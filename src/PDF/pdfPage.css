@@ -146,26 +146,34 @@
 
 /* ── Left: PDF preview ── */
 #pdf_preview {
-  width: 42%;
-  min-width: 260px;
-  max-width: 520px;
-  border-right: 1px solid var(--color-border);
+  flex-shrink: 0;
   overflow: auto;
   display: block;
   padding: 1.25rem 1rem;
   background: #141414;
-  flex-shrink: 0;
   touch-action: none;
-  transition: width 0.22s ease, min-width 0.22s ease, padding 0.22s ease, opacity 0.22s ease;
 }
 
 #pdf_preview.pdf_preview--closed {
-  width: 0;
-  min-width: 0;
+  width: 0 !important;
   padding: 0;
-  border-right: none;
   overflow: hidden;
   opacity: 0;
+}
+
+/* ── Resize handle ── */
+#pdf_resize_handle {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--color-border);
+  transition: background 0.15s;
+  z-index: 10;
+}
+
+#pdf_resize_handle:hover,
+#pdf_resize_handle:active {
+  background: var(--color-highlight);
 }
 
 /* ── Preview toggle button ── */
@@ -202,6 +210,168 @@
   cursor: grabbing;
 }
 
+#pdf_annot_canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#annot_text_input {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  border: 1px solid var(--color-highlight);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  font-size: 1rem;
+  outline: none;
+  min-width: 120px;
+  z-index: 30;
+}
+
+/* ── Annotation toolbar ── */
+#pdf_annot_toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.3rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+#pdf_annot_tools {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.annot_tool_btn {
+  padding: 0.22rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  line-height: 1.4;
+}
+
+.annot_tool_btn:hover { background: var(--color-bg); color: var(--color-text); }
+.annot_tool_btn--active { background: var(--color-bg); color: var(--color-text); border-color: var(--color-highlight); }
+
+#pdf_annot_colors {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.annot_color_btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s, border-color 0.1s;
+}
+
+.annot_color_btn:hover { transform: scale(1.2); }
+.annot_color_btn--active { border-color: #fff; transform: scale(1.15); }
+
+#pdf_annot_actions {
+  display: flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.annot_action_btn {
+  padding: 0.22rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: color 0.12s;
+}
+
+.annot_action_btn:hover:not(:disabled) { color: var(--color-text); }
+.annot_action_btn:disabled { opacity: 0.3; cursor: default; }
+
+/* ── Highlight panel ── */
+#highlight_panel {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  flex-shrink: 0;
+}
+
+#hlp_preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+
+#hlp_circle {
+  opacity: 0.5;
+  transition: width 0.12s, height 0.12s, background 0.12s;
+  min-width: 8px;
+  min-height: 8px;
+  max-width: 64px;
+  max-height: 64px;
+}
+
+#hlp_controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  flex: 1;
+}
+
+#hlp_slider {
+  width: 100%;
+  accent-color: var(--color-highlight);
+  cursor: pointer;
+}
+
+#hlp_colors {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+#hlp_mode_toggle {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.hlp_mode_btn {
+  padding: 0.22rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.hlp_mode_btn:hover { color: var(--color-text); }
+.hlp_mode_btn--active { background: var(--color-surface); color: var(--color-text); border-color: var(--color-highlight); }
+
 #pdf_canvas {
   box-shadow: 0 2px 16px rgba(0,0,0,0.5);
   display: block;
@@ -235,6 +405,40 @@
   background: rgba(56, 139, 253, 0.35);
   color: transparent;
 }
+
+/* span_selected: class kept for handle-position logic, highlight drawn by .sel_highlight rects */
+
+/* ── Selection drag handles ── */
+.sel_handle {
+  position: absolute;
+  width: 2px;
+  background: #3884fd;
+  z-index: 25;
+  touch-action: none;
+  cursor: col-resize;
+}
+
+/* Wider invisible hit target without changing visual width */
+.sel_handle::after {
+  content: "";
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -10px; right: -10px;
+}
+
+.sel_handle::before {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #3884fd;
+  border-radius: 50%;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.sel_handle--start::before { top: -10px; }
+.sel_handle--end::before   { bottom: -10px; top: auto; }
 
 /* ── Selection bar (expand before confirm) ── */
 #manual_select_bar {

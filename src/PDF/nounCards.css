@@ -16,19 +16,52 @@
 .noun_table_wrap {
   flex: 1;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.noun_font_controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0.3rem 0.65rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.noun_font_btn {
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: color 0.12s;
+}
+
+.noun_font_btn:hover:not(:disabled) { color: var(--color-text); }
+.noun_font_btn:disabled { opacity: 0.3; cursor: default; }
+
+.noun_font_label {
+  min-width: 2.8rem;
+  text-align: center;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
 }
 
 .noun_table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.78rem;
+  font-size: 1em;
 }
 
 .noun_table th {
   padding: 0.4rem 0.65rem;
   text-align: left;
   font-weight: 600;
-  font-size: 0.68rem;
+  font-size: 0.87em;
   color: var(--color-text-muted);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -60,10 +93,10 @@
   width: 2.5rem;
   text-align: right;
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.87em;
 }
 
-.noun_td_noun { font-size: 0.8rem; }
+.noun_td_noun { font-size: 1em; }
 
 .noun_th_mode, .noun_td_mode,
 .noun_th_card, .noun_td_card { width: 9rem; }
@@ -108,7 +141,7 @@
   border: 1px solid var(--color-border);
   background: var(--color-bg);
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.87em;
   cursor: pointer;
   width: 100%;
   outline: none;
@@ -121,7 +154,7 @@
 .noun_empty_row {
   padding: 1rem 0.65rem;
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: 1em;
   text-align: center;
 }
 

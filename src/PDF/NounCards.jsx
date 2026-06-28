@@ -74,6 +74,7 @@ const NounRow = ({ item, cardKey, modeKey, index, onStatus, onMove, onDelete }) 
 
 const NounCards = ({ data, streaming, onStatus, onMove, onDelete, activeCard = "objects" }) => {
   const card = CARDS.find((c) => c.key === activeCard) || CARDS[0];
+  const [fontSize, setFontSize] = useState(1);
 
   const rows = MODES.flatMap(({ key: modeKey }) =>
     (data?.[card.key]?.[modeKey] || []).map((item, i) => ({ item, modeKey, index: i }))
@@ -82,7 +83,12 @@ const NounCards = ({ data, streaming, onStatus, onMove, onDelete, activeCard = "
   return (
     <div className="noun_tabs_root">
       <div className={`noun_card noun_card--${activeCard}`}>
-        <div className="noun_table_wrap">
+        <div className="noun_table_wrap" style={{ fontSize: `${fontSize}rem` }}>
+          <div className="noun_font_controls">
+            <button className="noun_font_btn" onClick={() => setFontSize((s) => Math.max(0.5, +(s - 0.05).toFixed(2)))} disabled={fontSize <= 0.5}>−</button>
+            <span className="noun_font_label">{Math.round(fontSize * 100)}%</span>
+            <button className="noun_font_btn" onClick={() => setFontSize((s) => Math.min(1.6, +(s + 0.05).toFixed(2)))} disabled={fontSize >= 1.6}>+</button>
+          </div>
           <table className="noun_table">
             <thead>
               <tr>

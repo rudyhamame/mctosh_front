@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useHistory, useParams } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
@@ -22,6 +22,104 @@ const CARDS = [
   { key: "concept",   label: "Concept" },
   { key: "models",    label: "Models" },
 ];
+
+const ANNOT_TOOLS = [
+  { key: "highlight",     icon: "▋",  label: "Highlight" },
+  { key: "underline",     icon: "U̲",  label: "Underline" },
+  { key: "strikethrough", icon: "S̶",  label: "Strikethrough" },
+  { key: "pen",           icon: "✏",  label: "Pen" },
+  { key: "line",          icon: "╱",  label: "Line" },
+  { key: "arrow",         icon: "→",  label: "Arrow" },
+  { key: "rect",          icon: "□",  label: "Rectangle" },
+  { key: "circle",        icon: "○",  label: "Ellipse" },
+  { key: "text",          icon: "T",  label: "Text" },
+  { key: "eraser",        icon: "⌫",  label: "Eraser" },
+];
+
+const ANNOT_COLORS = ["#ffff00","#ff6b6b","#51cf66","#74c0fc","#f783ac","#ffa94d","#e9ecef","#212529"];
+
+// Draw a single annotation onto a 2d canvas context.
+// Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
+const drawAnnotation = (ctx, ann, scale = 1) => {
+  const s  = scale;
+  const p  = (v) => v * s;
+  const pt = ({ x, y }) => [x * s, y * s];
+
+  ctx.save();
+  ctx.strokeStyle = ann.color;
+  ctx.fillStyle   = ann.color;
+  ctx.lineWidth   = (ann.lineWidth || 2) * s;
+  ctx.lineCap     = "round";
+  ctx.lineJoin    = "round";
+
+  switch (ann.type) {
+    case "highlight":
+      if (!ann.points || ann.points.length < 2) break;
+      ctx.globalAlpha = 0.35;
+      ctx.lineWidth   = (ann.lineWidth || 16) * s;
+      ctx.beginPath();
+      if (ann.mode === "line") {
+        const [fx, fy] = pt(ann.points[0]);
+        const [lx, ly] = pt(ann.points[ann.points.length - 1]);
+        ctx.moveTo(fx, fy); ctx.lineTo(lx, ly);
+      } else {
+        const [fx, fy] = pt(ann.points[0]);
+        ctx.moveTo(fx, fy);
+        for (let i = 1; i < ann.points.length; i++) { const [x, y] = pt(ann.points[i]); ctx.lineTo(x, y); }
+      }
+      ctx.stroke();
+      break;
+    case "underline":
+      ctx.beginPath();
+      ctx.moveTo(p(ann.x),            p(ann.y + ann.h));
+      ctx.lineTo(p(ann.x + ann.w),    p(ann.y + ann.h));
+      ctx.stroke();
+      break;
+    case "strikethrough":
+      ctx.beginPath();
+      ctx.moveTo(p(ann.x),            p(ann.y + ann.h / 2));
+      ctx.lineTo(p(ann.x + ann.w),    p(ann.y + ann.h / 2));
+      ctx.stroke();
+      break;
+    case "pen":
+      if (!ann.points || ann.points.length < 2) break;
+      ctx.beginPath();
+      { const [fx, fy] = pt(ann.points[0]); ctx.moveTo(fx, fy); }
+      for (let i = 1; i < ann.points.length; i++) { const [x, y] = pt(ann.points[i]); ctx.lineTo(x, y); }
+      ctx.stroke();
+      break;
+    case "line":
+      ctx.beginPath(); ctx.moveTo(p(ann.x1), p(ann.y1)); ctx.lineTo(p(ann.x2), p(ann.y2)); ctx.stroke();
+      break;
+    case "arrow": {
+      const [x1, y1, x2, y2] = [p(ann.x1), p(ann.y1), p(ann.x2), p(ann.y2)];
+      const dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy);
+      if (len === 0) break;
+      const ux = dx / len, uy = dy / len, hl = 14 * s, ha = Math.PI / 6;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x2, y2);
+      ctx.lineTo(x2 - hl * (ux * Math.cos(ha) - uy * Math.sin(ha)), y2 - hl * (uy * Math.cos(ha) + ux * Math.sin(ha)));
+      ctx.lineTo(x2 - hl * (ux * Math.cos(ha) + uy * Math.sin(ha)), y2 - hl * (uy * Math.cos(ha) - ux * Math.sin(ha)));
+      ctx.closePath(); ctx.fill();
+      break;
+    }
+    case "rect":
+      ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
+      break;
+    case "circle":
+      ctx.beginPath();
+      ctx.ellipse(p(ann.x + ann.w / 2), p(ann.y + ann.h / 2), Math.abs(p(ann.w / 2)), Math.abs(p(ann.h / 2)), 0, 0, Math.PI * 2);
+      ctx.stroke();
+      break;
+    case "text":
+      ctx.font = `${(ann.fontSize || 16) * s}px sans-serif`;
+      ctx.fillText(ann.text || "", p(ann.x), p(ann.y));
+      break;
+    default: break;
+  }
+  ctx.restore();
+};
 
 const ALL_MODES = ["sub-molecule","molecule","sub-cell","cell","sub-tissue","tissue","sub-organ","organ","sub-system","system","sub-human","human"];
 const modeObj   = () => Object.fromEntries(ALL_MODES.map((m) => [m, []]));
@@ -78,8 +176,10 @@ const PDFPage = () => {
   const [loading, setLoading]       = useState(false);
   const [dragOver, setDragOver]     = useState(false);
   const [pageViewport, setPageViewport] = useState(null);
-  const [zoom, setZoom]             = useState(1);
-  const [previewOpen, setPreviewOpen] = useState(true);
+  const [zoom, setZoom]               = useState(1);
+  const [splitRatio, setSplitRatio]   = useState(0.42);
+  const savedRatioRef                 = useRef(0.42);
+  const contentRef                    = useRef(null);
   const fitScaleRef                 = useRef(1);
   const zoomRef                     = useRef(1);
   const extractModeRef              = useRef("ai");
@@ -104,6 +204,7 @@ const PDFPage = () => {
   const [manualMode,      setManualMode]      = useState("organ");
   // Selection bar (shown before popup — lets user expand range word-by-word)
   const [manualSelection, setManualSelection] = useState(null); // { startIdx, endIdx, text, x, y }
+  const [dragHandle,      setDragHandle]      = useState(null); // "start" | "end"
 
   const [history, setHistory]               = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -111,9 +212,21 @@ const PDFPage = () => {
   const [savedId, setSavedId]               = useState(null);
   const [activeHistoryId, setActiveHistoryId] = useState(null);
 
+  // ── Annotation state ──────────────────────────────────────────────────────
+  const [annotTool,      setAnnotTool]      = useState(null);
+  const [annotColor,     setAnnotColor]     = useState("#ffff00");
+  const [annotSize,      setAnnotSize]      = useState(16);
+  const [highlightMode,  setHighlightMode]  = useState("freehand"); // "freehand" | "line"
+  const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
+  const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
+  const [annotTextVal,   setAnnotTextVal]   = useState("");
+  const annotCanvasRef  = useRef(null);
+  const activeAnnotRef  = useRef(null);  // in-progress shape
+
   const canvasRef     = useRef(null);
   const textLayerRef  = useRef(null);
   const previewRef    = useRef(null);
+  const canvasWrapRef = useRef(null);
   const fileInputRef  = useRef(null);
   const renderTaskRef = useRef(null);
   const popupRef      = useRef(null);
@@ -193,18 +306,194 @@ const PDFPage = () => {
   // Keep refs in sync so event handlers always read the latest values
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
 
-  // Apply zoom-to-point scroll correction after canvas re-renders at new zoom
+  // Apply zoom-to-point scroll correction after canvas re-renders at new zoom.
+  // Also strips any CSS pinch-transform that was held until this point.
   useEffect(() => {
     const pending = scrollAfterZoomRef.current;
     if (!pending || !previewRef.current) return;
     scrollAfterZoomRef.current = null;
-    const el = previewRef.current;
+    const el   = previewRef.current;
+    const wrap = canvasWrapRef.current;
     requestAnimationFrame(() => {
+      // Remove the CSS transform and set the real scroll in the same frame
+      // so the canvas never flashes back to the pre-zoom position.
+      if (wrap && wrap.style.transform) {
+        wrap.style.transform       = "";
+        wrap.style.transformOrigin = "";
+      }
       el.scrollLeft = Math.max(0, pending.left);
       el.scrollTop  = Math.max(0, pending.top);
     });
   }, [zoom]);
   useEffect(() => { extractModeRef.current = extractMode; }, [extractMode]);
+
+  const manualSelectionRef = useRef(null);
+  useEffect(() => { manualSelectionRef.current = manualSelection; }, [manualSelection]);
+
+  // ── Render annotation canvas ───────────────────────────────────────────────
+  useEffect(() => {
+    const ac = annotCanvasRef.current;
+    const pc = canvasRef.current;
+    if (!ac || !pc) return;
+    ac.width  = pc.width;
+    ac.height = pc.height;
+    const scale = fitScaleRef.current * zoom;
+    const ctx = ac.getContext("2d");
+    ctx.clearRect(0, 0, ac.width, ac.height);
+    for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
+  }, [annotations, pageNum, zoom]);
+
+  // ── Annotation drawing events ──────────────────────────────────────────────
+  useEffect(() => {
+    const ac = annotCanvasRef.current;
+    if (!ac || !annotTool) return;
+
+    // Returns coordinates in PDF-point space (canvas pixels ÷ scale)
+    const getScale = () => fitScaleRef.current * zoomRef.current;
+    const toCanvas = (e) => {
+      const rect  = ac.getBoundingClientRect();
+      const scale = getScale();
+      const sx    = ac.width  / rect.width;
+      const sy    = ac.height / rect.height;
+      const cx    = e.touches ? e.touches[0].clientX : e.clientX;
+      const cy    = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: (cx - rect.left) * sx / scale, y: (cy - rect.top) * sy / scale, vx: cx, vy: cy };
+    };
+
+    const redraw = (extra) => {
+      const scale = getScale();
+      const ctx = ac.getContext("2d");
+      ctx.clearRect(0, 0, ac.width, ac.height);
+      for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
+      if (extra) drawAnnotation(ctx, extra, scale);
+    };
+
+    const onDown = (e) => {
+      if (e.touches && e.touches.length >= 2) {
+        activeAnnotRef.current = null; // cancel any in-progress stroke
+        return;
+      }
+      if (annotTool === "text") {
+        const p = toCanvas(e);
+        setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y });
+        setAnnotTextVal("");
+        return;
+      }
+      const p = toCanvas(e);
+      if (annotTool === "highlight") {
+        activeAnnotRef.current = { type: "highlight", color: annotColor, lineWidth: annotSize / getScale(), mode: highlightMode, points: [{ x: p.x, y: p.y }] };
+      } else if (["underline","strikethrough","rect","circle"].includes(annotTool)) {
+        activeAnnotRef.current = { type: annotTool, color: annotColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
+      } else if (["line","arrow"].includes(annotTool)) {
+        activeAnnotRef.current = { type: annotTool, color: annotColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+      } else if (annotTool === "pen") {
+        activeAnnotRef.current = { type: "pen", color: annotColor, lineWidth: 2 / getScale(), points: [{ x: p.x, y: p.y }] };
+      } else if (annotTool === "eraser") {
+        activeAnnotRef.current = { type: "eraser" };
+        const er = 18 / getScale();
+        setAnnotations((prev) => {
+          const pts = [...(prev[pageNum] || [])];
+          return { ...prev, [pageNum]: pts.filter((a) => {
+            if (a.type === "pen" || a.type === "highlight") return !a.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < er);
+            const cx2 = (a.x ?? a.x1 ?? 0), cy2 = (a.y ?? a.y1 ?? 0);
+            return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
+          })};
+        });
+      }
+    };
+
+    const onMove = (e) => {
+      if (e.touches && e.touches.length >= 2) {
+        activeAnnotRef.current = null;
+        return;
+      }
+      const ann = activeAnnotRef.current;
+      if (!ann) return;
+      const p = toCanvas(e);
+      if (ann.type === "pen" || ann.type === "highlight") {
+        if (ann.mode === "line") {
+          ann.points[1] = { x: p.x, y: p.y };
+        } else {
+          ann.points.push({ x: p.x, y: p.y });
+        }
+        redraw(ann);
+      } else if (["underline","strikethrough","rect","circle"].includes(ann.type)) {
+        ann.x = Math.min(ann._sx, p.x); ann.y = Math.min(ann._sy, p.y);
+        ann.w = Math.abs(p.x - ann._sx); ann.h = Math.abs(p.y - ann._sy);
+        redraw(ann);
+      } else if (["line","arrow"].includes(ann.type)) {
+        ann.x2 = p.x; ann.y2 = p.y;
+        redraw(ann);
+      } else if (ann.type === "eraser") {
+        const er = 18 / getScale();
+        setAnnotations((prev) => {
+          const pts = [...(prev[pageNum] || [])];
+          return { ...prev, [pageNum]: pts.filter((a) => {
+            if (a.type === "pen" || a.type === "highlight") return !a.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < er);
+            const cx2 = (a.x ?? a.x1 ?? 0), cy2 = (a.y ?? a.y1 ?? 0);
+            return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
+          })};
+        });
+      }
+    };
+
+    const onUp = () => {
+      const ann = activeAnnotRef.current;
+      activeAnnotRef.current = null;
+      if (!ann || ann.type === "eraser") return;
+      // ignore accidental tiny marks
+      const tiny = ann.type === "pen"
+        ? ann.points.length < 3
+        : ["line","arrow"].includes(ann.type)
+          ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < 3
+          : ann.w < 3 && ann.h < 3;
+      if (tiny) return;
+      const { _sx, _sy, ...clean } = ann;
+      setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), { ...clean, id: Date.now() }] }));
+    };
+
+    ac.addEventListener("mousedown",  onDown, { passive: true });
+    ac.addEventListener("mousemove",  onMove, { passive: true });
+    ac.addEventListener("mouseup",    onUp);
+    ac.addEventListener("touchstart", onDown, { passive: true });
+    ac.addEventListener("touchmove",  onMove, { passive: true });
+    ac.addEventListener("touchend",   onUp);
+    return () => {
+      ac.removeEventListener("mousedown",  onDown);
+      ac.removeEventListener("mousemove",  onMove);
+      ac.removeEventListener("mouseup",    onUp);
+      ac.removeEventListener("touchstart", onDown);
+      ac.removeEventListener("touchmove",  onMove);
+      ac.removeEventListener("touchend",   onUp);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annotTool, annotColor, annotSize, highlightMode, pageNum, annotations]);
+
+  const commitAnnotText = useCallback(() => {
+    if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
+    const scale = fitScaleRef.current * zoomRef.current;
+    setAnnotations((prev) => ({
+      ...prev,
+      [pageNum]: [...(prev[pageNum] || []), {
+        id: Date.now(), type: "text", color: annotColor,
+        x: annotTextInput.cx / scale, y: annotTextInput.cy / scale,
+        text: annotTextVal, fontSize: 16 / scale,
+      }],
+    }));
+    setAnnotTextInput(null); setAnnotTextVal("");
+  }, [annotTextInput, annotTextVal, annotColor, pageNum]);
+
+  const handleAnnotUndo = useCallback(() => {
+    setAnnotations((prev) => {
+      const arr = [...(prev[pageNum] || [])];
+      arr.pop();
+      return { ...prev, [pageNum]: arr };
+    });
+  }, [pageNum]);
+
+  const handleAnnotClear = useCallback(() => {
+    setAnnotations((prev) => ({ ...prev, [pageNum]: [] }));
+  }, [pageNum]);
 
   // ── Ctrl+Scroll to zoom ────────────────────────────────────────────────────
   useEffect(() => {
@@ -295,16 +584,25 @@ const PDFPage = () => {
       return { text: word, spanIdx, x: bx, y: by };
     };
 
+    // Extra pinch state
+    let pinchOriginX = 0, pinchOriginY = 0; // transform-origin in canvas-wrap space
+    let lastPinchZoom = 1;                   // final zoom reached during gesture
+
     const onTouchStart = (e) => {
       if (e.touches.length === 2) {
         clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         startDist = touchDist(e.touches);
         startZoom = zoomRef.current;
-        const rect = el.getBoundingClientRect();
-        startMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
-        startMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+        lastPinchZoom = startZoom;
+        const elRect   = el.getBoundingClientRect();
+        const wrapRect = canvasWrapRef.current?.getBoundingClientRect() || elRect;
+        startMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
+        startMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
         startSL   = el.scrollLeft;
         startST   = el.scrollTop;
+        // transform-origin: midpoint relative to the canvas wrap element
+        pinchOriginX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - wrapRect.left;
+        pinchOriginY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - wrapRect.top;
       } else if (e.touches.length === 1) {
         panX = e.touches[0].clientX;
         panY = e.touches[0].clientY;
@@ -317,13 +615,25 @@ const PDFPage = () => {
           const ct = e.touches[0];
           lpTimer = setTimeout(() => {
             lpTimer = null;
-            // Find and select the word under the finger
             const target = document.elementFromPoint(ct.clientX, ct.clientY);
             const layer  = textLayerRef.current;
             if (!target || !layer || !layer.contains(target)) return;
             const spanIdx = parseInt(target.dataset.spanIdx ?? "-1", 10);
             if (spanIdx < 0) return;
-            // Select entire span as anchor
+
+            // If this span is inside the existing selection, grab the nearest handle
+            const curSel = manualSelectionRef.current;
+            if (curSel) {
+              const lo  = Math.min(curSel.startIdx, curSel.endIdx);
+              const hi  = Math.max(curSel.startIdx, curSel.endIdx);
+              if (spanIdx >= lo && spanIdx <= hi) {
+                navigator.vibrate?.(30);
+                setDragHandle(spanIdx <= (lo + hi) / 2 ? "start" : "end");
+                return;
+              }
+            }
+
+            // Normal long-press: start a new selection from this word
             const textNode = target.firstChild;
             if (textNode && textNode.nodeType === Node.TEXT_NODE) {
               const range = document.createRange();
@@ -345,12 +655,14 @@ const PDFPage = () => {
         clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         e.preventDefault();
         const newZoom = Math.max(1, Math.min(5, startZoom * touchDist(e.touches) / startDist));
-        const scale   = newZoom / startZoom;
-        scrollAfterZoomRef.current = {
-          left: (startSL + startMidX) * scale - startMidX,
-          top:  (startST + startMidY) * scale - startMidY,
-        };
-        setZoom(newZoom);
+        lastPinchZoom = newZoom;
+        const factor = newZoom / startZoom;
+        // CSS transform: instant visual scale centered on the pinch midpoint, no React re-render
+        const wrap = canvasWrapRef.current;
+        if (wrap) {
+          wrap.style.transformOrigin = `${pinchOriginX}px ${pinchOriginY}px`;
+          wrap.style.transform       = `scale(${factor})`;
+        }
         return;
       }
       if (e.touches.length !== 1) return;
@@ -395,7 +707,21 @@ const PDFPage = () => {
     };
 
     const onTouchEnd = (e) => {
-      if (e.touches.length < 2) startDist = null;
+      if (e.touches.length < 2 && startDist !== null) {
+        startDist = null;
+        const wrap = canvasWrapRef.current;
+        if (wrap && wrap.style.transform) {
+          // Keep the CSS transform alive — useEffect([zoom]) will strip it atomically
+          // with the scroll correction after the canvas re-renders, preventing any snap.
+          const finalZoom = lastPinchZoom;
+          const ratio     = finalZoom / startZoom;
+          scrollAfterZoomRef.current = {
+            left: (startSL + startMidX) * ratio - startMidX,
+            top:  (startST + startMidY) * ratio - startMidY,
+          };
+          setZoom(finalZoom);
+        }
+      }
       clearTimeout(lpTimer); lpTimer = null;
 
       if (isLpSelecting) {
@@ -419,6 +745,13 @@ const PDFPage = () => {
         const ct     = e.changedTouches[0];
         const result = selectWordAt(ct.clientX, ct.clientY);
         if (result) {
+          // Tapping inside an existing selection: keep it, don't replace
+          const curSel = manualSelectionRef.current;
+          if (curSel) {
+            const lo = Math.min(curSel.startIdx, curSel.endIdx);
+            const hi = Math.max(curSel.startIdx, curSel.endIdx);
+            if (result.spanIdx >= lo && result.spanIdx <= hi) return;
+          }
           setManualSelection({ startIdx: result.spanIdx, endIdx: result.spanIdx, text: result.text, x: result.x, y: result.y });
         }
       }
@@ -551,6 +884,143 @@ const PDFPage = () => {
 
     return () => { cancelled = true; if (textLayerRef.current) textLayerRef.current.innerHTML = ""; };
   }, [extractMode, pdfDoc, pageNum, pageViewport]);
+
+  // Highlight selected text: group spans by line → one even rect per line.
+  // Uses getBoundingClientRect() for real visual bounds (glyph height > em-size, width overflow, etc.)
+  useEffect(() => {
+    const spans = spansRef.current;
+    const layer = textLayerRef.current;
+
+    layer?.querySelectorAll(".sel_highlight").forEach((el) => el.remove());
+    spans.forEach(({ el }) => el.classList.remove("span_selected"));
+
+    if (!manualSelection || !layer) return;
+    const lo = Math.min(manualSelection.startIdx, manualSelection.endIdx);
+    const hi = Math.max(manualSelection.startIdx, manualSelection.endIdx);
+
+    for (let i = lo; i <= hi; i++) spans[i]?.el?.classList.add("span_selected");
+
+    const layerRect = layer.getBoundingClientRect();
+    const bodyZoom  = parseFloat(document.body.style.zoom) || 1;
+
+    const lines = [];
+    for (let i = lo; i <= hi; i++) {
+      const el = spans[i]?.el;
+      if (!el) continue;
+
+      // Canvas-local bounds from the span's explicit CSS geometry
+      const r      = el.getBoundingClientRect();
+      const left   = (r.left   - layerRect.left) / bodyZoom;
+      const top    = (r.top    - layerRect.top)  / bodyZoom;
+      const right  = (r.right  - layerRect.left) / bodyZoom;
+      const bottom = (r.bottom - layerRect.top)  / bodyZoom;
+      const h      = bottom - top;
+
+      // PDF glyphs have ascenders/descenders that extend beyond the em-box.
+      // Pad vertically so the highlight covers the real canvas-rendered glyph height.
+      const padV = h * 0.25;
+
+      // Cluster threshold scales with font size
+      let line = lines.find((l) => Math.abs(l.refTop - top) < Math.max(8, h * 0.5));
+      if (!line) { line = { refTop: top, minL: Infinity, maxR: -Infinity, minT: Infinity, maxB: -Infinity }; lines.push(line); }
+      line.minL = Math.min(line.minL, left);
+      line.maxR = Math.max(line.maxR, right);
+      line.minT = Math.min(line.minT, top    - padV);
+      line.maxB = Math.max(line.maxB, bottom + padV);
+    }
+
+    for (const l of lines) {
+      const rect = document.createElement("div");
+      rect.className           = "sel_highlight";
+      rect.style.position      = "absolute";
+      rect.style.left          = `${l.minL}px`;
+      rect.style.top           = `${l.minT}px`;
+      rect.style.width         = `${l.maxR - l.minL}px`;
+      rect.style.height        = `${l.maxB - l.minT}px`;
+      rect.style.background    = "rgba(56,139,253,0.35)";
+      rect.style.borderRadius  = "2px";
+      rect.style.pointerEvents = "none";
+      rect.style.zIndex        = "1";
+      layer.insertBefore(rect, layer.firstChild);
+    }
+
+    return () => { layer?.querySelectorAll(".sel_highlight").forEach((el) => el.remove()); };
+  }, [manualSelection]);
+
+  // Positions (canvas-space px) of the two drag handles, using real visual bounds
+  const selHandles = useMemo(() => {
+    if (!manualSelection) return null;
+    const { startIdx, endIdx } = manualSelection;
+    const lo  = Math.min(startIdx, endIdx);
+    const hi  = Math.max(startIdx, endIdx);
+    const sEl = spansRef.current[lo]?.el;
+    const eEl = spansRef.current[hi]?.el;
+    const layer = textLayerRef.current;
+    if (!sEl || !eEl || !layer) return null;
+    const layerRect = layer.getBoundingClientRect();
+    const bodyZoom  = parseFloat(document.body.style.zoom) || 1;
+    const sR = sEl.getBoundingClientRect();
+    const eR = eEl.getBoundingClientRect();
+    const toLocal = (r) => ({
+      left:   (r.left   - layerRect.left) / bodyZoom,
+      top:    (r.top    - layerRect.top)  / bodyZoom,
+      right:  (r.right  - layerRect.left) / bodyZoom,
+      bottom: (r.bottom - layerRect.top)  / bodyZoom,
+    });
+    const s = toLocal(sR);
+    const e = toLocal(eR);
+    return {
+      start: { x: s.left,  y: s.top, h: s.bottom - s.top },
+      end:   { x: e.right, y: e.top, h: e.bottom - e.top },
+    };
+  }, [manualSelection]);
+
+  // Drag-handle events — attached while a handle is being dragged
+  useEffect(() => {
+    if (!dragHandle) return;
+
+    // Kill native text selection for the duration of the drag
+    const prev = document.body.style.userSelect;
+    document.body.style.userSelect = "none";
+    window.getSelection()?.removeAllRanges();
+
+    const onMove = (e) => {
+      e.preventDefault();
+      const cx = e.touches ? e.touches[0].clientX : e.clientX;
+      const cy = e.touches ? e.touches[0].clientY : e.clientY;
+      // Hit-test behind the handle (temporarily hide it so elementFromPoint sees the text layer)
+      const target = document.elementFromPoint(cx, cy);
+      const layer  = textLayerRef.current;
+      if (!target || !layer || !layer.contains(target)) return;
+      const idx = parseInt(target.dataset.spanIdx ?? "-1", 10);
+      if (idx < 0) return;
+      setManualSelection((sel) => {
+        if (!sel) return sel;
+        if (dragHandle === "start") {
+          const newStart = Math.min(idx, sel.endIdx);
+          const text = spansRef.current.slice(newStart, sel.endIdx + 1).map((s) => s.text).join(" ").trim();
+          return { ...sel, startIdx: newStart, text };
+        } else {
+          const newEnd = Math.max(idx, sel.startIdx);
+          const text = spansRef.current.slice(sel.startIdx, newEnd + 1).map((s) => s.text).join(" ").trim();
+          return { ...sel, endIdx: newEnd, text };
+        }
+      });
+    };
+    const onUp = () => setDragHandle(null);
+
+    window.addEventListener("mousemove",  onMove, { passive: false });
+    window.addEventListener("mouseup",    onUp);
+    window.addEventListener("touchmove",  onMove, { passive: false });
+    window.addEventListener("touchend",   onUp);
+    return () => {
+      document.body.style.userSelect = prev;
+      window.removeEventListener("mousemove",  onMove);
+      window.removeEventListener("mouseup",    onUp);
+      window.removeEventListener("touchmove",  onMove);
+      window.removeEventListener("touchend",   onUp);
+    };
+  }, [dragHandle]);
 
   // ── Dismiss popup when clicking outside ───────────────────────────────────
   useEffect(() => {
@@ -844,6 +1314,7 @@ const PDFPage = () => {
   useEffect(() => {
     if (!manualSelection) return;
     const handler = (e) => {
+      if (e.target.closest?.(".sel_handle")) return;
       if (selBarRef.current && !selBarRef.current.contains(e.target)) {
         setManualSelection(null);
         window.getSelection()?.removeAllRanges();
@@ -891,6 +1362,37 @@ const PDFPage = () => {
         [fromCard]: { ...prev[fromCard], [fromMode]: reindex(src, fromCard, fromMode) },
         [toCard]:   { ...prev[toCard],   [toMode]:   dst },
       };
+    });
+  }, []);
+
+  // ── Panel resize handle ────────────────────────────────────────────────────
+  const handleResizeStart = useCallback((e) => {
+    e.preventDefault();
+    const onMove = (ev) => {
+      if (!contentRef.current) return;
+      const rect  = contentRef.current.getBoundingClientRect();
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const ratio = Math.max(0.1, Math.min(1, (clientX - rect.left) / rect.width));
+      setSplitRatio(ratio);
+      if (ratio < 0.9) savedRatioRef.current = ratio;
+    };
+    const onEnd = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onEnd);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend",  onEnd);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onEnd);
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend",  onEnd);
+  }, []);
+
+  const togglePreview = useCallback(() => {
+    setSplitRatio((r) => {
+      if (r === 0) return savedRatioRef.current || 0.42;
+      savedRatioRef.current = r;
+      return 0;
     });
   }, []);
 
@@ -967,20 +1469,133 @@ const PDFPage = () => {
         </>}
       </div>
 
+      {/* Annotation toolbar */}
+      {pdfDoc && (
+        <div id="pdf_annot_toolbar">
+          <div id="pdf_annot_tools">
+            {ANNOT_TOOLS.map(({ key, icon, label }) => (
+              <button
+                key={key}
+                className={`annot_tool_btn${annotTool === key ? " annot_tool_btn--active" : ""}`}
+                title={label}
+                onClick={() => setAnnotTool((t) => t === key ? null : key)}
+              >{icon}</button>
+            ))}
+          </div>
+          <div id="pdf_annot_colors">
+            {ANNOT_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`annot_color_btn${annotColor === c ? " annot_color_btn--active" : ""}`}
+                style={{ background: c }}
+                title={c}
+                onClick={() => setAnnotColor(c)}
+              />
+            ))}
+          </div>
+          <div id="pdf_annot_actions">
+            <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}>↩</button>
+            <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}>🗑</button>
+          </div>
+        </div>
+      )}
+
+      {/* Highlight options panel */}
+      {annotTool === "highlight" && (
+        <div id="highlight_panel">
+          <div id="hlp_preview">
+            <div
+              id="hlp_circle"
+              style={{
+                width:        annotSize * 2,
+                height:       annotSize * 2,
+                background:   annotColor,
+                borderRadius: "50%",
+              }}
+            />
+          </div>
+          <div id="hlp_controls">
+            <input
+              id="hlp_slider"
+              type="range"
+              min="4" max="64" step="2"
+              value={annotSize}
+              onChange={(e) => setAnnotSize(Number(e.target.value))}
+            />
+            <div id="hlp_colors">
+              {ANNOT_COLORS.map((c) => (
+                <button
+                  key={c}
+                  className={`annot_color_btn${annotColor === c ? " annot_color_btn--active" : ""}`}
+                  style={{ background: c }}
+                  onClick={() => setAnnotColor(c)}
+                />
+              ))}
+            </div>
+            <div id="hlp_mode_toggle">
+              <button
+                className={`hlp_mode_btn${highlightMode === "freehand" ? " hlp_mode_btn--active" : ""}`}
+                onClick={() => setHighlightMode("freehand")}
+              >Freehand</button>
+              <button
+                className={`hlp_mode_btn${highlightMode === "line" ? " hlp_mode_btn--active" : ""}`}
+                onClick={() => setHighlightMode("line")}
+              >Line</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Split area */}
-      <div id="pdf_content">
+      <div id="pdf_content" ref={contentRef}>
 
         {/* Left — PDF viewer or upload zone */}
-        <div id="pdf_preview" ref={previewRef} className={previewOpen ? "" : "pdf_preview--closed"}>
+        <div
+          id="pdf_preview"
+          ref={previewRef}
+          style={{ width: splitRatio === 0 ? "0" : splitRatio >= 0.9 ? "100%" : `${splitRatio * 100}%` }}
+          className={splitRatio === 0 ? "pdf_preview--closed" : ""}
+        >
           {pdfDoc ? (
-            <div id="pdf_canvas_wrap">
+            <div id="pdf_canvas_wrap" ref={canvasWrapRef}>
               <canvas id="pdf_canvas" ref={canvasRef} />
+              <canvas
+                id="pdf_annot_canvas"
+                ref={annotCanvasRef}
+                style={{ pointerEvents: annotTool ? "auto" : "none", cursor: annotTool === "eraser" ? "cell" : annotTool ? "crosshair" : "default" }}
+              />
+              {annotTextInput && (
+                <input
+                  id="annot_text_input"
+                  autoFocus
+                  value={annotTextVal}
+                  onChange={(e) => setAnnotTextVal(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
+                  onBlur={commitAnnotText}
+                  style={{ left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left, top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top }}
+                />
+              )}
+              {/* Drag handles — sit at the edges of the highlighted selection */}
+              {manualSelection && !manualPopup && selHandles && (
+                <>
+                  <div
+                    className="sel_handle sel_handle--start"
+                    style={{ left: selHandles.start.x, top: selHandles.start.y, height: selHandles.start.h + 8 }}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("start"); }}
+                    onTouchStart={(e) => { e.stopPropagation(); setDragHandle("start"); }}
+                  />
+                  <div
+                    className="sel_handle sel_handle--end"
+                    style={{ left: selHandles.end.x, top: selHandles.end.y, height: selHandles.end.h + 8 }}
+                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("end"); }}
+                    onTouchStart={(e) => { e.stopPropagation(); setDragHandle("end"); }}
+                  />
+                </>
+              )}
               {/* Selection bar — absolute inside canvas wrap so it sits over the word */}
               {manualSelection && !manualPopup && (
                 <div ref={selBarRef} id="manual_select_bar" style={{ left: manualSelection.x, top: manualSelection.y }}>
-                  <button className="msb_btn" onClick={expandLeft}  disabled={manualSelection.startIdx === 0}>←</button>
                   <span id="msb_text">{manualSelection.text}</span>
-                  <button className="msb_btn" onClick={expandRight} disabled={manualSelection.endIdx >= spansRef.current.length - 1}>→</button>
                   <button id="msb_confirm" onClick={confirmSelection}>✓</button>
                   <button id="msb_cancel"  onClick={() => { setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>✕</button>
                 </div>
@@ -1018,16 +1633,21 @@ const PDFPage = () => {
           <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleInputChange} />
         </div>
 
+        {/* Resize handle */}
+        {splitRatio < 0.9 && splitRatio > 0 && (
+          <div id="pdf_resize_handle" onMouseDown={handleResizeStart} onTouchStart={handleResizeStart} />
+        )}
+
         {/* Right — Noun panel */}
-        <div id="pdf_nouns_panel">
+        <div id="pdf_nouns_panel" style={{ display: splitRatio >= 0.9 ? "none" : undefined }}>
 
           <div id="pdf_nouns_panel_header">
             <button
               id="pdf_preview_toggle"
-              onClick={() => setPreviewOpen((o) => !o)}
-              title={previewOpen ? "Hide PDF viewer" : "Show PDF viewer"}
+              onClick={togglePreview}
+              title={splitRatio === 0 ? "Show PDF viewer" : "Hide PDF viewer"}
             >
-              {previewOpen ? "‹" : "›"}
+              {splitRatio === 0 ? "›" : "‹"}
             </button>
             <span>
               {nounPage ? `Page ${nounPage} Nouns` : "Nouns"}
