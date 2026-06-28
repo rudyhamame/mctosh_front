@@ -1,0 +1,237 @@
+/* ── Tabs ── */
+.noun_tabs_root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.noun_tabs_bar {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem 0;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.noun_tab {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  background: none;
+  color: var(--color-text-muted);
+  position: relative;
+  bottom: -1px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.noun_tab:hover { color: var(--color-text); }
+
+.noun_tab--objects.noun_tab--active   { color: #80cbc4; background: #0a2a28; border-color: #80cbc4; }
+.noun_tab--traces.noun_tab--active    { color: #4fc3f7; background: #0a2a3a; border-color: #4fc3f7; }
+.noun_tab--phenomena.noun_tab--active { color: #ffb74d; background: #2a1a00; border-color: #ffb74d; }
+.noun_tab--concept.noun_tab--active   { color: #ce93d8; background: #1a0a2a; border-color: #ce93d8; }
+
+.noun_tab_count {
+  font-size: 0.68rem;
+  font-weight: 700;
+  opacity: 0.8;
+}
+
+/* ── Card ── */
+.noun_card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-top: none;
+}
+
+/* ── Table ── */
+.noun_table_wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.noun_table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+  table-layout: fixed;
+  min-width: 1080px;
+}
+
+.noun_table th {
+  padding: 0.4rem 0.65rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  white-space: nowrap;
+  width: calc(100% / 12);
+}
+
+.noun_th--sub {
+  font-weight: 400;
+  font-style: italic;
+  opacity: 0.6;
+  border-right: none;
+}
+
+.noun_table td {
+  padding: 0.45rem 0.65rem;
+  vertical-align: top;
+  border-right: 1px solid var(--color-border);
+}
+
+.noun_td--sub {
+  border-right: none;
+  opacity: 0.85;
+}
+
+.noun_table td:last-child {
+  border-right: none;
+}
+
+/* ── Chips ── */
+.noun_chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.noun_chip {
+  display: flex;
+  flex-direction: column;
+  padding: 0.2rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.74rem;
+  border: 1px solid var(--color-border);
+}
+
+.noun_chip_id {
+  font-size: 0.6rem;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  opacity: 0.4;
+  letter-spacing: 0.02em;
+  line-height: 1.2;
+}
+
+.noun_chip_noun {
+  line-height: 1.4;
+}
+
+.noun_chip_reason {
+  font-size: 0.64rem;
+  opacity: 0.55;
+  font-style: italic;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+/* ── Per-noun controls (shown on hover) ── */
+.noun_chip_controls {
+  display: none;
+  align-items: center;
+  gap: 0.2rem;
+  margin-top: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.noun_chip:hover .noun_chip_controls {
+  display: flex;
+}
+
+.ncc_btn {
+  padding: 0.08rem 0.35rem;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  font-size: 0.64rem;
+  cursor: pointer;
+  opacity: 0.45;
+  line-height: 1.4;
+  transition: opacity 0.12s;
+}
+
+.ncc_btn:hover { opacity: 1; }
+
+.ncc_accept.ncc_active { opacity: 1; color: #4caf50; border-color: #4caf50; }
+.ncc_reject.ncc_active { opacity: 1; color: #f44336; border-color: #f44336; }
+
+.ncc_select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  cursor: pointer;
+  max-width: 80px;
+  outline: none;
+}
+
+.ncc_select:hover { border-color: var(--color-text-muted); }
+
+/* ── Status variants ── */
+.noun_chip--accepted {
+  border-color: #2e5a2e !important;
+  opacity: 0.85;
+}
+
+.noun_chip--rejected .noun_chip_noun {
+  text-decoration: line-through;
+  opacity: 0.4;
+}
+
+.noun_chip--rejected {
+  opacity: 0.5;
+  border-color: #5a2e2e !important;
+}
+
+.noun_card--objects   .noun_chip { border-color: #1a4a48; color: #80cbc4; }
+.noun_card--traces    .noun_chip { border-color: #1e4d6b; color: #4fc3f7; }
+.noun_card--phenomena .noun_chip { border-color: #5a3a00; color: #ffb74d; }
+.noun_card--concept   .noun_chip { border-color: #3a1a5a; color: #ce93d8; }
+
+.noun_streaming_dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+  animation: noun_pulse 1s ease-in-out infinite;
+}
+
+@keyframes noun_pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.3; transform: scale(0.6); }
+}
+
+.noun_loading_row {
+  padding: 1rem 0.65rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.noun_empty {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}

@@ -1,0 +1,239 @@
+/* ── Page shell ── */
+#phen_page {
+  display: flex;
+  flex-direction: column;
+  height: calc(var(--vh, 1vh) * 100);
+  background: var(--color-bg);
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+/* ── Header bar ── */
+#phen_header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  font-size: 0.85rem;
+  background: var(--color-bg);
+}
+
+.phen_home_btn {
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.18rem 0.45rem;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+}
+
+.phen_home_btn:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+
+#phen_header_title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  flex: 1;
+}
+
+/* ── Sense tabs ── */
+#phen_sense_tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem 0;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.phen_sense_tab {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.9rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  background: none;
+  color: var(--color-text-muted);
+  position: relative;
+  bottom: -1px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.phen_sense_tab:hover { color: var(--color-text); }
+
+.phen_sense_tab--active-all { color: var(--color-text); border-color: var(--color-border); }
+
+.phen_sense_tab--eye.phen_sense_tab--active    { color: #4fc3f7; background: #0a2a3a; border-color: #4fc3f7; }
+.phen_sense_tab--ear.phen_sense_tab--active    { color: #ffb74d; background: #2a1a00; border-color: #ffb74d; }
+.phen_sense_tab--tongue.phen_sense_tab--active { color: #f06292; background: #2a0a18; border-color: #f06292; }
+.phen_sense_tab--skin.phen_sense_tab--active   { color: #81c784; background: #0a2010; border-color: #81c784; }
+.phen_sense_tab--nose.phen_sense_tab--active   { color: #ce93d8; background: #1a0a2a; border-color: #ce93d8; }
+
+.phen_tab_count {
+  font-size: 0.68rem;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+/* ── Add form ── */
+#phen_add_form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  background: var(--color-surface);
+}
+
+#phen_form_noun {
+  flex: 1;
+  min-width: 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.78rem;
+  outline: none;
+  cursor: pointer;
+}
+
+#phen_form_noun:focus { border-color: var(--color-highlight); }
+
+#phen_form_means {
+  flex-shrink: 0;
+  padding: 0.3rem 0.5rem;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.78rem;
+  outline: none;
+  cursor: pointer;
+}
+
+#phen_form_means:focus { border-color: var(--color-highlight); }
+
+#phen_form_add {
+  flex-shrink: 0;
+  padding: 0.3rem 0.9rem;
+  border-radius: 5px;
+  border: none;
+  background: var(--color-highlight);
+  color: #fff;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+#phen_form_add:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ── Table area ── */
+#phen_table_wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.phen_table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.phen_table th {
+  padding: 0.4rem 0.65rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  white-space: nowrap;
+}
+
+.phen_table tbody tr {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  transition: background 0.1s;
+}
+
+.phen_table tbody tr:hover { background: var(--color-surface); }
+
+.phen_table td {
+  padding: 0.45rem 0.65rem;
+  vertical-align: middle;
+  border-right: 1px solid var(--color-border);
+}
+
+.phen_table td:last-child { border-right: none; }
+
+.phen_table th {
+  border-right: 1px solid var(--color-border);
+}
+
+.phen_table th:last-child { border-right: none; }
+
+.phen_td_noun {
+  font-size: 0.82rem;
+  color: var(--color-text);
+}
+
+.phen_td_mode {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.phen_td_means { width: 130px; }
+
+/* Sense-tinted rows */
+.phen_row--eye    .phen_td_noun { color: #4fc3f7; }
+.phen_row--ear    .phen_td_noun { color: #ffb74d; }
+.phen_row--tongue .phen_td_noun { color: #f06292; }
+.phen_row--skin   .phen_td_noun { color: #81c784; }
+.phen_row--nose   .phen_td_noun { color: #ce93d8; }
+
+/* ── Means-of-access select in each row ── */
+.phen_chip_select {
+  width: 100%;
+  padding: 0.22rem 0.4rem;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+  outline: none;
+}
+
+.phen_chip_select:hover  { border-color: var(--color-text-muted); }
+.phen_chip_select:focus  { border-color: var(--color-highlight); }
+
+.phen_chip_select:hover  { border-color: var(--color-text-muted); }
+.phen_chip_select:focus  { border-color: var(--color-highlight); }
+.phen_chip_select:disabled { opacity: 0.4; cursor: wait; }
+
+/* ── Empty / loading states ── */
+.phen_state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  padding: 2rem;
+  text-align: center;
+}

@@ -1,0 +1,120 @@
+/* ── App shell ── */
+#App_viewportScale {
+  width: 100%;
+  height: calc(var(--vh, 1vh) * 100);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* ── Header ── */
+#app_nav_header {
+  display: flex;
+  align-items: center;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#app_nav_title {
+  flex: 1;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+#app_scale_controls {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-right: 0.5rem;
+}
+
+#app_scale_controls button {
+  padding: 0.28rem 0.6rem;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+#app_scale_controls button:hover:not(:disabled) {
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+#app_scale_controls button:disabled { opacity: 0.3; cursor: default; }
+
+#app_scale_label {
+  min-width: 3rem;
+  text-align: center;
+  font-size: 0.74rem !important;
+  border-left: 1px solid var(--color-border) !important;
+  border-right: 1px solid var(--color-border) !important;
+}
+
+#app_logout_btn {
+  padding: 0.28rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+#app_logout_btn:hover { color: var(--color-text); }
+
+/* ── Navigation grid ── */
+#app_nav_grid {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  padding: 2rem;
+  flex-wrap: wrap;
+}
+
+.app_nav_card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.75rem 2rem;
+  width: 220px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s;
+}
+
+.app_nav_card:hover {
+  border-color: var(--nav-color);
+  background: color-mix(in srgb, var(--nav-color) 6%, var(--color-surface));
+  transform: translateY(-2px);
+}
+
+.app_nav_card_label {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--nav-color);
+  letter-spacing: 0.04em;
+}
+
+.app_nav_card_desc {
+  font-size: 0.72rem;
+  font-weight: 100;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}

@@ -1,0 +1,31 @@
+/* ── Color variables ──────────────────────────────────────────────────────── */
+:root {
+  --color-primary: #1a1a2e;
+  --color-secondary: #16213e;
+  --color-accent: #0f3460;
+  --color-highlight: #e94560;
+  --color-text: #ffffff;
+  --color-text-muted: #a0a0b0;
+  --color-bg: #0d0d1a;
+  --color-surface: #1e1e3a;
+  --color-border: #2a2a4a;
+}
+
+/* ── Global reset ─────────────────────────────────────────────────────────── */
+html, body {
+  background-color: #0d0d1a;
+  color: #ffffff;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+::-webkit-scrollbar       { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }

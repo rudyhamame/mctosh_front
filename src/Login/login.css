@@ -1,0 +1,66 @@
+/* Login page styles */
+#login_page {
+  min-height: calc(var(--vh, 1vh) * 100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+#login_form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: 320px;
+  padding: 2rem;
+  background: var(--color-surface);
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+}
+
+#login_form h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  text-align: center;
+}
+
+#login_form input {
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-secondary);
+  color: var(--color-text);
+  font-size: 1rem;
+}
+
+#login_form button[type="submit"] {
+  padding: 0.75rem;
+  border-radius: 8px;
+  border: none;
+  background: var(--color-highlight);
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#login_error {
+  color: var(--color-highlight);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+#login_toggle {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: center;
+  padding: 0;
+}
+
+#login_toggle:hover {
+  color: var(--color-text);
+}
