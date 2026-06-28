@@ -1074,10 +1074,6 @@ const PDFPage = () => {
                 </>
               )}
 
-              {/* Manual mode hint */}
-              {extractMode === "manual" && pdfDoc && (
-                <span id="pdf_manual_hint">Click a word to select it / drag to select multiple</span>
-              )}
             </div>
           </div>
 
