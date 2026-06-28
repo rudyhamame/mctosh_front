@@ -127,7 +127,21 @@ const PDFPage = () => {
     setHistoryLoading(true);
     authFetch(apiUrl("/api/pdf/history"))
       .then((r) => r.json())
-      .then((d) => setHistory(d.extractions || []))
+      .then((d) => {
+        const extractions = d.extractions || [];
+        setHistory(extractions);
+        if (extractions.length > 0) {
+          const first = extractions[0];
+          authFetch(apiUrl(`/api/pdf/history/${first._id}`))
+            .then((r) => r.json())
+            .then((data) => {
+              setNounData(inflateExtraction(data.extraction));
+              setActiveHistoryId(first._id);
+              setSavedId(first._id);
+            })
+            .catch(() => {});
+        }
+      })
       .catch(() => {})
       .finally(() => setHistoryLoading(false));
   }, []);
@@ -167,6 +181,9 @@ const PDFPage = () => {
 
       renderTaskRef.current?.cancel();
       renderTaskRef.current = page.render({ canvasContext: canvas.getContext("2d"), viewport });
+      renderTaskRef.current.promise.catch((err) => {
+        if (err?.name !== "RenderingCancelledException") console.error(err);
+      });
       setPageViewport(viewport);
     });
 
@@ -853,6 +870,14 @@ const PDFPage = () => {
     });
   }, []);
 
+  const handleNounDelete = useCallback((card, mode, index) => {
+    setNounData((prev) => {
+      const items = [...prev[card][mode]];
+      items.splice(index, 1);
+      return { ...prev, [card]: { ...prev[card], [mode]: reindex(items, card, mode) } };
+    });
+  }, []);
+
   const handleNounMove = useCallback((fromCard, fromMode, index, toCard, toMode) => {
     if (fromCard === toCard && fromMode === toMode) return;
     setNounData((prev) => {
@@ -1056,34 +1081,6 @@ const PDFPage = () => {
             </div>
           </div>
 
-          {/* History list */}
-          {!nounData && !extracting && history.length > 0 && (
-            <div id="pdf_history">
-              <div id="pdf_history_label">{historyLoading ? "Loading history…" : "Recent extractions"}</div>
-              <table id="pdf_history_table">
-                <tbody>
-                  {history.map((item) => (
-                    <tr
-                      key={item._id}
-                      className={`phi_row${activeHistoryId === item._id ? " phi_row--active" : ""}`}
-                      onClick={() => loadHistoryItem(item._id)}
-                    >
-                      <td className="phi_td_name">{item.documentId?.filename || "—"}</td>
-                      <td className="phi_td_meta">p.{item.pageNumber} · {item.totalNouns} nouns · {item.provider}</td>
-                      <td className="phi_td_del">
-                        <button
-                          className="phi_delete_btn"
-                          onClick={(e) => handleDeleteExtraction(e, item._id)}
-                          title="Delete"
-                        >✕</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-
           {!extracting && extractError && (
             <div id="pdf_nouns_error">
               <span>⚠ {extractError}</span>
@@ -1092,13 +1089,43 @@ const PDFPage = () => {
           )}
 
           <div id="pdf_nouns_body">
-            <NounCards
-              data={nounData || EMPTY_NOUNS()}
-              streaming={extracting}
-              onStatus={handleNounStatus}
-              onMove={handleNounMove}
-              activeCard={activeCard}
-            />
+            <div id="pdf_nouns_table_area">
+              <NounCards
+                data={nounData || EMPTY_NOUNS()}
+                streaming={extracting}
+                onStatus={handleNounStatus}
+                onMove={handleNounMove}
+                onDelete={handleNounDelete}
+                activeCard={activeCard}
+              />
+            </div>
+
+            {history.length > 0 && (
+              <div id="pdf_history">
+                <div id="pdf_history_label">
+                  {historyLoading ? "Loading…" : "Sessions"}
+                </div>
+                <div id="pdf_history_scroll">
+                  {history.map((item) => (
+                    <div
+                      key={item._id}
+                      className={`phi_row${activeHistoryId === item._id ? " phi_row--active" : ""}`}
+                      onClick={() => loadHistoryItem(item._id)}
+                    >
+                      <div className="phi_td_name">{item.documentId?.filename || "—"}</div>
+                      <div className="phi_td_meta">p.{item.pageNumber} · {item.totalNouns} nouns · {item.provider}</div>
+                      <div className="phi_td_del">
+                        <button
+                          className="phi_delete_btn"
+                          onClick={(e) => handleDeleteExtraction(e, item._id)}
+                          title="Delete"
+                        >✕</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
         </div>
