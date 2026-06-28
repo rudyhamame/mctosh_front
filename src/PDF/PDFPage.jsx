@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { useHistory } from "react-router-dom";
+import { useHistory, useParams } from "react-router-dom";
 import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
 import { apiUrl } from "../config/api";
@@ -20,6 +20,7 @@ const CARDS = [
   { key: "traces",    label: "Traces" },
   { key: "phenomena", label: "Phenomena" },
   { key: "concept",   label: "Concept" },
+  { key: "models",    label: "Models" },
 ];
 
 const ALL_MODES = ["sub-molecule","molecule","sub-cell","cell","sub-tissue","tissue","sub-organ","organ","sub-system","system","sub-human","human"];
@@ -30,6 +31,7 @@ const EMPTY_NOUNS = () => ({
   traces:    modeObj(),
   phenomena: modeObj(),
   concept:   modeObj(),
+  models:    modeObj(),
   _total: 0,
 });
 
@@ -57,7 +59,7 @@ const inflateExtraction = (extraction) => {
 
 const deflateNounData = (nounData) => {
   const nouns = [];
-  for (const card of ["objects", "traces", "phenomena", "concept"]) {
+  for (const card of ["objects", "traces", "phenomena", "concept", "models"]) {
     for (const mode of ALL_MODES) {
       for (const item of nounData[card]?.[mode] || []) {
         nouns.push({ id: item.id, num: item.num, noun: item.noun, card, mode, reason: item.reason, status: item.status });
@@ -95,7 +97,10 @@ const PDFPage = () => {
   // Manual selection popup
   const [manualPopup,     setManualPopup]     = useState(null); // { x, y }
   const [manualNoun,      setManualNoun]      = useState("");
-  const [manualCard,      setManualCard]      = useState("objects");
+  const [manualCard,      setManualCard]      = useState(() => {
+    const p = window.location.pathname.split("/").pop();
+    return CARDS.find((c) => c.key === p)?.key || "objects";
+  });
   const [manualMode,      setManualMode]      = useState("organ");
   // Selection bar (shown before popup — lets user expand range word-by-word)
   const [manualSelection, setManualSelection] = useState(null); // { startIdx, endIdx, text, x, y }
@@ -685,7 +690,7 @@ const PDFPage = () => {
             if (err) { setExtractError(err); break; }
             if (noun && card && mode) {
               setNounData((prev) => {
-                const all = ["objects","traces","phenomena","concept"].flatMap((c) => ALL_MODES.flatMap((m) => prev[c][m].map((it) => it.noun)));
+                const all = ["objects","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => prev[c][m].map((it) => it.noun)));
                 if (all.includes(noun)) return prev;
                 const num = prev[card][mode].length + 1;
                 return {
@@ -766,7 +771,7 @@ const PDFPage = () => {
 
     setNounData((prev) => {
       const base = prev || EMPTY_NOUNS();
-      const all  = ["objects","traces","phenomena","concept"].flatMap((c) => ALL_MODES.flatMap((m) => base[c][m].map((it) => it.noun)));
+      const all  = ["objects","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => base[c][m].map((it) => it.noun)));
       if (all.includes(noun)) return base;
       const num = (base[manualCard][manualMode]?.length || 0) + 1;
       return {
@@ -879,6 +884,8 @@ const PDFPage = () => {
   };
 
   const router     = useHistory();
+  const { card: urlCard } = useParams();
+  const activeCard = CARDS.find((c) => c.key === urlCard)?.key || "objects";
   const canExtract = Boolean(pdfDoc) && pdfType !== "scanned";
 
   return (
@@ -1090,6 +1097,7 @@ const PDFPage = () => {
               streaming={extracting}
               onStatus={handleNounStatus}
               onMove={handleNounMove}
+              activeCard={activeCard}
             />
           </div>
 

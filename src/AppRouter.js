@@ -34,7 +34,6 @@ const AppRouter = () => {
   useLayoutEffect(() => {
     if (typeof document === "undefined") return undefined;
 
-    // Apply saved zoom scale
     const savedScale = localStorage.getItem("appScale");
     if (savedScale) document.body.style.zoom = savedScale;
 
@@ -57,6 +56,9 @@ const AppRouter = () => {
     <Router>
       <Switch>
         <Route exact path="/">
+          <Redirect to={canAccessAuthenticatedRoutes ? "/home" : "/login"} />
+        </Route>
+        <Route path="/login">
           {canAccessAuthenticatedRoutes ? (
             <Redirect to="/home" />
           ) : (
@@ -65,33 +67,33 @@ const AppRouter = () => {
         </Route>
         <Route path="/home">
           {canAccessAuthenticatedRoutes ? (
-            <App path="/home" onLogout={handleLogout} />
+            <App onLogout={handleLogout} />
           ) : (
-            <Redirect to="/" />
+            <Redirect to="/login" />
           )}
         </Route>
         <Route path="/ai">
           {canAccessAuthenticatedRoutes ? (
             <AIChat />
           ) : (
-            <Redirect to="/" />
+            <Redirect to="/login" />
           )}
         </Route>
-        <Route path="/pdf">
+        <Route path="/pdf/:card">
           {canAccessAuthenticatedRoutes ? (
             <PDFPage />
           ) : (
-            <Redirect to="/" />
+            <Redirect to="/login" />
           )}
         </Route>
         <Route path="/phenomena">
           {canAccessAuthenticatedRoutes ? (
             <PhenomenaPage />
           ) : (
-            <Redirect to="/" />
+            <Redirect to="/login" />
           )}
         </Route>
-        <Redirect to={canAccessAuthenticatedRoutes ? "/home" : "/"} />
+        <Redirect to={canAccessAuthenticatedRoutes ? "/home" : "/login"} />
       </Switch>
     </Router>
   );

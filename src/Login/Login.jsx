@@ -1,15 +1,22 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import "./login.css";
 import { apiUrl } from "../config/api";
 import { writeStoredSession } from "../utils/sessionCleanup";
 
 const Login = ({ onLogin }) => {
-  const [mode, setMode] = useState("login"); // "login" | "signup"
+  const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const videoRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+
+  const handlePlay = () => {
+    videoRef.current?.play();
+    setPlaying(true);
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -51,6 +58,19 @@ const Login = ({ onLogin }) => {
 
   return (
     <div id="login_page">
+      <div id="login_video_wrap">
+        <video
+          ref={videoRef}
+          id="login_video"
+          src="https://res.cloudinary.com/dtoxkii3q/video/upload/v1782581889/sample1/user-images/6a237f080175aacbdb3962ff/copy_dbc85ec1-1520-4cba-af16-b27eb6de8979.mp4"
+          playsInline
+          onEnded={() => setPlaying(false)}
+        />
+        {!playing && (
+          <button id="login_video_play" onClick={handlePlay} aria-label="Play">▶</button>
+        )}
+      </div>
+
       <form id="login_form" onSubmit={handleSubmit}>
         <h1>MCTOSH</h1>
 

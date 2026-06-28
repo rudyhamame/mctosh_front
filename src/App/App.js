@@ -1,20 +1,13 @@
-import React, { useRef, useState } from "react";
+import React, { useState } from "react";
 import { useHistory } from "react-router-dom";
 import "./App.css";
 
 const NAV_ITEMS = [
-  {
-    path:        "/pdf",
-    label:       "PDF Reader",
-    description: "Extract and classify nouns from medical PDFs",
-    color:       "#4fc3f7",
-  },
-  {
-    path:        "/phenomena",
-    label:       "Phenomena",
-    description: "Organise sensory phenomena by means of access",
-    color:       "#f06292",
-  },
+  { path: "/pdf/objects",   label: "Objects",    description: "Physical objects extracted from PDFs",          color: "#4fc3f7" },
+  { path: "/pdf/traces",    label: "Traces",     description: "Traces and signals extracted from PDFs",        color: "#81c784" },
+  { path: "/phenomena",     label: "Phenomena",  description: "Organise sensory phenomena by means of access", color: "#f06292" },
+  { path: "/pdf/concept",   label: "Concepts",   description: "Conceptual nouns extracted from PDFs",          color: "#ffb74d" },
+  { path: "/pdf/models",    label: "Models",     description: "Models extracted from PDFs",                    color: "#ce93d8" },
 ];
 
 const App = ({ onLogout }) => {
@@ -22,13 +15,6 @@ const App = ({ onLogout }) => {
   const [scale, setScale] = useState(
     () => parseFloat(localStorage.getItem("appScale") || "1")
   );
-  const videoRef = useRef(null);
-  const [playing, setPlaying] = useState(false);
-
-  const handlePlay = () => {
-    videoRef.current?.play();
-    setPlaying(true);
-  };
 
   const applyScale = (next) => {
     const s = Math.min(2, Math.max(0.5, Math.round(next * 10) / 10));
@@ -49,23 +35,6 @@ const App = ({ onLogout }) => {
           <button onClick={() => applyScale(scale + 0.1)} disabled={scale >= 2}>+</button>
         </div>
         <button id="app_logout_btn" onClick={onLogout}>Logout</button>
-      </div>
-
-      <div id="app_greeting">
-        <div id="app_greeting_wrap">
-          <video
-            ref={videoRef}
-            id="app_greeting_video"
-            src="https://res.cloudinary.com/dtoxkii3q/video/upload/v1782581889/sample1/user-images/6a237f080175aacbdb3962ff/copy_dbc85ec1-1520-4cba-af16-b27eb6de8979.mp4"
-            playsInline
-            onEnded={() => setPlaying(false)}
-          />
-          {!playing && (
-            <button id="app_greeting_play" onClick={handlePlay} aria-label="Play">
-              ▶
-            </button>
-          )}
-        </div>
       </div>
 
       <div id="app_nav_grid">

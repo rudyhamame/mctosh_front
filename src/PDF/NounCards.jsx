@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React from "react";
 
 const currentStatus = (item) => item.status?.value || "pending";
 import "./nounCards.css";
@@ -8,6 +8,7 @@ const CARDS = [
   { key: "traces",     label: "Traces" },
   { key: "phenomena",  label: "Phenomena" },
   { key: "concept",    label: "Concept" },
+  { key: "models",     label: "Models" },
 ];
 
 const MODES = [
@@ -79,30 +80,12 @@ const NounChip = ({ item, cardKey, modeKey, index, onStatus, onMove }) => {
   );
 };
 
-const NounCards = ({ data, streaming, onStatus, onMove }) => {
-  const [active, setActive] = useState("objects");
-  const card = CARDS.find((c) => c.key === active);
+const NounCards = ({ data, streaming, onStatus, onMove, activeCard = "objects" }) => {
+  const card = CARDS.find((c) => c.key === activeCard) || CARDS[0];
 
   return (
     <div className="noun_tabs_root">
-      <div className="noun_tabs_bar">
-        {CARDS.map(({ key, label }) => {
-          const count = MODES.reduce((n, m) => n + (data?.[key]?.[m.key]?.length || 0), 0);
-          return (
-            <button
-              key={key}
-              className={`noun_tab noun_tab--${key}${active === key ? " noun_tab--active" : ""}`}
-              onClick={() => setActive(key)}
-            >
-              {label}
-              {count > 0 && <span className="noun_tab_count">{count}</span>}
-              {streaming && <span className="noun_streaming_dot" />}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className={`noun_card noun_card--${active}`}>
+      <div className={`noun_card noun_card--${activeCard}`}>
         <div className="noun_table_wrap">
           <table className="noun_table">
             <thead>
