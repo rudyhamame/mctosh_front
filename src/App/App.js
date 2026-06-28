@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useHistory } from "react-router-dom";
 import "./App.css";
 
@@ -22,6 +22,13 @@ const App = ({ onLogout }) => {
   const [scale, setScale] = useState(
     () => parseFloat(localStorage.getItem("appScale") || "1")
   );
+  const videoRef = useRef(null);
+  const [playing, setPlaying] = useState(false);
+
+  const handlePlay = () => {
+    videoRef.current?.play();
+    setPlaying(true);
+  };
 
   const applyScale = (next) => {
     const s = Math.min(2, Math.max(0.5, Math.round(next * 10) / 10));
@@ -45,14 +52,20 @@ const App = ({ onLogout }) => {
       </div>
 
       <div id="app_greeting">
-        <video
-          id="app_greeting_video"
-          src="https://res.cloudinary.com/dtoxkii3q/video/upload/v1782581889/sample1/user-images/6a237f080175aacbdb3962ff/copy_dbc85ec1-1520-4cba-af16-b27eb6de8979.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-        />
+        <div id="app_greeting_wrap">
+          <video
+            ref={videoRef}
+            id="app_greeting_video"
+            src="https://res.cloudinary.com/dtoxkii3q/video/upload/v1782581889/sample1/user-images/6a237f080175aacbdb3962ff/copy_dbc85ec1-1520-4cba-af16-b27eb6de8979.mp4"
+            playsInline
+            onEnded={() => setPlaying(false)}
+          />
+          {!playing && (
+            <button id="app_greeting_play" onClick={handlePlay} aria-label="Play">
+              ▶
+            </button>
+          )}
+        </div>
       </div>
 
       <div id="app_nav_grid">

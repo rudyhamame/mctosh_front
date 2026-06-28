@@ -82,12 +82,41 @@
   flex-shrink: 0;
 }
 
-#app_greeting_video {
+#app_greeting_wrap {
+  position: relative;
   width: 100%;
   max-width: 480px;
+}
+
+#app_greeting_video {
+  width: 100%;
   max-height: 260px;
   border-radius: 10px;
   object-fit: cover;
+  display: block;
+}
+
+#app_greeting_play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 1.3rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, transform 0.12s;
+}
+
+#app_greeting_play:hover {
+  background: rgba(0, 0, 0, 0.75);
+  transform: scale(1.08);
 }
 
 /* ── Navigation grid ── */
