@@ -44,6 +44,17 @@ const App = ({ onLogout }) => {
         <button id="app_logout_btn" onClick={onLogout}>Logout</button>
       </div>
 
+      <div id="app_greeting">
+        <video
+          id="app_greeting_video"
+          src="https://res.cloudinary.com/dtoxkii3q/video/upload/v1782581889/sample1/user-images/6a237f080175aacbdb3962ff/copy_dbc85ec1-1520-4cba-af16-b27eb6de8979.mp4"
+          autoPlay
+          loop
+          muted
+          playsInline
+        />
+      </div>
+
       <div id="app_nav_grid">
         {NAV_ITEMS.map(({ path, label, description, color }) => (
           <button

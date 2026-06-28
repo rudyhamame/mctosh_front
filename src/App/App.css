@@ -74,6 +74,22 @@
 
 #app_logout_btn:hover { color: var(--color-text); }
 
+/* ── Greeting video ── */
+#app_greeting {
+  display: flex;
+  justify-content: center;
+  padding: 1.25rem 1.25rem 0;
+  flex-shrink: 0;
+}
+
+#app_greeting_video {
+  width: 100%;
+  max-width: 480px;
+  max-height: 260px;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
 /* ── Navigation grid ── */
 #app_nav_grid {
   flex: 1;
