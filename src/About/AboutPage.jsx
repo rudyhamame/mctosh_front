@@ -7,6 +7,7 @@ const SECTIONS = [
   { id: "about-what",       label: "What is MCTOSH?" },
   { id: "about-pivotal",    label: "A pivotal clarification" },
   { id: "about-modes",      label: "Two modes of access" },
+  { id: "about-reality",    label: "Clinical Reality" },
   { id: "about-means",      label: "Means of Access" },
   { id: "about-how",        label: "How it works" },
   { id: "about-cards",      label: "Cards" },
@@ -192,6 +193,65 @@ const AboutPage = () => {
               <p className="about_section_body about_section_body--warning" style={{ marginTop: "0.75rem" }}>
                 The serious error is treating the chart as the patient. The chart is evidence about
                 the patient — not the patient's clinical reality itself.
+              </p>
+            </section>
+
+            <section id="about-reality" className="about_section">
+              <h2 className="about_section_title">Clinical Reality</h2>
+              <p className="about_section_body">
+                <strong>Reality</strong> can serve as the broadest superclass in a clinical ontology —
+                but only if defined with enough precision. Without boundaries, the concept becomes too
+                diffuse to be useful in medicine. MCTOSH therefore works with a more constrained notion:
+                <strong> Clinical Reality</strong>, structured across four distinct domains.
+              </p>
+
+              <div className="about_reality_grid">
+                <div className="about_reality_card">
+                  <div className="about_reality_card_label">Being</div>
+                  <div className="about_reality_card_sub">Ontic domain</div>
+                  <p className="about_reality_card_desc">
+                    What actually exists — the patient, the organism, the organ, the disease process,
+                    the environment. This is the domain of entities, not of our knowledge of them.
+                  </p>
+                </div>
+                <div className="about_reality_card">
+                  <div className="about_reality_card_label">Knowing</div>
+                  <div className="about_reality_card_sub">Epistemic domain</div>
+                  <p className="about_reality_card_desc">
+                    What is observed, measured, inferred, or uncertain about those entities.
+                    Epistemology is not itself a kind of reality — it concerns the relation between
+                    an observer and reality.
+                  </p>
+                </div>
+                <div className="about_reality_card">
+                  <div className="about_reality_card_label">Representation</div>
+                  <div className="about_reality_card_sub">Semiotic domain</div>
+                  <p className="about_reality_card_desc">
+                    How reality is encoded — in text, images, codes, models, and clinical narratives.
+                    Representations are not the reality they describe; they are structured
+                    approximations of it.
+                  </p>
+                </div>
+                <div className="about_reality_card">
+                  <div className="about_reality_card_label">Action</div>
+                  <div className="about_reality_card_sub">Pragmatic domain</div>
+                  <p className="about_reality_card_desc">
+                    What clinicians do with knowledge — diagnosis, treatment, decisions, and outcomes.
+                    Action is what closes the loop: it feeds back into the ontic domain by altering
+                    the very reality it acts upon.
+                  </p>
+                </div>
+              </div>
+
+              <p className="about_section_body" style={{ marginTop: "1rem" }}>
+                The critical distinction is between the four domains, not just between ontology and
+                epistemology. Reality itself, access to reality, descriptions of reality, and actions
+                that alter reality are genuinely different things — and collapsing them is one of the
+                most common sources of confusion in clinical reasoning.
+              </p>
+              <p className="about_section_body about_section_body--warning" style={{ marginTop: "0.75rem" }}>
+                A diagnosis is not the disease. A chart is not the patient. A model is not the
+                organism. Each belongs to a different domain of Clinical Reality.
               </p>
             </section>
 
