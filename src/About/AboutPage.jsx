@@ -18,10 +18,20 @@ const AboutPage = () => {
   const history = useHistory();
   const scrollRef = useRef(null);
   const [activeId, setActiveId] = useState("about-what");
-  const [scale, setScale] = useState(1);
+  const [scale,    setScale]    = useState(1);
+  const [copied,   setCopied]   = useState(false);
+  const bodyRef = useRef(null);
 
   const applyScale = (next) =>
     setScale(Math.min(2, Math.max(0.5, Math.round(next * 10) / 10)));
+
+  const handleCopy = () => {
+    const text = bodyRef.current?.innerText || "";
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  };
 
   useEffect(() => {
     const scrollEl = scrollRef.current;
@@ -58,6 +68,9 @@ const AboutPage = () => {
       <div id="about_header">
         <button id="about_back_btn" onClick={() => history.goBack()}>←</button>
         <span id="about_header_title">About MCTOSH</span>
+        <button id="about_copy_btn" onClick={handleCopy} title="Copy all text">
+          {copied ? "Copied ✓" : "Copy"}
+        </button>
         <div id="about_zoom_controls">
           <button onClick={() => applyScale(scale - 0.1)} disabled={scale <= 0.5}>−</button>
           <button id="about_zoom_label" onClick={() => applyScale(1)} title="Reset zoom">
@@ -82,7 +95,7 @@ const AboutPage = () => {
         </nav>
 
         <div id="about_scroll" ref={scrollRef}>
-          <div id="about_body" style={{ fontSize: `${scale}rem` }}>
+          <div id="about_body" ref={bodyRef} style={{ fontSize: `${scale}rem` }}>
 
             <section id="about-objectives" className="about_section">
               <h2 className="about_section_title">Objectives</h2>
