@@ -17,6 +17,7 @@ import SourcesPage       from "./Sources/SourcesPage";
 import StudyRoom           from "./Study/StudyRoom";
 import YouTubePage         from "./YouTube/YouTubePage";
 import YouTubeSourcePage   from "./Hylomorphism/YouTubeSourcePage";
+import SettingsPage         from "./Settings/SettingsPage";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
@@ -43,6 +44,11 @@ const AppRouter = () => {
 
     const savedScale = localStorage.getItem("appScale");
     if (savedScale) document.body.style.zoom = savedScale;
+
+    const savedTheme = localStorage.getItem("mctosh_theme") || "original";
+    document.documentElement.classList.remove("theme-light", "theme-dark");
+    if (savedTheme === "light") document.documentElement.classList.add("theme-light");
+    if (savedTheme === "dark")  document.documentElement.classList.add("theme-dark");
 
     const rootElement = document.documentElement;
     const setVh = () =>
@@ -141,6 +147,13 @@ const AppRouter = () => {
         <Route path="/phenomena">
           {canAccessAuthenticatedRoutes ? (
             <PhenomenaPage />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
+        <Route path="/settings">
+          {canAccessAuthenticatedRoutes ? (
+            <SettingsPage />
           ) : (
             <Redirect to="/login" />
           )}

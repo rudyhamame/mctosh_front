@@ -23,6 +23,12 @@ const HOME_ITEMS = [
     description: "Read sources, annotate PDFs, and review extracted hyles side-by-side",
     color: "#ce93d8",
   },
+  {
+    path: "/settings",
+    label: "Settings",
+    description: "Control prompts, AI providers, and app theme",
+    color: "#78909c",
+  },
 ];
 
 const App = ({ onLogout }) => {
