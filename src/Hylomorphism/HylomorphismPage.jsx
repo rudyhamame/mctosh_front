@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useHistory } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { apiUrl } from "../config/api";
+import MCTOSHPromptModal from "./MCTOSHPromptModal";
 import "./hylomorphismPage.css";
 
 const TYPE_OPTIONS = [
@@ -25,9 +26,10 @@ const authHeader = () => {
 
 const HylomorphismPage = () => {
   const history = useHistory();
-  const [allSources, setAllSources] = useState([]);
-  const [loading,    setLoading]    = useState(true);
-  const [sourceType, setSourceType] = useState("pdf");
+  const [allSources,   setAllSources]   = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [sourceType,   setSourceType]   = useState("pdf");
+  const [showPrompt,   setShowPrompt]   = useState(false);
 
   useEffect(() => {
     fetch(apiUrl("/api/sources/"), { headers: authHeader() })
@@ -59,7 +61,9 @@ const HylomorphismPage = () => {
       <div id="hylo_header">
         <button id="hylo_back_btn" onClick={() => history.push("/home")}>←</button>
         <span id="hylo_header_title">Hyle-to-Meaning</span>
+        <button id="hylo_prompt_btn" onClick={() => setShowPrompt(true)} title="View MCTOSH Classification Prompt">Prompt</button>
       </div>
+      {showPrompt && <MCTOSHPromptModal onClose={() => setShowPrompt(false)} />}
 
       <div id="hylo_source_body">
         <div id="hylo_source_card">

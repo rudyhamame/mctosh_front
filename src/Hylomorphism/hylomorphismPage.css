@@ -30,6 +30,19 @@
 
 #hylo_back_btn:hover { color: var(--color-text); }
 
+#hylo_prompt_btn {
+  margin-left: auto;
+  padding: 0.2rem 0.75rem;
+  border: none;
+  border-radius: 6px;
+  background: #ce93d8;
+  color: #000;
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+#hylo_prompt_btn:hover { opacity: 0.82; }
+
 #hylo_header_title {
   font-size: 0.85rem;
   font-weight: 700;
