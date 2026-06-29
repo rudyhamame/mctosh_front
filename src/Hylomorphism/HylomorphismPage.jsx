@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useHistory } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { apiUrl } from "../config/api";
 import "./hylomorphismPage.css";
 
 const TYPE_OPTIONS = [
@@ -29,7 +30,7 @@ const HylomorphismPage = () => {
   const [sourceType, setSourceType] = useState("pdf");
 
   useEffect(() => {
-    fetch("/api/sources/", { headers: authHeader() })
+    fetch(apiUrl("/api/sources/"), { headers: authHeader() })
       .then(r => r.json())
       .then(d => setAllSources(d.sources || []))
       .catch(() => {})

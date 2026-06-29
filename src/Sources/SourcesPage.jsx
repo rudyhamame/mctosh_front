@@ -1,6 +1,7 @@
 import React, { useRef, useState, useCallback, useEffect } from "react";
 import { useHistory } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { apiUrl } from "../config/api";
 import "./sourcesPage.css";
 
 const TYPE_LABELS = { pdf: "PDF", word: "Word", youtube: "YouTube", image: "Image" };
@@ -30,7 +31,7 @@ const SourcesPage = () => {
   useEffect(() => {
     (async () => {
       try {
-        const res  = await fetch("/api/sources/", { headers: authHeader() });
+        const res  = await fetch(apiUrl("/api/sources/"), { headers: authHeader() });
         const data = await res.json();
         if (res.ok) setSources(data.sources || []);
       } catch {}
@@ -63,7 +64,7 @@ const SourcesPage = () => {
       form.append("file", file);
       form.append("type", type);
       form.append("name", file.name);
-      const res  = await fetch("/api/sources/save", { method: "POST", headers: authHeader(), body: form });
+      const res  = await fetch(apiUrl("/api/sources/save"), { method: "POST", headers: authHeader(), body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `"${file.name}" failed.`);
       if (data.duplicate) {
@@ -89,7 +90,7 @@ const SourcesPage = () => {
       form.append("type", "youtube");
       form.append("name", url);
       form.append("url",  url);
-      const res  = await fetch("/api/sources/save", { method: "POST", headers: authHeader(), body: form });
+      const res  = await fetch(apiUrl("/api/sources/save"), { method: "POST", headers: authHeader(), body: form });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Save failed.");
       setSources((prev) => [data.source, ...prev]);
@@ -103,7 +104,7 @@ const SourcesPage = () => {
   /* ── Delete ── */
   const deleteSource = useCallback(async (id) => {
     try {
-      await fetch(`/api/sources/${id}`, { method: "DELETE", headers: authHeader() });
+      await fetch(apiUrl(`/api/sources/${id}`), { method: "DELETE", headers: authHeader() });
       setSources((prev) => prev.filter((s) => s._id !== id));
     } catch {}
   }, []);
