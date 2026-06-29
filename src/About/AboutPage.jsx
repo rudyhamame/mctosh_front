@@ -247,7 +247,7 @@ const AboutPage = () => {
 
                 <div className="about_reality_card about_reality_card--praxis">
                   <div className="about_reality_card_label">Clinical Action</div>
-                  <div className="about_reality_card_sub">Clinical Praxis Domain — how knowledge is used</div>
+                  <div className="about_reality_card_sub">Clinical Praxis / Pragmatic Domain — how knowledge is used</div>
                   <ul className="about_reality_list">
                     <li>treatment and intervention</li>
                     <li>monitoring and prevention</li>
