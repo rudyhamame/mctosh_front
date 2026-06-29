@@ -431,39 +431,58 @@
   line-height: 1.5;
 }
 
-/* ── Clinical Reality grid ── */
-.about_reality_grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
+/* ── Four Domains flow ── */
+.about_reality_flow {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
   margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.about_reality_arrow {
+  display: flex;
+  align-items: center;
+  padding: 0 0.4rem;
+  font-size: 1.1em;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
 }
 
 .about_reality_card {
-  padding: 0.85rem 1rem;
+  flex: 1;
+  min-width: 140px;
+  padding: 0.8rem 0.9rem;
   border: 1px solid var(--color-border);
   border-radius: 8px;
   background: var(--color-surface);
 }
 
+.about_reality_card--ontic     { border-top: 2px solid #4fc3f7; }
+.about_reality_card--epistemic { border-top: 2px solid #81c784; }
+.about_reality_card--semantic  { border-top: 2px solid #ffb74d; }
+.about_reality_card--praxis    { border-top: 2px solid #f06292; }
+
 .about_reality_card_label {
-  font-size: 0.78em;
+  font-size: 0.75em;
   font-weight: 700;
   color: var(--color-text);
   letter-spacing: 0.04em;
 }
 
 .about_reality_card_sub {
-  font-size: 0.65em;
+  font-size: 0.6em;
   color: var(--color-text-muted);
   font-style: italic;
-  margin-top: 0.1rem;
-  margin-bottom: 0.5rem;
+  margin-top: 0.15rem;
+  margin-bottom: 0.55rem;
+  line-height: 1.4;
 }
 
-.about_reality_card_desc {
+.about_reality_list {
   margin: 0;
-  font-size: 0.78em;
-  line-height: 1.6;
+  padding-left: 1rem;
+  font-size: 0.72em;
+  line-height: 1.7;
   color: var(--color-text-muted);
 }
