@@ -1,17 +1,33 @@
 import React, { useState } from "react";
 import { useHistory } from "react-router-dom";
 import "./App.css";
+import AIProviderSelect from "./AIProviderSelect";
+import { useAIProvider } from "../hooks/useAIProvider";
 
-const NAV_ITEMS = [
-  { path: "/pdf/objects",   label: "Objects",    description: "Physical objects extracted from PDFs",          color: "#4fc3f7" },
-  { path: "/pdf/traces",    label: "Traces",     description: "Traces and signals extracted from PDFs",        color: "#81c784" },
-  { path: "/phenomena",     label: "Phenomena",  description: "Organise sensory phenomena by means of access", color: "#f06292" },
-  { path: "/pdf/concept",   label: "Concepts",   description: "Conceptual nouns extracted from PDFs",          color: "#ffb74d" },
-  { path: "/pdf/models",    label: "Models",     description: "Models extracted from PDFs",                    color: "#ce93d8" },
+const HOME_ITEMS = [
+  {
+    path: "/hylomorphism",
+    label: "Hyle-to-Meaning",
+    description: "Extract hyles from clinical text and classify them into Objects, Traces, Phenomena, Concepts, and Models",
+    color: "#e53935",
+  },
+  {
+    path: "/sources",
+    label: "Hyle Source Organisation",
+    description: "Store and manage PDFs as sources from which hyles will be extracted",
+    color: "#4fc3f7",
+  },
+  {
+    path: "/study",
+    label: "Study Room",
+    description: "Read sources, annotate PDFs, and review extracted hyles side-by-side",
+    color: "#ce93d8",
+  },
 ];
 
 const App = ({ onLogout }) => {
   const history = useHistory();
+  const { provider, setProvider } = useAIProvider();
   const [scale, setScale] = useState(
     () => parseFloat(localStorage.getItem("appScale") || "1")
   );
@@ -34,19 +50,20 @@ const App = ({ onLogout }) => {
           </button>
           <button onClick={() => applyScale(scale + 0.1)} disabled={scale >= 2}>+</button>
         </div>
+        <AIProviderSelect provider={provider} setProvider={setProvider} />
         <button id="app_logout_btn" onClick={onLogout}>Logout</button>
       </div>
 
-      <div id="app_nav_grid">
-        {NAV_ITEMS.map(({ path, label, description, color }) => (
+      <div id="app_home_grid">
+        {HOME_ITEMS.map(({ path, label, description, color }) => (
           <button
             key={path}
-            className="app_nav_card"
+            className="app_home_card"
             style={{ "--nav-color": color }}
             onClick={() => history.push(path)}
           >
-            <span className="app_nav_card_label">{label}</span>
-            <span className="app_nav_card_desc">{description}</span>
+            <span className="app_home_card_label">{label}</span>
+            <span className="app_home_card_desc">{description}</span>
           </button>
         ))}
       </div>

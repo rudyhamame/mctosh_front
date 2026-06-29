@@ -74,24 +74,25 @@
 
 #app_logout_btn:hover { color: var(--color-text); }
 
-/* ── Navigation grid ── */
-#app_nav_grid {
+/* ── Home two-door grid ── */
+#app_home_grid {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 1.25rem;
-  padding: 2rem;
+  gap: 1.5rem;
+  padding: 2.5rem;
   flex-wrap: wrap;
 }
 
-.app_nav_card {
+.app_home_card {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 1.75rem 2rem;
-  width: 220px;
+  gap: 0.75rem;
+  padding: 2.5rem 2.25rem;
+  width: 260px;
   border: 1px solid var(--color-border);
+  border-top: 3px solid var(--nav-color);
   border-radius: 10px;
   background: var(--color-surface);
   cursor: pointer;
@@ -99,22 +100,21 @@
   transition: border-color 0.15s, background 0.15s, transform 0.12s;
 }
 
-.app_nav_card:hover {
-  border-color: var(--nav-color);
-  background: color-mix(in srgb, var(--nav-color) 6%, var(--color-surface));
-  transform: translateY(-2px);
+.app_home_card:hover {
+  background: color-mix(in srgb, var(--nav-color) 5%, var(--color-surface));
+  transform: translateY(-3px);
 }
 
-.app_nav_card_label {
-  font-size: 0.88rem;
+.app_home_card_label {
+  font-size: 1rem;
   font-weight: 700;
   color: var(--nav-color);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
 }
 
-.app_nav_card_desc {
-  font-size: 0.72rem;
-  font-weight: 100;
+.app_home_card_desc {
+  font-size: 0.76rem;
+  font-weight: 400;
   color: var(--color-text-muted);
-  line-height: 1.5;
+  line-height: 1.6;
 }

@@ -7,9 +7,16 @@ import {
 } from "react-router-dom";
 import App from "./App/App";
 import Login from "./Login/Login";
-import AIChat        from "./AI/AIChat";
-import PDFPage       from "./PDF/PDFPage";
-import PhenomenaPage from "./Phenomena/PhenomenaPage";
+import AIChat            from "./AI/AIChat";
+import PDFPage           from "./PDF/PDFPage";
+import CardPage          from "./Card/CardPage";
+import PhenomenaPage     from "./Phenomena/PhenomenaPage";
+import AboutPage         from "./About/AboutPage";
+import HylomorphismPage  from "./Hylomorphism/HylomorphismPage";
+import SourcesPage       from "./Sources/SourcesPage";
+import StudyRoom           from "./Study/StudyRoom";
+import YouTubePage         from "./YouTube/YouTubePage";
+import YouTubeSourcePage   from "./Hylomorphism/YouTubeSourcePage";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
@@ -58,6 +65,9 @@ const AppRouter = () => {
         <Route exact path="/">
           <Redirect to={canAccessAuthenticatedRoutes ? "/home" : "/login"} />
         </Route>
+        <Route path="/about">
+          <AboutPage />
+        </Route>
         <Route path="/login">
           {canAccessAuthenticatedRoutes ? (
             <Redirect to="/home" />
@@ -72,6 +82,41 @@ const AppRouter = () => {
             <Redirect to="/login" />
           )}
         </Route>
+        <Route path="/hylomorphism/youtube_source">
+          {canAccessAuthenticatedRoutes ? (
+            <YouTubeSourcePage />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
+        <Route path="/hylomorphism">
+          {canAccessAuthenticatedRoutes ? (
+            <HylomorphismPage />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
+        <Route path="/sources">
+          {canAccessAuthenticatedRoutes ? (
+            <SourcesPage />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
+        <Route path="/study">
+          {canAccessAuthenticatedRoutes ? (
+            <StudyRoom />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
+        <Route path="/youtube">
+          {canAccessAuthenticatedRoutes ? (
+            <YouTubePage />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
         <Route path="/ai">
           {canAccessAuthenticatedRoutes ? (
             <AIChat />
@@ -79,9 +124,16 @@ const AppRouter = () => {
             <Redirect to="/login" />
           )}
         </Route>
-        <Route path="/pdf/:card">
+        <Route path="/hyles">
           {canAccessAuthenticatedRoutes ? (
             <PDFPage />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
+        <Route path="/card/:card">
+          {canAccessAuthenticatedRoutes ? (
+            <CardPage />
           ) : (
             <Redirect to="/login" />
           )}
@@ -93,6 +145,10 @@ const AppRouter = () => {
             <Redirect to="/login" />
           )}
         </Route>
+        {/* Legacy redirect — keep old /pdf/:card links working */}
+        <Route path="/pdf/:card" render={({ match }) => (
+          <Redirect to={`/card/${match.params.card}`} />
+        )} />
         <Redirect to={canAccessAuthenticatedRoutes ? "/home" : "/login"} />
       </Switch>
     </Router>

@@ -103,3 +103,19 @@
 #login_toggle:hover {
   color: var(--color-text);
 }
+
+#login_about_btn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  text-align: center;
+  padding: 0;
+  margin-top: 0.25rem;
+  letter-spacing: 0.04em;
+}
+
+#login_about_btn:hover {
+  color: var(--color-text);
+}

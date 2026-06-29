@@ -1,11 +1,15 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useHistory, useParams } from "react-router-dom";
+import { useHistory, useLocation, useParams } from "react-router-dom";
+import AIProviderSelect from "../App/AIProviderSelect";
+import { useAIProvider } from "../hooks/useAIProvider";
 import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
-import NounCards from "./NounCards";
+import HyleCards from "./HyleCards";
 import SystemMessageModal from "./SystemMessageModal";
+import { drawAnnotation } from "./annotationDraw";
+import { LINGUISTIC_UNITS, unitById } from "../Linguistics/linguisticUnits";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -23,108 +27,71 @@ const CARDS = [
   { key: "models",    label: "Models" },
 ];
 
+const HYLE_TYPE_TREE = [
+  {
+    key: "morpheme", label: "Morpheme",
+    children: [
+      {
+        key: "morpheme.base", label: "Base",
+        children: [
+          { key: "morpheme.base.free",  label: "Free",  note: "simple word" },
+          { key: "morpheme.base.bound", label: "Bound" },
+        ],
+      },
+      {
+        key: "morpheme.affix", label: "Affix",
+        children: [
+          { key: "morpheme.affix.prefix",      label: "Prefix" },
+          { key: "morpheme.affix.connecting",  label: "Connecting vowel" },
+          { key: "morpheme.affix.suffix",      label: "Suffix" },
+        ],
+      },
+    ],
+  },
+  {
+    key: "word", label: "Word",
+    children: [
+      { key: "word.compound", label: "Compound", note: "one or more morphemes" },
+    ],
+  },
+  { key: "syntagm",  label: "Syntagm" },
+  { key: "paradigm", label: "Paradigm" },
+];
+
+// Flat label lookup for selected type display
+const HYLE_TYPE_LABELS = {
+  "morpheme.base.free":       "Free base",
+  "morpheme.base.bound":      "Bound base",
+  "morpheme.affix.prefix":    "Prefix",
+  "morpheme.affix.connecting":"Connecting vowel",
+  "morpheme.affix.suffix":    "Suffix",
+  "word.compound":            "Compound",
+  "syntagm":                  "Syntagm",
+  "paradigm":                 "Paradigm",
+};
+
 const ANNOT_TOOLS = [
-  { key: "highlight",     icon: "▋",  label: "Highlight" },
-  { key: "underline",     icon: "U̲",  label: "Underline" },
-  { key: "strikethrough", icon: "S̶",  label: "Strikethrough" },
-  { key: "pen",           icon: "✏",  label: "Pen" },
-  { key: "line",          icon: "╱",  label: "Line" },
-  { key: "arrow",         icon: "→",  label: "Arrow" },
-  { key: "rect",          icon: "□",  label: "Rectangle" },
-  { key: "circle",        icon: "○",  label: "Ellipse" },
-  { key: "text",          icon: "T",  label: "Text" },
-  { key: "eraser",        icon: "⌫",  label: "Eraser" },
+  { key: "highlight",     icon: "fi-rr-highlighter",          label: "Highlight",     hasSize: true  },
+  { key: "underline",     icon: "fi-rr-underline",            label: "Underline",     hasSize: false },
+  { key: "strikethrough", icon: "fi-rr-strikethrough",        label: "Strikethrough", hasSize: false },
+  { key: "pen",           icon: "fi-rr-pencil",               label: "Pen",           hasSize: true  },
+  { key: "line",          icon: "fi-rr-minus",                label: "Line",          hasSize: false },
+  { key: "arrow",         icon: "fi-rr-arrow-small-right",    label: "Arrow",         hasSize: false },
+  { key: "rect",          icon: "fi-rr-rectangle-horizontal", label: "Rectangle",     hasSize: false },
+  { key: "circle",        icon: "fi-rr-circle",               label: "Ellipse",       hasSize: false },
+  { key: "text",          icon: "fi-rr-text",                 label: "Text",          hasSize: false },
+  { key: "eraser",        icon: "fi-rr-eraser",               label: "Eraser",        hasSize: true  },
 ];
 
 const ANNOT_COLORS = ["#ffff00","#ff6b6b","#51cf66","#74c0fc","#f783ac","#ffa94d","#e9ecef","#212529"];
 
 // Draw a single annotation onto a 2d canvas context.
 // Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
-const drawAnnotation = (ctx, ann, scale = 1) => {
-  const s  = scale;
-  const p  = (v) => v * s;
-  const pt = ({ x, y }) => [x * s, y * s];
-
-  ctx.save();
-  ctx.strokeStyle = ann.color;
-  ctx.fillStyle   = ann.color;
-  ctx.lineWidth   = (ann.lineWidth || 2) * s;
-  ctx.lineCap     = "round";
-  ctx.lineJoin    = "round";
-
-  switch (ann.type) {
-    case "highlight":
-      if (!ann.points || ann.points.length < 2) break;
-      ctx.globalAlpha = 0.35;
-      ctx.lineWidth   = (ann.lineWidth || 16) * s;
-      ctx.beginPath();
-      if (ann.mode === "line") {
-        const [fx, fy] = pt(ann.points[0]);
-        const [lx, ly] = pt(ann.points[ann.points.length - 1]);
-        ctx.moveTo(fx, fy); ctx.lineTo(lx, ly);
-      } else {
-        const [fx, fy] = pt(ann.points[0]);
-        ctx.moveTo(fx, fy);
-        for (let i = 1; i < ann.points.length; i++) { const [x, y] = pt(ann.points[i]); ctx.lineTo(x, y); }
-      }
-      ctx.stroke();
-      break;
-    case "underline":
-      ctx.beginPath();
-      ctx.moveTo(p(ann.x),            p(ann.y + ann.h));
-      ctx.lineTo(p(ann.x + ann.w),    p(ann.y + ann.h));
-      ctx.stroke();
-      break;
-    case "strikethrough":
-      ctx.beginPath();
-      ctx.moveTo(p(ann.x),            p(ann.y + ann.h / 2));
-      ctx.lineTo(p(ann.x + ann.w),    p(ann.y + ann.h / 2));
-      ctx.stroke();
-      break;
-    case "pen":
-      if (!ann.points || ann.points.length < 2) break;
-      ctx.beginPath();
-      { const [fx, fy] = pt(ann.points[0]); ctx.moveTo(fx, fy); }
-      for (let i = 1; i < ann.points.length; i++) { const [x, y] = pt(ann.points[i]); ctx.lineTo(x, y); }
-      ctx.stroke();
-      break;
-    case "line":
-      ctx.beginPath(); ctx.moveTo(p(ann.x1), p(ann.y1)); ctx.lineTo(p(ann.x2), p(ann.y2)); ctx.stroke();
-      break;
-    case "arrow": {
-      const [x1, y1, x2, y2] = [p(ann.x1), p(ann.y1), p(ann.x2), p(ann.y2)];
-      const dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy);
-      if (len === 0) break;
-      const ux = dx / len, uy = dy / len, hl = 14 * s, ha = Math.PI / 6;
-      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(x2, y2);
-      ctx.lineTo(x2 - hl * (ux * Math.cos(ha) - uy * Math.sin(ha)), y2 - hl * (uy * Math.cos(ha) + ux * Math.sin(ha)));
-      ctx.lineTo(x2 - hl * (ux * Math.cos(ha) + uy * Math.sin(ha)), y2 - hl * (uy * Math.cos(ha) - ux * Math.sin(ha)));
-      ctx.closePath(); ctx.fill();
-      break;
-    }
-    case "rect":
-      ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
-      break;
-    case "circle":
-      ctx.beginPath();
-      ctx.ellipse(p(ann.x + ann.w / 2), p(ann.y + ann.h / 2), Math.abs(p(ann.w / 2)), Math.abs(p(ann.h / 2)), 0, 0, Math.PI * 2);
-      ctx.stroke();
-      break;
-    case "text":
-      ctx.font = `${(ann.fontSize || 16) * s}px sans-serif`;
-      ctx.fillText(ann.text || "", p(ann.x), p(ann.y));
-      break;
-    default: break;
-  }
-  ctx.restore();
-};
 
 const ALL_MODES = ["sub-molecule","molecule","sub-cell","cell","sub-tissue","tissue","sub-organ","organ","sub-system","system","sub-human","human"];
 const modeObj   = () => Object.fromEntries(ALL_MODES.map((m) => [m, []]));
 
-const EMPTY_NOUNS = () => ({
+const EMPTY_HYLES = () => ({
   objects:   modeObj(),
   traces:    modeObj(),
   phenomena: modeObj(),
@@ -145,7 +112,7 @@ const initStatus   = () => ({ value: "pending", at: new Date().toISOString() });
 const currentStatus = (item) => item.status?.value || "pending";
 
 const inflateExtraction = (extraction) => {
-  const data = EMPTY_NOUNS();
+  const data = EMPTY_HYLES();
   for (const { id, num, noun, card, mode, reason, status } of extraction.nouns || []) {
     if (data[card]?.[mode]) {
       data[card][mode].push({ id, num, noun, reason: reason || "", status: status?.value ? status : initStatus() });
@@ -155,11 +122,11 @@ const inflateExtraction = (extraction) => {
   return data;
 };
 
-const deflateNounData = (nounData) => {
+const deflateNounData = (hyleData) => {
   const nouns = [];
   for (const card of ["objects", "traces", "phenomena", "concept", "models"]) {
     for (const mode of ALL_MODES) {
-      for (const item of nounData[card]?.[mode] || []) {
+      for (const item of hyleData[card]?.[mode] || []) {
         nouns.push({ id: item.id, num: item.num, noun: item.noun, card, mode, reason: item.reason, status: item.status });
       }
     }
@@ -177,26 +144,30 @@ const PDFPage = () => {
   const [dragOver, setDragOver]     = useState(false);
   const [pageViewport, setPageViewport] = useState(null);
   const [zoom, setZoom]               = useState(1);
-  const [splitRatio, setSplitRatio]   = useState(0.42);
+  const [splitRatio,     setSplitRatio]    = useState(1);
+  const [extractionOpen, setExtractionOpen] = useState(false);
   const savedRatioRef                 = useRef(0.42);
   const contentRef                    = useRef(null);
   const fitScaleRef                 = useRef(1);
   const zoomRef                     = useRef(1);
   const extractModeRef              = useRef("ai");
 
-  const [nounData, setNounData]       = useState(null);
-  const [nounPage, setNounPage]       = useState(null);
+  const [hyleData, setHyleData]       = useState(null);
+  const [hyleFontSize, setHyleFontSize] = useState(1);
+  const [hylePage, setHylePage]       = useState(null);
   const [extracting, setExtracting]   = useState(false);
   const [extractError, setExtractError] = useState("");
-  const [provider, setProvider]       = useState("openai");
+  const { provider, setProvider }     = useAIProvider();
   const [showSysModal, setShowSysModal] = useState(false);
 
   // AI vs Manual toggle
-  const [extractMode, setExtractMode] = useState("ai");
+  const extractMode = provider === "manual" ? "manual" : "ai";
+  const [extractionType, setExtractionType] = useState(null); // selected hyle type key
+  const [typeTreeOpen,   setTypeTreeOpen]   = useState(false);
 
   // Manual selection popup
   const [manualPopup,     setManualPopup]     = useState(null); // { x, y }
-  const [manualNoun,      setManualNoun]      = useState("");
+  const [manualHyle,      setManualHyle]      = useState("");
   const [manualCard,      setManualCard]      = useState(() => {
     const p = window.location.pathname.split("/").pop();
     return CARDS.find((c) => c.key === p)?.key || "objects";
@@ -215,25 +186,57 @@ const PDFPage = () => {
   // ── Annotation state ──────────────────────────────────────────────────────
   const [annotTool,      setAnnotTool]      = useState(null);
   const [annotColor,     setAnnotColor]     = useState("#ffff00");
-  const [annotSize,      setAnnotSize]      = useState(16);
+  const [annotSize,      setAnnotSize]      = useState(16);  // highlight lineWidth
+  const [penSize,        setPenSize]        = useState(2);   // pen lineWidth
+  const [eraserSize,     setEraserSize]     = useState(18);  // eraser radius
   const [highlightMode,  setHighlightMode]  = useState("freehand"); // "freehand" | "line"
+  const [linguisticUnit, setLinguisticUnit] = useState(null); // id from LINGUISTIC_UNITS | null
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
   const [annotTextVal,   setAnnotTextVal]   = useState("");
   const annotCanvasRef  = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
 
-  const canvasRef     = useRef(null);
+  // Per-page refs for continuous scroll
+  const pageCanvasRefs    = useRef([]);
+  const pageContainerRefs = useRef([]);
+  const renderTasksRef    = useRef([]);
+  const pageViewportsRef  = useRef([]);
+  const pageNumRef        = useRef(1);
+  pageNumRef.current      = pageNum;  // sync during render
+
+  // Proxy ref: always points to current page's PDF canvas
+  const canvasRef = { get current() { return pageCanvasRefs.current[pageNumRef.current - 1] ?? null; } };
+
   const textLayerRef  = useRef(null);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
   const fileInputRef  = useRef(null);
-  const renderTaskRef = useRef(null);
   const popupRef      = useRef(null);
   const selBarRef          = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
   const mouseDownPosRef    = useRef(null); // {x,y} at last mousedown — used to detect drag vs click
+
+  // ── Sources list (for /hyles drop-zone replacement) ─────────────────────
+  const [hyleSources,        setHyleSources]        = useState([]);
+  const [hyleSourcesLoading, setHyleSourcesLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isNounsPage) return;
+    setHyleSourcesLoading(true);
+    authFetch(apiUrl("/api/sources/"))
+      .then((r) => r.json())
+      .then((d) => setHyleSources((d.sources || []).filter((s) => s.type === "pdf" || s.type === "word")))
+      .catch(() => {})
+      .finally(() => setHyleSourcesLoading(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Load from Sources page ────────────────────────────────────────────────
+  useEffect(() => {
+    const { sourceId, pdfName } = location.state || {};
+    if (sourceId) loadFromSource(sourceId, pdfName || "document.pdf");
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Fetch history on mount ─────────────────────────────────────────────────
   useEffect(() => {
@@ -248,7 +251,7 @@ const PDFPage = () => {
           authFetch(apiUrl(`/api/pdf/history/${first._id}`))
             .then((r) => r.json())
             .then((data) => {
-              setNounData(inflateExtraction(data.extraction));
+              setHyleData(inflateExtraction(data.extraction));
               setActiveHistoryId(first._id);
               setSavedId(first._id);
             })
@@ -260,48 +263,50 @@ const PDFPage = () => {
   }, []);
 
   // ── Render PDF page on canvas ──────────────────────────────────────────────
+  // Render ALL pages whenever pdfDoc or zoom changes (continuous scroll)
   useEffect(() => {
-    if (!pdfDoc || !canvasRef.current) return;
+    if (!pdfDoc || pageCount === 0) return;
     let cancelled = false;
+    renderTasksRef.current.forEach(t => t?.cancel());
+    renderTasksRef.current = new Array(pageCount).fill(null);
 
-    pdfDoc.getPage(pageNum).then((page) => {
-      if (cancelled || !canvasRef.current) return;
-      const previewWidth = previewRef.current?.clientWidth || 480;
-      const naturalWidth = page.getViewport({ scale: 1 }).width;
-      fitScaleRef.current = (previewWidth - 24) / naturalWidth;
+    const renderOnePage = async (n) => {
+      if (cancelled) return;
+      const canvas = pageCanvasRefs.current[n - 1];
+      if (!canvas) return;
+      const page = await pdfDoc.getPage(n);
+      if (cancelled || !pageCanvasRefs.current[n - 1]) return;
       const scale    = fitScaleRef.current * zoom;
       const viewport = page.getViewport({ scale });
+      pageViewportsRef.current[n - 1] = viewport;
+      const c = pageCanvasRefs.current[n - 1];
+      if (!c || cancelled) return;
+      c.width  = viewport.width;
+      c.height = viewport.height;
+      const task = page.render({ canvasContext: c.getContext("2d"), viewport });
+      renderTasksRef.current[n - 1] = task;
+      task.promise.catch(err => { if (err?.name !== "RenderingCancelledException") console.error(err); });
+      if (n === pageNumRef.current && !cancelled) setPageViewport(viewport);
+    };
 
-      const canvas = canvasRef.current;
-
-      // Snapshot current content before resizing so we can paint it as a
-      // scaled placeholder — prevents the canvas from flashing black while
-      // pdfjs renders the new frame asynchronously.
-      let snapshot = null;
-      if (canvas.width > 0 && canvas.height > 0) {
-        snapshot = document.createElement("canvas");
-        snapshot.width  = canvas.width;
-        snapshot.height = canvas.height;
-        snapshot.getContext("2d").drawImage(canvas, 0, 0);
-      }
-
-      canvas.width  = viewport.width;
-      canvas.height = viewport.height;
-
-      if (snapshot) {
-        canvas.getContext("2d").drawImage(snapshot, 0, 0, viewport.width, viewport.height);
-      }
-
-      renderTaskRef.current?.cancel();
-      renderTaskRef.current = page.render({ canvasContext: canvas.getContext("2d"), viewport });
-      renderTaskRef.current.promise.catch((err) => {
-        if (err?.name !== "RenderingCancelledException") console.error(err);
-      });
-      setPageViewport(viewport);
+    // Compute fitScale from page 1 first, then render all pages
+    pdfDoc.getPage(1).then(page1 => {
+      if (cancelled) return;
+      const previewWidth = previewRef.current?.clientWidth || 480;
+      fitScaleRef.current = (previewWidth - 24) / page1.getViewport({ scale: 1 }).width;
+      const cur = pageNumRef.current;
+      renderOnePage(cur);
+      for (let n = 1; n <= pageCount; n++) { if (n !== cur) renderOnePage(n); }
     });
 
-    return () => { cancelled = true; renderTaskRef.current?.cancel(); };
-  }, [pdfDoc, pageNum, zoom]);
+    return () => { cancelled = true; renderTasksRef.current.forEach(t => t?.cancel()); };
+  }, [pdfDoc, zoom, pageCount]);
+
+  // Sync pageViewport when pageNum changes via scroll
+  useEffect(() => {
+    const vp = pageViewportsRef.current[pageNum - 1];
+    if (vp) setPageViewport(vp);
+  }, [pageNum]);
 
   // Keep refs in sync so event handlers always read the latest values
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
@@ -325,9 +330,33 @@ const PDFPage = () => {
       el.scrollTop  = Math.max(0, pending.top);
     });
   }, [zoom]);
+  // IntersectionObserver: update pageNum as user scrolls through pages
+  useEffect(() => {
+    if (!pdfDoc || !previewRef.current || pageCount === 0) return;
+    const root = previewRef.current;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let topmost = null;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const n = parseInt(entry.target.dataset.page, 10);
+          if (topmost === null || n < topmost) topmost = n;
+        }
+        if (topmost !== null) setPageNum(topmost);
+      },
+      { root, threshold: 0.15 }
+    );
+    pageContainerRefs.current.forEach((el, i) => {
+      if (el) { el.dataset.page = String(i + 1); observer.observe(el); }
+    });
+    return () => observer.disconnect();
+  }, [pdfDoc, pageCount]);
+
   useEffect(() => { extractModeRef.current = extractMode; }, [extractMode]);
+  useEffect(() => { if (extractMode !== "manual") { setManualPopup(null); setManualSelection(null); } }, [extractMode]);
 
   const manualSelectionRef = useRef(null);
+  const dragHandleRef      = useRef(null); // sync mirror of dragHandle state
   useEffect(() => { manualSelectionRef.current = manualSelection; }, [manualSelection]);
 
   // ── Render annotation canvas ───────────────────────────────────────────────
@@ -368,6 +397,11 @@ const PDFPage = () => {
       if (extra) drawAnnotation(ctx, extra, scale);
     };
 
+    // When a linguistic unit is active it overrides the stroke color
+    const lingMeta = linguisticUnit ? unitById(linguisticUnit) : null;
+    const activeColor = lingMeta ? lingMeta.color : annotColor;
+    const unitField   = linguisticUnit ? { unit: linguisticUnit } : {};
+
     const onDown = (e) => {
       if (e.touches && e.touches.length >= 2) {
         activeAnnotRef.current = null; // cancel any in-progress stroke
@@ -381,16 +415,16 @@ const PDFPage = () => {
       }
       const p = toCanvas(e);
       if (annotTool === "highlight") {
-        activeAnnotRef.current = { type: "highlight", color: annotColor, lineWidth: annotSize / getScale(), mode: highlightMode, points: [{ x: p.x, y: p.y }] };
+        activeAnnotRef.current = { type: "highlight", color: activeColor, lineWidth: annotSize / getScale(), mode: highlightMode, points: [{ x: p.x, y: p.y }], ...unitField };
       } else if (["underline","strikethrough","rect","circle"].includes(annotTool)) {
-        activeAnnotRef.current = { type: annotTool, color: annotColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
+        activeAnnotRef.current = { type: annotTool, color: activeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y, ...unitField };
       } else if (["line","arrow"].includes(annotTool)) {
-        activeAnnotRef.current = { type: annotTool, color: annotColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+        activeAnnotRef.current = { type: annotTool, color: activeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y, ...unitField };
       } else if (annotTool === "pen") {
-        activeAnnotRef.current = { type: "pen", color: annotColor, lineWidth: 2 / getScale(), points: [{ x: p.x, y: p.y }] };
+        activeAnnotRef.current = { type: "pen", color: activeColor, lineWidth: penSize / getScale(), points: [{ x: p.x, y: p.y }], ...unitField };
       } else if (annotTool === "eraser") {
         activeAnnotRef.current = { type: "eraser" };
-        const er = 18 / getScale();
+        const er = eraserSize / getScale();
         setAnnotations((prev) => {
           const pts = [...(prev[pageNum] || [])];
           return { ...prev, [pageNum]: pts.filter((a) => {
@@ -425,7 +459,7 @@ const PDFPage = () => {
         ann.x2 = p.x; ann.y2 = p.y;
         redraw(ann);
       } else if (ann.type === "eraser") {
-        const er = 18 / getScale();
+        const er = eraserSize / getScale();
         setAnnotations((prev) => {
           const pts = [...(prev[pageNum] || [])];
           return { ...prev, [pageNum]: pts.filter((a) => {
@@ -467,7 +501,7 @@ const PDFPage = () => {
       ac.removeEventListener("touchend",   onUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, highlightMode, pageNum, annotations]);
+  }, [annotTool, annotColor, annotSize, penSize, eraserSize, highlightMode, linguisticUnit, pageNum, annotations]);
 
   const commitAnnotText = useCallback(() => {
     if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
@@ -569,19 +603,29 @@ const PDFPage = () => {
       while (e < text.length && /\S/.test(text[e]))     e++;
       if (s === e) return null;
 
-      const range = document.createRange();
-      range.setStart(textNode, s);
-      range.setEnd(textNode, e);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      const word = sel.toString().trim();
+      // pdfjs sometimes splits one word across adjacent spans with no whitespace.
+      // Expand left/right across spans that share the same word boundary.
+      const spans = spansRef.current;
+      let loIdx = spanIdx, hiIdx = spanIdx;
+      if (s === 0) {
+        while (loIdx > 0 && !/\s$/.test(spans[loIdx - 1]?.el.textContent || " ")) loIdx--;
+      }
+      if (e === text.length) {
+        while (hiIdx < spans.length - 1 && !/^\s/.test(spans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
+      }
+
+      const parts = [
+        ...spans.slice(loIdx, spanIdx).map((sp) => sp.el.textContent),
+        text.substring(s, e),
+        ...spans.slice(spanIdx + 1, hiIdx + 1).map((sp) => sp.el.textContent),
+      ];
+      const word = parts.join("").trim();
       if (!word) return null;
-      sel.removeAllRanges(); // clear browser selection highlight
+      window.getSelection()?.removeAllRanges();
 
       const bx = parseFloat(target.style.left  || "0") + (parseFloat(target.style.width  || "0") || target.offsetWidth  || 0) / 2;
       const by = parseFloat(target.style.top   || "0") +  parseFloat(target.style.height || "0") + 8;
-      return { text: word, spanIdx, x: bx, y: by };
+      return { text: word, spanIdx: loIdx, endIdx: hiIdx, x: bx, y: by };
     };
 
     // Extra pinch state
@@ -589,6 +633,9 @@ const PDFPage = () => {
     let lastPinchZoom = 1;                   // final zoom reached during gesture
 
     const onTouchStart = (e) => {
+      // Handles are managed by their own React onTouchStart — don't start a pan
+      if (e.target.closest?.(".sel_handle")) return;
+
       if (e.touches.length === 2) {
         clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         startDist = touchDist(e.touches);
@@ -633,16 +680,24 @@ const PDFPage = () => {
               }
             }
 
-            // Normal long-press: start a new selection from this word
-            const textNode = target.firstChild;
-            if (textNode && textNode.nodeType === Node.TEXT_NODE) {
+            // Normal long-press: start a new selection from this word, expanding
+            // across adjacent spans that pdfjs may have split the word into.
+            const lpSpans = spansRef.current;
+            let loIdx = spanIdx, hiIdx = spanIdx;
+            while (loIdx > 0 && !/\s$/.test(lpSpans[loIdx - 1]?.el.textContent || " ")) loIdx--;
+            while (hiIdx < lpSpans.length - 1 && !/^\s/.test(lpSpans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
+            const fromNode = lpSpans[loIdx]?.el.firstChild;
+            const toNode   = lpSpans[hiIdx]?.el.firstChild;
+            if (fromNode && fromNode.nodeType === Node.TEXT_NODE &&
+                toNode   && toNode.nodeType   === Node.TEXT_NODE) {
               const range = document.createRange();
-              range.selectNodeContents(textNode);
+              range.setStart(fromNode, 0);
+              range.setEnd(toNode, toNode.textContent.length);
               const sel = window.getSelection();
               sel.removeAllRanges();
               sel.addRange(range);
             }
-            lpStartSpanIdx = spanIdx;
+            lpStartSpanIdx = loIdx;
             isLpSelecting  = true;
             navigator.vibrate?.(30);
           }, 400);
@@ -666,6 +721,29 @@ const PDFPage = () => {
         return;
       }
       if (e.touches.length !== 1) return;
+
+      // Drag handle — handled inline so it works on the very first touchmove
+      if (dragHandleRef.current) {
+        e.preventDefault();
+        const ct     = e.touches[0];
+        const target = document.elementFromPoint(ct.clientX, ct.clientY);
+        const layer  = textLayerRef.current;
+        if (!target || !layer || !layer.contains(target)) return;
+        const idx = parseInt(target.dataset.spanIdx ?? "-1", 10);
+        if (idx < 0) return;
+        const which = dragHandleRef.current;
+        setManualSelection((sel) => {
+          if (!sel) return sel;
+          if (which === "start") {
+            const newStart = Math.min(idx, sel.endIdx);
+            return { ...sel, startIdx: newStart, text: spansRef.current.slice(newStart, sel.endIdx + 1).map((s) => s.text).join(" ").trim() };
+          } else {
+            const newEnd = Math.max(idx, sel.startIdx);
+            return { ...sel, endIdx: newEnd, text: spansRef.current.slice(sel.startIdx, newEnd + 1).map((s) => s.text).join(" ").trim() };
+          }
+        });
+        return;
+      }
 
       // After long-press fires, dragging extends the text selection
       if (isLpSelecting) {
@@ -707,6 +785,12 @@ const PDFPage = () => {
     };
 
     const onTouchEnd = (e) => {
+      if (dragHandleRef.current) {
+        dragHandleRef.current = null;
+        setDragHandle(null);
+        return;
+      }
+
       if (e.touches.length < 2 && startDist !== null) {
         startDist = null;
         const wrap = canvasWrapRef.current;
@@ -731,7 +815,7 @@ const PDFPage = () => {
         if (text) {
           const vr = sel.getRangeAt(0).getBoundingClientRect();
           const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
-          setManualNoun(noun);
+          setManualHyle(noun);
           setManualPopup({
             x: vr.left + vr.width  / 2,
             y: vr.bottom + 10,
@@ -752,7 +836,7 @@ const PDFPage = () => {
             const hi = Math.max(curSel.startIdx, curSel.endIdx);
             if (result.spanIdx >= lo && result.spanIdx <= hi) return;
           }
-          setManualSelection({ startIdx: result.spanIdx, endIdx: result.spanIdx, text: result.text, x: result.x, y: result.y });
+          setManualSelection({ startIdx: result.spanIdx, endIdx: result.endIdx, text: result.text, x: result.x, y: result.y });
         }
       }
     };
@@ -967,11 +1051,13 @@ const PDFPage = () => {
       right:  (r.right  - layerRect.left) / bodyZoom,
       bottom: (r.bottom - layerRect.top)  / bodyZoom,
     });
-    const s = toLocal(sR);
-    const e = toLocal(eR);
+    const s    = toLocal(sR);
+    const e    = toLocal(eR);
+    const padS = (s.bottom - s.top) * 0.25;
+    const padE = (e.bottom - e.top) * 0.25;
     return {
-      start: { x: s.left,  y: s.top, h: s.bottom - s.top },
-      end:   { x: e.right, y: e.top, h: e.bottom - e.top },
+      start: { x: s.left,  y: s.top - padS, h: (s.bottom - s.top) + padS * 2 },
+      end:   { x: e.right, y: e.top - padE, h: (e.bottom - e.top) + padE * 2 },
     };
   }, [manualSelection]);
 
@@ -1007,18 +1093,15 @@ const PDFPage = () => {
         }
       });
     };
-    const onUp = () => setDragHandle(null);
+    const onUp = () => { dragHandleRef.current = null; setDragHandle(null); };
 
-    window.addEventListener("mousemove",  onMove, { passive: false });
-    window.addEventListener("mouseup",    onUp);
-    window.addEventListener("touchmove",  onMove, { passive: false });
-    window.addEventListener("touchend",   onUp);
+    // Touch drag is handled inline in #pdf_preview's native onTouchMove — only mouse needs window listeners
+    window.addEventListener("mousemove", onMove, { passive: false });
+    window.addEventListener("mouseup",   onUp);
     return () => {
       document.body.style.userSelect = prev;
-      window.removeEventListener("mousemove",  onMove);
-      window.removeEventListener("mouseup",    onUp);
-      window.removeEventListener("touchmove",  onMove);
-      window.removeEventListener("touchend",   onUp);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
     };
   }, [dragHandle]);
 
@@ -1037,8 +1120,8 @@ const PDFPage = () => {
 
   // ── Clear results on page change ───────────────────────────────────────────
   useEffect(() => {
-    if (nounData !== null && nounPage !== pageNum) {
-      setNounData(null);
+    if (hyleData !== null && hylePage !== pageNum) {
+      setHyleData(null);
       setExtractError("");
       setSavedId(null);
       setActiveHistoryId(null);
@@ -1047,21 +1130,20 @@ const PDFPage = () => {
   }, [pageNum]);
 
   // ── Load PDF ───────────────────────────────────────────────────────────────
-  const loadFile = useCallback(async (file) => {
-    if (!file || file.type !== "application/pdf") return;
+  const loadPdfBytes = useCallback(async (arrayBuffer, name) => {
     setLoading(true);
-    setFilename(file.name);
+    setFilename(name);
     setPdfDoc(null); setPdfType(null);
-    setNounData(null); setNounPage(null);
+    setHyleData(null); setHylePage(null);
     setExtractError(""); setSavedId(null); setActiveHistoryId(null);
     setPageNum(1); setPageViewport(null); setZoom(1);
-
+    renderTasksRef.current.forEach(t => t?.cancel());
+    pageCanvasRefs.current = []; pageContainerRefs.current = [];
+    pageViewportsRef.current = []; renderTasksRef.current = [];
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const doc         = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       setPdfDoc(doc);
       setPageCount(doc.numPages);
-
       const sampleCount = Math.min(10, doc.numPages);
       const step        = Math.max(1, Math.floor(doc.numPages / sampleCount));
       let totalChars = 0, sampledPages = 0;
@@ -1080,6 +1162,30 @@ const PDFPage = () => {
     }
   }, []);
 
+  const loadFile = useCallback(async (file) => {
+    if (!file || file.type !== "application/pdf") return;
+    const arrayBuffer = await file.arrayBuffer();
+    loadPdfBytes(arrayBuffer, file.name);
+  }, [loadPdfBytes]);
+
+  const loadFromSource = useCallback(async (sourceId, name) => {
+    setLoading(true);
+    try {
+      const res = await authFetch(apiUrl(`/api/sources/${sourceId}/download`));
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        alert(`Could not load PDF: ${data.error || res.status}`);
+        setLoading(false);
+        return;
+      }
+      const arrayBuffer = await res.arrayBuffer();
+      loadPdfBytes(arrayBuffer, name);
+    } catch (err) {
+      alert(`Could not load PDF: ${err.message}`);
+      setLoading(false);
+    }
+  }, [loadPdfBytes]);
+
   // ── History ────────────────────────────────────────────────────────────────
   const handleDeleteExtraction = useCallback(async (e, id) => {
     e.stopPropagation();
@@ -1096,8 +1202,8 @@ const PDFPage = () => {
       const res  = await authFetch(apiUrl(`/api/pdf/history/${id}`));
       const data = await res.json();
       if (data.extraction) {
-        setNounData(inflateExtraction(data.extraction));
-        setNounPage(data.extraction.pageNumber);
+        setHyleData(inflateExtraction(data.extraction));
+        setHylePage(data.extraction.pageNumber);
         setActiveHistoryId(id); setSavedId(id); setExtractError("");
       }
     } catch {}
@@ -1105,7 +1211,7 @@ const PDFPage = () => {
 
   // ── Save ───────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
-    if (!nounData || saving) return;
+    if (!hyleData || saving) return;
     setSaving(true);
     try {
       const { systemMessage } = await (await fetch(apiUrl("/api/pdf/system-message"))).json();
@@ -1116,12 +1222,12 @@ const PDFPage = () => {
           filename: filename || "unknown.pdf",
           pageCount: pageCount || 1,
           type: pdfType || "text-based",
-          pageNumber: nounPage || pageNum,
+          pageNumber: hylePage || pageNum,
           provider: extractMode === "manual" ? "manual" : provider,
-          model: extractMode === "manual" ? "user" : provider === "openai" ? "gpt-4o-mini" : "llama3.2:3b",
+          model: extractMode === "manual" ? "user" : provider,
           systemMessageSnapshot: systemMessage || "",
-          nouns: deflateNounData(nounData),
-          totalNouns: nounData._total,
+          nouns: deflateNounData(hyleData),
+          totalNouns: hyleData._total,
         }),
       });
       const data = await res.json();
@@ -1131,14 +1237,14 @@ const PDFPage = () => {
       }
     } catch {}
     finally { setSaving(false); }
-  }, [nounData, saving, filename, pageCount, pdfType, nounPage, pageNum, provider, extractMode]);
+  }, [hyleData, saving, filename, pageCount, pdfType, hylePage, pageNum, provider, extractMode]);
 
   // ── AI extraction (streaming) ──────────────────────────────────────────────
   const handleExtract = useCallback(async () => {
     if (!pdfDoc || extracting || pdfType === "scanned") return;
     setExtracting(true);
-    setNounData(EMPTY_NOUNS());
-    setNounPage(pageNum);
+    setHyleData(EMPTY_HYLES());
+    setHylePage(pageNum);
     setExtractError(""); setSavedId(null); setActiveHistoryId(null);
 
     try {
@@ -1148,7 +1254,7 @@ const PDFPage = () => {
 
       if (!text || text.replace(/\s/g, "").length < 80) {
         setExtractError("This page has no extractable text content.");
-        setNounData(null);
+        setHyleData(null);
         return;
       }
 
@@ -1176,7 +1282,7 @@ const PDFPage = () => {
             const { noun, card, mode, reason, total, error: err } = JSON.parse(payload);
             if (err) { setExtractError(err); break; }
             if (noun && card && mode) {
-              setNounData((prev) => {
+              setHyleData((prev) => {
                 const all = ["objects","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => prev[c][m].map((it) => it.noun)));
                 if (all.includes(noun)) return prev;
                 const num = prev[card][mode].length + 1;
@@ -1217,7 +1323,7 @@ const PDFPage = () => {
       const dragText = sel?.toString().trim().replace(/\s+/g, " ");
       if (dragText && sel.rangeCount > 0) {
         const rect = sel.getRangeAt(0).getBoundingClientRect();
-        setManualNoun(dragText.toLowerCase().replace(/[.,;:]+$/, ""));
+        setManualHyle(dragText.toLowerCase().replace(/[.,;:]+$/, ""));
         setManualPopup({ x: rect.left + rect.width / 2, y: rect.bottom + 10 });
       }
       return;
@@ -1253,11 +1359,11 @@ const PDFPage = () => {
   }, [extractMode]);
 
   const handleManualAdd = useCallback(() => {
-    const noun = manualNoun.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
+    const noun = manualHyle.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
     if (!noun) return;
 
-    setNounData((prev) => {
-      const base = prev || EMPTY_NOUNS();
+    setHyleData((prev) => {
+      const base = prev || EMPTY_HYLES();
       const all  = ["objects","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => base[c][m].map((it) => it.noun)));
       if (all.includes(noun)) return base;
       const num = (base[manualCard][manualMode]?.length || 0) + 1;
@@ -1270,11 +1376,11 @@ const PDFPage = () => {
         _total: (base._total || 0) + 1,
       };
     });
-    if (!nounPage) setNounPage(pageNum);
+    if (!hylePage) setHylePage(pageNum);
     setManualPopup(null);
-    setManualNoun("");
+    setManualHyle("");
     window.getSelection()?.removeAllRanges();
-  }, [manualNoun, manualCard, manualMode, nounPage, pageNum]);
+  }, [manualHyle, manualCard, manualMode, hylePage, pageNum]);
 
   // ── Selection bar: expand / confirm ───────────────────────────────────────
   const expandLeft = useCallback(() => {
@@ -1298,7 +1404,7 @@ const PDFPage = () => {
   const confirmSelection = useCallback(() => {
     if (!manualSelection) return;
     const noun = manualSelection.text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
-    setManualNoun(noun);
+    setManualHyle(noun);
     // Get fresh viewport coords for the popup via the span's bounding rect
     const spanEl = spansRef.current[manualSelection.endIdx]?.el;
     const vr = spanEl?.getBoundingClientRect();
@@ -1332,8 +1438,8 @@ const PDFPage = () => {
   const reindex = (items, card, mode) =>
     items.map((item, i) => ({ ...item, num: i + 1, id: `${card}_${mode}_${i + 1}` }));
 
-  const handleNounStatus = useCallback((card, mode, index, newValue) => {
-    setNounData((prev) => {
+  const handleHyleStatus = useCallback((card, mode, index, newValue) => {
+    setHyleData((prev) => {
       const items  = [...prev[card][mode]];
       const next   = currentStatus(items[index]) === newValue ? "pending" : newValue;
       items[index] = { ...items[index], status: { value: next, at: new Date().toISOString() } };
@@ -1341,17 +1447,17 @@ const PDFPage = () => {
     });
   }, []);
 
-  const handleNounDelete = useCallback((card, mode, index) => {
-    setNounData((prev) => {
+  const handleHyleDelete = useCallback((card, mode, index) => {
+    setHyleData((prev) => {
       const items = [...prev[card][mode]];
       items.splice(index, 1);
       return { ...prev, [card]: { ...prev[card], [mode]: reindex(items, card, mode) } };
     });
   }, []);
 
-  const handleNounMove = useCallback((fromCard, fromMode, index, toCard, toMode) => {
+  const handleHyleMove = useCallback((fromCard, fromMode, index, toCard, toMode) => {
     if (fromCard === toCard && fromMode === toMode) return;
-    setNounData((prev) => {
+    setHyleData((prev) => {
       const src = [...prev[fromCard][fromMode]];
       const [item] = src.splice(index, 1);
       const dst = [...prev[toCard][toMode]];
@@ -1403,16 +1509,48 @@ const PDFPage = () => {
   const handleInputChange = (e) => loadFile(e.target.files[0]);
 
   const handleClose = () => {
+    renderTasksRef.current.forEach(t => t?.cancel());
+    pageCanvasRefs.current = []; pageContainerRefs.current = [];
+    pageViewportsRef.current = []; renderTasksRef.current = [];
     setPdfDoc(null); setFilename(""); setPageNum(1); setPageCount(0);
-    setPdfType(null); setNounData(null); setNounPage(null);
+    setPdfType(null); setHyleData(null); setHylePage(null);
     setExtractError(""); setSavedId(null); setActiveHistoryId(null);
     setPageViewport(null); setManualPopup(null); setZoom(1);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const renderTypeNode = (node, depth = 0) => {
+    const isLeaf = !node.children || node.children.length === 0;
+    return (
+      <div key={node.key} className={`hyle_type_node hyle_type_depth_${depth}`}>
+        {isLeaf ? (
+          <button
+            className={`hyle_type_leaf${extractionType === node.key ? " hyle_type_leaf--active" : ""}`}
+            onClick={() => setExtractionType(extractionType === node.key ? null : node.key)}
+          >
+            {node.label}
+            {node.note && <span className="hyle_type_note">{node.note}</span>}
+          </button>
+        ) : (
+          <>
+            <span className="hyle_type_group">{node.label}</span>
+            <div className="hyle_type_children">
+              {node.children.map((child) => renderTypeNode(child, depth + 1))}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   const router     = useHistory();
+  const location   = useLocation();
   const { card: urlCard } = useParams();
-  const activeCard = CARDS.find((c) => c.key === urlCard)?.key || "objects";
+  const isNounsPage = !urlCard; // true when mounted at /hyles (no card in URL)
+  const [localCard, setLocalCard] = useState("objects");
+  const activeCard = isNounsPage
+    ? localCard
+    : (CARDS.find((c) => c.key === urlCard)?.key || "objects");
   const canExtract = Boolean(pdfDoc) && pdfType !== "scanned";
 
   return (
@@ -1429,9 +1567,9 @@ const PDFPage = () => {
         >
           <input
             id="manual_noun_input"
-            value={manualNoun}
-            onChange={(e) => setManualNoun(e.target.value)}
-            placeholder="Noun"
+            value={manualHyle}
+            onChange={(e) => setManualHyle(e.target.value)}
+            placeholder="Hyle"
             autoFocus
           />
           <div id="manual_selects">
@@ -1453,9 +1591,9 @@ const PDFPage = () => {
       <div id="pdf_toolbar">
         <button id="pdf_home_btn" onClick={() => router.push("/home")} title="Home">⌂</button>
         {pdfDoc && <>
-          <button onClick={() => setPageNum((n) => n - 1)} disabled={pageNum <= 1}>‹</button>
+          <button onClick={() => pageContainerRefs.current[pageNum - 2]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum <= 1}>‹</button>
           <span>{pageNum} / {pageCount}</span>
-          <button onClick={() => setPageNum((n) => n + 1)} disabled={pageNum >= pageCount}>›</button>
+          <button onClick={() => pageContainerRefs.current[pageNum]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum >= pageCount}>›</button>
           <span id="pdf_filename">{filename}</span>
           {pdfType && <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>{PDF_TYPE_LABEL[pdfType]}</span>}
           <div id="pdf_zoom_controls">
@@ -1466,11 +1604,39 @@ const PDFPage = () => {
             <button onClick={() => setZoom((z) => Math.min(5, z * 1.25))} title="Zoom in">+</button>
           </div>
           <button id="pdf_close" onClick={handleClose}>✕</button>
+
+          {/* Hyles toggle + extraction controls */}
+          <button
+            id="pdf_hyles_toggle_btn"
+            className={extractionOpen ? "pdf_hyles_toggle_btn--active" : ""}
+            onClick={() => {
+              const next = !extractionOpen;
+              setExtractionOpen(next);
+              setSplitRatio(next ? 0.5 : 1);
+            }}
+          >Hyles</button>
+
+          {extractionOpen && (
+            <div id="pdf_hyles_actions">
+              {hyleData && hyleData._total > 0 && !extracting && (
+                <button className={`pdf_action_btn${savedId ? " pdf_action_btn--saved" : ""}`} onClick={handleSave} disabled={saving}>
+                  {saving ? "Saving…" : savedId ? "Saved" : "Save"}
+                </button>
+              )}
+              <button id="pdf_sys_btn" onClick={() => setShowSysModal(true)}>System</button>
+              <AIProviderSelect provider={provider} setProvider={setProvider} disabled={extracting} />
+              {extractMode === "ai" && (
+                <button id="pdf_extract_btn" onClick={handleExtract} disabled={!canExtract || extracting} title={!canExtract ? "Open a text-based PDF first" : ""}>
+                  {extracting ? "Extracting…" : pdfDoc ? `Extract Page ${pageNum}` : "Extract"}
+                </button>
+              )}
+            </div>
+          )}
         </>}
       </div>
 
-      {/* Annotation toolbar */}
-      {pdfDoc && (
+      {/* Annotation toolbar + Linguistic Units bar */}
+      {pdfDoc && (<>
         <div id="pdf_annot_toolbar">
           <div id="pdf_annot_tools">
             {ANNOT_TOOLS.map(({ key, icon, label }) => (
@@ -1479,7 +1645,7 @@ const PDFPage = () => {
                 className={`annot_tool_btn${annotTool === key ? " annot_tool_btn--active" : ""}`}
                 title={label}
                 onClick={() => setAnnotTool((t) => t === key ? null : key)}
-              >{icon}</button>
+              ><i className={`fi ${icon}`} /></button>
             ))}
           </div>
           <div id="pdf_annot_colors">
@@ -1494,54 +1660,107 @@ const PDFPage = () => {
             ))}
           </div>
           <div id="pdf_annot_actions">
-            <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}>↩</button>
-            <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}>🗑</button>
+            <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
+            <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-trash" /></button>
           </div>
         </div>
-      )}
 
-      {/* Highlight options panel */}
-      {annotTool === "highlight" && (
+        {/* Linguistic Units bar */}
+        <div id="pdf_ling_bar">
+          <span id="pdf_ling_label">Linguistic Units</span>
+          <div id="pdf_ling_units">
+            {LINGUISTIC_UNITS.map(u => (
+              <button
+                key={u.id}
+                className={`pdf_ling_btn${linguisticUnit === u.id ? " pdf_ling_btn--active" : ""}`}
+                style={{ "--lu-color": u.color }}
+                title={u.desc}
+                onClick={() => {
+                  setLinguisticUnit(prev => prev === u.id ? null : u.id);
+                  if (!annotTool) setAnnotTool("highlight");
+                }}
+              >{u.label}</button>
+            ))}
+            {linguisticUnit && (
+              <button
+                className="pdf_ling_clear"
+                title="Clear linguistic unit"
+                onClick={() => setLinguisticUnit(null)}
+              >×</button>
+            )}
+          </div>
+        </div>
+      </>)}
+
+      {/* Tool options panel (pen / highlight / eraser) */}
+      {(annotTool === "highlight" || annotTool === "pen" || annotTool === "eraser") && (
         <div id="highlight_panel">
           <div id="hlp_preview">
             <div
               id="hlp_circle"
               style={{
-                width:        annotSize * 2,
-                height:       annotSize * 2,
-                background:   annotColor,
+                width:        annotTool === "pen" ? penSize * 4 : annotTool === "eraser" ? eraserSize * 2 : annotSize * 2,
+                height:       annotTool === "pen" ? penSize * 4 : annotTool === "eraser" ? eraserSize * 2 : annotSize * 2,
+                background:   annotTool === "eraser" ? "rgba(255,255,255,0.15)" : annotColor,
                 borderRadius: "50%",
+                border:       annotTool === "eraser" ? "1px dashed rgba(255,255,255,0.4)" : "none",
+                maxWidth:     "80px",
+                maxHeight:    "80px",
               }}
             />
           </div>
           <div id="hlp_controls">
-            <input
-              id="hlp_slider"
-              type="range"
-              min="4" max="64" step="2"
-              value={annotSize}
-              onChange={(e) => setAnnotSize(Number(e.target.value))}
-            />
-            <div id="hlp_colors">
-              {ANNOT_COLORS.map((c) => (
+            {annotTool === "pen" && (
+              <input
+                id="hlp_slider"
+                type="range"
+                min="1" max="20" step="0.5"
+                value={penSize}
+                onChange={(e) => setPenSize(Number(e.target.value))}
+              />
+            )}
+            {annotTool === "highlight" && (
+              <input
+                id="hlp_slider"
+                type="range"
+                min="4" max="64" step="2"
+                value={annotSize}
+                onChange={(e) => setAnnotSize(Number(e.target.value))}
+              />
+            )}
+            {annotTool === "eraser" && (
+              <input
+                id="hlp_slider"
+                type="range"
+                min="6" max="48" step="2"
+                value={eraserSize}
+                onChange={(e) => setEraserSize(Number(e.target.value))}
+              />
+            )}
+            {annotTool !== "eraser" && (
+              <div id="hlp_colors">
+                {ANNOT_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    className={`annot_color_btn${annotColor === c ? " annot_color_btn--active" : ""}`}
+                    style={{ background: c }}
+                    onClick={() => setAnnotColor(c)}
+                  />
+                ))}
+              </div>
+            )}
+            {annotTool === "highlight" && (
+              <div id="hlp_mode_toggle">
                 <button
-                  key={c}
-                  className={`annot_color_btn${annotColor === c ? " annot_color_btn--active" : ""}`}
-                  style={{ background: c }}
-                  onClick={() => setAnnotColor(c)}
-                />
-              ))}
-            </div>
-            <div id="hlp_mode_toggle">
-              <button
-                className={`hlp_mode_btn${highlightMode === "freehand" ? " hlp_mode_btn--active" : ""}`}
-                onClick={() => setHighlightMode("freehand")}
-              >Freehand</button>
-              <button
-                className={`hlp_mode_btn${highlightMode === "line" ? " hlp_mode_btn--active" : ""}`}
-                onClick={() => setHighlightMode("line")}
-              >Line</button>
-            </div>
+                  className={`hlp_mode_btn${highlightMode === "freehand" ? " hlp_mode_btn--active" : ""}`}
+                  onClick={() => setHighlightMode("freehand")}
+                >Freehand</button>
+                <button
+                  className={`hlp_mode_btn${highlightMode === "line" ? " hlp_mode_btn--active" : ""}`}
+                  onClick={() => setHighlightMode("line")}
+                >Line</button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1558,58 +1777,99 @@ const PDFPage = () => {
         >
           {pdfDoc ? (
             <div id="pdf_canvas_wrap" ref={canvasWrapRef}>
-              <canvas id="pdf_canvas" ref={canvasRef} />
-              <canvas
-                id="pdf_annot_canvas"
-                ref={annotCanvasRef}
-                style={{ pointerEvents: annotTool ? "auto" : "none", cursor: annotTool === "eraser" ? "cell" : annotTool ? "crosshair" : "default" }}
-              />
-              {annotTextInput && (
-                <input
-                  id="annot_text_input"
-                  autoFocus
-                  value={annotTextVal}
-                  onChange={(e) => setAnnotTextVal(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
-                  onBlur={commitAnnotText}
-                  style={{ left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left, top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top }}
-                />
-              )}
-              {/* Drag handles — sit at the edges of the highlighted selection */}
-              {manualSelection && !manualPopup && selHandles && (
-                <>
-                  <div
-                    className="sel_handle sel_handle--start"
-                    style={{ left: selHandles.start.x, top: selHandles.start.y, height: selHandles.start.h + 8 }}
-                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("start"); }}
-                    onTouchStart={(e) => { e.stopPropagation(); setDragHandle("start"); }}
-                  />
-                  <div
-                    className="sel_handle sel_handle--end"
-                    style={{ left: selHandles.end.x, top: selHandles.end.y, height: selHandles.end.h + 8 }}
-                    onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("end"); }}
-                    onTouchStart={(e) => { e.stopPropagation(); setDragHandle("end"); }}
-                  />
-                </>
-              )}
-              {/* Selection bar — absolute inside canvas wrap so it sits over the word */}
-              {manualSelection && !manualPopup && (
-                <div ref={selBarRef} id="manual_select_bar" style={{ left: manualSelection.x, top: manualSelection.y }}>
-                  <span id="msb_text">{manualSelection.text}</span>
-                  <button id="msb_confirm" onClick={confirmSelection}>✓</button>
-                  <button id="msb_cancel"  onClick={() => { setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>✕</button>
-                </div>
-              )}
-              {extractMode === "manual" && (
+              {Array.from({ length: pageCount }, (_, i) => i + 1).map(n => (
                 <div
-                  ref={textLayerRef}
-                  className="pdf_text_layer"
-                  style={pageViewport
-                    ? { width: pageViewport.width, height: pageViewport.height }
-                    : { inset: 0, position: "absolute" }}
-                  onMouseDown={handleTextMouseDown}
-                  onMouseUp={handleTextSelection}
-                />
+                  key={n}
+                  className="pdf_page_container"
+                  ref={el => { pageContainerRefs.current[n - 1] = el; }}
+                  data-page={n}
+                >
+                  <canvas
+                    className="pdf_page_canvas"
+                    ref={el => { pageCanvasRefs.current[n - 1] = el; }}
+                  />
+                  {pageNum === n && (
+                    <>
+                      <canvas
+                        id="pdf_annot_canvas"
+                        ref={annotCanvasRef}
+                        style={{ pointerEvents: annotTool ? "auto" : "none", cursor: annotTool === "eraser" ? "cell" : annotTool ? "crosshair" : "default" }}
+                      />
+                      {annotTextInput && (
+                        <input
+                          id="annot_text_input"
+                          autoFocus
+                          value={annotTextVal}
+                          onChange={(e) => setAnnotTextVal(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
+                          onBlur={commitAnnotText}
+                          style={{ left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left, top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top }}
+                        />
+                      )}
+                      {manualSelection && !manualPopup && selHandles && (
+                        <>
+                          <div
+                            className="sel_handle sel_handle--start"
+                            style={{ left: selHandles.start.x, top: selHandles.start.y, height: selHandles.start.h + 8 }}
+                            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("start"); dragHandleRef.current = "start"; }}
+                            onTouchStart={(e) => { e.stopPropagation(); dragHandleRef.current = "start"; setDragHandle("start"); }}
+                          />
+                          <div
+                            className="sel_handle sel_handle--end"
+                            style={{ left: selHandles.end.x, top: selHandles.end.y, height: selHandles.end.h + 8 }}
+                            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("end"); dragHandleRef.current = "end"; }}
+                            onTouchStart={(e) => { e.stopPropagation(); dragHandleRef.current = "end"; setDragHandle("end"); }}
+                          />
+                        </>
+                      )}
+                      {manualSelection && !manualPopup && (
+                        <div ref={selBarRef} id="manual_select_bar" style={{ left: manualSelection.x, top: manualSelection.y }}>
+                          <span id="msb_text">{manualSelection.text}</span>
+                          <button id="msb_confirm" onClick={confirmSelection}>✓</button>
+                          <button id="msb_cancel"  onClick={() => { setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>✕</button>
+                        </div>
+                      )}
+                      {extractMode === "manual" && (
+                        <div
+                          ref={textLayerRef}
+                          className="pdf_text_layer"
+                          style={pageViewport
+                            ? { width: pageViewport.width, height: pageViewport.height }
+                            : { inset: 0, position: "absolute" }}
+                          onMouseDown={handleTextMouseDown}
+                          onMouseUp={handleTextSelection}
+                        />
+                      )}
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : isNounsPage ? (
+            <div id="pdf_source_select_zone">
+              {loading ? <p>Loading…</p> : hyleSourcesLoading ? <p>Loading sources…</p> : hyleSources.length === 0 ? (
+                <>
+                  <span id="pdf_source_empty_icon">📂</span>
+                  <p id="pdf_source_empty_msg">No sources yet.</p>
+                  <p id="pdf_source_empty_sub">Go to <strong>Hyle Source Organisation</strong> to add PDFs.</p>
+                </>
+              ) : (
+                <>
+                  <label id="pdf_source_label" htmlFor="pdf_source_select">Choose Hyle Source</label>
+                  <select
+                    id="pdf_source_select"
+                    defaultValue=""
+                    onChange={(e) => {
+                      const src = hyleSources.find((s) => s._id === e.target.value);
+                      if (src) loadFromSource(src._id, src.name);
+                    }}
+                  >
+                    <option value="" disabled>Select a source…</option>
+                    {hyleSources.map((s) => (
+                      <option key={s._id} value={s._id}>{s.name}</option>
+                    ))}
+                  </select>
+                </>
               )}
             </div>
           ) : (
@@ -1639,9 +1899,9 @@ const PDFPage = () => {
         )}
 
         {/* Right — Noun panel */}
-        <div id="pdf_nouns_panel" style={{ display: splitRatio >= 0.9 ? "none" : undefined }}>
+        <div id="pdf_hyles_panel" style={{ display: splitRatio >= 0.9 ? "none" : undefined }}>
 
-          <div id="pdf_nouns_panel_header">
+          <div id="pdf_hyles_panel_header">
             <button
               id="pdf_preview_toggle"
               onClick={togglePreview}
@@ -1649,70 +1909,68 @@ const PDFPage = () => {
             >
               {splitRatio === 0 ? "›" : "‹"}
             </button>
-            <span>
-              {nounPage ? `Page ${nounPage} Nouns` : "Nouns"}
-              {nounData?._total > 0 && (
+            <span style={{ flex: 1 }}>
+              {hylePage ? `Page ${hylePage} Hyles` : "Hyles"}
+              {hyleData?._total > 0 && (
                 <span style={{ fontWeight: 400, marginLeft: "0.5rem", color: "var(--color-text-muted)" }}>
-                  ({nounData._total} found)
+                  ({hyleData._total} found)
                 </span>
               )}
             </span>
 
-            <div id="pdf_nouns_actions">
-              {nounData && nounData._total > 0 && !extracting && (
-                <button className={`pdf_action_btn${savedId ? " pdf_action_btn--saved" : ""}`} onClick={handleSave} disabled={saving}>
-                  {saving ? "Saving…" : savedId ? "Saved" : "Save"}
-                </button>
-              )}
-              <button id="pdf_sys_btn" onClick={() => setShowSysModal(true)}>System</button>
-
-              {/* AI / Manual toggle */}
-              <div id="pdf_mode_toggle">
-                <button
-                  className={`pdf_mode_btn${extractMode === "ai" ? " pdf_mode_btn--active" : ""}`}
-                  onClick={() => { setExtractMode("ai"); setManualPopup(null); }}
-                  disabled={extracting}
-                >AI</button>
-                <button
-                  className={`pdf_mode_btn${extractMode === "manual" ? " pdf_mode_btn--active" : ""}`}
-                  onClick={() => setExtractMode("manual")}
-                  disabled={!pdfDoc}
-                  title={!pdfDoc ? "Open a PDF first" : ""}
-                >Manual</button>
-              </div>
-
-              {/* AI-only controls */}
-              {extractMode === "ai" && (
-                <>
-                  <div id="pdf_provider_toggle">
-                    <button className={`pdf_provider_btn${provider === "local"  ? " pdf_provider_btn--active" : ""}`} onClick={() => setProvider("local")}  disabled={extracting}>Local</button>
-                    <button className={`pdf_provider_btn${provider === "openai" ? " pdf_provider_btn--active" : ""}`} onClick={() => setProvider("openai")} disabled={extracting}>OpenAI</button>
-                  </div>
-                  <button id="pdf_extract_btn" onClick={handleExtract} disabled={!canExtract || extracting} title={!canExtract ? "Open a text-based PDF first" : ""}>
-                    {extracting ? "Extracting…" : pdfDoc ? `Extract Page ${pageNum}` : "Extract"}
-                  </button>
-                </>
-              )}
-
+            <div className="hyle_font_controls">
+              <button className="hyle_font_btn" onClick={() => setHyleFontSize((s) => Math.max(0.5, +(s - 0.05).toFixed(2)))} disabled={hyleFontSize <= 0.5}>−</button>
+              <span className="hyle_font_label">{Math.round(hyleFontSize * 100)}%</span>
+              <button className="hyle_font_btn" onClick={() => setHyleFontSize((s) => Math.min(1.6, +(s + 0.05).toFixed(2)))} disabled={hyleFontSize >= 1.6}>+</button>
             </div>
+
+            <button
+              id="hyle_type_toggle_btn"
+              className={typeTreeOpen ? "hyle_type_toggle_btn--open" : ""}
+              onClick={() => setTypeTreeOpen((o) => !o)}
+              title="Extraction type"
+            >
+              {extractionType ? HYLE_TYPE_LABELS[extractionType] : "Type"}
+            </button>
           </div>
 
+          {typeTreeOpen && (
+            <div id="hyle_type_panel">
+              {HYLE_TYPE_TREE.map((node) => renderTypeNode(node))}
+            </div>
+          )}
+
+          {isNounsPage && (
+            <div id="hyle_card_tabs">
+              {CARDS.map(({ key, label }) => (
+                <button
+                  key={key}
+                  className={`hyle_card_tab${activeCard === key ? " hyle_card_tab--active" : ""}`}
+                  onClick={() => setLocalCard(key)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
           {!extracting && extractError && (
-            <div id="pdf_nouns_error">
+            <div id="pdf_hyles_error">
               <span>⚠ {extractError}</span>
               {pdfDoc && extractMode === "ai" && <button onClick={handleExtract}>Retry</button>}
             </div>
           )}
 
-          <div id="pdf_nouns_body">
-            <div id="pdf_nouns_table_area">
-              <NounCards
-                data={nounData || EMPTY_NOUNS()}
+          <div id="pdf_hyles_body">
+            <div id="pdf_hyles_table_area">
+              <HyleCards
+                data={hyleData || EMPTY_HYLES()}
                 streaming={extracting}
-                onStatus={handleNounStatus}
-                onMove={handleNounMove}
-                onDelete={handleNounDelete}
+                onStatus={handleHyleStatus}
+                onMove={handleHyleMove}
+                onDelete={handleHyleDelete}
                 activeCard={activeCard}
+                fontSize={hyleFontSize}
               />
             </div>
 

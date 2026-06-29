@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import "./nounCards.css";
+import "./hyleCards.css";
 
 const currentStatus = (item) => item.status?.value || "pending";
 
@@ -26,7 +26,7 @@ const MODES = [
   { key: "human",        label: "Human" },
 ];
 
-const NounRow = ({ item, cardKey, modeKey, index, onStatus, onMove, onDelete }) => {
+const HyleRow = ({ item, cardKey, modeKey, index, onStatus, onMove, onDelete }) => {
   const [moveCard, setMoveCard] = useState(cardKey);
   const [moveMode, setMoveMode] = useState(modeKey);
 
@@ -38,20 +38,20 @@ const NounRow = ({ item, cardKey, modeKey, index, onStatus, onMove, onDelete }) 
   const status = currentStatus(item);
 
   return (
-    <tr className={`noun_row noun_row--${status}`}>
-      <td className="noun_td_num">{item.num}</td>
-      <td className="noun_td_noun">{item.noun}</td>
-      <td className="noun_td_mode">
+    <tr className={`hyle_row noun_row--${status}`}>
+      <td className="hyle_td_num">{item.num}</td>
+      <td className="hyle_td_hyle">{item.noun}</td>
+      <td className="hyle_td_mode">
         <select className="ncc_select" value={moveMode} onChange={handleModeChange} title="Mode">
           {MODES.map(({ key, label }) => <option key={key} value={key}>{label}</option>)}
         </select>
       </td>
-      <td className="noun_td_card">
+      <td className="hyle_td_card">
         <select className="ncc_select" value={moveCard} onChange={handleCardChange} title="Card">
           {CARDS.map(({ key, label }) => <option key={key} value={key}>{label}</option>)}
         </select>
       </td>
-      <td className="noun_td_actions">
+      <td className="hyle_td_actions">
         <button
           className={`ncc_btn ncc_accept${status === "accepted" ? " ncc_active" : ""}`}
           title="Accept"
@@ -72,48 +72,42 @@ const NounRow = ({ item, cardKey, modeKey, index, onStatus, onMove, onDelete }) 
   );
 };
 
-const NounCards = ({ data, streaming, onStatus, onMove, onDelete, activeCard = "objects" }) => {
+const HyleCards = ({ data, streaming, onStatus, onMove, onDelete, activeCard = "objects", fontSize = 1 }) => {
   const card = CARDS.find((c) => c.key === activeCard) || CARDS[0];
-  const [fontSize, setFontSize] = useState(1);
 
   const rows = MODES.flatMap(({ key: modeKey }) =>
     (data?.[card.key]?.[modeKey] || []).map((item, i) => ({ item, modeKey, index: i }))
   );
 
   return (
-    <div className="noun_tabs_root">
-      <div className={`noun_card noun_card--${activeCard}`}>
-        <div className="noun_table_wrap" style={{ fontSize: `${fontSize}rem` }}>
-          <div className="noun_font_controls">
-            <button className="noun_font_btn" onClick={() => setFontSize((s) => Math.max(0.5, +(s - 0.05).toFixed(2)))} disabled={fontSize <= 0.5}>−</button>
-            <span className="noun_font_label">{Math.round(fontSize * 100)}%</span>
-            <button className="noun_font_btn" onClick={() => setFontSize((s) => Math.min(1.6, +(s + 0.05).toFixed(2)))} disabled={fontSize >= 1.6}>+</button>
-          </div>
-          <table className="noun_table">
+    <div className="hyle_tabs_root">
+      <div className={`hyle_card noun_card--${activeCard}`}>
+        <div className="hyle_table_wrap" style={{ fontSize: `${fontSize}rem` }}>
+          <table className="hyle_table">
             <thead>
               <tr>
-                <th className="noun_th_num">#</th>
-                <th className="noun_th_noun">Noun</th>
-                <th className="noun_th_mode">Mode</th>
-                <th className="noun_th_card">Card</th>
-                <th className="noun_th_actions"></th>
+                <th className="hyle_th_num">#</th>
+                <th className="hyle_th_hyle">Hyle</th>
+                <th className="hyle_th_mode">Mode</th>
+                <th className="hyle_th_card">Card</th>
+                <th className="hyle_th_actions"></th>
               </tr>
             </thead>
             <tbody>
               {streaming && rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="noun_loading_row">
-                    <span className="noun_streaming_dot" />
+                  <td colSpan={5} className="hyle_loading_row">
+                    <span className="hyle_streaming_dot" />
                     Asking AI to extract nouns…
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="noun_empty_row">No nouns yet</td>
+                  <td colSpan={5} className="hyle_empty_row">No nouns yet</td>
                 </tr>
               ) : (
                 rows.map(({ item, modeKey, index }) => (
-                  <NounRow
+                  <HyleRow
                     key={item.id || `${modeKey}_${index}`}
                     item={item}
                     cardKey={card.key}
@@ -133,4 +127,4 @@ const NounCards = ({ data, streaming, onStatus, onMove, onDelete, activeCard = "
   );
 };
 
-export default NounCards;
+export default HyleCards;

@@ -209,7 +209,7 @@ const PhenomenaPage = () => {
       {loading ? (
         <div className="phen_state">Loading…</div>
       ) : pool.length === 0 ? (
-        <div className="phen_state">No phenomena extracted yet — use the PDF Reader to extract nouns.</div>
+        <div className="phen_state">No phenomena extracted yet — use the Hyles page to extract hyles.</div>
       ) : (
         <div id="phen_table_wrap">
           <table className="phen_table">

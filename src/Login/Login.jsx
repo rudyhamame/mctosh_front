@@ -1,9 +1,11 @@
 import React, { useRef, useState } from "react";
+import { useHistory } from "react-router-dom";
 import "./login.css";
 import { apiUrl } from "../config/api";
 import { writeStoredSession } from "../utils/sessionCleanup";
 
 const Login = ({ onLogin }) => {
+  const history = useHistory();
   const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -116,6 +118,10 @@ const Login = ({ onLogin }) => {
 
         <button type="button" id="login_toggle" onClick={toggle}>
           {mode === "signup" ? "Already have an account? Sign in" : "No account? Sign up"}
+        </button>
+
+        <button type="button" id="login_about_btn" onClick={() => history.push("/about")}>
+          About MCTOSH
         </button>
       </form>
     </div>

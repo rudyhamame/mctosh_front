@@ -1,0 +1,319 @@
+/* ── Page shell ── */
+#study_page {
+  display: flex;
+  flex-direction: column;
+  height: calc(var(--vh, 1vh) * 100);
+  background: var(--color-bg);
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+/* ── Header ── */
+#study_header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.55rem 1.1rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#study_back_btn {
+  padding: 0.18rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  line-height: 1;
+}
+#study_back_btn:hover { color: var(--color-text); }
+
+#study_title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  flex: 1;
+}
+
+#study_source_wrap {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#study_source_select {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.78rem;
+  cursor: pointer;
+  max-width: 260px;
+}
+#study_source_select:focus { outline: none; border-color: var(--color-highlight); }
+
+/* ── Body: left + right split ── */
+#study_body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Left: compact cards panel ── */
+#study_cards_panel {
+  width: 34%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  overflow: hidden;
+}
+
+#study_card_tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.study_card_tab {
+  flex: 1;
+  padding: 0.35rem 0.3rem;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  background: none;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+.study_card_tab:last-child { border-right: none; }
+.study_card_tab:hover { color: var(--card-color); }
+.study_card_tab--active {
+  color: var(--card-color);
+  background: color-mix(in srgb, var(--card-color) 7%, var(--color-bg));
+  border-bottom: 2px solid var(--card-color);
+}
+
+#study_card_body {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.study_card_empty {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+#study_card_table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.study_hyle_row {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.study_hyle_row--accepted { opacity: 1; }
+.study_hyle_row--rejected { opacity: 0.35; }
+.study_hyle_row--pending  { opacity: 0.75; }
+
+.study_td_num {
+  padding: 0.28rem 0.5rem 0.28rem 0.8rem;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  width: 1.6rem;
+  text-align: right;
+  vertical-align: middle;
+}
+
+.study_td_noun {
+  padding: 0.28rem 0.4rem;
+  font-weight: 500;
+  vertical-align: middle;
+  word-break: break-word;
+}
+
+.study_td_mode {
+  padding: 0.28rem 0.7rem 0.28rem 0;
+  font-size: 0.6rem;
+  color: var(--color-text-muted);
+  text-align: right;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+/* ── Right: PDF panel ── */
+#study_pdf_panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ── StudyPDFPanel inner elements ── */
+.study_pdf_wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.study_pdf_loading_inline {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  padding: 3rem 1rem;
+  text-align: center;
+  width: 100%;
+}
+
+.study_pdf_empty,
+.study_pdf_loading {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  gap: 0.5rem;
+  height: 100%;
+  text-align: center;
+  padding: 2rem;
+}
+
+.study_pdf_empty_icon { font-size: 2.2rem; opacity: 0.4; }
+.study_pdf_empty_sub  { font-size: 0.72rem; opacity: 0.6; }
+
+/* ── Annotation toolbar ── */
+.study_ann_toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.study_ann_tools {
+  display: flex;
+  gap: 0.15rem;
+}
+
+.study_ann_btn {
+  padding: 0.2rem 0.45rem;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  line-height: 1.4;
+}
+.study_ann_btn:hover { background: var(--color-bg); color: var(--color-text); }
+.study_ann_btn--active { background: var(--color-bg); color: var(--color-text); border-color: var(--color-highlight); }
+
+.study_ann_colors {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.study_ann_color {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s, border-color 0.1s;
+}
+.study_ann_color:hover { transform: scale(1.2); }
+.study_ann_color--active { border-color: #fff; transform: scale(1.15); }
+
+/* Size row */
+.study_ann_size_row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.study_ann_size_dot {
+  flex-shrink: 0;
+  min-width: 6px;
+  min-height: 6px;
+  transition: width 0.1s, height 0.1s;
+}
+
+.study_ann_size_slider {
+  width: 72px;
+  height: 3px;
+  accent-color: var(--color-highlight, #69f0ae);
+  cursor: pointer;
+}
+
+.study_save_status {
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.study_page_counter {
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  min-width: 3rem;
+  text-align: right;
+}
+
+/* ── PDF viewer (scrollable canvas area) ── */
+.study_pdf_viewer {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  background: #141414;
+  padding: 1rem 0.75rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.study_page_container {
+  position: relative;
+  flex-shrink: 0;
+  display: block;
+  line-height: 0;
+}
+
+.study_page_canvas {
+  display: block;
+  box-shadow: 0 2px 14px rgba(0,0,0,0.5);
+}
+
+.study_annot_canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
