@@ -25,6 +25,25 @@ const AboutPage = () => {
   const applyScale = (next) =>
     setScale(Math.min(2, Math.max(0.5, Math.round(next * 10) / 10)));
 
+  const pinchRef = useRef({ dist: null, base: 1 });
+  const onTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      const dx = e.touches[0].clientX - e.touches[1].clientX;
+      const dy = e.touches[0].clientY - e.touches[1].clientY;
+      pinchRef.current = { dist: Math.hypot(dx, dy), base: scale };
+    }
+  };
+  const onTouchMove = (e) => {
+    if (e.touches.length !== 2 || pinchRef.current.dist === null) return;
+    e.preventDefault();
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const newDist = Math.hypot(dx, dy);
+    const next = pinchRef.current.base * (newDist / pinchRef.current.dist);
+    setScale(Math.min(2, Math.max(0.5, next)));
+  };
+  const onTouchEnd = () => { pinchRef.current.dist = null; };
+
   const handleCopy = () => {
     const text = bodyRef.current?.innerText || "";
     navigator.clipboard?.writeText(text).then(() => {
@@ -32,6 +51,19 @@ const AboutPage = () => {
       setTimeout(() => setCopied(false), 1800);
     });
   };
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove",  onTouchMove,  { passive: false });
+    el.addEventListener("touchend",   onTouchEnd,   { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove",  onTouchMove);
+      el.removeEventListener("touchend",   onTouchEnd);
+    };
+  }, [scale]);
 
   useEffect(() => {
     const scrollEl = scrollRef.current;
