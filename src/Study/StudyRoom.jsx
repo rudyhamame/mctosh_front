@@ -72,7 +72,7 @@ const StudyRoom = () => {
       {/* ── Header ── */}
       <div id="study_header">
         <button id="study_back_btn" onClick={() => history.push("/home")}>←</button>
-        <span id="study_title">Study Room</span>
+        <span id="study_title">MCTOSH Representation Space</span>
 
         <div id="study_source_wrap">
           <select

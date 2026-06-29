@@ -116,7 +116,7 @@ const AppRouter = () => {
             <Redirect to="/login" />
           )}
         </Route>
-        <Route path="/study">
+        <Route path="/representation">
           {canAccessAuthenticatedRoutes ? (
             <StudyRoom />
           ) : (

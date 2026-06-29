@@ -18,9 +18,9 @@ const HOME_ITEMS = [
     color: "#4fc3f7",
   },
   {
-    path: "/study",
-    label: "Study Room",
-    description: "Read sources, annotate PDFs, and review extracted hyles side-by-side",
+    path: "/representation",
+    label: "MCTOSH Representation Space",
+    description: "Explore extracted hyles organised into Objects, Traces, Phenomena, Concepts, and Models alongside annotated sources",
     color: "#ce93d8",
   },
   {
