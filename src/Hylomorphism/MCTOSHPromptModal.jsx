@@ -1,6 +1,21 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { MCTOSH_PROMPT_TEXT } from "./mctoshPrompt";
+import { apiUrl } from "../config/api";
+import { readStoredSession } from "../utils/sessionCleanup";
 import "./mctoshPromptModal.css";
+
+const authHeader = () => {
+  const token = readStoredSession()?.token || "";
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+const TYPE_OPTIONS = [
+  { value: "",        label: "All types" },
+  { value: "pdf",     label: "PDF" },
+  { value: "word",    label: "Word" },
+  { value: "youtube", label: "YouTube" },
+  { value: "image",   label: "Image" },
+];
 
 const SECTIONS = [
   { roman: "I",    title: "Input" },
@@ -18,10 +33,42 @@ const SECTIONS = [
 ];
 
 const MCTOSHPromptModal = ({ onClose }) => {
-  const [copied, setCopied] = useState(false);
+  const [copied,      setCopied]      = useState(false);
+  const [allSources,  setAllSources]  = useState([]);
+  const [filterType,  setFilterType]  = useState("");
+  const [selectedId,  setSelectedId]  = useState("");
+  const [inputText,   setInputText]   = useState("");
+  const [loadingText, setLoadingText] = useState(false);
+
+  useEffect(() => {
+    fetch(apiUrl("/api/sources/"), { headers: authHeader() })
+      .then(r => r.json())
+      .then(d => setAllSources(d.sources || []))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    setSelectedId("");
+    setInputText("");
+  }, [filterType]);
+
+  useEffect(() => {
+    if (!selectedId) { setInputText(""); return; }
+    setLoadingText(true);
+    fetch(apiUrl(`/api/sources/${selectedId}`), { headers: authHeader() })
+      .then(r => r.json())
+      .then(d => setInputText(d.source?.transcript || ""))
+      .catch(() => setInputText(""))
+      .finally(() => setLoadingText(false));
+  }, [selectedId]);
+
+  const filtered = filterType ? allSources.filter(s => s.type === filterType) : allSources;
 
   const handleCopy = () => {
-    navigator.clipboard?.writeText(MCTOSH_PROMPT_TEXT).then(() => {
+    const full = inputText.trim()
+      ? `${MCTOSH_PROMPT_TEXT}\n\n${"━".repeat(46)}\nCLINICAL INPUT\n${"━".repeat(46)}\n\n${inputText.trim()}`
+      : MCTOSH_PROMPT_TEXT;
+    navigator.clipboard?.writeText(full).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     });
@@ -32,7 +79,27 @@ const MCTOSHPromptModal = ({ onClose }) => {
       <div id="mcp_modal">
         <div id="mcp_header">
           <span id="mcp_title">MCTOSH Clinical Linguistic Decomposition &amp; Ontological Classification Prompt</span>
-          <button id="mcp_copy_btn" onClick={handleCopy}>{copied ? "Copied ✓" : "Copy Prompt"}</button>
+          <div id="mcp_source_row">
+            <select
+              id="mcp_type_select"
+              value={filterType}
+              onChange={e => setFilterType(e.target.value)}
+            >
+              {TYPE_OPTIONS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+            <select
+              id="mcp_source_select"
+              value={selectedId}
+              onChange={e => setSelectedId(e.target.value)}
+              disabled={filtered.length === 0}
+            >
+              <option value="">Select source…</option>
+              {filtered.map(s => <option key={s._id} value={s._id}>{s.name}</option>)}
+            </select>
+          </div>
+          <button id="mcp_copy_btn" onClick={handleCopy}>
+            {copied ? "Copied ✓" : inputText ? "Copy Prompt + Input" : "Copy Prompt"}
+          </button>
           <button id="mcp_close_btn" onClick={onClose}>×</button>
         </div>
 
@@ -46,6 +113,22 @@ const MCTOSHPromptModal = ({ onClose }) => {
         </div>
 
         <div id="mcp_body">
+          {/* ── Source input panel ── */}
+          {(selectedId || loadingText) && (
+            <div id="mcp_input_panel">
+              <div id="mcp_input_label">
+                <span>Clinical Input</span>
+                {inputText && <span id="mcp_input_count">{inputText.trim().split(/\s+/).length} words</span>}
+              </div>
+              {loadingText
+                ? <div id="mcp_input_loading">Loading transcript…</div>
+                : inputText
+                  ? <pre id="mcp_input_text">{inputText}</pre>
+                  : <div id="mcp_input_empty">No transcript saved for this source. Open it in the Transcript Editor to fetch one.</div>
+              }
+            </div>
+          )}
+
           <p className="mcp_intro">
             You are an expert clinical linguist and ontological classifier working within the MCTOSH framework.
             Your task is to analyze clinical text in two stages: <strong>Stage 1 — Linguistic Decomposition</strong> and{" "}
