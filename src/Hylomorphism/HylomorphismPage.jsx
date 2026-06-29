@@ -13,10 +13,10 @@ const TYPE_OPTIONS = [
 ];
 
 const TYPE_ROUTE = {
-  pdf:     (src) => ({ path: "/hyles",                        state: { sourceId: src._id, pdfName: src.name } }),
-  word:    (src) => ({ path: "/hyles",                        state: { sourceId: src._id, pdfName: src.name } }),
+  pdf:     (src) => ({ path: "/hylomorphism/pdf_source",      state: { sourceId: src._id, pdfName: src.name } }),
+  word:    (src) => ({ path: "/hylomorphism/pdf_source",      state: { sourceId: src._id, pdfName: src.name } }),
   youtube: (src) => ({ path: "/hylomorphism/youtube_source",  state: { sourceId: src._id, sourceName: src.name, sourceUrl: src.url } }),
-  image:   (src) => ({ path: "/hyles",                        state: { sourceId: src._id, pdfName: src.name } }),
+  image:   (src) => ({ path: "/hylomorphism/pdf_source",      state: { sourceId: src._id, pdfName: src.name } }),
 };
 
 const authHeader = () => {

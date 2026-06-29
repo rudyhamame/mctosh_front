@@ -89,6 +89,13 @@ const AppRouter = () => {
             <Redirect to="/login" />
           )}
         </Route>
+        <Route path="/hylomorphism/pdf_source">
+          {canAccessAuthenticatedRoutes ? (
+            <PDFPage />
+          ) : (
+            <Redirect to="/login" />
+          )}
+        </Route>
         <Route path="/hylomorphism">
           {canAccessAuthenticatedRoutes ? (
             <HylomorphismPage />
@@ -120,13 +127,6 @@ const AppRouter = () => {
         <Route path="/ai">
           {canAccessAuthenticatedRoutes ? (
             <AIChat />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/hyles">
-          {canAccessAuthenticatedRoutes ? (
-            <PDFPage />
           ) : (
             <Redirect to="/login" />
           )}

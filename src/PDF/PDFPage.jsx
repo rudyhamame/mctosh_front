@@ -1589,7 +1589,7 @@ const PDFPage = () => {
 
       {/* Toolbar */}
       <div id="pdf_toolbar">
-        <button id="pdf_home_btn" onClick={() => router.push("/home")} title="Home">⌂</button>
+        <button id="pdf_home_btn" onClick={() => router.push("/hylomorphism")} title="Hyle-to-Meaning">⌂</button>
         {pdfDoc && <>
           <button onClick={() => pageContainerRefs.current[pageNum - 2]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum <= 1}>‹</button>
           <span>{pageNum} / {pageCount}</span>

@@ -226,7 +226,7 @@ const SourcesPage = () => {
                           {s.name}
                         </button>
                       : <button className="sources_url_link"
-                          onClick={() => history.push("/hyles", { sourceId: s._id, pdfName: s.name })}>
+                          onClick={() => history.push("/hylomorphism/pdf_source", { sourceId: s._id, pdfName: s.name })}>
                           {s.name}
                         </button>
                     : <span className="sources_url_none">—</span>}
