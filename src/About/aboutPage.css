@@ -60,15 +60,6 @@
   border-color: var(--color-highlight) !important;
 }
 
-#about_trans_error {
-  font-size: 0.7rem;
-  color: var(--color-highlight);
-  max-width: 180px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 /* ── Arabic body ────────────────────────────────────────────────────────────── */
 #about_ar_body {
   max-width: 900px;
@@ -77,16 +68,6 @@
   font-family: "Segoe UI", "Noto Sans Arabic", "Cairo", "Amiri", sans-serif;
   line-height: 1.9;
 }
-
-.about_ar_para {
-  margin-bottom: 0.9em;
-  color: var(--color-text);
-  text-align: right;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.about_ar_para:empty { display: none; }
 
 #about_zoom_controls {
   margin-left: auto;

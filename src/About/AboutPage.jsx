@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useHistory } from "react-router-dom";
-import { apiUrl } from "../config/api";
+import AboutContentAR from "./AboutContentAR";
 import "./aboutPage.css";
 
 const SECTIONS_EN = [
@@ -29,18 +29,13 @@ const SECTIONS_AR = [
   { id: "about-types",        label: "أنواع الاستخراج" },
 ];
 
-const AR_CACHE_KEY = "mctosh_about_ar";
-
 const AboutPage = () => {
   const history = useHistory();
   const scrollRef = useRef(null);
-  const [activeId,     setActiveId]     = useState("about-what");
-  const [scale,        setScale]        = useState(1);
-  const [copied,       setCopied]       = useState(false);
-  const [lang,         setLang]         = useState("en");
-  const [arContent,    setArContent]    = useState(() => localStorage.getItem(AR_CACHE_KEY) || "");
-  const [translating,  setTranslating]  = useState(false);
-  const [transError,   setTransError]   = useState("");
+  const [activeId, setActiveId] = useState("about-what");
+  const [scale,    setScale]    = useState(1);
+  const [copied,   setCopied]   = useState(false);
+  const [lang,     setLang]     = useState("en");
   const bodyRef = useRef(null);
 
   const SECTIONS = lang === "ar" ? SECTIONS_AR : SECTIONS_EN;
@@ -75,31 +70,7 @@ const AboutPage = () => {
     });
   };
 
-  const handleAR = async () => {
-    if (lang === "ar") { setLang("en"); return; }
-    if (arContent)     { setLang("ar"); return; }
-    setTranslating(true);
-    setTransError("");
-    try {
-      const text = bodyRef.current?.innerText || "";
-      const provider = localStorage.getItem("mctosh_ai_provider") || "groq";
-      const res = await fetch(apiUrl("/api/ai/translate"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, targetLang: "ar", provider }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Translation failed");
-      localStorage.setItem(AR_CACHE_KEY, data.translation);
-      setArContent(data.translation);
-      setLang("ar");
-    } catch (e) {
-      setTransError(e.message);
-      setTimeout(() => setTransError(""), 4000);
-    } finally {
-      setTranslating(false);
-    }
-  };
+  const handleAR = () => setLang(l => l === "ar" ? "en" : "ar");
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -156,12 +127,10 @@ const AboutPage = () => {
           id="about_ar_btn"
           className={lang === "ar" ? "about_ar_btn--active" : ""}
           onClick={handleAR}
-          disabled={translating}
-          title={lang === "ar" ? "Switch to English" : "Translate to Arabic"}
+          title={lang === "ar" ? "Switch to English" : "Switch to Arabic"}
         >
-          {translating ? "…" : lang === "ar" ? "EN" : "AR"}
+          {lang === "ar" ? "EN" : "AR"}
         </button>
-        {transError && <span id="about_trans_error">{transError}</span>}
         <div id="about_zoom_controls">
           <button onClick={() => applyScale(scale - 0.1)} disabled={scale <= 0.5}>−</button>
           <button id="about_zoom_label" onClick={() => applyScale(1)} title="Reset zoom">
@@ -186,11 +155,9 @@ const AboutPage = () => {
         </nav>
 
         <div id="about_scroll" ref={scrollRef}>
-          {lang === "ar" && arContent ? (
+          {lang === "ar" ? (
             <div id="about_ar_body" dir="rtl" lang="ar" style={{ fontSize: `${scale}rem` }}>
-              {arContent.split(/\n{2,}/).map((block, i) => (
-                <p key={i} className="about_ar_para">{block.trim()}</p>
-              ))}
+              <AboutContentAR />
             </div>
           ) : (
           <div id="about_body" ref={bodyRef} style={{ fontSize: `${scale}rem` }}>
