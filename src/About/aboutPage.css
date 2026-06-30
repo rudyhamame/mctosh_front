@@ -502,6 +502,67 @@
   color: var(--color-text-muted);
 }
 
+/* ── Clinical Epistemology etymology ───────────────────────────────────────── */
+.about_epist_etymology {
+  margin-top: 1.1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 6px;
+  padding: 1rem 1.2rem;
+  max-width: 520px;
+}
+
+.about_epist_etym_word {
+  font-size: 1em;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: 0.03em;
+  margin-bottom: 0.3rem;
+  font-family: "Georgia", serif;
+}
+
+.about_epist_etym_eq {
+  font-size: 0.78em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.about_epist_etym_morph {
+  font-family: "Menlo", "Consolas", monospace;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.about_epist_etym_rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.85rem;
+}
+
+.about_epist_etym_row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  font-size: 0.75em;
+}
+
+.about_epist_etym_gloss {
+  color: var(--color-text-muted);
+}
+
+.about_epist_etym_result {
+  font-size: 0.75em;
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.65rem;
+  line-height: 1.55;
+}
+
 /* ── Clinical Epistemology ──────────────────────────────────────────────────── */
 .about_epist_cols {
   display: flex;
@@ -561,7 +622,8 @@
   border: 1px solid var(--color-border);
 }
 
-.about_epist_step--first::before {
+.about_epist_step--first::before,
+.about_epist_step--recognition::before {
   background: var(--color-highlight);
   border-color: var(--color-highlight);
   width: 11px;
@@ -569,9 +631,22 @@
   left: 3px;
 }
 
-.about_epist_step--first .about_epist_step_label {
+.about_epist_step--first .about_epist_step_label,
+.about_epist_step--recognition .about_epist_step_label {
   color: var(--color-highlight);
   font-weight: 600;
+}
+
+.about_epist_step--primitive::before {
+  background: #78909c;
+  border-color: #78909c;
+  width: 9px;
+  height: 9px;
+}
+
+.about_epist_step--primitive .about_epist_step_label {
+  color: #90a4ae;
+  font-style: italic;
 }
 
 .about_epist_step_label {

@@ -317,28 +317,62 @@ const AboutPage = () => {
               <h2 className="about_section_title">Clinical Epistemology</h2>
               <p className="about_section_body">
                 Before there is knowledge, there is only reality and possible access to it.
-                The first epistemic act is <strong>recognition</strong> — not yet understanding, not yet naming, only the
-                act of encountering something and registering that it is there.
+                The question of what the <em>first</em> epistemic act is turns on the etymology of the
+                word used to name it.
+              </p>
+
+              {/* ── Etymology block ── */}
+              <div className="about_epist_etymology">
+                <div className="about_epist_etym_word">recognition</div>
+                <div className="about_epist_etym_eq">= <span className="about_epist_etym_morph">re-</span> + <span className="about_epist_etym_morph">cogn-</span> + <span className="about_epist_etym_morph">-ition</span></div>
+                <div className="about_epist_etym_rows">
+                  <div className="about_epist_etym_row">
+                    <span className="about_epist_etym_morph">re-</span>
+                    <span className="about_epist_etym_gloss">again / back</span>
+                  </div>
+                  <div className="about_epist_etym_row">
+                    <span className="about_epist_etym_morph">cogn-</span>
+                    <span className="about_epist_etym_gloss">know — from Latin <em>cognōscere</em>, "to come to know"</span>
+                  </div>
+                  <div className="about_epist_etym_row">
+                    <span className="about_epist_etym_morph">-ition</span>
+                    <span className="about_epist_etym_gloss">act or process</span>
+                  </div>
+                </div>
+                <div className="about_epist_etym_result">
+                  From Latin <em>recognōscere</em>: "to know again, acknowledge, examine, identify."
+                  Literally: <strong>knowing something as this identifiable thing.</strong>
+                </div>
+              </div>
+
+              {/* ── Correction note ── */}
+              <p className="about_section_body" style={{ marginTop: "1rem" }}>
+                This etymology contains a correction. Because <em>recognōscere</em> implies knowing
+                <em> again</em> — re-encountering a pattern already held in some form — recognition
+                presupposes prior steps that are more primitive still: encounter, noticing, and
+                differentiation must come first. The more precise sequence is:
               </p>
 
               <div className="about_epist_cols">
 
                 {/* ── General sequence ── */}
                 <div className="about_epist_col">
-                  <div className="about_epist_col_title">The epistemic sequence</div>
+                  <div className="about_epist_col_title">The corrected epistemic sequence</div>
                   <ol className="about_epist_steps">
                     {[
-                      { n: "0", label: "Ontos", sub: "reality exists, independent of any knower" },
-                      { n: "1", label: "Access to ontic manifestation", sub: "the knower is positioned to encounter a trace" },
-                      { n: "2", label: "Recognition", sub: "something is registered — there is something here" },
-                      { n: "3", label: "Differentiation", sub: "that something is distinguished from its background" },
-                      { n: "4", label: "Naming", sub: "a linguistic handle is attached to the distinction" },
-                      { n: "5", label: "Relation-building", sub: "the named entity is connected to others" },
-                      { n: "6", label: "Interpretation", sub: "meaning is assigned in context" },
-                      { n: "7", label: "Concept formation", sub: "a stable, repeatable category is constructed" },
-                      { n: "8", label: "Diagnosis", sub: "the concept is applied to the particular case" },
-                    ].map((s, i, arr) => (
-                      <li key={s.n} className={`about_epist_step${s.n === "2" ? " about_epist_step--first" : ""}`}>
+                      { label: "Ontos",                    sub: "reality exists, independent of any knower",                          mark: null },
+                      { label: "Access",                   sub: "the knower is positioned to encounter a trace",                      mark: null },
+                      { label: "Encounter / reception",    sub: "a trace reaches the observer — the most primitive epistemic event",   mark: "primitive" },
+                      { label: "Noticing",                 sub: "something registers — attention is drawn before any identification",  mark: "primitive" },
+                      { label: "Differentiation",          sub: "that something is separated from its background",                    mark: null },
+                      { label: "Recognition",              sub: "cognoscere → recognoscere: knowing it as this identifiable thing",   mark: "recognition" },
+                      { label: "Naming",                   sub: "a linguistic handle is attached",                                    mark: null },
+                      { label: "Relation-building",        sub: "the named entity is connected to others",                            mark: null },
+                      { label: "Interpretation",           sub: "meaning is assigned in context",                                     mark: null },
+                      { label: "Concept formation",        sub: "a stable, repeatable category is constructed",                       mark: null },
+                      { label: "Diagnosis",                sub: "the concept is applied to the particular case",                      mark: null },
+                    ].map((s, i) => (
+                      <li key={i} className={`about_epist_step${s.mark ? ` about_epist_step--${s.mark}` : ""}`}>
                         <div className="about_epist_step_label">{s.label}</div>
                         <div className="about_epist_step_sub">{s.sub}</div>
                       </li>
@@ -351,17 +385,19 @@ const AboutPage = () => {
                   <div className="about_epist_col_title">Clinical example — ECG</div>
                   <ol className="about_epist_steps about_epist_steps--example">
                     {[
-                      { label: "ECG waveform exists", sub: "ontic reality, independent of any observer" },
-                      { label: "Doctor is positioned at the ECG", sub: "access is established" },
-                      { label: "A patterned signal is registered", sub: "recognition — something is there" },
-                      { label: "ST segment distinguished from baseline", sub: "differentiation" },
-                      { label: "“ST elevation” is named", sub: "naming" },
-                      { label: "Related to symptoms, troponin, anatomy", sub: "relation-building" },
-                      { label: "Possible ischemia is interpreted", sub: "interpretation" },
-                      { label: "Myocardial infarction concept formed or rejected", sub: "concept formation" },
-                      { label: "Diagnosis applied to this patient now", sub: "diagnosis" },
+                      { label: "ECG waveform exists",                                   sub: "ontic reality",                                      mark: null },
+                      { label: "Doctor is positioned at the ECG",                        sub: "access is established",                              mark: null },
+                      { label: "A signal reaches the observer",                          sub: "encounter / reception",                              mark: "primitive" },
+                      { label: "Something is noticed",                                   sub: "noticing — before any identification",               mark: "primitive" },
+                      { label: "ST segment distinguished from baseline",                 sub: "differentiation",                                    mark: null },
+                      { label: "Recognized as this patterned signal",                    sub: "cognoscere → recognoscere",                         mark: "recognition" },
+                      { label: "“ST elevation” is named",             sub: "naming",                                             mark: null },
+                      { label: "Related to symptoms, troponin, anatomy",                 sub: "relation-building",                                  mark: null },
+                      { label: "Possible ischemia is interpreted",                       sub: "interpretation",                                     mark: null },
+                      { label: "Myocardial infarction concept formed or rejected",       sub: "concept formation",                                  mark: null },
+                      { label: "Diagnosis applied to this patient now",                  sub: "diagnosis",                                          mark: null },
                     ].map((s, i) => (
-                      <li key={i} className={`about_epist_step${i === 2 ? " about_epist_step--first" : ""}`}>
+                      <li key={i} className={`about_epist_step${s.mark ? ` about_epist_step--${s.mark}` : ""}`}>
                         <div className="about_epist_step_label">{s.label}</div>
                         <div className="about_epist_step_sub">{s.sub}</div>
                       </li>
@@ -372,7 +408,7 @@ const AboutPage = () => {
               </div>
 
               {/* ── Perception / Recognition / Knowledge distinction ── */}
-              <div className="about_epist_distinctions">
+              <div className="about_epist_distinctions" style={{ marginTop: "1.4rem" }}>
                 <div className="about_epist_distinction">
                   <span className="about_epist_term">Perception</span>
                   <span className="about_epist_eq">=</span>
@@ -381,7 +417,7 @@ const AboutPage = () => {
                 <div className="about_epist_distinction about_epist_distinction--highlighted">
                   <span className="about_epist_term">Recognition</span>
                   <span className="about_epist_eq">=</span>
-                  <span className="about_epist_def">identifying that something is there</span>
+                  <span className="about_epist_def">knowing the trace as this identifiable thing — <em>recognōscere</em></span>
                 </div>
                 <div className="about_epist_distinction">
                   <span className="about_epist_term">Knowledge</span>
@@ -391,7 +427,7 @@ const AboutPage = () => {
               </div>
 
               <p className="about_section_body about_section_body--callout" style={{ marginTop: "1.1rem" }}>
-                Recognition does not yet give truth. It only establishes: <em>"There is something here that must be distinguished."</em> That is the beginning of epistemology.
+                Recognition does not yet give truth. Once the mind identifies the trace as a distinct something, recognition begins — but encounter and noticing are prior. That is where epistemology starts.
               </p>
             </section>
 
