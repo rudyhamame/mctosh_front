@@ -8,6 +8,7 @@ const SECTIONS = [
   { id: "about-pivotal",    label: "A pivotal clarification" },
   { id: "about-modes",      label: "Two modes of access" },
   { id: "about-reality",    label: "Four Domains" },
+  { id: "about-epistemology", label: "Clinical Epistemology" },
   { id: "about-means",      label: "Means of Access" },
   { id: "about-how",        label: "How it works" },
   { id: "about-cards",      label: "Cards" },
@@ -309,6 +310,88 @@ const AboutPage = () => {
                 clinical encounter. Clinical Access, Representation, and Action are all medicine's
                 responses to that reality. Collapsing these domains is the root of many reasoning errors:
                 treating the chart as the patient, or a diagnosis as the disease itself.
+              </p>
+            </section>
+
+            <section id="about-epistemology" className="about_section">
+              <h2 className="about_section_title">Clinical Epistemology</h2>
+              <p className="about_section_body">
+                Before there is knowledge, there is only reality and possible access to it.
+                The first epistemic act is <strong>recognition</strong> — not yet understanding, not yet naming, only the
+                act of encountering something and registering that it is there.
+              </p>
+
+              <div className="about_epist_cols">
+
+                {/* ── General sequence ── */}
+                <div className="about_epist_col">
+                  <div className="about_epist_col_title">The epistemic sequence</div>
+                  <ol className="about_epist_steps">
+                    {[
+                      { n: "0", label: "Ontos", sub: "reality exists, independent of any knower" },
+                      { n: "1", label: "Access to ontic manifestation", sub: "the knower is positioned to encounter a trace" },
+                      { n: "2", label: "Recognition", sub: "something is registered — there is something here" },
+                      { n: "3", label: "Differentiation", sub: "that something is distinguished from its background" },
+                      { n: "4", label: "Naming", sub: "a linguistic handle is attached to the distinction" },
+                      { n: "5", label: "Relation-building", sub: "the named entity is connected to others" },
+                      { n: "6", label: "Interpretation", sub: "meaning is assigned in context" },
+                      { n: "7", label: "Concept formation", sub: "a stable, repeatable category is constructed" },
+                      { n: "8", label: "Diagnosis", sub: "the concept is applied to the particular case" },
+                    ].map((s, i, arr) => (
+                      <li key={s.n} className={`about_epist_step${s.n === "2" ? " about_epist_step--first" : ""}`}>
+                        <div className="about_epist_step_label">{s.label}</div>
+                        <div className="about_epist_step_sub">{s.sub}</div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                {/* ── Clinical example ── */}
+                <div className="about_epist_col">
+                  <div className="about_epist_col_title">Clinical example — ECG</div>
+                  <ol className="about_epist_steps about_epist_steps--example">
+                    {[
+                      { label: "ECG waveform exists", sub: "ontic reality, independent of any observer" },
+                      { label: "Doctor is positioned at the ECG", sub: "access is established" },
+                      { label: "A patterned signal is registered", sub: "recognition — something is there" },
+                      { label: "ST segment distinguished from baseline", sub: "differentiation" },
+                      { label: "“ST elevation” is named", sub: "naming" },
+                      { label: "Related to symptoms, troponin, anatomy", sub: "relation-building" },
+                      { label: "Possible ischemia is interpreted", sub: "interpretation" },
+                      { label: "Myocardial infarction concept formed or rejected", sub: "concept formation" },
+                      { label: "Diagnosis applied to this patient now", sub: "diagnosis" },
+                    ].map((s, i) => (
+                      <li key={i} className={`about_epist_step${i === 2 ? " about_epist_step--first" : ""}`}>
+                        <div className="about_epist_step_label">{s.label}</div>
+                        <div className="about_epist_step_sub">{s.sub}</div>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+              </div>
+
+              {/* ── Perception / Recognition / Knowledge distinction ── */}
+              <div className="about_epist_distinctions">
+                <div className="about_epist_distinction">
+                  <span className="about_epist_term">Perception</span>
+                  <span className="about_epist_eq">=</span>
+                  <span className="about_epist_def">receiving a trace</span>
+                </div>
+                <div className="about_epist_distinction about_epist_distinction--highlighted">
+                  <span className="about_epist_term">Recognition</span>
+                  <span className="about_epist_eq">=</span>
+                  <span className="about_epist_def">identifying that something is there</span>
+                </div>
+                <div className="about_epist_distinction">
+                  <span className="about_epist_term">Knowledge</span>
+                  <span className="about_epist_eq">=</span>
+                  <span className="about_epist_def">determining what it is and how it relates</span>
+                </div>
+              </div>
+
+              <p className="about_section_body about_section_body--callout" style={{ marginTop: "1.1rem" }}>
+                Recognition does not yet give truth. It only establishes: <em>"There is something here that must be distinguished."</em> That is the beginning of epistemology.
               </p>
             </section>
 

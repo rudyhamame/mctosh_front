@@ -501,3 +501,131 @@
   line-height: 1.7;
   color: var(--color-text-muted);
 }
+
+/* ── Clinical Epistemology ──────────────────────────────────────────────────── */
+.about_epist_cols {
+  display: flex;
+  gap: 2rem;
+  margin-top: 1.2rem;
+  flex-wrap: wrap;
+}
+
+.about_epist_col {
+  flex: 1;
+  min-width: 220px;
+}
+
+.about_epist_col_title {
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 0.75rem;
+}
+
+.about_epist_steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  position: relative;
+}
+
+.about_epist_steps::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 16px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--color-border);
+}
+
+.about_epist_step {
+  display: flex;
+  flex-direction: column;
+  padding: 0.45rem 0 0.45rem 1.6rem;
+  position: relative;
+}
+
+.about_epist_step::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--color-border);
+  border: 1px solid var(--color-border);
+}
+
+.about_epist_step--first::before {
+  background: var(--color-highlight);
+  border-color: var(--color-highlight);
+  width: 11px;
+  height: 11px;
+  left: 3px;
+}
+
+.about_epist_step--first .about_epist_step_label {
+  color: var(--color-highlight);
+  font-weight: 600;
+}
+
+.about_epist_step_label {
+  font-size: 0.78em;
+  color: var(--color-text);
+  line-height: 1.3;
+}
+
+.about_epist_step_sub {
+  font-size: 0.65em;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  margin-top: 0.1rem;
+  font-style: italic;
+}
+
+/* ── Perception / Recognition / Knowledge ── */
+.about_epist_distinctions {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 1.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.about_epist_distinction {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.55rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+.about_epist_distinction:last-child { border-bottom: none; }
+
+.about_epist_distinction--highlighted {
+  background: color-mix(in srgb, var(--color-highlight) 8%, var(--color-surface));
+}
+
+.about_epist_term {
+  font-size: 0.78em;
+  font-weight: 700;
+  color: var(--color-text);
+  min-width: 7em;
+}
+
+.about_epist_eq {
+  font-size: 0.78em;
+  color: var(--color-text-muted);
+}
+
+.about_epist_def {
+  font-size: 0.78em;
+  color: var(--color-text-muted);
+}
