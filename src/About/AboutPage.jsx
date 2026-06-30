@@ -1,27 +1,49 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useHistory } from "react-router-dom";
+import { apiUrl } from "../config/api";
 import "./aboutPage.css";
 
-const SECTIONS = [
-  { id: "about-objectives", label: "Objectives" },
-  { id: "about-what",       label: "What is MCTOSH?" },
-  { id: "about-pivotal",    label: "A pivotal clarification" },
-  { id: "about-modes",      label: "Two modes of access" },
-  { id: "about-reality",    label: "Four Domains" },
+const SECTIONS_EN = [
+  { id: "about-objectives",   label: "Objectives" },
+  { id: "about-what",         label: "What is MCTOSH?" },
+  { id: "about-pivotal",      label: "A pivotal clarification" },
+  { id: "about-modes",        label: "Two modes of access" },
+  { id: "about-reality",      label: "Four Domains" },
   { id: "about-epistemology", label: "Clinical Epistemology" },
-  { id: "about-means",      label: "Means of Access" },
-  { id: "about-how",        label: "How it works" },
-  { id: "about-cards",      label: "Cards" },
-  { id: "about-types",      label: "Extraction Types" },
+  { id: "about-means",        label: "Means of Access" },
+  { id: "about-how",          label: "How it works" },
+  { id: "about-cards",        label: "Cards" },
+  { id: "about-types",        label: "Extraction Types" },
 ];
+
+const SECTIONS_AR = [
+  { id: "about-objectives",   label: "الأهداف" },
+  { id: "about-what",         label: "ما هو MCTOSH؟" },
+  { id: "about-pivotal",      label: "توضيح محوري" },
+  { id: "about-modes",        label: "وسيلتا الوصول" },
+  { id: "about-reality",      label: "المجالات الأربعة" },
+  { id: "about-epistemology", label: "الإبستيمولوجيا السريرية" },
+  { id: "about-means",        label: "وسائل الوصول" },
+  { id: "about-how",          label: "كيف يعمل" },
+  { id: "about-cards",        label: "البطاقات" },
+  { id: "about-types",        label: "أنواع الاستخراج" },
+];
+
+const AR_CACHE_KEY = "mctosh_about_ar";
 
 const AboutPage = () => {
   const history = useHistory();
   const scrollRef = useRef(null);
-  const [activeId, setActiveId] = useState("about-what");
-  const [scale,    setScale]    = useState(1);
-  const [copied,   setCopied]   = useState(false);
+  const [activeId,     setActiveId]     = useState("about-what");
+  const [scale,        setScale]        = useState(1);
+  const [copied,       setCopied]       = useState(false);
+  const [lang,         setLang]         = useState("en");
+  const [arContent,    setArContent]    = useState(() => localStorage.getItem(AR_CACHE_KEY) || "");
+  const [translating,  setTranslating]  = useState(false);
+  const [transError,   setTransError]   = useState("");
   const bodyRef = useRef(null);
+
+  const SECTIONS = lang === "ar" ? SECTIONS_AR : SECTIONS_EN;
 
   const applyScale = (next) =>
     setScale(Math.min(2, Math.max(0.5, Math.round(next * 10) / 10)));
@@ -51,6 +73,32 @@ const AboutPage = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     });
+  };
+
+  const handleAR = async () => {
+    if (lang === "ar") { setLang("en"); return; }
+    if (arContent)     { setLang("ar"); return; }
+    setTranslating(true);
+    setTransError("");
+    try {
+      const text = bodyRef.current?.innerText || "";
+      const provider = localStorage.getItem("mctosh_ai_provider") || "groq";
+      const res = await fetch(apiUrl("/api/ai/translate"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, targetLang: "ar", provider }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Translation failed");
+      localStorage.setItem(AR_CACHE_KEY, data.translation);
+      setArContent(data.translation);
+      setLang("ar");
+    } catch (e) {
+      setTransError(e.message);
+      setTimeout(() => setTransError(""), 4000);
+    } finally {
+      setTranslating(false);
+    }
   };
 
   useEffect(() => {
@@ -104,6 +152,16 @@ const AboutPage = () => {
         <button id="about_copy_btn" onClick={handleCopy} title="Copy all text">
           {copied ? "Copied ✓" : "Copy"}
         </button>
+        <button
+          id="about_ar_btn"
+          className={lang === "ar" ? "about_ar_btn--active" : ""}
+          onClick={handleAR}
+          disabled={translating}
+          title={lang === "ar" ? "Switch to English" : "Translate to Arabic"}
+        >
+          {translating ? "…" : lang === "ar" ? "EN" : "AR"}
+        </button>
+        {transError && <span id="about_trans_error">{transError}</span>}
         <div id="about_zoom_controls">
           <button onClick={() => applyScale(scale - 0.1)} disabled={scale <= 0.5}>−</button>
           <button id="about_zoom_label" onClick={() => applyScale(1)} title="Reset zoom">
@@ -128,6 +186,13 @@ const AboutPage = () => {
         </nav>
 
         <div id="about_scroll" ref={scrollRef}>
+          {lang === "ar" && arContent ? (
+            <div id="about_ar_body" dir="rtl" lang="ar" style={{ fontSize: `${scale}rem` }}>
+              {arContent.split(/\n{2,}/).map((block, i) => (
+                <p key={i} className="about_ar_para">{block.trim()}</p>
+              ))}
+            </div>
+          ) : (
           <div id="about_body" ref={bodyRef} style={{ fontSize: `${scale}rem` }}>
 
             <section id="about-objectives" className="about_section">
@@ -637,6 +702,7 @@ const AboutPage = () => {
             </section>
 
           </div>
+          )}
         </div>
       </div>
     </div>
