@@ -1,26 +1,36 @@
 import React, { useCallback, useLayoutEffect, useState } from "react";
 import {
   BrowserRouter as Router,
-  Redirect,
+  Navigate,
   Route,
-  Switch,
+  Routes,
+  useParams,
 } from "react-router-dom";
 import App from "./App/App";
 import Login from "./Login/Login";
-import AIChat            from "./AI/AIChat";
-import PDFPage           from "./PDF/PDFPage";
-import CardPage          from "./Card/CardPage";
-import PhenomenaPage     from "./Phenomena/PhenomenaPage";
-import AboutPage         from "./About/AboutPage";
-import HylomorphismPage  from "./Hylomorphism/HylomorphismPage";
-import SourcesPage       from "./Sources/SourcesPage";
-import StudyRoom           from "./Study/StudyRoom";
-import YouTubePage         from "./YouTube/YouTubePage";
-import YouTubeSourcePage   from "./Hylomorphism/YouTubeSourcePage";
-import SettingsPage         from "./Settings/SettingsPage";
+import AIChat                         from "./AI/AIChat";
+import HomeChat                       from "./App/HomeChat";
+import PDFPage                        from "./PDF/PDFPage";
+import CardPage                       from "./Card/CardPage";
+import PhenomenaPage                  from "./Phenomena/PhenomenaPage";
+import AboutPage                      from "./About/AboutPage";
+import PortfolioPage                  from "./Portfolio/PortfolioPage";
+import HylomorphismPage               from "./Hylomorphism/HylomorphismPage";
+import SourcesPage                    from "./Sources/SourcesPage";
+import YouTubePage                    from "./YouTube/YouTubePage";
+import YouTubeSourcePage              from "./Hylomorphism/YouTubeSourcePage";
+import SettingsPage                   from "./Settings/SettingsPage";
+import PatientInstantiationPage       from "./PatientInstantiation/PatientInstantiationPage";
+import PatientModelling               from "./PatientModelling/PatientModelling";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
+
+// Legacy redirect: /pdf/:card → /card/:card
+const PdfCardRedirect = () => {
+  const { card } = useParams();
+  return <Navigate to={`/card/${card}`} replace />;
+};
 
 const AppRouter = () => {
   const [authState, setAuthState] = useState(getStoredAuth);
@@ -65,105 +75,47 @@ const AppRouter = () => {
     };
   }, []);
 
+  const auth = (element) =>
+    canAccessAuthenticatedRoutes ? element : <Navigate to="/login" replace />;
+
   return (
     <Router>
-      <Switch>
-        <Route exact path="/">
-          <Redirect to={canAccessAuthenticatedRoutes ? "/home" : "/login"} />
-        </Route>
-        <Route path="/about">
-          <AboutPage />
-        </Route>
-        <Route path="/login">
-          {canAccessAuthenticatedRoutes ? (
-            <Redirect to="/home" />
-          ) : (
-            <Login onLogin={handleLogin} onForceLogout={handleLogout} />
-          )}
-        </Route>
-        <Route path="/home">
-          {canAccessAuthenticatedRoutes ? (
-            <App onLogout={handleLogout} />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/hylomorphism/youtube_source">
-          {canAccessAuthenticatedRoutes ? (
-            <YouTubeSourcePage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/hylomorphism/pdf_source">
-          {canAccessAuthenticatedRoutes ? (
-            <PDFPage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/hylomorphism">
-          {canAccessAuthenticatedRoutes ? (
-            <HylomorphismPage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/sources">
-          {canAccessAuthenticatedRoutes ? (
-            <SourcesPage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/representation">
-          {canAccessAuthenticatedRoutes ? (
-            <StudyRoom />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/youtube">
-          {canAccessAuthenticatedRoutes ? (
-            <YouTubePage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/ai">
-          {canAccessAuthenticatedRoutes ? (
-            <AIChat />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/card/:card">
-          {canAccessAuthenticatedRoutes ? (
-            <CardPage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/phenomena">
-          {canAccessAuthenticatedRoutes ? (
-            <PhenomenaPage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        <Route path="/settings">
-          {canAccessAuthenticatedRoutes ? (
-            <SettingsPage />
-          ) : (
-            <Redirect to="/login" />
-          )}
-        </Route>
-        {/* Legacy redirect — keep old /pdf/:card links working */}
-        <Route path="/pdf/:card" render={({ match }) => (
-          <Redirect to={`/card/${match.params.card}`} />
-        )} />
-        <Redirect to={canAccessAuthenticatedRoutes ? "/home" : "/login"} />
-      </Switch>
+      <Routes>
+        <Route path="/" element={
+          <Navigate to={canAccessAuthenticatedRoutes ? "/home" : "/login"} replace />
+        } />
+
+        <Route path="/about"     element={<AboutPage />} />
+        <Route path="/portfolio" element={<PortfolioPage />} />
+
+        <Route path="/login" element={
+          canAccessAuthenticatedRoutes
+            ? <Navigate to="/home" replace />
+            : <Login onLogin={handleLogin} onForceLogout={handleLogout} />
+        } />
+
+        <Route path="/home"               element={auth(<App onLogout={handleLogout} />)} />
+        <Route path="/hylomorphism/youtube_source" element={auth(<YouTubeSourcePage />)} />
+        <Route path="/hylomorphism/pdf_source"     element={auth(<PDFPage />)} />
+        <Route path="/hylomorphism"       element={auth(<HylomorphismPage />)} />
+        <Route path="/sources"            element={auth(<SourcesPage />)} />
+        <Route path="/youtube"            element={auth(<YouTubePage />)} />
+        <Route path="/ai"                 element={auth(<AIChat />)} />
+        <Route path="/card/:card"         element={auth(<CardPage />)} />
+        <Route path="/phenomena"          element={auth(<PhenomenaPage />)} />
+        <Route path="/settings"           element={auth(<SettingsPage />)} />
+        <Route path="/patient-instantiation" element={auth(<PatientInstantiationPage />)} />
+        <Route path="/patient-modelling"     element={auth(<PatientModelling />)} />
+
+        {/* Legacy redirect */}
+        <Route path="/pdf/:card" element={<PdfCardRedirect />} />
+
+        <Route path="*" element={
+          <Navigate to={canAccessAuthenticatedRoutes ? "/home" : "/login"} replace />
+        } />
+      </Routes>
+
+      {canAccessAuthenticatedRoutes && <HomeChat />}
     </Router>
   );
 };

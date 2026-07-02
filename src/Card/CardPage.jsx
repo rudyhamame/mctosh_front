@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useHistory, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import HyleCards from "../PDF/HyleCards";
@@ -54,7 +54,7 @@ const deflateNounData = (hyleData) => {
 };
 
 const CardPage = () => {
-  const history = useHistory();
+  const navigate = useNavigate();
   const { card: urlCard } = useParams();
   const activeCard = CARDS.find((c) => c.key === urlCard)?.key || "objects";
 
@@ -146,7 +146,7 @@ const CardPage = () => {
   return (
     <div id="card_page">
       <div id="card_header">
-        <button className="card_home_btn" onClick={() => history.push("/home")}>⌂</button>
+        <button className="card_home_btn" onClick={() => navigate("/home")}>⌂</button>
         <span id="card_header_title">
           {CARDS.find((c) => c.key === activeTab)?.label || activeTab}
         </span>
@@ -193,7 +193,7 @@ const CardPage = () => {
           <button
             key={key}
             className={`card_tab${activeTab === key ? " card_tab--active" : ""}`}
-            onClick={() => { setActiveTab(key); history.replace(`/card/${key}`); }}
+            onClick={() => { setActiveTab(key); navigate(`/card/${key}`, { replace: true }); }}
           >
             {label}
           </button>

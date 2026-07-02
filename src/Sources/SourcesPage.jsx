@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useEffect } from "react";
-import { useHistory } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { apiUrl } from "../config/api";
 import "./sourcesPage.css";
@@ -13,7 +13,7 @@ const authHeader = () => {
 };
 
 const SourcesPage = () => {
-  const history     = useHistory();
+  const navigate = useNavigate();
   const fileDocRef  = useRef(null);
   const fileImgRef  = useRef(null);
   const dropdownRef = useRef(null);
@@ -133,7 +133,7 @@ const SourcesPage = () => {
 
       {/* ── Header ── */}
       <div id="sources_header">
-        <button id="sources_back_btn" onClick={() => history.push("/home")}>←</button>
+        <button id="sources_back_btn" onClick={() => navigate("/home")}>←</button>
         <span id="sources_header_title">Hyle Source Organisation</span>
         {uploadCount > 0 && <span id="sources_uploading_label">Uploading {uploadCount > 1 ? `${uploadCount} files` : ""}…</span>}
 
@@ -222,11 +222,11 @@ const SourcesPage = () => {
                   {s.url
                     ? s.type === "youtube"
                       ? <button className="sources_url_link"
-                          onClick={() => history.push("/youtube", { sourceId: s._id, sourceName: s.name, sourceUrl: s.url })}>
+                          onClick={() => navigate("/youtube", { state: { sourceId: s._id, sourceName: s.name, sourceUrl: s.url } })}>
                           {s.name}
                         </button>
                       : <button className="sources_url_link"
-                          onClick={() => history.push("/hylomorphism/pdf_source", { sourceId: s._id, pdfName: s.name })}>
+                          onClick={() => navigate("/hylomorphism/pdf_source", { state: { sourceId: s._id, pdfName: s.name } })}>
                           {s.name}
                         </button>
                     : <span className="sources_url_none">—</span>}

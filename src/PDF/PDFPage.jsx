@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useHistory, useLocation, useParams } from "react-router-dom";
+import { useNavigate, useLocation, useParams } from "react-router-dom";
 import AIProviderSelect from "../App/AIProviderSelect";
 import { useAIProvider } from "../hooks/useAIProvider";
 import * as pdfjsLib from "pdfjs-dist";
@@ -1543,7 +1543,7 @@ const PDFPage = () => {
     );
   };
 
-  const router     = useHistory();
+  const navigate = useNavigate();
   const location   = useLocation();
   const { card: urlCard } = useParams();
   const isNounsPage = !urlCard; // true when mounted at /hyles (no card in URL)
@@ -1589,7 +1589,7 @@ const PDFPage = () => {
 
       {/* Toolbar */}
       <div id="pdf_toolbar">
-        <button id="pdf_home_btn" onClick={() => router.push("/hylomorphism")} title="Hyle-to-Meaning">⌂</button>
+        <button id="pdf_home_btn" onClick={() => navigate("/hylomorphism")} title="Hyle-to-Meaning">⌂</button>
         {pdfDoc && <>
           <button onClick={() => pageContainerRefs.current[pageNum - 2]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum <= 1}>‹</button>
           <span>{pageNum} / {pageCount}</span>

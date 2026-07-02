@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useHistory, useLocation } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { LINGUISTIC_UNITS } from "../Linguistics/linguisticUnits";
@@ -40,7 +40,7 @@ const loadYTApi = (cb) => {
 };
 
 const YouTubeSourcePage = () => {
-  const history  = useHistory();
+  const navigate = useNavigate();
   const location = useLocation();
   const { sourceId, sourceName, sourceUrl } = location.state || {};
 
@@ -114,11 +114,11 @@ const YouTubeSourcePage = () => {
     <div id="ytsrc_page">
       {/* ── Header ── */}
       <div id="ytsrc_header">
-        <button id="ytsrc_back_btn" onClick={() => history.push("/hylomorphism")}>←</button>
+        <button id="ytsrc_back_btn" onClick={() => navigate("/hylomorphism")}>←</button>
         <span id="ytsrc_title">{sourceName || "YouTube Source"}</span>
         <button
           id="ytsrc_open_editor_btn"
-          onClick={() => history.push("/youtube", { sourceId, sourceName, sourceUrl })}
+          onClick={() => navigate("/youtube", { sourceId, sourceName, sourceUrl })}
           title="Open in transcript editor"
         >Transcript Editor</button>
       </div>

@@ -71,20 +71,94 @@
   font-size: 0.74rem;
   cursor: pointer;
 }
-
 #app_logout_btn:hover { color: var(--color-text); }
 
-/* ── Home two-door grid ── */
+/* ── Home grid ── */
 #app_home_grid {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1.5rem;
+  gap: 2.5rem;
   padding: 2.5rem;
-  flex-wrap: wrap;
+  overflow-y: auto;
 }
 
+/* ── Pipeline section ── */
+#app_pipeline_section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+#app_pipeline_label {
+  font-size: 0.56rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  opacity: 0.45;
+  font-weight: 700;
+  margin: 0;
+}
+
+#app_pipeline_row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* ── Pipeline card ── */
+.app_pipeline_card {
+  position: relative;
+  padding-top: 2rem !important;
+}
+
+.app_pipeline_step_num {
+  position: absolute;
+  top: 0.7rem;
+  left: 1rem;
+  font-size: 0.55rem;
+  font-weight: 800;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  letter-spacing: 0.06em;
+  color: var(--nav-color);
+  opacity: 0.55;
+}
+
+/* ── Pipeline connector ── */
+.app_pipeline_connector {
+  display: flex;
+  align-items: center;
+  padding: 0 0.35rem;
+  flex-shrink: 0;
+  align-self: center;
+  margin-bottom: 0.5rem;
+}
+
+.app_connector_line {
+  width: 14px;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.app_connector_arrow {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  opacity: 0.35;
+  line-height: 1;
+}
+
+/* ── Other cards section ── */
+#app_other_section {
+  display: flex;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* ── Home card (shared) ── */
 .app_home_card {
   display: flex;
   flex-direction: column;
@@ -103,6 +177,12 @@
 .app_home_card:hover {
   background: color-mix(in srgb, var(--nav-color) 5%, var(--color-surface));
   transform: translateY(-3px);
+}
+
+.app_home_card_icon {
+  font-size: 1.5rem;
+  color: var(--nav-color);
+  line-height: 1;
 }
 
 .app_home_card_label {

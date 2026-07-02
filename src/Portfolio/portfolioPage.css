@@ -1,0 +1,374 @@
+/* ═══════════════════════════════
+   Portfolio Page — clean & neutral
+   ═══════════════════════════════ */
+
+#pf_page {
+  min-height: 100vh;
+  background: #ffffff;
+  color: #111827;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Hero ─── */
+#pf_hero {
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: center;
+  padding: 3rem 1.5rem 2.5rem;
+}
+
+#pf_photo {
+  width: 170px;
+  height: 170px;
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: center 20%;
+  border: 3px solid #e5e7eb;
+  margin: 0 auto 1.1rem;
+  display: block;
+}
+
+#pf_name {
+  font-size: 2.3rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #111827;
+  margin: 0 0 0.4rem;
+}
+
+#pf_title {
+  font-size: 0.97rem;
+  color: #6b7280;
+  font-weight: 400;
+  margin: 0 0 1.3rem;
+}
+
+#pf_resume_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 auto 1.2rem;
+  padding: 0.45rem 1.1rem;
+  background: #111827;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 0.12s;
+}
+
+#pf_resume_btn::before {
+  content: "\2193";
+  font-size: 0.85rem;
+}
+
+#pf_resume_btn:hover { background: #374151; }
+
+#pf_links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: center;
+}
+
+.pf_link {
+  font-size: 0.78rem;
+  color: #2563eb;
+  text-decoration: none;
+  padding: 0.25rem 0.7rem;
+  border: 1px solid #bfdbfe;
+  border-radius: 99px;
+  background: #eff6ff;
+  transition: background 0.12s;
+}
+
+.pf_link:hover { background: #dbeafe; }
+
+/* ─── Main content ─── */
+#pf_main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 1.5rem 4rem;
+}
+
+.pf_section {
+  margin-top: 2.2rem;
+  padding-top: 2.2rem;
+  border-top: 1px solid #f3f4f6;
+}
+
+.pf_section_title {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: #9ca3af;
+  margin: 0 0 1.1rem;
+}
+
+.pf_body {
+  font-size: 0.9rem;
+  line-height: 1.78;
+  color: #374151;
+  margin: 0;
+}
+
+/* ─── Project card ─── */
+.pf_project_card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1.3rem 1.4rem 1.1rem;
+  background: #fafafa;
+}
+
+.pf_project_header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.pf_project_name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #111827;
+}
+
+.pf_project_date {
+  font-size: 0.76rem;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.pf_project_bullets {
+  margin: 0.65rem 0 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.pf_project_bullets li {
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: #4b5563;
+}
+
+.pf_tech_tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.85rem;
+}
+
+.pf_tag {
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: #f3f4f6;
+  color: #374151;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+  border: 1px solid #e5e7eb;
+}
+
+.pf_project_links {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.pf_project_link {
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.3rem 0.9rem;
+  border-radius: 6px;
+  text-decoration: none;
+  background: #2563eb;
+  color: #fff;
+  border: 1px solid #2563eb;
+  transition: background 0.12s;
+}
+
+.pf_project_link:hover { background: #1d4ed8; border-color: #1d4ed8; }
+
+.pf_project_link--ghost {
+  background: transparent;
+  color: #2563eb;
+}
+
+.pf_project_link--ghost:hover { background: #eff6ff; }
+
+/* ─── Skills grid ─── */
+.pf_skills_grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.3rem 2rem;
+}
+
+.pf_skill_group_title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: #111827;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.4rem;
+}
+
+.pf_skill_list {
+  margin: 0;
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+
+.pf_skill_list li {
+  font-size: 0.82rem;
+  line-height: 1.5;
+  color: #4b5563;
+}
+
+/* ─── Experience ─── */
+.pf_exp_group_label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: #6b7280;
+  margin-bottom: 0.85rem;
+}
+
+.pf_exp_group_label--spaced { margin-top: 1.6rem; }
+
+.pf_exp_item {
+  margin-bottom: 1.15rem;
+  padding-bottom: 1.15rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.pf_exp_item:last-of-type { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+
+.pf_exp_item--compact {
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.55rem;
+}
+
+.pf_exp_header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin-bottom: 0.18rem;
+}
+
+.pf_exp_title {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #111827;
+}
+
+.pf_exp_dates {
+  font-size: 0.73rem;
+  color: #9ca3af;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pf_exp_org {
+  font-size: 0.78rem;
+  color: #6b7280;
+  margin-bottom: 0.45rem;
+}
+
+.pf_exp_bullets {
+  margin: 0;
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.22rem;
+}
+
+.pf_exp_bullets li {
+  font-size: 0.81rem;
+  line-height: 1.55;
+  color: #4b5563;
+}
+
+/* ─── Education ─── */
+.pf_edu_item {
+  margin-bottom: 0.85rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.pf_edu_item:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+
+.pf_edu_degree {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 0.14rem;
+}
+
+.pf_edu_meta {
+  font-size: 0.78rem;
+  color: #6b7280;
+}
+
+/* ─── Contact ─── */
+.pf_contact_grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.65rem;
+}
+
+.pf_contact_item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  text-decoration: none;
+  background: #fafafa;
+  transition: border-color 0.12s;
+}
+
+.pf_contact_item:hover { border-color: #2563eb; }
+
+.pf_contact_label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+
+.pf_contact_value {
+  font-size: 0.82rem;
+  color: #2563eb;
+  word-break: break-all;
+}
+
+/* ─── Footer ─── */
+#pf_footer {
+  text-align: center;
+  padding: 1.5rem;
+  font-size: 0.73rem;
+  color: #9ca3af;
+  border-top: 1px solid #f3f4f6;
+  background: #fff;
+}
+
+/* ─── Responsive ─── */
+@media (max-width: 540px) {
+  #pf_name { font-size: 1.8rem; }
+  .pf_skills_grid { grid-template-columns: 1fr; }
+  .pf_contact_grid { grid-template-columns: 1fr; }
+  .pf_project_header { flex-direction: column; gap: 0.2rem; }
+  .pf_exp_header { flex-direction: column; gap: 0.1rem; }
+}

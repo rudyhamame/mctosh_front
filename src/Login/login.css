@@ -1,121 +1,851 @@
-/* Login page styles */
+/* ════════════════════════════════════════════════════════════════
+   MCTOSHS LOGIN — 3D Rotatable Animation (Three.js)
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Page shell ── */
 #login_page {
-  min-height: calc(var(--vh, 1vh) * 100);
+  height: calc(var(--vh, 1vh) * 100);
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: row;
+  background: #04060f;
+  color: #dde3ef;
+  overflow: hidden;
+  position: relative;
+  font-family: inherit;
+  touch-action: manipulation; /* block browser pinch-zoom on the page */
+}
+
+
+#login_page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 65% 65% at 38% 50%, rgba(0,229,255,0.035) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 50% at 5%  5%,  rgba(79,195,247,0.04)  0%, transparent 65%),
+    radial-gradient(ellipse 45% 40% at 80% 90%, rgba(206,147,216,0.03) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ══════════════════════════════════════
+   LEFT — Animation Panel
+   ══════════════════════════════════════ */
+#login_anim_panel {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 2rem 2rem 1.5rem;
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+}
+
+/* ── Brand ── */
+#login_brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  align-self: flex-start;
+}
+
+#login_sigil {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #00e5ff, #26a69a);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 22px rgba(0,229,255,0.35);
+  flex-shrink: 0;
+}
+#login_sigil span {
+  font-size: 1.4rem;
+  font-weight: 900;
+  color: #fff;
+  line-height: 1;
+}
+
+#login_brand_text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+#login_wordmark {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.4vw, 2.4rem);
+  font-weight: 900;
+  letter-spacing: 0.26em;
+  line-height: 1;
+  background: linear-gradient(130deg, #e8edf8 0%, #b0bec5 30%, #00e5ff 60%, #26a69a 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: wordmark_shimmer 6s ease-in-out infinite alternate;
+}
+
+@keyframes wordmark_shimmer {
+  from { filter: brightness(1); }
+  to   { filter: brightness(1.2) drop-shadow(0 0 18px rgba(0,229,255,0.4)); }
+}
+
+#login_platform_label {
+  margin: 0;
+  font-size: 0.58rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: #26a69a;
+  font-weight: 600;
+}
+
+/* ── Stage wrapper ── */
+#login_stage_wrap {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+  touch-action: none; /* JS pinch handler takes over here */
+}
+
+/* ── Stage (900×900, absolutely centered, scaled via JS) ── */
+#login_stage {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 900px;
+  height: 900px;
+  margin-top: -450px;
+  margin-left: -450px;
+  will-change: transform;
+}
+
+#login_svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ══════════════════════════════════════
+   Orbital Keyframes
+   ══════════════════════════════════════ */
+@keyframes orbit_cw {
+  from { transform: rotate(0deg)    translateX(var(--r)); }
+  to   { transform: rotate(360deg)  translateX(var(--r)); }
+}
+@keyframes orbit_ccw {
+  from { transform: rotate(0deg)    translateX(var(--r)); }
+  to   { transform: rotate(-360deg) translateX(var(--r)); }
+}
+
+/* ── Soft orbit path rings ── */
+.orb_ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--orb-color) 30%, transparent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--orb-color) 12%, transparent);
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* ── Base particle ── */
+.bio_particle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  animation-duration:        var(--dur);
+  animation-delay:           var(--delay);
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-fill-mode:       both;
+  pointer-events: none;
+  will-change: transform;
+  z-index: 8;  /* above spheres (z-index 5) */
+}
+
+/* ── Counter-rotation keyframes — keep letter upright as dot orbits ── */
+@keyframes counter_cw  { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
+@keyframes counter_ccw { from { transform: rotate(0deg); } to { transform: rotate( 360deg); } }
+
+/* ── Orbital dot ── */
+.orb_dot {
+  width: 32px;
+  height: 32px;
+  margin: -16px;
+  border-radius: 50%;
+  background: var(--orb-color);
+  box-shadow:
+    0 0 14px var(--orb-color),
+    0 0 32px color-mix(in srgb, var(--orb-color) 40%, transparent);
+}
+
+/* ── Letter inside the dot — counter-rotates to stay upright ── */
+.orb_dot_letter {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 900;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  color: #04060f;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+/* ══════════════════════════════════════
+   MCTOSHS Pipeline Nodes
+   ══════════════════════════════════════ */
+.mctosh_node {
+  position: absolute;
+  left: var(--nx);
+  top:  var(--ny);
+  transform: translate(-50%, -50%);
+  width: 148px;
+  height: 148px;
+  border-radius: 50%;
+  background: rgba(4, 22, 40, 0.88);
+  border: 1.5px solid rgba(79,195,247,0.4);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 1.5rem;
-  background: var(--color-bg);
-  color: var(--color-text);
+  z-index: 10;
+  backdrop-filter: blur(10px);
+  box-shadow:
+    0 0 28px rgba(79,195,247,0.18),
+    0 0 56px rgba(79,195,247,0.08),
+    inset 0 0 18px rgba(79,195,247,0.06);
+  animation: node_breathe 4.5s ease-in-out infinite;
+  gap: 6px;
+  padding: 0 14px;
 }
 
-#login_video_wrap {
-  position: relative;
-  width: 100%;
-  max-width: 380px;
-}
-
-#login_video {
-  width: 100%;
-  max-height: 220px;
-  border-radius: 10px;
-  object-fit: cover;
-  display: block;
-}
-
-#login_video_play {
+.mctosh_node::before {
+  content: "";
   position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 3.5rem;
-  height: 3.5rem;
+  inset: -8px;
   border-radius: 50%;
-  border: none;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 1.3rem;
-  cursor: pointer;
+  border: 1px solid rgba(79,195,247,0.15);
+  animation: node_ring_expand 4.5s ease-in-out infinite;
+}
+
+@keyframes node_breathe {
+  0%, 100% {
+    box-shadow:
+      0 0 22px rgba(79,195,247,0.14),
+      0 0 44px rgba(79,195,247,0.06),
+      inset 0 0 12px rgba(79,195,247,0.04);
+  }
+  50% {
+    box-shadow:
+      0 0 32px rgba(79,195,247,0.28),
+      0 0 60px rgba(79,195,247,0.12),
+      inset 0 0 18px rgba(79,195,247,0.08);
+    border-color: rgba(79,195,247,0.6);
+  }
+}
+
+@keyframes node_ring_expand {
+  0%, 100% { transform: scale(1);    opacity: 0.5; }
+  50%       { transform: scale(1.15); opacity: 0.15; }
+}
+
+.mn_ring {
+  position: absolute;
+  inset: -18px;
+  border-radius: 50%;
+  border: 1px dashed rgba(79,195,247,0.12);
+  animation: node_ring_expand 4.5s ease-in-out infinite;
+  animation-delay: -2.25s;
+}
+
+.mn_step {
+  font-size: 1.5rem;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-weight: 700;
+  color: #4fc3f7;
+  letter-spacing: 0.05em;
+  line-height: 1;
+}
+
+.mn_label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(200,230,255,0.8);
+  letter-spacing: 0.01em;
+  text-align: center;
+  max-width: 124px;
+  line-height: 1.3;
+}
+
+/* ══════════════════════════════════════
+   Center Photo
+   ══════════════════════════════════════ */
+#login_center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+}
+
+#login_center_glow {
+  position: absolute;
+  width: 780px;
+  height: 780px;
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle,
+    rgba(160,110,255,0.07) 0%,
+    rgba(120,80,220,0.03) 50%,
+    transparent 78%
+  );
+  pointer-events: none;
+  animation: center_glow 7s ease-in-out infinite;
+  z-index: -1;
+}
+
+@keyframes center_glow {
+  0%, 100% { transform: translate(-50%, -50%) scale(1);    opacity: 0.7; }
+  50%       { transform: translate(-50%, -50%) scale(1.12); opacity: 1;   }
+}
+
+/* ══════════════════════════════════════
+   Patient Reality — 3D glass sphere
+   ══════════════════════════════════════ */
+#pr_sphere {
+  position: relative;
+  width: 720px;
+  height: 720px;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse 46% 28% at 27% 21%,
+      rgba(255,255,255,0.15) 0%,
+      rgba(200,180,255,0.05) 42%,
+      transparent 100%
+    ),
+    radial-gradient(circle at 50% 50%,
+      transparent 38%,
+      rgba(8,0,28,0.18) 58%,
+      rgba(5,0,18,0.55) 78%,
+      rgba(3,0,12,0.82) 100%
+    );
+  border: 1.5px solid rgba(160,110,255,0.40);
+  box-shadow:
+    inset 0 0 200px rgba(0,0,0,0.08),
+    0 0  110px rgba(160,110,255,0.16),
+    0 0  220px rgba(120,80,220,0.07);
+  animation: pr_breathe 7s ease-in-out infinite;
+}
+
+@keyframes pr_breathe {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 200px rgba(0,0,0,0.08),
+      0 0  110px rgba(160,110,255,0.16),
+      0 0  220px rgba(120,80,220,0.07);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 200px rgba(0,0,0,0.06),
+      0 0  145px rgba(160,110,255,0.26),
+      0 0  280px rgba(120,80,220,0.12);
+  }
+}
+
+/* Specular highlights on the glass surface */
+#pr_spec_a {
+  position: absolute;
+  top: 9%; left: 14%;
+  width: 38%; height: 22%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(255,255,255,0.20) 0%, transparent 100%);
+  filter: blur(14px);
+  animation: spec_drift 12s ease-in-out infinite;
+  pointer-events: none;
+}
+
+#pr_spec_b {
+  position: absolute;
+  top: 15%; left: 26%;
+  width: 10%; height: 6%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(255,255,255,0.50) 0%, transparent 100%);
+  filter: blur(4px);
+  animation: spec_drift 12s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes spec_drift {
+  0%, 100% { transform: translate(0,     0);    opacity: 1;    }
+  33%       { transform: translate(18px, -10px); opacity: 0.68; }
+  66%       { transform: translate(-12px,  6px); opacity: 0.85; }
+}
+
+/* Rim light on opposite side — simulates light wrapping around sphere */
+#pr_rim {
+  position: absolute;
+  bottom: 12%; right: 13%;
+  width: 24%; height: 14%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(160,110,255,0.20) 0%, transparent 100%);
+  filter: blur(20px);
+  pointer-events: none;
+}
+
+/* MCTOSHS label — just below the MCTOSHS sphere (outside it) */
+#ms_label_wrap {
+  position: absolute;
+  top: 727px;   /* lowered to clear the larger MCTOSHS sphere */
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9;
+  padding: 6px 14px 7px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(2, 18, 34, 0.58), rgba(2, 12, 26, 0.26));
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
+}
+
+#ms_label_name {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(0, 229, 255, 0.65);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+}
+
+/* Patient Reality label — just below the PR sphere (outside it) */
+#pr_label_wrap {
+  position: absolute;
+  top: 855px;   /* lowered for cleaner spacing beneath Patient Reality */
+  left: 50%;
+  transform: translateX(-50%);
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9;
+  padding: 7px 16px 8px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(22, 10, 44, 0.48), rgba(12, 8, 28, 0.18));
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+}
+
+#pr_step {
+  display: block;
+  font-size: 0.62rem;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-weight: 700;
+  color: rgba(180,140,255,0.60);
+  letter-spacing: 0.14em;
+  margin-bottom: 3px;
+}
+
+#pr_name {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(210,190,255,0.72);
+  line-height: 1.1;
+}
+
+/* ══════════════════════════════════════
+   MCTOSHS — inner 3D solid sphere
+   ══════════════════════════════════════ */
+/* MCTOSHS sphere — glass orb containing all 7 orbital modes inside it */
+#mctosh_sphere {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 500px;
+  height: 500px;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse 46% 28% at 28% 22%,
+      rgba(0,229,255,0.20) 0%,
+      rgba(0,200,230,0.06) 40%,
+      transparent 100%
+    ),
+    radial-gradient(circle at 50% 50%,
+      transparent 52%,
+      rgba(0,20,45,0.18) 66%,
+      rgba(0,12,32,0.50) 80%,
+      rgba(0,6,18,0.80) 100%
+    );
+  border: 1.5px solid rgba(0,229,255,0.55);
+  box-shadow:
+    inset 0 0 160px rgba(0,30,60,0.12),
+    0 0  70px rgba(0,229,255,0.22),
+    0 0 130px rgba(0,180,220,0.10);
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, transform 0.12s;
+  animation: ms_pulse 5s ease-in-out infinite;
+  z-index: 3;
 }
 
-#login_video_play:hover {
-  background: rgba(0, 0, 0, 0.75);
-  transform: scale(1.08);
+/* Void center — inside M orbit, not part of MCTOSHS; matches Patient Reality color */
+#ms_void {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100px;
+  height: 100px;
+  margin-top: -50px;
+  margin-left: -50px;
+  border-radius: 50%;
+  background: radial-gradient(circle,
+    rgba(100,60,200,0.28) 0%,
+    rgba(140,90,240,0.14) 55%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 2;
 }
 
+/* Inner M-orbit ring — marks the hollow void boundary inside MCTOSHS */
+#ms_m_ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100px;
+  height: 100px;
+  margin-top: -50px;
+  margin-left: -50px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  box-shadow:
+    0 0 8px rgba(0, 229, 255, 0.18),
+    inset 0 0 8px rgba(0, 229, 255, 0.10);
+  pointer-events: none;
+  animation: ms_m_ring_pulse 5s ease-in-out infinite;
+}
+
+@keyframes ms_m_ring_pulse {
+  0%, 100% { border-color: rgba(0, 229, 255, 0.25); box-shadow: 0 0 6px rgba(0,229,255,0.14), inset 0 0 6px rgba(0,229,255,0.07); }
+  50%       { border-color: rgba(0, 229, 255, 0.50); box-shadow: 0 0 12px rgba(0,229,255,0.28), inset 0 0 10px rgba(0,229,255,0.14); }
+}
+
+#ms_rim {
+  position: absolute;
+  bottom: 12%; right: 14%;
+  width: 22%; height: 14%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(0,229,255,0.14) 0%, transparent 100%);
+  filter: blur(18px);
+  pointer-events: none;
+}
+
+@keyframes ms_pulse {
+  0%, 100% {
+    box-shadow:
+      inset 0 0 160px rgba(0,30,60,0.12),
+      0 0  70px rgba(0,229,255,0.22),
+      0 0 130px rgba(0,180,220,0.10);
+    border-color: rgba(0,229,255,0.30);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 160px rgba(0,30,60,0.08),
+      0 0  95px rgba(0,229,255,0.36),
+      0 0 170px rgba(0,180,220,0.16);
+    border-color: rgba(0,229,255,0.48);
+  }
+}
+
+/* MCTOSHS label — shown at center of the glass sphere */
+#ms_label {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  pointer-events: none;
+}
+
+#ms_word {
+  font-size: 0.70rem;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  color: rgba(0,229,255,0.75);
+  text-transform: uppercase;
+}
+
+/* Tagline */
+#login_tagline {
+  margin: 0;
+  font-size: 0.68rem;
+  color: rgba(255,255,255,0.18);
+  font-style: italic;
+  letter-spacing: 0.05em;
+  text-align: center;
+}
+
+/* ══════════════════════════════════════
+   RIGHT — Glassmorphism Form Panel
+   ══════════════════════════════════════ */
+#login_panel {
+  width: 400px;
+  flex-shrink: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 3rem 3.5rem 5rem;
+  background: rgba(255,255,255,0.022);
+  border-left: 1px solid rgba(255,255,255,0.06);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+  animation: panel_enter 0.6s cubic-bezier(0.22,1,0.36,1) both;
+}
+
+@keyframes panel_enter {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Form header */
+#login_form_head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+#login_form_bar {
+  width: 3px;
+  height: 22px;
+  background: linear-gradient(to bottom, #00e5ff, #26a69a);
+  border-radius: 2px;
+  box-shadow: 0 0 14px rgba(0,229,255,0.55);
+}
+
+#login_form_title {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #c5cfe0;
+}
+
+/* Fields */
 #login_form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  width: 320px;
-  padding: 2rem;
-  background: var(--color-surface);
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
+  gap: 1.1rem;
 }
 
-#login_form h1 {
-  margin: 0 0 0.5rem;
-  font-size: 1.5rem;
-  text-align: center;
+.login_field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.login_field_label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #37474f;
 }
 
 #login_form input {
-  padding: 0.75rem 1rem;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background: var(--color-secondary);
-  color: var(--color-text);
-  font-size: 1rem;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.78rem 1rem;
+  min-height: 44px;
+  border-radius: 7px;
+  border: 1px solid rgba(255,255,255,0.07);
+  background: rgba(255,255,255,0.035);
+  color: #dde3ef;
+  font-size: 0.875rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
 }
 
-#login_form button[type="submit"] {
-  padding: 0.75rem;
+#login_form input:focus {
+  border-color: rgba(0,229,255,0.4);
+  background: rgba(0,229,255,0.03);
+  box-shadow:
+    0 0 0 3px rgba(0,229,255,0.07),
+    inset 0 0 0 1px rgba(0,229,255,0.1);
+}
+
+#login_form input::placeholder { color: #1e3038; }
+
+/* Error */
+#login_error {
+  font-size: 0.75rem;
+  color: #ef5350;
+  background: rgba(239,83,80,0.07);
+  border: 1px solid rgba(239,83,80,0.18);
+  border-radius: 6px;
+  padding: 0.55rem 0.85rem;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+/* Submit */
+#login_submit {
+  margin-top: 0.4rem;
+  padding: 0.88rem;
+  min-height: 44px;
   border-radius: 8px;
   border: none;
-  background: var(--color-highlight);
+  background: linear-gradient(135deg, #00bcd4 0%, #26a69a 50%, #00897b 100%);
   color: #fff;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   cursor: pointer;
+  transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+  box-shadow:
+    0 4px 22px rgba(0,229,255,0.22),
+    inset 0 1px 0 rgba(255,255,255,0.15);
+  position: relative;
+  overflow: hidden;
 }
 
-#login_error {
-  color: var(--color-highlight);
-  font-size: 0.875rem;
-  text-align: center;
+#login_submit::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 55%);
+  pointer-events: none;
 }
 
+#login_submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow:
+    0 8px 28px rgba(0,229,255,0.35),
+    inset 0 1px 0 rgba(255,255,255,0.2);
+}
+#login_submit:active:not(:disabled) { transform: translateY(0); }
+#login_submit:disabled { opacity: 0.45; cursor: default; }
+
+/* Toggle */
 #login_toggle {
   background: none;
   border: none;
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
+  color: #37474f;
+  font-size: 0.72rem;
   cursor: pointer;
   text-align: center;
-  padding: 0;
+  padding: 0.2rem 0;
+  letter-spacing: 0.03em;
+  transition: color 0.15s;
+  font-family: inherit;
+}
+#login_toggle:hover { color: #00e5ff; }
+
+/* Links */
+#login_links {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  justify-content: center;
+  margin-top: 0.25rem;
 }
 
-#login_toggle:hover {
-  color: var(--color-text);
-}
-
-#login_about_btn {
+.login_link {
   background: none;
   border: none;
-  color: var(--color-text-muted);
-  font-size: 0.75rem;
+  color: #263238;
+  font-size: 0.62rem;
   cursor: pointer;
-  text-align: center;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
   padding: 0;
-  margin-top: 0.25rem;
-  letter-spacing: 0.04em;
+  transition: color 0.15s;
+  font-family: inherit;
+}
+.login_link:hover { color: #546e7a; }
+.login_link_sep { color: #1a2730; font-size: 0.6rem; }
+
+/* Footer */
+#login_footer {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.58rem;
+  color: #1e2e32;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-#login_about_btn:hover {
-  color: var(--color-text);
+/* ══════════════════════════════════════
+   Accessibility
+   ══════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  .bio_particle,
+  #login_center_glow,
+  #pr_sphere,
+  #pr_spec_a,
+  #pr_spec_b,
+  #mctosh_sphere,
+  #login_wordmark {
+    animation: none !important;
+  }
+}
+
+/* ══════════════════════════════════════
+   Responsive
+   ══════════════════════════════════════ */
+@media (max-width: 960px) {
+  #login_page {
+    flex-direction: column;
+    height: auto;
+    min-height: 100dvh;
+    overflow-y: auto;
+  }
+  #login_anim_panel {
+    height: 58vw;
+    min-height: 260px;
+    flex: none;
+    padding: 1.5rem 1rem 1rem;
+  }
+  #login_panel {
+    flex: 1;
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding: 2rem 2rem 4rem;
+    backdrop-filter: none;
+    overflow: hidden;
+  }
+  #login_footer {
+    position: static;
+    margin-top: 2rem;
+  }
 }

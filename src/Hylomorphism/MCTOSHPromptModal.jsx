@@ -31,7 +31,7 @@ const MCTOSHPromptModal = ({ onClose }) => {
     <div id="mcp_overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div id="mcp_modal">
         <div id="mcp_header">
-          <span id="mcp_title">MCTOSH Clinical Linguistic Decomposition &amp; Ontological Classification Prompt</span>
+          <span id="mcp_title">MCTOSHS Clinical Linguistic Decomposition &amp; Ontological Classification Prompt</span>
           <button id="mcp_copy_btn" onClick={handleCopy}>{copied ? "Copied ✓" : "Copy Prompt"}</button>
           <button id="mcp_close_btn" onClick={onClose}>×</button>
         </div>
@@ -47,9 +47,9 @@ const MCTOSHPromptModal = ({ onClose }) => {
 
         <div id="mcp_body">
           <p className="mcp_intro">
-            You are an expert clinical linguist and ontological classifier working within the MCTOSH framework.
+            You are an expert clinical linguist and ontological classifier working within the MCTOSHS framework.
             Your task is to analyze clinical text in two stages: <strong>Stage 1 — Linguistic Decomposition</strong> and{" "}
-            <strong>Stage 2 — MCTOSH Ontological Classification</strong>.
+            <strong>Stage 2 — MCTOSHS Ontological Classification</strong>.
           </p>
           <p className="mcp_intro">
             Do not classify a medical expression from a word alone. First identify its morphemes, words, phrase
@@ -64,7 +64,7 @@ const MCTOSHPromptModal = ({ onClose }) => {
             <ol className="mcp_ol">
               <li>Raw clinical text.</li>
               <li>Optionally, pre-extracted linguistic annotations.</li>
-              <li>Optionally, a previous MCTOSH classification.</li>
+              <li>Optionally, a previous MCTOSHS classification.</li>
             </ol>
             <p className="mcp_p">Use the raw clinical text to verify every conclusion.</p>
           </section>
@@ -166,7 +166,7 @@ const MCTOSHPromptModal = ({ onClose }) => {
 
           {/* VI */}
           <section id="mcp_sec_VI" className="mcp_section">
-            <h2 className="mcp_sec_title"><span className="mcp_roman">VI.</span> MCTOSH Ontological Levels</h2>
+            <h2 className="mcp_sec_title"><span className="mcp_roman">VI.</span> MCTOSHS Ontological Levels</h2>
             <p className="mcp_p">After linguistic analysis, classify each extracted item into one primary level.</p>
             {[
               { level: "Level 1 — Object", desc: "Material entity, biological structure, physical substrate, molecular component, anatomical entity.", examples: "heart · left ventricle · myocardium · cardiomyocyte · mitochondrion · troponin · sodium ion · gastric mucosa" },
@@ -184,7 +184,7 @@ const MCTOSHPromptModal = ({ onClose }) => {
 
           {/* VII */}
           <section id="mcp_sec_VII" className="mcp_section">
-            <h2 className="mcp_sec_title"><span className="mcp_roman">VII.</span> MCTOSH Mode Classification</h2>
+            <h2 className="mcp_sec_title"><span className="mcp_roman">VII.</span> MCTOSHS Mode Classification</h2>
             <p className="mcp_p">Assign the narrowest valid mode. Never use Human when a narrower anatomical scale is available.</p>
             <div className="mcp_mode_grid">
               {["Sub-molecule","Molecule","Sub-cell","Cell","Sub-tissue","Tissue","Sub-organ","Organ","Sub-system","System","Sub-human","Human"].map((m, i) => (
@@ -246,7 +246,7 @@ Echo image recording ventricular motion          → Level 2, Sub-organ trace`}<
               <p className="mcp_p">Columns: ID · Surface Phrase · Normalized Expression · Head Word · Modifiers · Morphemes · Syntagm Type · Relation · Assertion · Negation · Temporality</p>
             </div>
             <div className="mcp_output_block">
-              <div className="mcp_output_label">B. MCTOSH Classification Table</div>
+              <div className="mcp_output_label">B. MCTOSHS Classification Table</div>
               <p className="mcp_p">Columns: ID · Extracted Expression · Level · Mode · Ontic/Epistemic Status · Clinical Role · Structural Scale Basis · Certainty · Explanation</p>
               <pre className="mcp_code">Structural Scale Basis: Explicitly stated · Necessarily implied · Inferred · Unresolved</pre>
             </div>
@@ -260,7 +260,7 @@ Echo image recording ventricular motion          → Level 2, Sub-organ trace`}<
   "reduced ejection fraction"                       → Level 2, interpreted quantitative finding`}</pre>
             </div>
             <div className="mcp_output_block">
-              <div className="mcp_output_label">D. MCTOSH Diagnostic Circle</div>
+              <div className="mcp_output_label">D. MCTOSHS Diagnostic Circle</div>
               <pre className="mcp_code">Object / structure → process / phenomenon → trace → clinical interpretation → concept</pre>
               <p className="mcp_p">Use "not established" when the text does not support a causal or diagnostic link.</p>
             </div>
@@ -276,7 +276,7 @@ Echo image recording ventricular motion          → Level 2, Sub-organ trace`}<
               <li>Did I separate the symptom as lived experience from the patient's report?</li>
               <li>Did I preserve negation, uncertainty, temporality, and source?</li>
               <li>Did I classify the phrase according to context rather than only its root word?</li>
-              <li>Did I assign the narrowest valid MCTOSH mode?</li>
+              <li>Did I assign the narrowest valid MCTOSHS mode?</li>
               <li>Did I avoid assigning Human when organ, tissue, cell, or molecule is more precise?</li>
               <li>Did I avoid converting suspected concepts into confirmed diagnoses?</li>
               <li>Did I preserve the raw text as the final authority?</li>

@@ -1,30 +1,40 @@
 import React, { useState } from "react";
-import { useHistory } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import "./App.css";
 import AIProviderSelect from "./AIProviderSelect";
 import { useAIProvider } from "../hooks/useAIProvider";
 
-const HOME_ITEMS = [
-  {
-    path: "/hylomorphism",
-    label: "Hyle-to-Meaning",
-    description: "Extract hyles from clinical text and classify them into Objects, Traces, Phenomena, Concepts, and Models",
-    color: "#e53935",
-  },
+const PIPELINE = [
   {
     path: "/sources",
-    label: "Hyle Source Organisation",
-    description: "Store and manage PDFs as sources from which hyles will be extracted",
+    icon: "fi-rr-books",
+    label: "Clinical Representation Reservoir",
+    description: "Store and manage PDFs as sources from which clinical hyles are extracted",
     color: "#4fc3f7",
+    step: "01",
   },
   {
-    path: "/representation",
-    label: "MCTOSH Representation Space",
-    description: "Explore extracted hyles organised into Objects, Traces, Phenomena, Concepts, and Models alongside annotated sources",
-    color: "#ce93d8",
+    path: "/patient-modelling",
+    icon: "fi-rr-blueprint",
+    label: "MCTOSHS Objects Modelling",
+    description: "Build the Morphe/schema for Patient Representative Objects across the six MCTOSHS dimensions",
+    color: "#8e24aa",
+    step: "02",
   },
+  {
+    path: "/patient-instantiation",
+    icon: "fi-rr-hospital-user",
+    label: "Patient Instantiation",
+    description: "Instantiate the Patient Instance — receive the Morphe to form the Hylomorphic Entity",
+    color: "#26a69a",
+    step: "03",
+  },
+];
+
+const OTHER = [
   {
     path: "/settings",
+    icon: "fi-rr-settings",
     label: "Settings",
     description: "Control prompts, AI providers, and app theme",
     color: "#78909c",
@@ -32,7 +42,7 @@ const HOME_ITEMS = [
 ];
 
 const App = ({ onLogout }) => {
-  const history = useHistory();
+  const navigate = useNavigate();
   const { provider, setProvider } = useAIProvider();
   const [scale, setScale] = useState(
     () => parseFloat(localStorage.getItem("appScale") || "1")
@@ -48,7 +58,7 @@ const App = ({ onLogout }) => {
   return (
     <div id="App_viewportScale">
       <div id="app_nav_header">
-        <span id="app_nav_title">MCTOSH</span>
+        <span id="app_nav_title">MCTOSHS</span>
         <div id="app_scale_controls">
           <button onClick={() => applyScale(scale - 0.1)} disabled={scale <= 0.5}>−</button>
           <button id="app_scale_label" onClick={() => applyScale(1)} title="Reset zoom">
@@ -61,17 +71,52 @@ const App = ({ onLogout }) => {
       </div>
 
       <div id="app_home_grid">
-        {HOME_ITEMS.map(({ path, label, description, color }) => (
-          <button
-            key={path}
-            className="app_home_card"
-            style={{ "--nav-color": color }}
-            onClick={() => history.push(path)}
-          >
-            <span className="app_home_card_label">{label}</span>
-            <span className="app_home_card_desc">{description}</span>
-          </button>
-        ))}
+
+        {/* Pipeline section */}
+        <div id="app_pipeline_section">
+          <p id="app_pipeline_label">MCTOSHS Clinical Pipeline</p>
+          <div id="app_pipeline_row">
+            {PIPELINE.map(({ path, icon, label, description, color, step }, i) => (
+              <React.Fragment key={path}>
+                <button
+                  className="app_home_card app_pipeline_card"
+                  style={{ "--nav-color": color }}
+                  onClick={() => navigate(path)}
+                >
+                  <div className="app_pipeline_step_num">{step}</div>
+                  <i className={`fi ${icon} app_home_card_icon`} />
+                  <span className="app_home_card_label">{label}</span>
+                  <span className="app_home_card_desc">{description}</span>
+                </button>
+
+                {i < PIPELINE.length - 1 && (
+                  <div className="app_pipeline_connector">
+                    <div className="app_connector_line" />
+                    <i className="fi fi-rr-caret-right app_connector_arrow" />
+                    <div className="app_connector_line" />
+                  </div>
+                )}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+
+        {/* Other cards */}
+        <div id="app_other_section">
+          {OTHER.map(({ path, icon, label, description, color }) => (
+            <button
+              key={path}
+              className="app_home_card"
+              style={{ "--nav-color": color }}
+              onClick={() => navigate(path)}
+            >
+              <i className={`fi ${icon} app_home_card_icon`} />
+              <span className="app_home_card_label">{label}</span>
+              <span className="app_home_card_desc">{description}</span>
+            </button>
+          ))}
+        </div>
+
       </div>
     </div>
   );

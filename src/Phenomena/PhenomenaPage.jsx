@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { useHistory } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import "./phenomenaPage.css";
@@ -38,7 +38,7 @@ const MODES = [
 const key = (noun, mode) => `${noun}::${mode}`;
 
 const PhenomenaPage = () => {
-  const history = useHistory();
+  const navigate = useNavigate();
   const [pool, setPool]             = useState([]);  // [{noun, mode}] from PDF extractions
   const [assignments, setAssignments] = useState({}); // { "noun::mode": Phenomenon doc }
   const [loading, setLoading]       = useState(true);
@@ -141,7 +141,7 @@ const PhenomenaPage = () => {
 
       {/* Header */}
       <div id="phen_header">
-        <button className="phen_home_btn" onClick={() => history.push("/home")} title="Home">⌂</button>
+        <button className="phen_home_btn" onClick={() => navigate("/home")} title="Home">⌂</button>
         <span id="phen_header_title">Phenomena</span>
         <span style={{ fontSize: "0.72rem", color: "var(--color-text-muted)" }}>
           {pool.length} extracted · {Object.keys(assignments).length} assigned

@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 export const AI_PROVIDERS = [
   { id: "local",  label: "Local",  sub: "Ollama" },
   { id: "openai", label: "OpenAI", sub: "GPT-4o mini" },
-  { id: "groq",   label: "Groq",   sub: "Llama 3.3 70B" },
+  { id: "groq",   label: "Groq",   sub: "Llama 4 Scout" },
   { id: "nara",   label: "Nara",   sub: "mimo-v2.5" },
   { id: "manual", label: "Manual", sub: "Select text" },
 ];

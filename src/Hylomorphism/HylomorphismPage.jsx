@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useHistory } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { apiUrl } from "../config/api";
 import MCTOSHPromptModal from "./MCTOSHPromptModal";
@@ -25,7 +25,7 @@ const authHeader = () => {
 };
 
 const HylomorphismPage = () => {
-  const history = useHistory();
+  const navigate = useNavigate();
   const [allSources,   setAllSources]   = useState([]);
   const [loading,      setLoading]      = useState(true);
   const [sourceType,   setSourceType]   = useState("pdf");
@@ -47,7 +47,7 @@ const HylomorphismPage = () => {
     const src = allSources.find(s => s._id === id);
     if (!src) return;
     const { path, state } = (TYPE_ROUTE[src.type] ?? TYPE_ROUTE.pdf)(src);
-    history.push(path, state);
+    navigate(path, { state });
   };
 
   const noSourcesMsg = loading
@@ -59,9 +59,9 @@ const HylomorphismPage = () => {
   return (
     <div id="hylo_page">
       <div id="hylo_header">
-        <button id="hylo_back_btn" onClick={() => history.push("/home")}>←</button>
+        <button id="hylo_back_btn" onClick={() => navigate("/home")}>←</button>
         <span id="hylo_header_title">Hyle-to-Meaning</span>
-        <button id="hylo_prompt_btn" onClick={() => setShowPrompt(true)} title="View MCTOSH Classification Prompt">Prompt</button>
+        <button id="hylo_prompt_btn" onClick={() => setShowPrompt(true)} title="View MCTOSHS Classification Prompt">Prompt</button>
       </div>
       {showPrompt && <MCTOSHPromptModal onClose={() => setShowPrompt(false)} />}
 

@@ -163,6 +163,31 @@
 }
 
 /* ── Objectives list ── */
+.about_audience_row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  margin-bottom: 1.1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.about_audience_label {
+  font-size: 0.68em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #e53935;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.about_audience_value {
+  font-size: 0.82em;
+  line-height: 1.6;
+  color: var(--color-text);
+}
+
 .about_objectives_list {
   margin: 0.5rem 0 0 0;
   padding: 0;
@@ -211,6 +236,20 @@
   grid-column: 2;
 }
 
+.about_objectives_list--grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 1.5rem;
+}
+
+.about_objectives_list--compact li {
+  padding: 0.25rem 0;
+}
+
+.about_objectives_list--compact .about_obj_label {
+  margin-bottom: 0;
+}
+
 .about_section--pivotal {
   border-left: 3px solid #e53935;
   padding-left: 1rem;
@@ -237,6 +276,158 @@
   margin: 0;
 }
 
+.about_unipt_compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.about_unipt_col {
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.about_unipt_col_title {
+  font-size: 0.78em;
+  font-weight: 700;
+  color: #e53935;
+  margin-bottom: 0.45rem;
+  letter-spacing: 0.03em;
+}
+
+.about_unipt_traits {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.about_unipt_trait_col {
+  padding: 0.8rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.about_unipt_trait_title {
+  font-size: 0.76em;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin-bottom: 0.45rem;
+  font-style: italic;
+}
+
+.about_unipt_flow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-top: 1rem;
+  padding: 0.9rem 1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.about_unipt_flow_item {
+  font-size: 0.8em;
+  color: var(--color-text);
+  padding: 0.18rem 0;
+}
+
+.about_unipt_flow_item--return {
+  font-weight: 700;
+  color: #e53935;
+}
+
+.about_unipt_flow_arrow {
+  font-size: 0.75em;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+}
+
+@media (max-width: 540px) {
+  .about_unipt_compare,
+  .about_unipt_traits { grid-template-columns: 1fr; }
+}
+
+.about_comm_grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.about_comm_direction {
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+}
+
+.about_comm_arrow {
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #e53935;
+  margin-bottom: 0.5rem;
+}
+
+.about_comm_desc {
+  font-size: 0.82em;
+  line-height: 1.55;
+  color: var(--color-text);
+  margin: 0 0 0.5rem;
+}
+
+.about_comm_list {
+  margin: 0;
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+}
+
+.about_comm_list li {
+  font-size: 0.8em;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+@media (max-width: 540px) {
+  .about_comm_grid { grid-template-columns: 1fr; }
+}
+
+.about_conclusion {
+  border-top: 2px solid var(--color-highlight);
+  margin-top: 2rem;
+  padding-top: 2rem;
+}
+
+.about_what_tagline {
+  margin-top: 1.2rem;
+  font-size: 0.95em;
+  font-weight: 600;
+  font-style: italic;
+  color: var(--color-text);
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+}
+
+.about_what_quote {
+  margin: 0.9rem 0;
+  padding: 0.7rem 1rem;
+  border-left: 3px solid var(--color-highlight);
+  background: var(--color-surface);
+  border-radius: 0 6px 6px 0;
+  font-size: 0.88em;
+  font-style: italic;
+  line-height: 1.65;
+  color: var(--color-text);
+}
+
 .about_cards_list {
   list-style: none;
   margin: 0;
@@ -260,6 +451,90 @@
   height: 9px;
   border-radius: 50%;
   flex-shrink: 0;
+}
+
+/* ── 3D Ball / Trace analogy ── */
+.about_ball_case {
+  margin-top: 1.5rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.about_ball_case_title {
+  font-size: 0.78em;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0 0 0.55rem;
+}
+
+.about_ball_svg {
+  display: block;
+  width: 100%;
+  max-width: 380px;
+  margin: 0.7rem auto 0.85rem;
+  color: var(--color-text);
+}
+
+.about_ball_code {
+  font-family: "SF Mono", "Fira Code", "Courier New", monospace;
+  font-size: 0.76em;
+  line-height: 1.75;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border-radius: 4px;
+  padding: 0.6rem 0.9rem;
+  margin: 0.5rem 0;
+}
+
+.about_ball_rule {
+  font-size: 0.82em;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0.8rem 0 0;
+}
+
+.about_ball_principle {
+  font-family: "SF Mono", "Fira Code", "Courier New", monospace;
+  font-size: 0.76em;
+  line-height: 1.85;
+  color: var(--color-text-muted);
+  background: var(--color-surface);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 4px;
+  padding: 0.75rem 0.9rem;
+  margin-top: 1.1rem;
+}
+
+/* ── Psyche definition block ── */
+.about_psyche_def {
+  display: flex;
+  align-items: baseline;
+  gap: 0.85rem;
+  margin-top: 0.9rem;
+  padding: 0.9rem 1.1rem;
+  background: var(--color-surface);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 4px;
+}
+
+.about_psyche_term {
+  font-size: 1em;
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.about_psyche_eq {
+  font-size: 0.95em;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.about_psyche_body {
+  font-size: 0.88em;
+  line-height: 1.7;
+  color: var(--color-text);
 }
 
 /* ── Means of Access levels ── */
@@ -353,7 +628,7 @@
 }
 
 .about_compare_table td:first-child { padding-left: 0; }
-.about_compare_table td:last-child  { border-left: 1px solid var(--color-border); color: var(--color-text-muted); }
+.about_compare_table td:last-child  { border-left: 1px solid var(--color-border); }
 
 .about_compare_table tbody tr:last-child td { border-bottom: none; }
 
@@ -482,6 +757,32 @@
   padding-bottom: 0.25rem;
 }
 
+.about_pres_snake {
+  display: flex;
+  flex-direction: column;
+  margin-top: 1rem;
+}
+
+.about_pres_row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.about_pres_row .about_reality_card {
+  flex: 1;
+  min-width: 0;
+}
+
+.about_pres_curve {
+  width: 32px;
+  height: 36px;
+  display: block;
+  margin-left: auto;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
 .about_reality_arrow {
   display: flex;
   align-items: center;
@@ -503,8 +804,36 @@
 
 .about_reality_card--ontic     { border-top: 2px solid #4fc3f7; }
 .about_reality_card--epistemic { border-top: 2px solid #81c784; }
+.about_reality_card--phenom    { border-top: 2px solid #a5d6a7; }
+.about_reality_card--interp    { border-top: 2px solid #ce93d8; }
 .about_reality_card--semantic  { border-top: 2px solid #ffb74d; }
 .about_reality_card--praxis    { border-top: 2px solid #f06292; }
+
+.about_layer_label {
+  font-size: 0.7em;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #e53935;
+  margin-bottom: 0.5rem;
+  margin-top: 1rem;
+}
+
+.about_repr_examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.about_repr_tag {
+  font-size: 0.75em;
+  padding: 0.2rem 0.6rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+}
 
 .about_reality_card_label {
   font-size: 0.75em;
@@ -528,6 +857,84 @@
   font-size: 0.72em;
   line-height: 1.7;
   color: var(--color-text-muted);
+}
+
+/* ── Clinical Epistemology map ──────────────────────────────────────────────── */
+.about_epist_map {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.about_epist_map_row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.about_epist_map_row--patient   { border-left: 3px solid #4fc3f7; }
+.about_epist_map_row--clinician { border-left: 3px solid #ce93d8; }
+.about_epist_map_row--repr      { border-left: 3px solid #ffb74d; }
+
+.about_epist_map_label {
+  font-size: 0.65em;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  width: 4.5rem;
+  flex-shrink: 0;
+  padding-top: 0.2rem;
+}
+
+.about_epist_map_steps {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.about_epist_map_step {
+  flex: 1;
+  min-width: 0;
+}
+
+.about_epist_map_step--wide {
+  flex: 1;
+}
+
+.about_epist_map_num {
+  font-size: 0.65em;
+  font-weight: 700;
+  color: #e53935;
+  margin-bottom: 0.15rem;
+}
+
+.about_epist_map_name {
+  font-size: 0.78em;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 0.12rem;
+}
+
+.about_epist_map_sub {
+  font-size: 0.72em;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.about_epist_map_arrow {
+  padding: 0 0.4rem;
+  font-size: 0.85em;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  padding-top: 0.5rem;
 }
 
 /* ── Clinical Epistemology etymology ───────────────────────────────────────── */

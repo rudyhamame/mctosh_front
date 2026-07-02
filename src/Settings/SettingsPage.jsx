@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useHistory } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { MCTOSH_PROMPT_TEXT } from "../Hylomorphism/mctoshPrompt";
@@ -11,7 +11,7 @@ const authHeader = () => {
 };
 
 const THEMES = [
-  { id: "original", label: "Original", desc: "Deep blue-navy — the MCTOSH default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
+  { id: "original", label: "Original", desc: "Deep blue-navy — the MCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
   { id: "light",    label: "Light",    desc: "Clean white with soft contrast",       bg: "#f8f8fc", surface: "#ffffff",  text: "#111122", border: "#d0d0e0" },
   { id: "dark",     label: "Dark",     desc: "Pure black — minimal ink",             bg: "#000000", surface: "#0f0f0f",  text: "#f0f0f0", border: "#222222" },
 ];
@@ -19,6 +19,7 @@ const THEMES = [
 const SECTIONS = [
   { id: "prompts",   label: "Prompts",       icon: "fi fi-rr-document" },
   { id: "ai",        label: "AI Providers",  icon: "fi fi-rr-microchip-ai" },
+  { id: "ai_access", label: "AI Access",     icon: "fi fi-rr-shield-check" },
   { id: "theme",     label: "Theme",         icon: "fi fi-rr-palette" },
 ];
 
@@ -98,9 +99,11 @@ const PromptEditor = ({ label, desc, fetchUrl, saveUrl, method = "PATCH", field 
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 const SettingsPage = () => {
-  const history  = useHistory();
+  const navigate = useNavigate();
   const [section,   setSection]   = useState("prompts");
   const [theme,     setTheme]     = useState(() => localStorage.getItem("mctosh_theme") || "original");
+  const [aiCodebase, setAiCodebase] = useState(() => localStorage.getItem("mctosh_ai_codebase") === "true");
+  const [aiDb,       setAiDb]       = useState(() => localStorage.getItem("mctosh_ai_db")       === "true");
   const [providers, setProviders] = useState([]);
   const [aiLoading, setAiLoading] = useState(true);
   const [defProvider, setDefProvider] = useState(() => localStorage.getItem("mctosh_ai_provider") || "groq");
@@ -129,7 +132,7 @@ const SettingsPage = () => {
     <div id="sett_page">
       {/* ── Header ── */}
       <div id="sett_header">
-        <button id="sett_back_btn" onClick={() => history.push("/home")}>←</button>
+        <button id="sett_back_btn" onClick={() => navigate("/home")}>←</button>
         <span id="sett_header_title">Settings</span>
       </div>
 
@@ -155,11 +158,11 @@ const SettingsPage = () => {
           {section === "prompts" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Prompts</h2>
-              <p className="sett_section_desc">Edit the AI prompts used across MCTOSH. Changes take effect immediately on the server for backend prompts.</p>
+              <p className="sett_section_desc">Edit the AI prompts used across MCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
 
               <PromptEditor
                 label="Hyle Extraction"
-                desc="Used when extracting hyles from PDF, Word, or image sources — the core MCTOSH classification engine."
+                desc="Used when extracting hyles from PDF, Word, or image sources — the core MCTOSHS classification engine."
                 fetchUrl="/api/pdf/system-message"
                 saveUrl="/api/pdf/system-message"
                 method="PATCH"
@@ -174,7 +177,7 @@ const SettingsPage = () => {
                 field="prompt"
               />
               <PromptEditor
-                label="MCTOSH Classification Prompt"
+                label="MCTOSHS Classification Prompt"
                 desc="The formal 12-section classification prompt accessible from the Hyle-to-Meaning page. Stored locally in your browser."
                 fetchUrl={null}
                 saveUrl={null}
@@ -189,7 +192,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">AI Providers</h2>
               <p className="sett_section_desc">
-                Select the default AI provider used across MCTOSH. The provider is sent with every extraction and classification request.
+                Select the default AI provider used across MCTOSHS. The provider is sent with every extraction and classification request.
                 Configure API keys in your backend environment variables.
               </p>
 
@@ -233,11 +236,79 @@ const SettingsPage = () => {
             </div>
           )}
 
+          {/* ═══ AI ACCESS ═══ */}
+          {section === "ai_access" && (
+            <div className="sett_section">
+              <h2 className="sett_section_title">AI Access</h2>
+              <p className="sett_section_desc">
+                A complete breakdown of what MCTOSHS AI can and cannot access during a conversation. Toggles for codebase and DB are available inside the Dev AI chat panel.
+              </p>
+
+              <div className="sett_access_group">
+                <div className="sett_access_group_header sett_access_group_header--on">
+                  <i className="fi fi-rr-check-circle" /> Always available
+                </div>
+                <ul className="sett_access_list">
+                  <li><strong>MCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
+                  <li><strong>Conversation history</strong> — all messages exchanged in the current session are included with each request, giving the AI full context of the ongoing conversation.</li>
+                  <li><strong>Selected AI provider &amp; model</strong> — the provider you choose in the chat dropdown determines which backend inference engine processes the request.</li>
+                </ul>
+              </div>
+
+              <div className="sett_access_group">
+                <div className="sett_access_group_header sett_access_group_header--toggle">
+                  <i className="fi fi-rr-terminal" /> Codebase context
+                  <button
+                    className={`sett_access_toggle${aiCodebase ? " sett_access_toggle--on" : ""}`}
+                    onClick={() => setAiCodebase(v => { localStorage.setItem("mctosh_ai_codebase", String(!v)); return !v; })}
+                  >{aiCodebase ? "ON" : "OFF"}</button>
+                </div>
+                <ul className="sett_access_list">
+                  <li><strong>Backend source files</strong> — all <code>.js</code> files inside <code>back/</code>: Express routes, Mongoose models, middleware, utilities, AI API handlers.</li>
+                  <li><strong>Frontend source files</strong> — all <code>.js</code> / <code>.jsx</code> files inside <code>front/src/</code>: pages, components, hooks, config, CSS (not included, only JS).</li>
+                  <li><strong>File paths</strong> — every file is prefixed with its relative path so the AI can reference exact locations (e.g. <code>back/routes/AIAPI.js</code>).</li>
+                  <li><strong>Size limits</strong> — 60 000 chars total across all files, 4 000 chars per individual file. Files that exceed the per-file limit are truncated with a notice. Files added first (filesystem order) take priority before the total cap is hit.</li>
+                  <li><strong>Excluded</strong> — <code>node_modules/</code>, <code>.git/</code>, <code>dist/</code>, <code>build/</code>, and binary/asset files are never read.</li>
+                </ul>
+              </div>
+
+              <div className="sett_access_group">
+                <div className="sett_access_group_header sett_access_group_header--toggle">
+                  <i className="fi fi-rr-database" /> DB context
+                  <button
+                    className={`sett_access_toggle${aiDb ? " sett_access_toggle--on" : ""}`}
+                    onClick={() => setAiDb(v => { localStorage.setItem("mctosh_ai_db", String(!v)); return !v; })}
+                  >{aiDb ? "ON" : "OFF"}</button>
+                </div>
+                <ul className="sett_access_list">
+                  <li><strong>Sources</strong> — name, type, and creation date for every source document belonging to your account (<code>Source.find(&#123; userId &#125;)</code>).</li>
+                  <li><strong>Phenomena count</strong> — total number of phenomena extracted and linked to your account.</li>
+                  <li><strong>Page extractions count</strong> — total number of page-level extractions linked to your account.</li>
+                  <li><strong>Scope</strong> — all queries are filtered by your <code>userId</code>. No other user's data is ever fetched.</li>
+                </ul>
+              </div>
+
+              <div className="sett_access_group">
+                <div className="sett_access_group_header sett_access_group_header--off">
+                  <i className="fi fi-rr-ban" /> No access — ever
+                </div>
+                <ul className="sett_access_list">
+                  <li><strong>Environment variables &amp; secrets</strong> — the <code>.env</code> file, API keys, JWT secret, database credentials, and SMTP credentials are never read or sent.</li>
+                  <li><strong>Other users' data</strong> — DB queries are always scoped to your own <code>userId</code>.</li>
+                  <li><strong>File system outside the project</strong> — only <code>back/</code> and <code>front/src/</code> are scanned; nothing else on the host machine.</li>
+                  <li><strong>Code execution</strong> — the AI reads and reasons about source files but cannot run shell commands, execute code, or modify any file.</li>
+                  <li><strong>CSS / asset files</strong> — only <code>.js</code> and <code>.jsx</code> files are collected; <code>.css</code>, images, fonts, and other assets are excluded.</li>
+                  <li><strong>Network requests</strong> — the AI cannot make external HTTP calls on your behalf during a conversation.</li>
+                </ul>
+              </div>
+            </div>
+          )}
+
           {/* ═══ THEME ═══ */}
           {section === "theme" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Theme</h2>
-              <p className="sett_section_desc">Choose the visual style for MCTOSH. Applied immediately and remembered across sessions.</p>
+              <p className="sett_section_desc">Choose the visual style for MCTOSHS. Applied immediately and remembered across sessions.</p>
 
               <div id="sett_theme_grid">
                 {THEMES.map(t => (

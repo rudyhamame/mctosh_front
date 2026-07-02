@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useHistory, useLocation } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import "./youtubePage.css";
@@ -43,7 +43,7 @@ const loadYTApi = (cb) => {
 };
 
 const YouTubePage = () => {
-  const history  = useHistory();
+  const navigate = useNavigate();
   const location = useLocation();
   const { sourceId, sourceName, sourceUrl } = location.state || {};
 
@@ -293,7 +293,7 @@ const YouTubePage = () => {
     <div id="yt_page">
       {/* ── Header ── */}
       <div id="yt_header">
-        <button id="yt_back_btn" onClick={() => history.push("/sources")}>←</button>
+        <button id="yt_back_btn" onClick={() => navigate("/sources")}>←</button>
         <span id="yt_title">{sourceName || "YouTube Source"}</span>
         <span id="yt_save_status">{saving ? "Saving…" : saved ? "Saved ✓" : "Unsaved"}</span>
         <span id="yt_word_count">{wordCount > 0 ? `${wordCount} words` : ""}</span>
