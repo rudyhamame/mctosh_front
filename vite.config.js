@@ -60,6 +60,7 @@ export default defineConfig({
       ignored: [
         "**/.git/**",
         "**/.vite/**",
+        "**/build/**",
         "**/node_modules/**",
       ],
       interval: 250,
