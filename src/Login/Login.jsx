@@ -3,43 +3,15 @@ import { useNavigate } from "react-router-dom";
 import "./login.css";
 import { apiUrl } from "../config/api";
 import { writeStoredSession } from "../utils/sessionCleanup";
+import ThreadTubes3D from "./ThreadTubes3D";
 
 const STAGE = 980;
 
-// Patient Reality "thread" — Z depths (px) for each cross-section ring making
-// up the rope-like tube. Centered on 0 so the ring at index (RINGS-1)/2 sits
-// exactly at the surface, matching today's flat circle when unrotated. Depth
-// runs far past the visible frame (and opacity fades all the way to 0 at the
-// tips, see the render below) so the thread reads as endless, never showing
-// a visible "end of the rope" even at the full rotation range.
-// NOTE: depth must stay a small fraction of `perspective` (6000px, shared by
-// all three thread groups) — pushing it too far causes near rings (positive
-// Z, closer to the viewer) to balloon in projected size even at rest (scale
-// = perspective / (perspective - z)), which blew up into a huge glowing halo
-// when this was tried at depth ~900 against a 2200px perspective. Perspective
-// was later raised from 2200 to 6000 specifically to shrink that per-ring
-// scale variance (it was ~16%, reading as a soft blur/glow when 80+ rings
-// stacked); ring count was raised at the same time (density, not total
-// depth) so the tube still reads as solid instead of see-through at 90°.
-const PR_THREAD_RINGS = Array.from({ length: 96 }, (_, i) => (i - 47.5) * 7.47);
-const PR_THREAD_DEPTH = Math.max(...PR_THREAD_RINGS.map(Math.abs));
-
-// MCTOSHS inner sphere as its own 3D thread — smaller diameter, same ring
-// density/pitch ratio as Patient Reality's, so it reads as a nested tube
-// that rotates in lockstep with the outer one.
-const MS_THREAD_RINGS = Array.from({ length: 96 }, (_, i) => (i - 47.5) * 5.4);
-const MS_THREAD_DEPTH = Math.max(...MS_THREAD_RINGS.map(Math.abs));
-
-// Orbit dots (M/C/T/O/OS/H/S) as small SOLID rod threads — filled discs
-// (not hollow rings) stacked along Z, same shared rotation as the big tubes.
-// Same total Z range as Patient Reality (so the elongation AMOUNT matches,
-// see the shared-perspective note above) but with far fewer discs — every
-// element here needs transform-style:preserve-3d up the whole bio_particle
-// chain (for correct direction/amount), which appears to force per-element
-// GPU layer promotion; ×7 dots at high density was enough to hang the page
-// entirely (a plain rest-state screenshot timed out). Keep this lean.
-const ORB_THREAD_DISCS = Array.from({ length: 14 }, (_, i) => (i - 6.5) * (PR_THREAD_DEPTH / 6.5));
-const ORB_THREAD_DEPTH = Math.max(...ORB_THREAD_DISCS.map(Math.abs));
+// Patient Reality / MCTOSHS / orbit-dot "threads" (the rope-like tube reveal
+// on tilt) are rendered as WebGL geometry by <ThreadTubes3D> instead of
+// hundreds of stacked CSS-transformed DOM elements — that approach hung the
+// page outright once ring density got high enough to look solid at 90°. See
+// ThreadTubes3D.jsx for the actual ring/disc-stack geometry.
 
 const MCTOSHS_ORBITS = [
   { id: "m",  letter: "M",  r: 244, color: "#00e5ff", dur: "8s",   dir: "cw", delay: "0s" },
@@ -421,12 +393,9 @@ export default function Login({ onLogin }) {
         el.style.opacity   = '1';
         const dotEl = el.firstElementChild;
         if (dotEl) dotEl.style.transform = `rotate(${-cssDeg}deg)`;
-        // Counter-rotate the thread wrap too — otherwise each dot's own
-        // orbital angle (cssDeg) pre-rotates its local 3D axes, so the rod
-        // elongates in a direction that drifts from the main tubes' axis
-        // instead of matching it.
-        const threadEl = el.children[1];
-        if (threadEl) threadEl.style.transform = `translate(-50%, -50%) rotate(${-cssDeg}deg)`;
+        // (The orbit-dot rope threads are WebGL now — see ThreadTubes3D,
+        // which reads s._x/_y directly each frame. No DOM counter-rotation
+        // needed; Three.js's scene graph inherits the shared tilt correctly.)
         s._x = 450 + Math.cos(rad) * orb.r;
         s._y = 450 + Math.sin(rad) * orb.r;
       });
@@ -591,10 +560,6 @@ export default function Login({ onLogin }) {
 
   const toggle = () => { setMode(m => m === "login" ? "signup" : "login"); setError(""); };
 
-  // Spheres always at full size (no sagittal cross-section)
-  const prR_disp = 360;
-  const msR_disp = 260;
-
   // Shared one-finger-tilt-driven rotation for all 3D threads (Patient Reality,
   // MCTOSHS, and the orbit dots) so they all rotate together in lockstep.
   const threadRotation =
@@ -604,7 +569,7 @@ export default function Login({ onLogin }) {
   return (
     <div id="login_page">
 
-      {/* ── LEFT: 2D Orbital Animation ── */}
+      {/* ── LEFT: Orbital Animation ── */}
       <div id="login_anim_panel" className={panelHidden ? "login_panel_expanded" : ""}>
         <div id="login_brand">
           <div id="login_sigil"><span>M</span></div>
@@ -622,61 +587,10 @@ export default function Login({ onLogin }) {
         >
           <div id="login_stage" style={{ transform: `translate(${panXY.x}px,${panXY.y}px) scale(${stageScale})` }}>
 
-            {/* Spheres + zone labels on PR sphere */}
             <div id="login_center">
               <div id="login_center_glow" />
 
-              {/* Patient Reality as a 3D thread — panning reveals the flat
-                  circle is one cross-section ring of a rope-like tube.
-                  pr_sphere (the flat fill + zone labels + nested mctosh_sphere)
-                  lives INSIDE the tilted group at z=0 as the tube's front cap,
-                  so the color filling the gap between the two tube walls
-                  tilts along with them instead of staying flat underneath. */}
-              <div id="pr_thread_wrap">
-                <div id="pr_thread_group" style={{ transform: threadRotation }}>
-                  <div id="pr_sphere">
-                    {/* Zone sector labels — positioned within the PR sphere */}
-                    <div id="pr_zone_detr">Deterioration</div>
-                    {/* Divider lines at 3 o'clock / 9 o'clock / 12 o'clock */}
-                    <svg id="pr_zone_svg" viewBox="0 0 720 720" aria-hidden="true">
-                      <line x1="360" y1="0"   x2="360" y2="360" stroke="rgba(255,255,255,0.08)" strokeWidth="1"/>
-                    </svg>
-                    <div id="pr_spec_a" />
-                    <div id="pr_spec_b" />
-                    <div id="pr_rim" />
-                    <div id="mctosh_sphere">
-                      <div id="ms_rim" />
-                    </div>
-                  </div>
-                  {PR_THREAD_RINGS.map((z) => (
-                    <div
-                      key={z}
-                      className="pr_thread_ring"
-                      style={{
-                        transform: `translateZ(${z}px)`,
-                        opacity: 1 - 0.6 * (Math.abs(z) / PR_THREAD_DEPTH),
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
-
-              {/* MCTOSHS inner sphere as a nested 3D thread — rotates in
-                  lockstep with Patient Reality's tube via the same transform */}
-              <div id="ms_thread_wrap">
-                <div id="ms_thread_group" style={{ transform: threadRotation }}>
-                  {MS_THREAD_RINGS.map((z) => (
-                    <div
-                      key={z}
-                      className="ms_thread_ring"
-                      style={{
-                        transform: `translateZ(${z}px)`,
-                        opacity: 1 - 0.6 * (Math.abs(z) / MS_THREAD_DEPTH),
-                      }}
-                    />
-                  ))}
-                </div>
-              </div>
+              <ThreadTubes3D tiltXYRef={tiltRef} orbStateRef={orbStateRef} orbits={MCTOSHS_ORBITS} />
             </div>
 
             {/* Orbit system (path rings + rope canvas + dots + labels) tilts
@@ -687,16 +601,6 @@ export default function Login({ onLogin }) {
                 they'd sit stuck in place while the tube warped around them. */}
             <div id="orbit_system_wrap">
               <div id="orbit_system_group" style={{ transform: threadRotation }}>
-
-                {/* MCTOSHS label */}
-                <div id="ms_label_wrap" style={{ top: `${450 + msR_disp + 15}px` }}>
-                  <span id="ms_label_name">MCTOSHS</span>
-                </div>
-
-                {/* Patient Reality label */}
-                <div id="pr_label_wrap">
-                  <span id="pr_name">Patient Reality</span>
-                </div>
 
                 {/* Soft orbit path rings — always full size */}
                 {MCTOSHS_ORBITS.map(orb => (
@@ -736,25 +640,9 @@ export default function Login({ onLogin }) {
                     <div className="orb_dot">
                       <span className="orb_dot_letter">{orb.letter}</span>
                     </div>
-                    <div className="orb_thread_wrap">
-                      {/* No threadRotation here — this already sits inside
-                          orbit_system_group's rotated 3D space (inherited via
-                          the preserve-3d chain), so reapplying it here would
-                          double the rotation (e.g. 180° when the main tube is
-                          only at 90°). The Z axis is already the tube's axis. */}
-                      <div className="orb_thread_group">
-                        {ORB_THREAD_DISCS.map(z => (
-                          <div
-                            key={z}
-                            className="orb_thread_disc"
-                            style={{
-                              transform: `translateZ(${z}px)`,
-                              opacity: 1 - Math.abs(z) / ORB_THREAD_DEPTH,
-                            }}
-                          />
-                        ))}
-                      </div>
-                    </div>
+                    {/* This dot's rope thread is WebGL now (ThreadTubes3D),
+                        positioned every frame from orbStateRef — no DOM
+                        thread element needed here anymore. */}
                   </div>
                 ))}
 

@@ -153,6 +153,10 @@
   inset: 0;
   perspective: 6000px;
   perspective-origin: 50% 50%;
+  /* Above #login_center (z-index 5, which now also holds the WebGL tube
+     canvas) — dots/arc/labels are the foreground UI layer and need to stay
+     visible on top of the tube, not hidden behind its now-opaque surface. */
+  z-index: 6;
 }
 
 #orbit_system_group {
@@ -186,10 +190,6 @@
   pointer-events: none;
   will-change: transform;
   z-index: 8;  /* above spheres (z-index 5) */
-  /* Don't flatten orb_thread_group's 3D children — let them share the
-     perspective established up at #orbit_system_wrap, same as the main
-     tubes, so the orbit dot threads elongate by the same amount. */
-  transform-style: preserve-3d;
 }
 
 /* ── Counter-rotation keyframes — keep letter upright as dot orbits ── */
@@ -205,43 +205,9 @@
   background: var(--orb-color);
 }
 
-/* Orbit dot as a small SOLID rod thread — filled discs stacked along Z,
-   sitting behind the flat dot (z-index -1 inside bio_particle's own
-   stacking context) so at rest it's fully hidden by the flat dot above it. */
-.orb_thread_wrap {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 32px;
-  height: 32px;
-  /* No local perspective here on purpose — it inherits the shared 2200px
-     perspective from #orbit_system_wrap (via .bio_particle's preserve-3d
-     above) instead of opening its own disconnected 3D space. Needs its
-     own preserve-3d too, or it'd flatten orb_thread_group right here and
-     break that inheritance chain. */
-  transform-style: preserve-3d;
-  pointer-events: none;
-  z-index: -1;
-}
-
-.orb_thread_group {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-}
-
-.orb_thread_disc {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: var(--orb-color);
-  /* A defined wall (like the main tubes' ring border) so adjacent discs'
-     edges read as one continuous tube surface instead of a row of
-     separate aligned circles/beads. */
-  border: 2px solid rgba(255,255,255,0.4);
-  box-sizing: border-box;
-}
+/* Each dot's rope thread is WebGL now (see <ThreadTubes3D> in Login.jsx,
+   positioned every frame from the same physics state as this dot) — no DOM
+   thread element needed here anymore. */
 
 /* ── Letter inside the dot — counter-rotates to stay upright ── */
 .orb_dot_letter {
@@ -403,10 +369,10 @@
   animation: pr_breathe 7s ease-in-out infinite;
 }
 
-/* Patient Reality as a 3D thread: the visible circle is one cross-section
-   ring of a long rope-like tube extending in depth. At rest (no rotation)
-   every ring sits exactly on top of the front one, so it looks identical
-   to a flat circle — panning rotates the tube and reveals its depth. */
+/* pr_sphere (flat fill + zone labels + nested mctosh_sphere) lives inside
+   this small rotating wrapper so it tilts in sync with the WebGL tube walls
+   rendered by <ThreadTubes3D> around it (the tube geometry itself — the
+   actual "rope" — is WebGL now, not stacked DOM rings; see ThreadTubes3D.jsx). */
 #pr_thread_wrap {
   position: absolute;
   top: 50%;
@@ -423,44 +389,6 @@
 #pr_thread_group {
   position: absolute;
   inset: 0;
-  transform-style: preserve-3d;
-}
-
-.pr_thread_ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 7px solid rgba(160,110,255,0.115);
-  box-sizing: border-box;
-}
-
-/* MCTOSHS inner sphere — same tube technique, smaller diameter + cyan
-   palette, nested inside Patient Reality's tube and sharing its rotation. */
-#ms_thread_wrap {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 520px;
-  height: 520px;
-  perspective: 6000px;
-  perspective-origin: 50% 50%;
-  pointer-events: none;
-  z-index: 5;
-}
-
-#ms_thread_group {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-}
-
-.ms_thread_ring {
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  border: 6px solid rgba(0,229,255,0.1);
-  box-sizing: border-box;
 }
 
 /* Zone divider SVG */
