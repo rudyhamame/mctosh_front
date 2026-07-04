@@ -119,6 +119,30 @@ const SourcesPage = () => {
     } catch {}
   }, []);
 
+  /* ── Download as Markdown ── */
+  const [markdownBusyId, setMarkdownBusyId] = useState(null);
+
+  const downloadMarkdown = useCallback(async (id, name) => {
+    setError(null);
+    setMarkdownBusyId(id);
+    try {
+      const res  = await fetch(apiUrl(`/api/sources/${id}/markdown`), { headers: authHeader() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Markdown conversion failed.");
+      const blob = new Blob([data.markdown], { type: "text/markdown" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url;
+      a.download = `${name.replace(/\.[^./]+$/, "")}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setMarkdownBusyId(null);
+    }
+  }, []);
+
   /* ── File picker ── */
   const MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 
@@ -277,6 +301,16 @@ const SourcesPage = () => {
                     : <span className="sources_url_none">—</span>}
                 </td>
                 <td className="sources_td_actions">
+                  {s.key && s.type !== "youtube" && s.type !== "image" && (
+                    <button
+                      className="sources_md_btn"
+                      onClick={() => downloadMarkdown(s._id, s.name)}
+                      disabled={markdownBusyId === s._id}
+                      title="Download as Markdown"
+                    >
+                      {markdownBusyId === s._id ? "…" : "MD"}
+                    </button>
+                  )}
                   <button className="sources_del_btn" onClick={() => deleteSource(s._id)}>✕</button>
                 </td>
               </tr>
