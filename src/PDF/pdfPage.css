@@ -636,6 +636,10 @@
 
 #msb_cancel:hover { color: var(--color-text); }
 
+.msb_action_btn { white-space: nowrap; }
+#msb_confirm:disabled { opacity: 0.6; cursor: default; }
+#msb_error { font-size: 0.68rem; color: #ef5350; white-space: nowrap; }
+
 /* ── Manual selection popup ── */
 #manual_popup {
   position: fixed;

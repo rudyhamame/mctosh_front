@@ -280,28 +280,6 @@
 }
 #ue_open_btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-#ue_zoom_badge {
-  flex-shrink: 0;
-  font-size: 0.72rem;
-  color: var(--color-text-muted);
-  background: var(--color-border);
-  padding: 0.22rem 0.6rem;
-  border-radius: 999px;
-}
-
-.ue_spin { animation: ue_spin_anim 0.8s linear infinite; }
-@keyframes ue_spin_anim { to { transform: rotate(360deg); } }
-
-#ue_doc_error {
-  padding: 0.6rem 1.25rem;
-  font-size: 0.75rem;
-  color: #ef5350;
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  flex-shrink: 0;
-}
-
 #ue_doc_empty {
   flex: 1;
   display: flex;
@@ -316,129 +294,9 @@
 #ue_doc_empty i { font-size: 2.2rem; }
 #ue_doc_empty p { margin: 0; }
 
-#ue_reader {
+/* Hosts the embedded PDFPage reader (which fills height:100% via .pdf_page--embedded) */
+#ue_reader_wrap {
   flex: 1;
   min-height: 0;
-  overflow: auto;
-  padding: 1.25rem 1rem;
-  background: #141414;
-  /* Let vertical scroll stay native; hand pinch (multi-touch) gestures to our own handler. */
-  touch-action: pan-y;
-}
-
-#ue_canvas_wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  padding-bottom: 24px;
-  min-height: 100%;
-  /* Shrink-wrap to the (possibly zoomed-wider-than-viewport) content instead of
-     staying at 100% of the scroll container — otherwise align-items: center
-     overflows the canvas equally left/right, and the left overflow ends up
-     outside the scrollable range (scrollLeft can't go negative), making it
-     unreachable no matter how far right you scroll. */
-  width: fit-content;
-  min-width: 100%;
-  margin: 0 auto;
-}
-
-.ue_page_container {
-  position: relative;
-  display: block;
-  line-height: 0;
-  flex-shrink: 0;
-}
-
-.ue_page_canvas {
-  box-shadow: 0 2px 16px rgba(0,0,0,0.5);
-  display: block;
-}
-
-/* Invisible selectable text layer, positioned over the rendered canvas */
-.ue_text_layer {
-  position: absolute;
-  top: 0;
-  left: 0;
-  overflow: visible;
-  line-height: 1;
-  cursor: text;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.ue_text_layer span {
-  color: transparent;
-  position: absolute;
-  white-space: pre;
-  cursor: text;
-  transform-origin: 0% 0%;
-  user-select: text;
-}
-
-.ue_text_layer ::selection {
-  background: color-mix(in srgb, #b39ddb 45%, transparent);
-  color: transparent;
-}
-
-/* ── Floating "Linguistic Analysis" bar ── */
-#ue_select_bar {
-  position: fixed;
-  transform: translateX(-50%);
-  z-index: 9999;
-  background: var(--color-bg);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 0.4rem 0.5rem;
-  box-shadow: 0 6px 28px rgba(0,0,0,0.55);
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  max-width: 90vw;
-}
-
-#ue_select_snippet {
-  font-size: 0.76rem;
-  color: var(--color-text-muted);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 220px;
-  padding: 0 0.2rem;
-}
-
-#ue_analyze_btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  white-space: nowrap;
-  background: color-mix(in srgb, var(--color-bg) 55%, #b39ddb 18%);
-  border: 1px solid #b39ddb;
-  border-radius: 6px;
-  color: #b39ddb;
-  font-size: 0.74rem;
-  font-weight: 600;
-  padding: 0.3rem 0.7rem;
-  cursor: pointer;
-  transition: background 0.12s, opacity 0.12s;
-}
-#ue_analyze_btn:hover:not(:disabled) { background: color-mix(in srgb, var(--color-bg) 30%, #b39ddb 28%); }
-#ue_analyze_btn:disabled { opacity: 0.55; cursor: default; }
-
-#ue_select_cancel {
-  background: none;
-  border: none;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: 0.85rem;
-  line-height: 1;
-  padding: 0.2rem;
-  transition: color 0.12s;
-}
-#ue_select_cancel:hover { color: var(--color-text); }
-
-#ue_select_err {
-  font-size: 0.68rem;
-  color: #ef5350;
-  white-space: nowrap;
 }

@@ -141,6 +141,9 @@ const PDFPage = ({
   embeddedPdfName = "",
   embeddedFile = null,
   embeddedHomePath = "/hylomorphism",
+  selectionOnly = false,           // hide Hyle-extraction/annotation chrome, force manual text-selection always on
+  onSelectionAction = null,        // async (selectedText) => void — replaces the ✓ "add to Hyles" button in the selection bar
+  selectionActionLabel = "Add",
 }) => {
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
@@ -169,7 +172,7 @@ const PDFPage = ({
   const [showSysModal, setShowSysModal] = useState(false);
 
   // AI vs Manual toggle
-  const extractMode = provider === "manual" ? "manual" : "ai";
+  const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
   const [extractionType, setExtractionType] = useState(null); // selected hyle type key
   const [typeTreeOpen,   setTypeTreeOpen]   = useState(false);
 
@@ -190,6 +193,10 @@ const PDFPage = ({
   const [saving, setSaving]                 = useState(false);
   const [savedId, setSavedId]               = useState(null);
   const [activeHistoryId, setActiveHistoryId] = useState(null);
+
+  // ── Selection action (selectionOnly mode) ──────────────────────────────────
+  const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
+  const [selectionActionError, setSelectionActionError] = useState("");
 
   // ── Annotation state ──────────────────────────────────────────────────────
   const [annotTool,      setAnnotTool]      = useState(null);
@@ -406,7 +413,9 @@ const PDFPage = ({
 
   const manualSelectionRef = useRef(null);
   const dragHandleRef      = useRef(null); // sync mirror of dragHandle state
+  const onSelectionActionRef = useRef(onSelectionAction);
   useEffect(() => { manualSelectionRef.current = manualSelection; }, [manualSelection]);
+  useEffect(() => { onSelectionActionRef.current = onSelectionAction; }, [onSelectionAction]);
 
   // ── Render annotation canvas ───────────────────────────────────────────────
   useEffect(() => {
@@ -899,12 +908,16 @@ const PDFPage = ({
         const text = sel?.toString().replace(/\s+/g, " ").trim();
         if (text) {
           const vr = sel.getRangeAt(0).getBoundingClientRect();
-          const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
-          setManualHyle(noun);
-          setManualPopup({
-            x: vr.left + vr.width  / 2,
-            y: vr.bottom + 10,
-          });
+          if (onSelectionActionRef.current) {
+            setManualSelection({ startIdx: -1, endIdx: -1, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
+          } else {
+            const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
+            setManualHyle(noun);
+            setManualPopup({
+              x: vr.left + vr.width  / 2,
+              y: vr.bottom + 10,
+            });
+          }
         }
         sel?.removeAllRanges();
         return;
@@ -1455,8 +1468,12 @@ const PDFPage = ({
       const dragText = sel?.toString().trim().replace(/\s+/g, " ");
       if (dragText && sel.rangeCount > 0) {
         const rect = sel.getRangeAt(0).getBoundingClientRect();
-        setManualHyle(dragText.toLowerCase().replace(/[.,;:]+$/, ""));
-        setManualPopup({ x: rect.left + rect.width / 2, y: rect.bottom + 10 });
+        if (onSelectionAction) {
+          setManualSelection({ startIdx: -1, endIdx: -1, text: dragText, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
+        } else {
+          setManualHyle(dragText.toLowerCase().replace(/[.,;:]+$/, ""));
+          setManualPopup({ x: rect.left + rect.width / 2, y: rect.bottom + 10 });
+        }
       }
       return;
     }
@@ -1488,7 +1505,7 @@ const PDFPage = ({
     const bx = parseFloat(target.style.left || "0") + (parseFloat(target.style.width || "0") || target.offsetWidth || 0) / 2;
     const by = parseFloat(target.style.top  || "0") +  parseFloat(target.style.height || "0") + 8;
     setManualSelection({ startIdx: spanIdx, endIdx: spanIdx, text: word, x: bx, y: by });
-  }, [extractMode]);
+  }, [extractMode, onSelectionAction]);
 
   const handleManualAdd = useCallback(() => {
     const noun = manualHyle.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
@@ -1547,6 +1564,20 @@ const PDFPage = ({
     setManualSelection(null);
   }, [manualSelection]);
 
+  const handleSelectionAction = useCallback(async () => {
+    if (!manualSelection || !onSelectionAction || selectionActionBusy) return;
+    setSelectionActionBusy(true);
+    setSelectionActionError("");
+    try {
+      await onSelectionAction(manualSelection.text);
+      setManualSelection(null);
+      window.getSelection()?.removeAllRanges();
+    } catch (e) {
+      setSelectionActionError(e.message);
+    } finally {
+      setSelectionActionBusy(false);
+    }
+  }, [manualSelection, onSelectionAction, selectionActionBusy]);
 
   // Dismiss selection bar when clicking outside
   useEffect(() => {
@@ -1728,37 +1759,39 @@ const PDFPage = ({
           <button id="pdf_close" onClick={handleClose}>✕</button>
 
           {/* Hyles toggle + extraction controls */}
-          <button
-            id="pdf_hyles_toggle_btn"
-            className={extractionOpen ? "pdf_hyles_toggle_btn--active" : ""}
-            onClick={() => {
-              const next = !extractionOpen;
-              setExtractionOpen(next);
-              setSplitRatio(next ? 0.5 : 1);
-            }}
-          >Hyles</button>
+          {!selectionOnly && <>
+            <button
+              id="pdf_hyles_toggle_btn"
+              className={extractionOpen ? "pdf_hyles_toggle_btn--active" : ""}
+              onClick={() => {
+                const next = !extractionOpen;
+                setExtractionOpen(next);
+                setSplitRatio(next ? 0.5 : 1);
+              }}
+            >Hyles</button>
 
-          {extractionOpen && (
-            <div id="pdf_hyles_actions">
-              {hyleData && hyleData._total > 0 && !extracting && (
-                <button className={`pdf_action_btn${savedId ? " pdf_action_btn--saved" : ""}`} onClick={handleSave} disabled={saving}>
-                  {saving ? "Saving…" : savedId ? "Saved" : "Save"}
-                </button>
-              )}
-              <button id="pdf_sys_btn" onClick={() => setShowSysModal(true)}>System</button>
-              <AIProviderSelect provider={provider} setProvider={setProvider} disabled={extracting} />
-              {extractMode === "ai" && (
-                <button id="pdf_extract_btn" onClick={handleExtract} disabled={!canExtract || extracting} title={!canExtract ? "Open a text-based PDF first" : ""}>
-                  {extracting ? "Extracting…" : pdfDoc ? `Extract Page ${pageNum}` : "Extract"}
-                </button>
-              )}
-            </div>
-          )}
+            {extractionOpen && (
+              <div id="pdf_hyles_actions">
+                {hyleData && hyleData._total > 0 && !extracting && (
+                  <button className={`pdf_action_btn${savedId ? " pdf_action_btn--saved" : ""}`} onClick={handleSave} disabled={saving}>
+                    {saving ? "Saving…" : savedId ? "Saved" : "Save"}
+                  </button>
+                )}
+                <button id="pdf_sys_btn" onClick={() => setShowSysModal(true)}>System</button>
+                <AIProviderSelect provider={provider} setProvider={setProvider} disabled={extracting} />
+                {extractMode === "ai" && (
+                  <button id="pdf_extract_btn" onClick={handleExtract} disabled={!canExtract || extracting} title={!canExtract ? "Open a text-based PDF first" : ""}>
+                    {extracting ? "Extracting…" : pdfDoc ? `Extract Page ${pageNum}` : "Extract"}
+                  </button>
+                )}
+              </div>
+            )}
+          </>}
         </>}
       </div>
 
       {/* Annotation toolbar + Linguistic Units bar */}
-      {pdfDoc && (<>
+      {pdfDoc && !selectionOnly && (<>
         <div id="pdf_annot_toolbar">
           <div id="pdf_annot_tools">
             {ANNOT_TOOLS.map(({ key, icon, label }) => (
@@ -1947,8 +1980,15 @@ const PDFPage = ({
                       {manualSelection && !manualPopup && (
                         <div ref={selBarRef} id="manual_select_bar" style={{ left: manualSelection.x, top: manualSelection.y }}>
                           <span id="msb_text">{manualSelection.text}</span>
-                          <button id="msb_confirm" onClick={confirmSelection}>✓</button>
-                          <button id="msb_cancel"  onClick={() => { setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>✕</button>
+                          {onSelectionAction ? (
+                            <button id="msb_confirm" className="msb_action_btn" onClick={handleSelectionAction} disabled={selectionActionBusy}>
+                              {selectionActionBusy ? "…" : selectionActionLabel}
+                            </button>
+                          ) : (
+                            <button id="msb_confirm" onClick={confirmSelection}>✓</button>
+                          )}
+                          <button id="msb_cancel"  onClick={() => { setManualSelection(null); setSelectionActionError(""); window.getSelection()?.removeAllRanges(); }}>✕</button>
+                          {selectionActionError && <span id="msb_error">{selectionActionError}</span>}
                         </div>
                       )}
                       {extractMode === "manual" && (
