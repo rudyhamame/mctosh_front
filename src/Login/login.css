@@ -144,6 +144,23 @@
   to   { transform: rotate(-450deg) translateX(var(--r)); }
 }
 
+/* Orbit system wrap — zero-size passthrough (matches #login_center's own
+   zero-size anchor) that adds the shared perspective/tilt to the rings,
+   rope canvas and dots together, so the whole solar system tilts as one
+   rigid object in sync with the Patient Reality / MCTOSHS threads. */
+#orbit_system_wrap {
+  position: absolute;
+  inset: 0;
+  perspective: 2200px;
+  perspective-origin: 50% 50%;
+}
+
+#orbit_system_group {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
 /* ── Soft orbit path rings ── */
 .orb_ring {
   position: absolute;

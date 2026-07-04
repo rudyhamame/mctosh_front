@@ -8,19 +8,28 @@ const STAGE = 980;
 
 // Patient Reality "thread" — Z depths (px) for each cross-section ring making
 // up the rope-like tube. Centered on 0 so the ring at index (RINGS-1)/2 sits
-// exactly at the surface, matching today's flat circle when unrotated.
-const PR_THREAD_RINGS = Array.from({ length: 60 }, (_, i) => (i - 29.5) * 9);
+// exactly at the surface, matching today's flat circle when unrotated. Depth
+// runs far past the visible frame (and opacity fades all the way to 0 at the
+// tips, see the render below) so the thread reads as endless, never showing
+// a visible "end of the rope" even at the full rotation range.
+// NOTE: depth must stay a small fraction of `perspective` (2200px on the big
+// tubes, 260px on the orbit dots) — pushing it too far causes near rings
+// (positive Z, closer to the viewer) to balloon in projected size even at
+// rest (scale = perspective / (perspective - z)), which blew up into a huge
+// glowing halo when this was tried at depth ~900. Keep the ratio modest and
+// rely on the opacity fading fully to 0 (below) for the "endless" look.
+const PR_THREAD_RINGS = Array.from({ length: 80 }, (_, i) => (i - 39.5) * 9);
 const PR_THREAD_DEPTH = Math.max(...PR_THREAD_RINGS.map(Math.abs));
 
 // MCTOSHS inner sphere as its own 3D thread — smaller diameter, same ring
 // density/pitch ratio as Patient Reality's, so it reads as a nested tube
 // that rotates in lockstep with the outer one.
-const MS_THREAD_RINGS = Array.from({ length: 60 }, (_, i) => (i - 29.5) * 6.5);
+const MS_THREAD_RINGS = Array.from({ length: 80 }, (_, i) => (i - 39.5) * 6.5);
 const MS_THREAD_DEPTH = Math.max(...MS_THREAD_RINGS.map(Math.abs));
 
 // Orbit dots (M/C/T/O/OS/H/S) as small SOLID rod threads — filled discs
 // (not hollow rings) stacked along Z, same shared rotation as the big tubes.
-const ORB_THREAD_DISCS = Array.from({ length: 22 }, (_, i) => (i - 10.5) * 2.2);
+const ORB_THREAD_DISCS = Array.from({ length: 28 }, (_, i) => (i - 13.5) * 2.2);
 const ORB_THREAD_DEPTH = Math.max(...ORB_THREAD_DISCS.map(Math.abs));
 
 const MCTOSHS_ORBITS = [
@@ -233,8 +242,12 @@ export default function Login({ onLogin }) {
     };
 
     const onMove = (e) => {
+      // Always prevent native touch-scroll on this control (even for a lone
+      // finger driving tilt via Pointer events below) — otherwise the browser
+      // commits to scrolling on the very first touchmove and later
+      // preventDefault() calls here get silently ignored once a 2nd finger joins.
+      e.preventDefault();
       if (e.touches.length === 2 && pinchRef.current.active) {
-        e.preventDefault();
         const ratio   = touchDist(e.touches) / pinchRef.current.startDist;
         const newZoom = Math.max(0.4, Math.min(3, pinchRef.current.startZoom * ratio));
         zoomRef.current = newZoom;
@@ -570,8 +583,8 @@ export default function Login({ onLogin }) {
   // Shared one-finger-tilt-driven rotation for all 3D threads (Patient Reality,
   // MCTOSHS, and the orbit dots) so they all rotate together in lockstep.
   const threadRotation =
-    `rotateX(${Math.max(-32, Math.min(32, -tiltXY.y * 0.4))}deg) ` +
-    `rotateY(${Math.max(-32, Math.min(32,  tiltXY.x * 0.4))}deg)`;
+    `rotateX(${Math.max(-90, Math.min(90, -tiltXY.y * 0.4))}deg) ` +
+    `rotateY(${Math.max(-90, Math.min(90,  tiltXY.x * 0.4))}deg)`;
 
   return (
     <div id="login_page">
@@ -657,33 +670,71 @@ export default function Login({ onLogin }) {
               <span id="pr_name">Patient Reality</span>
             </div>
 
-            {/* Soft orbit path rings — always full size */}
-            {MCTOSHS_ORBITS.map(orb => (
-              <div
-                key={`ring-${orb.id}`}
-                className="orb_ring"
-                style={{
-                  "--orb-color": orb.color,
-                  width:      `${orb.r * 2}px`,
-                  height:     `${orb.r * 2}px`,
-                  marginTop:  `-${orb.r}px`,
-                  marginLeft: `-${orb.r}px`,
-                }}
-              />
-            ))}
+            {/* Orbit system (path rings + rope canvas + dots) tilts together
+                with the same rotation as the Patient Reality / MCTOSHS
+                threads, so the whole solar system reads as one rigid 3D
+                object instead of a flat disk floating inside a tilted tube. */}
+            <div id="orbit_system_wrap">
+              <div id="orbit_system_group" style={{ transform: threadRotation }}>
 
-            {/* Rope canvas — drawn by RAF loop */}
-            <canvas
-              ref={ropeCanvasRef}
-              width={900} height={900}
-              style={{
-                position: 'absolute', top: 0, left: 0,
-                width: '900px', height: '900px',
-                pointerEvents: 'none', zIndex: 7,
-              }}
-            />
+                {/* Soft orbit path rings — always full size */}
+                {MCTOSHS_ORBITS.map(orb => (
+                  <div
+                    key={`ring-${orb.id}`}
+                    className="orb_ring"
+                    style={{
+                      "--orb-color": orb.color,
+                      width:      `${orb.r * 2}px`,
+                      height:     `${orb.r * 2}px`,
+                      marginTop:  `-${orb.r}px`,
+                      marginLeft: `-${orb.r}px`,
+                    }}
+                  />
+                ))}
 
-            {/* Curved disease control — right half of PR sphere border */}
+                {/* Rope canvas — drawn by RAF loop */}
+                <canvas
+                  ref={ropeCanvasRef}
+                  width={900} height={900}
+                  style={{
+                    position: 'absolute', top: 0, left: 0,
+                    width: '900px', height: '900px',
+                    pointerEvents: 'none', zIndex: 7,
+                  }}
+                />
+
+                {/* Orbiting letter dots — M (i=0) is draggable to set disease state */}
+                {MCTOSHS_ORBITS.map((orb, i) => (
+                  <div
+                    key={orb.id}
+                    ref={el => { dotElsRef.current[i] = el; }}
+                    className="bio_particle"
+                    style={{ "--orb-color": orb.color, ...(i === 0 ? { cursor: 'grab', touchAction: 'none' } : {}) }}
+                    onPointerDown={i === 0 ? handleMDotPointerDown : undefined}
+                  >
+                    <div className="orb_dot">
+                      <span className="orb_dot_letter">{orb.letter}</span>
+                    </div>
+                    <div className="orb_thread_wrap">
+                      <div className="orb_thread_group" style={{ transform: threadRotation }}>
+                        {ORB_THREAD_DISCS.map(z => (
+                          <div
+                            key={z}
+                            className="orb_thread_disc"
+                            style={{
+                              transform: `translateZ(${z}px)`,
+                              opacity: 1 - Math.abs(z) / ORB_THREAD_DEPTH,
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Curved disease control — right half of PR sphere border.
+                    Lives inside the tilted group too so it rotates with
+                    everything else instead of floating flat in the gap. */}
             {(() => {
               const ARC_R  = 390;
               const t      = diseaseLevel / 0.20;
@@ -821,34 +872,8 @@ export default function Login({ onLogin }) {
               );
             })()}
 
-            {/* Orbiting letter dots — M (i=0) is draggable to set disease state */}
-            {MCTOSHS_ORBITS.map((orb, i) => (
-              <div
-                key={orb.id}
-                ref={el => { dotElsRef.current[i] = el; }}
-                className="bio_particle"
-                style={{ "--orb-color": orb.color, ...(i === 0 ? { cursor: 'grab', touchAction: 'none' } : {}) }}
-                onPointerDown={i === 0 ? handleMDotPointerDown : undefined}
-              >
-                <div className="orb_thread_wrap">
-                  <div className="orb_thread_group" style={{ transform: threadRotation }}>
-                    {ORB_THREAD_DISCS.map(z => (
-                      <div
-                        key={z}
-                        className="orb_thread_disc"
-                        style={{
-                          transform: `translateZ(${z}px)`,
-                          opacity: 1 - 0.6 * (Math.abs(z) / ORB_THREAD_DEPTH),
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-                <div className="orb_dot">
-                  <span className="orb_dot_letter">{orb.letter}</span>
-                </div>
               </div>
-            ))}
+            </div>
 
           </div>
         </div>
