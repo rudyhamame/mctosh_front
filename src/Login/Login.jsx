@@ -9,7 +9,8 @@ const STAGE = 980;
 // Patient Reality "thread" — Z depths (px) for each cross-section ring making
 // up the rope-like tube. Centered on 0 so the ring at index (RINGS-1)/2 sits
 // exactly at the surface, matching today's flat circle when unrotated.
-const PR_THREAD_RINGS = Array.from({ length: 28 }, (_, i) => (i - 13.5) * 24);
+const PR_THREAD_RINGS = Array.from({ length: 60 }, (_, i) => (i - 29.5) * 9);
+const PR_THREAD_DEPTH = Math.max(...PR_THREAD_RINGS.map(Math.abs));
 
 const MCTOSHS_ORBITS = [
   { id: "m",  letter: "M",  r: 244, color: "#00e5ff", dur: "8s",   dir: "cw", delay: "0s" },
@@ -544,12 +545,19 @@ export default function Login({ onLogin }) {
                   id="pr_thread_group"
                   style={{
                     transform:
-                      `rotateX(${Math.max(-28, Math.min(28, -panXY.y * 0.06))}deg) ` +
-                      `rotateY(${Math.max(-28, Math.min(28,  panXY.x * 0.06))}deg)`,
+                      `rotateX(${Math.max(-32, Math.min(32, -panXY.y * 0.4))}deg) ` +
+                      `rotateY(${Math.max(-32, Math.min(32,  panXY.x * 0.4))}deg)`,
                   }}
                 >
                   {PR_THREAD_RINGS.map((z) => (
-                    <div key={z} className="pr_thread_ring" style={{ transform: `translateZ(${z}px)` }} />
+                    <div
+                      key={z}
+                      className="pr_thread_ring"
+                      style={{
+                        transform: `translateZ(${z}px)`,
+                        opacity: 1 - 0.6 * (Math.abs(z) / PR_THREAD_DEPTH),
+                      }}
+                    />
                   ))}
                 </div>
               </div>

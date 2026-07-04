@@ -367,7 +367,7 @@
   position: absolute;
   inset: 0;
   border-radius: 50%;
-  border: 1.5px solid rgba(160,110,255,0.40);
+  border: 7px solid rgba(160,110,255,0.16);
   box-sizing: border-box;
 }
 
