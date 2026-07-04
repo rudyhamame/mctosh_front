@@ -733,7 +733,12 @@ export default function Login({ onLogin }) {
                       <span className="orb_dot_letter">{orb.letter}</span>
                     </div>
                     <div className="orb_thread_wrap">
-                      <div className="orb_thread_group" style={{ transform: threadRotation }}>
+                      {/* No threadRotation here — this already sits inside
+                          orbit_system_group's rotated 3D space (inherited via
+                          the preserve-3d chain), so reapplying it here would
+                          double the rotation (e.g. 180° when the main tube is
+                          only at 90°). The Z axis is already the tube's axis. */}
+                      <div className="orb_thread_group">
                         {ORB_THREAD_DISCS.map(z => (
                           <div
                             key={z}
