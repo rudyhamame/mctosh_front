@@ -29,8 +29,13 @@ const MS_THREAD_DEPTH = Math.max(...MS_THREAD_RINGS.map(Math.abs));
 
 // Orbit dots (M/C/T/O/OS/H/S) as small SOLID rod threads — filled discs
 // (not hollow rings) stacked along Z, same shared rotation as the big tubes.
-const ORB_THREAD_DISCS = Array.from({ length: 28 }, (_, i) => (i - 13.5) * 2.2);
-const ORB_THREAD_DEPTH = Math.max(...ORB_THREAD_DISCS.map(Math.abs));
+// Reuse Patient Reality's exact Z range (not a scaled-down version) so these
+// threads elongate by the SAME amount as the two main cylinders when tilted
+// — they share the same perspective (inherited from #orbit_system_wrap, see
+// .bio_particle's preserve-3d in the CSS) so an identical Z range produces
+// an identical visual stretch, regardless of the dot's tiny on-screen size.
+const ORB_THREAD_DISCS = PR_THREAD_RINGS;
+const ORB_THREAD_DEPTH = PR_THREAD_DEPTH;
 
 const MCTOSHS_ORBITS = [
   { id: "m",  letter: "M",  r: 244, color: "#00e5ff", dur: "8s",   dir: "cw", delay: "0s" },
@@ -412,6 +417,12 @@ export default function Login({ onLogin }) {
         el.style.opacity   = '1';
         const dotEl = el.firstElementChild;
         if (dotEl) dotEl.style.transform = `rotate(${-cssDeg}deg)`;
+        // Counter-rotate the thread wrap too — otherwise each dot's own
+        // orbital angle (cssDeg) pre-rotates its local 3D axes, so the rod
+        // elongates in a direction that drifts from the main tubes' axis
+        // instead of matching it.
+        const threadEl = el.children[1];
+        if (threadEl) threadEl.style.transform = `translate(-50%, -50%) rotate(${-cssDeg}deg)`;
         s._x = 450 + Math.cos(rad) * orb.r;
         s._y = 450 + Math.sin(rad) * orb.r;
       });
@@ -610,25 +621,29 @@ export default function Login({ onLogin }) {
             {/* Spheres + zone labels on PR sphere */}
             <div id="login_center">
               <div id="login_center_glow" />
-              <div id="pr_sphere">
-                {/* Zone sector labels — positioned within the PR sphere */}
-                <div id="pr_zone_detr">Deterioration</div>
-                {/* Divider lines at 3 o'clock / 9 o'clock / 12 o'clock */}
-                <svg id="pr_zone_svg" viewBox="0 0 720 720" aria-hidden="true">
-                  <line x1="360" y1="0"   x2="360" y2="360" stroke="rgba(255,255,255,0.08)" strokeWidth="1"/>
-                </svg>
-                <div id="pr_spec_a" />
-                <div id="pr_spec_b" />
-                <div id="pr_rim" />
-                <div id="mctosh_sphere">
-                  <div id="ms_rim" />
-                </div>
-              </div>
 
               {/* Patient Reality as a 3D thread — panning reveals the flat
-                  circle is one cross-section ring of a rope-like tube */}
+                  circle is one cross-section ring of a rope-like tube.
+                  pr_sphere (the flat fill + zone labels + nested mctosh_sphere)
+                  lives INSIDE the tilted group at z=0 as the tube's front cap,
+                  so the color filling the gap between the two tube walls
+                  tilts along with them instead of staying flat underneath. */}
               <div id="pr_thread_wrap">
                 <div id="pr_thread_group" style={{ transform: threadRotation }}>
+                  <div id="pr_sphere">
+                    {/* Zone sector labels — positioned within the PR sphere */}
+                    <div id="pr_zone_detr">Deterioration</div>
+                    {/* Divider lines at 3 o'clock / 9 o'clock / 12 o'clock */}
+                    <svg id="pr_zone_svg" viewBox="0 0 720 720" aria-hidden="true">
+                      <line x1="360" y1="0"   x2="360" y2="360" stroke="rgba(255,255,255,0.08)" strokeWidth="1"/>
+                    </svg>
+                    <div id="pr_spec_a" />
+                    <div id="pr_spec_b" />
+                    <div id="pr_rim" />
+                    <div id="mctosh_sphere">
+                      <div id="ms_rim" />
+                    </div>
+                  </div>
                   {PR_THREAD_RINGS.map((z) => (
                     <div
                       key={z}

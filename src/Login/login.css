@@ -186,6 +186,10 @@
   pointer-events: none;
   will-change: transform;
   z-index: 8;  /* above spheres (z-index 5) */
+  /* Don't flatten orb_thread_group's 3D children — let them share the
+     perspective established up at #orbit_system_wrap, same as the main
+     tubes, so the orbit dot threads elongate by the same amount. */
+  transform-style: preserve-3d;
 }
 
 /* ── Counter-rotation keyframes — keep letter upright as dot orbits ── */
@@ -211,8 +215,12 @@
   transform: translate(-50%, -50%);
   width: 32px;
   height: 32px;
-  perspective: 260px;
-  perspective-origin: 50% 50%;
+  /* No local perspective here on purpose — it inherits the shared 2200px
+     perspective from #orbit_system_wrap (via .bio_particle's preserve-3d
+     above) instead of opening its own disconnected 3D space. Needs its
+     own preserve-3d too, or it'd flatten orb_thread_group right here and
+     break that inheritance chain. */
+  transform-style: preserve-3d;
   pointer-events: none;
   z-index: -1;
 }
