@@ -340,6 +340,37 @@
   animation: pr_breathe 7s ease-in-out infinite;
 }
 
+/* Patient Reality as a 3D thread: the visible circle is one cross-section
+   ring of a long rope-like tube extending in depth. At rest (no rotation)
+   every ring sits exactly on top of the front one, so it looks identical
+   to a flat circle — panning rotates the tube and reveals its depth. */
+#pr_thread_wrap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 720px;
+  height: 720px;
+  perspective: 2200px;
+  perspective-origin: 50% 50%;
+  pointer-events: none;
+  z-index: 4;
+}
+
+#pr_thread_group {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.pr_thread_ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid rgba(160,110,255,0.40);
+  box-sizing: border-box;
+}
+
 /* Zone divider SVG */
 #pr_zone_svg {
   position: absolute;

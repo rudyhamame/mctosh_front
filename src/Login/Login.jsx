@@ -6,6 +6,11 @@ import { writeStoredSession } from "../utils/sessionCleanup";
 
 const STAGE = 980;
 
+// Patient Reality "thread" — Z depths (px) for each cross-section ring making
+// up the rope-like tube. Centered on 0 so the ring at index (RINGS-1)/2 sits
+// exactly at the surface, matching today's flat circle when unrotated.
+const PR_THREAD_RINGS = Array.from({ length: 28 }, (_, i) => (i - 13.5) * 24);
+
 const MCTOSHS_ORBITS = [
   { id: "m",  letter: "M",  r: 244, color: "#00e5ff", dur: "8s",   dir: "cw", delay: "0s" },
   { id: "c",  letter: "C",  r: 214, color: "#4da6ff", dur: "16s",  dir: "cw", delay: "0s" },
@@ -502,7 +507,7 @@ export default function Login({ onLogin }) {
           <div id="login_sigil"><span>M</span></div>
           <div id="login_brand_text">
             <h1 id="login_wordmark">MCTOSHS | CVS</h1>
-            <p id="login_platform_label">Cardiovascular Clinical Intelligence Platform</p>
+            <p id="login_platform_label">Cardiovascular Thread of Clinical Patient Reality</p>
           </div>
         </div>
 
@@ -529,6 +534,23 @@ export default function Login({ onLogin }) {
                 <div id="pr_rim" />
                 <div id="mctosh_sphere">
                   <div id="ms_rim" />
+                </div>
+              </div>
+
+              {/* Patient Reality as a 3D thread — panning reveals the flat
+                  circle is one cross-section ring of a rope-like tube */}
+              <div id="pr_thread_wrap">
+                <div
+                  id="pr_thread_group"
+                  style={{
+                    transform:
+                      `rotateX(${Math.max(-28, Math.min(28, -panXY.y * 0.06))}deg) ` +
+                      `rotateY(${Math.max(-28, Math.min(28,  panXY.x * 0.06))}deg)`,
+                  }}
+                >
+                  {PR_THREAD_RINGS.map((z) => (
+                    <div key={z} className="pr_thread_ring" style={{ transform: `translateZ(${z}px)` }} />
+                  ))}
                 </div>
               </div>
             </div>
