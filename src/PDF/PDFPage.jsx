@@ -235,6 +235,7 @@ const PDFPage = ({
   const mouseDownPosRef    = useRef(null); // {x,y} at last mousedown — used to detect drag vs click
   const suppressTextSelectionRef = useRef(false);
   const lastLoadedSourceKeyRef = useRef("");
+  const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
   const lastLoadedFileRef = useRef(null);
   const wheelZoomStateRef  = useRef({
     baseZoom: 1,
@@ -1244,6 +1245,7 @@ const PDFPage = ({
 
   // ── Load PDF ───────────────────────────────────────────────────────────────
   const loadPdfBytes = useCallback(async (arrayBuffer, name) => {
+    currentSourceIdRef.current = ""; // caller (loadFromSource) sets this back if applicable
     setLoading(true);
     setLoadError("");
     setFilename(name);
@@ -1298,7 +1300,8 @@ const PDFPage = ({
         return;
       }
       const arrayBuffer = await res.arrayBuffer();
-      loadPdfBytes(arrayBuffer, name);
+      await loadPdfBytes(arrayBuffer, name);
+      currentSourceIdRef.current = sourceId;
     } catch (err) {
       setLoadError(`Could not load PDF: ${err.message}`);
       setLoading(false);
@@ -1383,6 +1386,24 @@ const PDFPage = ({
     finally { setSaving(false); }
   }, [hyleData, saving, filename, pageCount, pdfType, hylePage, pageNum, provider, extractMode]);
 
+  // Prefers the server-side LlamaParse Markdown for this page (better structure —
+  // real headings/lists/tables) when the doc came from a saved Source; falls back
+  // to raw client-side pdf.js text (local uploads, or if the markdown service is
+  // unavailable/unconfigured/out of quota) so extraction never breaks.
+  const getPageText = useCallback(async (n) => {
+    const sourceId = currentSourceIdRef.current;
+    if (sourceId) {
+      try {
+        const res  = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?page=${n}`));
+        const data = await res.json();
+        if (res.ok && data.markdown?.trim()) return data.markdown;
+      } catch {}
+    }
+    const page    = await pdfDoc.getPage(n);
+    const content = await page.getTextContent();
+    return content.items.map((item) => item.str + (item.hasEOL ? "\n" : " ")).join("").trim();
+  }, [pdfDoc]);
+
   // ── AI extraction (streaming) ──────────────────────────────────────────────
   const handleExtract = useCallback(async () => {
     if (!pdfDoc || extracting || pdfType === "scanned") return;
@@ -1392,9 +1413,7 @@ const PDFPage = ({
     setExtractError(""); setSavedId(null); setActiveHistoryId(null);
 
     try {
-      const page    = await pdfDoc.getPage(pageNum);
-      const content = await page.getTextContent();
-      const text    = content.items.map((item) => item.str + (item.hasEOL ? "\n" : " ")).join("").trim();
+      const text = await getPageText(pageNum);
 
       if (!text || text.replace(/\s/g, "").length < 80) {
         setExtractError("This page has no extractable text content.");
@@ -1445,7 +1464,7 @@ const PDFPage = ({
     } finally {
       setExtracting(false);
     }
-  }, [pdfDoc, pageNum, extracting, pdfType, provider]);
+  }, [pdfDoc, pageNum, extracting, pdfType, provider, getPageText]);
 
   // ── Manual selection ───────────────────────────────────────────────────────
   const handleTextMouseDown = useCallback((e) => {
