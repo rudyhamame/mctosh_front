@@ -660,22 +660,24 @@ export default function Login({ onLogin }) {
               </div>
             </div>
 
-            {/* MCTOSHS label */}
-            <div id="ms_label_wrap" style={{ top: `${450 + msR_disp + 15}px` }}>
-              <span id="ms_label_name">MCTOSHS</span>
-            </div>
-
-            {/* Patient Reality label */}
-            <div id="pr_label_wrap">
-              <span id="pr_name">Patient Reality</span>
-            </div>
-
-            {/* Orbit system (path rings + rope canvas + dots) tilts together
-                with the same rotation as the Patient Reality / MCTOSHS
-                threads, so the whole solar system reads as one rigid 3D
-                object instead of a flat disk floating inside a tilted tube. */}
+            {/* Orbit system (path rings + rope canvas + dots + labels) tilts
+                together with the same rotation as the Patient Reality /
+                MCTOSHS threads, so the whole solar system reads as one rigid
+                3D object instead of a flat disk floating inside a tilted
+                tube. The two text labels were the one part left flat before —
+                they'd sit stuck in place while the tube warped around them. */}
             <div id="orbit_system_wrap">
               <div id="orbit_system_group" style={{ transform: threadRotation }}>
+
+                {/* MCTOSHS label */}
+                <div id="ms_label_wrap" style={{ top: `${450 + msR_disp + 15}px` }}>
+                  <span id="ms_label_name">MCTOSHS</span>
+                </div>
+
+                {/* Patient Reality label */}
+                <div id="pr_label_wrap">
+                  <span id="pr_name">Patient Reality</span>
+                </div>
 
                 {/* Soft orbit path rings — always full size */}
                 {MCTOSHS_ORBITS.map(orb => (
