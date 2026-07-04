@@ -430,7 +430,7 @@ const AboutContentAR = () => (
           <ul className="about_type_list">
             <li>
               <span className="about_type_label">2.1 الكلمة المركبة</span>
-              <span className="about_type_desc_inline">— تُبنى من عدة مورفيمات داخل كلمة واحدة. <em>مثال: myocardium، وhepatocyte</em></span>
+              <span className="about_type_desc_inline">— تُبنى من عدة مورفيمات داخل كلمة واحدة. <em>مثال: myocardium، وcardiomyocyte</em></span>
             </li>
           </ul>
         </div>

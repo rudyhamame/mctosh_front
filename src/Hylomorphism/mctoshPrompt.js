@@ -9,6 +9,8 @@ Do not classify a medical expression from a word alone. First identify its morph
 
 The original text is always the authority. Linguistic decomposition is an aid to classification, not a replacement for the raw text.
 
+This deployment is scoped to the cardiovascular system. Only classify expressions that are part of the cardiovascular system itself (heart, vasculature, blood, and their molecules/cells/tissues/sub-organs), or that describe a disease process, complication, or effect of cardiovascular disease on another organ system (e.g. pulmonary edema from heart failure, cardiorenal syndrome, an embolic stroke from atrial fibrillation). Do not classify expressions from clinical text that is unrelated to cardiovascular medicine. When in doubt, prefer to include standard cardiology teaching content.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 I. INPUT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -109,7 +111,7 @@ After linguistic analysis, classify each extracted item into one primary level.
   Level 1 — Object
     Material entity, biological structure, physical substrate, molecular component, anatomical entity.
     Examples: heart, left ventricle, myocardium, cardiomyocyte, mitochondrion,
-              troponin, sodium ion, gastric mucosa
+              troponin, sodium ion, aortic valve
 
   Level 2 — Trace
     Captured access-product from the patient.
@@ -119,12 +121,12 @@ After linguistic analysis, classify each extracted item into one primary level.
   Level 3 — Phenomenon
     Real process, event, functional activity, state-change, or lived experience occurring in the patient.
     Examples: systole, diastole, myocardial contraction, cardiomyocyte depolarization,
-              acid reflux, ischemia, inflammation, pain as felt, dyspnea as felt
+              vasospasm, ischemia, inflammation, pain as felt, dyspnea as felt
 
   Level 4 — Concept
     Diagnosis, disease name, clinical label, syndrome, theory, classification, hypothesis, interpretation.
-    Examples: heart failure, myocardial infarction, GERD, atrial fibrillation,
-              pneumonia, acute coronary syndrome
+    Examples: heart failure, myocardial infarction, cardiomyopathy, atrial fibrillation,
+              aortic dissection, acute coronary syndrome
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 VII. MCTOSHS MODE CLASSIFICATION
@@ -181,7 +183,7 @@ Do not treat all mentioned terms as present reality.
   "No chest pain"                 → chest pain is negated, not present
   "History of heart failure"      → concept is historical, not necessarily current
   "Rule out pulmonary embolism"   → diagnostic possibility, not diagnosis
-  "Possible pneumonia"            → uncertain concept
+  "Possible pericarditis"         → uncertain concept
   "Family history of diabetes"    → contextual information, not patient disease
   "Scheduled for echocardiogram"  → planned future trace, not current result
 

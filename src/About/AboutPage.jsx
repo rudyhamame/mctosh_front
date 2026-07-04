@@ -1057,7 +1057,7 @@ const AboutPage = () => {
                   <ul className="about_type_list">
                     <li>
                       <span className="about_type_label">2.1 Compound</span>
-                      <span className="about_type_desc_inline">— built from multiple morphemes into a single word. <em>e.g. myocardium, hepatocyte</em></span>
+                      <span className="about_type_desc_inline">— built from multiple morphemes into a single word. <em>e.g. myocardium, cardiomyocyte</em></span>
                     </li>
                   </ul>
                 </div>
