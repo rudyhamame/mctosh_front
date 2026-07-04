@@ -82,9 +82,9 @@ const AppRouter = () => {
     canAccessAuthenticatedRoutes ? element : <Navigate to="/login" replace />;
 
   return (
-    // MCTOSHS | CS is a sub-app of the future MCTOSH product — mounted at
-    // /cs/ instead of the domain root, so mctoshs.ca/cs/login is the main page.
-    <Router basename="/cs">
+    // MCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
+    // /cvs/ instead of the domain root, so mctoshs.ca/cvs/login is the main page.
+    <Router basename="/cvs">
       <Routes>
         <Route path="/" element={
           <Navigate to={canAccessAuthenticatedRoutes ? "/home" : "/login"} replace />

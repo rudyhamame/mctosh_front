@@ -501,7 +501,7 @@ export default function Login({ onLogin }) {
         <div id="login_brand">
           <div id="login_sigil"><span>M</span></div>
           <div id="login_brand_text">
-            <h1 id="login_wordmark">MCTOSHS</h1>
+            <h1 id="login_wordmark">MCTOSHS | CVS</h1>
             <p id="login_platform_label">Cardiovascular Clinical Intelligence Platform</p>
           </div>
         </div>
@@ -887,7 +887,7 @@ export default function Login({ onLogin }) {
         </form>
 
         <footer id="login_footer">
-          <span>MCTOSHS &middot; From representation to reality</span>
+          <span>MCTOSHS | CVS &middot; From representation to reality</span>
           <span>&copy; {new Date().getFullYear()} Rudy Hamame</span>
         </footer>
       </div>
