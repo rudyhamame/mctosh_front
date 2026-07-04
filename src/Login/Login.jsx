@@ -12,30 +12,34 @@ const STAGE = 980;
 // runs far past the visible frame (and opacity fades all the way to 0 at the
 // tips, see the render below) so the thread reads as endless, never showing
 // a visible "end of the rope" even at the full rotation range.
-// NOTE: depth must stay a small fraction of `perspective` (2200px on the big
-// tubes, 260px on the orbit dots) — pushing it too far causes near rings
-// (positive Z, closer to the viewer) to balloon in projected size even at
-// rest (scale = perspective / (perspective - z)), which blew up into a huge
-// glowing halo when this was tried at depth ~900. Keep the ratio modest and
-// rely on the opacity fading fully to 0 (below) for the "endless" look.
-const PR_THREAD_RINGS = Array.from({ length: 80 }, (_, i) => (i - 39.5) * 9);
+// NOTE: depth must stay a small fraction of `perspective` (6000px, shared by
+// all three thread groups) — pushing it too far causes near rings (positive
+// Z, closer to the viewer) to balloon in projected size even at rest (scale
+// = perspective / (perspective - z)), which blew up into a huge glowing halo
+// when this was tried at depth ~900 against a 2200px perspective. Perspective
+// was later raised from 2200 to 6000 specifically to shrink that per-ring
+// scale variance (it was ~16%, reading as a soft blur/glow when 80+ rings
+// stacked); ring count was raised at the same time (density, not total
+// depth) so the tube still reads as solid instead of see-through at 90°.
+const PR_THREAD_RINGS = Array.from({ length: 96 }, (_, i) => (i - 47.5) * 7.47);
 const PR_THREAD_DEPTH = Math.max(...PR_THREAD_RINGS.map(Math.abs));
 
 // MCTOSHS inner sphere as its own 3D thread — smaller diameter, same ring
 // density/pitch ratio as Patient Reality's, so it reads as a nested tube
 // that rotates in lockstep with the outer one.
-const MS_THREAD_RINGS = Array.from({ length: 80 }, (_, i) => (i - 39.5) * 6.5);
+const MS_THREAD_RINGS = Array.from({ length: 96 }, (_, i) => (i - 47.5) * 5.4);
 const MS_THREAD_DEPTH = Math.max(...MS_THREAD_RINGS.map(Math.abs));
 
 // Orbit dots (M/C/T/O/OS/H/S) as small SOLID rod threads — filled discs
 // (not hollow rings) stacked along Z, same shared rotation as the big tubes.
-// Reuse Patient Reality's exact Z range (not a scaled-down version) so these
-// threads elongate by the SAME amount as the two main cylinders when tilted
-// — they share the same perspective (inherited from #orbit_system_wrap, see
-// .bio_particle's preserve-3d in the CSS) so an identical Z range produces
-// an identical visual stretch, regardless of the dot's tiny on-screen size.
-const ORB_THREAD_DISCS = PR_THREAD_RINGS;
-const ORB_THREAD_DEPTH = PR_THREAD_DEPTH;
+// Same total Z range as Patient Reality (so the elongation AMOUNT matches,
+// see the shared-perspective note above) but with far fewer discs — every
+// element here needs transform-style:preserve-3d up the whole bio_particle
+// chain (for correct direction/amount), which appears to force per-element
+// GPU layer promotion; ×7 dots at high density was enough to hang the page
+// entirely (a plain rest-state screenshot timed out). Keep this lean.
+const ORB_THREAD_DISCS = Array.from({ length: 14 }, (_, i) => (i - 6.5) * (PR_THREAD_DEPTH / 6.5));
+const ORB_THREAD_DEPTH = Math.max(...ORB_THREAD_DISCS.map(Math.abs));
 
 const MCTOSHS_ORBITS = [
   { id: "m",  letter: "M",  r: 244, color: "#00e5ff", dur: "8s",   dir: "cw", delay: "0s" },
