@@ -184,6 +184,35 @@
   background: var(--orb-color);
 }
 
+/* Orbit dot as a small SOLID rod thread — filled discs stacked along Z,
+   sitting behind the flat dot (z-index -1 inside bio_particle's own
+   stacking context) so at rest it's fully hidden by the flat dot above it. */
+.orb_thread_wrap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 32px;
+  perspective: 260px;
+  perspective-origin: 50% 50%;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.orb_thread_group {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.orb_thread_disc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--orb-color);
+}
+
 /* ── Letter inside the dot — counter-rotates to stay upright ── */
 .orb_dot_letter {
   position: absolute;
@@ -368,6 +397,35 @@
   inset: 0;
   border-radius: 50%;
   border: 7px solid rgba(160,110,255,0.16);
+  box-sizing: border-box;
+}
+
+/* MCTOSHS inner sphere — same tube technique, smaller diameter + cyan
+   palette, nested inside Patient Reality's tube and sharing its rotation. */
+#ms_thread_wrap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 520px;
+  height: 520px;
+  perspective: 2200px;
+  perspective-origin: 50% 50%;
+  pointer-events: none;
+  z-index: 5;
+}
+
+#ms_thread_group {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.ms_thread_ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 6px solid rgba(0,229,255,0.14);
   box-sizing: border-box;
 }
 
@@ -747,6 +805,17 @@
   color: rgba(255,255,255,0.18);
   font-style: italic;
   letter-spacing: 0.05em;
+  text-align: center;
+}
+
+#login_quote {
+  margin: 0.5rem 0 0;
+  max-width: 460px;
+  font-size: 0.64rem;
+  line-height: 1.5;
+  color: rgba(255,255,255,0.14);
+  font-style: italic;
+  letter-spacing: 0.02em;
   text-align: center;
 }
 

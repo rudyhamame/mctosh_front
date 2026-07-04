@@ -12,6 +12,17 @@ const STAGE = 980;
 const PR_THREAD_RINGS = Array.from({ length: 60 }, (_, i) => (i - 29.5) * 9);
 const PR_THREAD_DEPTH = Math.max(...PR_THREAD_RINGS.map(Math.abs));
 
+// MCTOSHS inner sphere as its own 3D thread — smaller diameter, same ring
+// density/pitch ratio as Patient Reality's, so it reads as a nested tube
+// that rotates in lockstep with the outer one.
+const MS_THREAD_RINGS = Array.from({ length: 60 }, (_, i) => (i - 29.5) * 6.5);
+const MS_THREAD_DEPTH = Math.max(...MS_THREAD_RINGS.map(Math.abs));
+
+// Orbit dots (M/C/T/O/OS/H/S) as small SOLID rod threads — filled discs
+// (not hollow rings) stacked along Z, same shared rotation as the big tubes.
+const ORB_THREAD_DISCS = Array.from({ length: 22 }, (_, i) => (i - 10.5) * 2.2);
+const ORB_THREAD_DEPTH = Math.max(...ORB_THREAD_DISCS.map(Math.abs));
+
 const MCTOSHS_ORBITS = [
   { id: "m",  letter: "M",  r: 244, color: "#00e5ff", dur: "8s",   dir: "cw", delay: "0s" },
   { id: "c",  letter: "C",  r: 214, color: "#4da6ff", dur: "16s",  dir: "cw", delay: "0s" },
@@ -138,9 +149,15 @@ export default function Login({ onLogin }) {
   const mDraggingRef  = useRef(false);
   // Disease intensity — read by RAF, written by slider
   const diseaseRef    = useRef(0);
-  // Pan state — one-finger drag to navigate after zoom
+  // Pan state — TWO-finger drag (trackpad swipe or touch) moves/scrolls the
+  // whole stage. Fully decoupled from the tilt state below.
   const panRef        = useRef({ active: false, startX: 0, startY: 0, panX: 0, panY: 0 });
   const [panXY,      setPanXY]      = useState({ x: 0, y: 0 });
+
+  // Tilt state — ONE-finger drag (or mouse drag) rotates the 3D threads only;
+  // it never touches panXY/the stage translate, so rotating never "scrolls".
+  const tiltRef       = useRef({ active: false, startX: 0, startY: 0, baseX: 0, baseY: 0, tiltX: 0, tiltY: 0 });
+  const [tiltXY,     setTiltXY]     = useState({ x: 0, y: 0 });
 
   // Physics state — all start at 12 o'clock
   // smo: exponential moving average of each orbit's angle (used by inner orbits as rope target
@@ -181,7 +198,8 @@ export default function Login({ onLogin }) {
     return () => ro.disconnect();
   }, []);
 
-  // Pinch-zoom on animation wrap only
+  // Two-finger touch on the animation wrap: pinch to zoom, drag to pan
+  // (single-finger touch does neither, freeing it up / avoiding accidental pans).
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
@@ -191,10 +209,21 @@ export default function Login({ onLogin }) {
       const dy = touches[0].clientY - touches[1].clientY;
       return Math.sqrt(dx * dx + dy * dy);
     };
+    const touchCentroid = (touches) => ({
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    });
 
     const onStart = (e) => {
       if (e.touches.length === 2) {
-        panRef.current.active = false; // cancel pan when pinch begins
+        tiltRef.current.active = false; // 2nd finger down — hand off from tilt to pan
+        const pr = panRef.current;
+        const centroid = touchCentroid(e.touches);
+        pr.active = true;
+        pr.startX = centroid.x;
+        pr.startY = centroid.y;
+        pr.baseX  = pr.panX;
+        pr.baseY  = pr.panY;
         pinchRef.current = {
           active:    true,
           startDist: touchDist(e.touches),
@@ -210,20 +239,59 @@ export default function Login({ onLogin }) {
         const newZoom = Math.max(0.4, Math.min(3, pinchRef.current.startZoom * ratio));
         zoomRef.current = newZoom;
         setStageScale(baseScaleRef.current * newZoom);
+
+        const pr = panRef.current;
+        const centroid = touchCentroid(e.touches);
+        const nx = pr.baseX + (centroid.x - pr.startX);
+        const ny = pr.baseY + (centroid.y - pr.startY);
+        pr.panX = nx;
+        pr.panY = ny;
+        setPanXY({ x: nx, y: ny });
       }
     };
 
-    const onEnd = () => { pinchRef.current.active = false; };
+    const onEnd = (e) => {
+      pinchRef.current.active = false;
+      if (e.touches.length < 2) panRef.current.active = false;
+    };
 
-    wrap.addEventListener("touchstart", onStart, { passive: true });
-    wrap.addEventListener("touchmove",  onMove,  { passive: false });
-    wrap.addEventListener("touchend",   onEnd,   { passive: true });
+    wrap.addEventListener("touchstart",  onStart, { passive: true });
+    wrap.addEventListener("touchmove",   onMove,  { passive: false });
+    wrap.addEventListener("touchend",    onEnd,   { passive: true });
+    wrap.addEventListener("touchcancel", onEnd,   { passive: true });
 
     return () => {
-      wrap.removeEventListener("touchstart", onStart);
-      wrap.removeEventListener("touchmove",  onMove);
-      wrap.removeEventListener("touchend",   onEnd);
+      wrap.removeEventListener("touchstart",  onStart);
+      wrap.removeEventListener("touchmove",   onMove);
+      wrap.removeEventListener("touchend",    onEnd);
+      wrap.removeEventListener("touchcancel", onEnd);
     };
+  }, []);
+
+  // Trackpad two-finger swipe pans the stage (reported as wheel deltaX/deltaY);
+  // trackpad pinch-to-zoom is reported as wheel + ctrlKey by the browser.
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+
+    const onWheel = (e) => {
+      e.preventDefault();
+      if (e.ctrlKey) {
+        const newZoom = Math.max(0.4, Math.min(3, zoomRef.current * (1 - e.deltaY * 0.01)));
+        zoomRef.current = newZoom;
+        setStageScale(baseScaleRef.current * newZoom);
+        return;
+      }
+      const pr = panRef.current;
+      const nx = pr.panX - e.deltaX;
+      const ny = pr.panY - e.deltaY;
+      pr.panX = nx;
+      pr.panY = ny;
+      setPanXY({ x: nx, y: ny });
+    };
+
+    wrap.addEventListener("wheel", onWheel, { passive: false });
+    return () => wrap.removeEventListener("wheel", onWheel);
   }, []);
 
   // Unified 60-fps loop: disease physics + homeostasis cascade + rope + control canvas
@@ -393,16 +461,16 @@ export default function Login({ onLogin }) {
     orbStateRef.current[0].omega = 0;
   };
 
+  // One-finger drag (mouse or touch) rotates the 3D threads only — it never
+  // writes to panXY, so rotating the tube never moves/scrolls the stage.
   const handleWrapPointerDown = (e) => {
-    // Only start pan for the primary pointer (not M-dot or arc — those stopPropagation)
     if (!e.isPrimary || pinchRef.current.active) return;
-    const pr = panRef.current;
-    pr.active = true;
-    pr.startX = e.clientX;
-    pr.startY = e.clientY;
-    // snapshot current pan as base for this drag
-    pr.baseX  = pr.panX;
-    pr.baseY  = pr.panY;
+    const tr = tiltRef.current;
+    tr.active = true;
+    tr.startX = e.clientX;
+    tr.startY = e.clientY;
+    tr.baseX  = tr.tiltX;
+    tr.baseY  = tr.tiltY;
   };
 
   const handleStagePointerMove = (e) => {
@@ -416,19 +484,19 @@ export default function Login({ onLogin }) {
       const s0 = orbStateRef.current[0];
       s0.angle = Math.atan2(dy, dx) + Math.PI / 2;
       s0.omega = 0;
-    } else if (panRef.current.active && e.isPrimary && !arcDraggingRef.current) {
-      const pr = panRef.current;
-      const nx = pr.baseX + (e.clientX - pr.startX);
-      const ny = pr.baseY + (e.clientY - pr.startY);
-      pr.panX = nx;
-      pr.panY = ny;
-      setPanXY({ x: nx, y: ny });
+    } else if (tiltRef.current.active && e.isPrimary && !pinchRef.current.active && !arcDraggingRef.current) {
+      const tr = tiltRef.current;
+      const nx = tr.baseX + (e.clientX - tr.startX);
+      const ny = tr.baseY + (e.clientY - tr.startY);
+      tr.tiltX = nx;
+      tr.tiltY = ny;
+      setTiltXY({ x: nx, y: ny });
     }
   };
 
   const handleStagePointerUp = () => {
     mDraggingRef.current   = false;
-    panRef.current.active  = false;
+    tiltRef.current.active = false;
   };
 
   // Arc control: angle from wrap center maps to disease intensity [0, 0.20]
@@ -499,6 +567,12 @@ export default function Login({ onLogin }) {
   const prR_disp = 360;
   const msR_disp = 260;
 
+  // Shared one-finger-tilt-driven rotation for all 3D threads (Patient Reality,
+  // MCTOSHS, and the orbit dots) so they all rotate together in lockstep.
+  const threadRotation =
+    `rotateX(${Math.max(-32, Math.min(32, -tiltXY.y * 0.4))}deg) ` +
+    `rotateY(${Math.max(-32, Math.min(32,  tiltXY.x * 0.4))}deg)`;
+
   return (
     <div id="login_page">
 
@@ -541,14 +615,7 @@ export default function Login({ onLogin }) {
               {/* Patient Reality as a 3D thread — panning reveals the flat
                   circle is one cross-section ring of a rope-like tube */}
               <div id="pr_thread_wrap">
-                <div
-                  id="pr_thread_group"
-                  style={{
-                    transform:
-                      `rotateX(${Math.max(-32, Math.min(32, -panXY.y * 0.4))}deg) ` +
-                      `rotateY(${Math.max(-32, Math.min(32,  panXY.x * 0.4))}deg)`,
-                  }}
-                >
+                <div id="pr_thread_group" style={{ transform: threadRotation }}>
                   {PR_THREAD_RINGS.map((z) => (
                     <div
                       key={z}
@@ -556,6 +623,23 @@ export default function Login({ onLogin }) {
                       style={{
                         transform: `translateZ(${z}px)`,
                         opacity: 1 - 0.6 * (Math.abs(z) / PR_THREAD_DEPTH),
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* MCTOSHS inner sphere as a nested 3D thread — rotates in
+                  lockstep with Patient Reality's tube via the same transform */}
+              <div id="ms_thread_wrap">
+                <div id="ms_thread_group" style={{ transform: threadRotation }}>
+                  {MS_THREAD_RINGS.map((z) => (
+                    <div
+                      key={z}
+                      className="ms_thread_ring"
+                      style={{
+                        transform: `translateZ(${z}px)`,
+                        opacity: 1 - 0.6 * (Math.abs(z) / MS_THREAD_DEPTH),
                       }}
                     />
                   ))}
@@ -746,6 +830,20 @@ export default function Login({ onLogin }) {
                 style={{ "--orb-color": orb.color, ...(i === 0 ? { cursor: 'grab', touchAction: 'none' } : {}) }}
                 onPointerDown={i === 0 ? handleMDotPointerDown : undefined}
               >
+                <div className="orb_thread_wrap">
+                  <div className="orb_thread_group" style={{ transform: threadRotation }}>
+                    {ORB_THREAD_DISCS.map(z => (
+                      <div
+                        key={z}
+                        className="orb_thread_disc"
+                        style={{
+                          transform: `translateZ(${z}px)`,
+                          opacity: 1 - 0.6 * (Math.abs(z) / ORB_THREAD_DEPTH),
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
                 <div className="orb_dot">
                   <span className="orb_dot_letter">{orb.letter}</span>
                 </div>
@@ -797,6 +895,11 @@ export default function Login({ onLogin }) {
 
 
         <p id="login_tagline">&ldquo;From representation to reality&rdquo;</p>
+        <p id="login_quote">
+          &ldquo;A worm born inside the human intestine cannot observe or
+          imagine the unity of the larger reality that contains it, even if
+          such a unity truly exists.&rdquo;
+        </p>
 
 
       </div>
