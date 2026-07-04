@@ -93,10 +93,10 @@ const PortfolioPage = () => (
 
     {/* ─── Hero ─── */}
     <header id="pf_hero">
-      <img id="pf_photo" src="/photo.jpg" alt="Rudy Hamame" />
+      <img id="pf_photo" src={`${import.meta.env.BASE_URL}photo.jpg`} alt="Rudy Hamame" />
       <h1 id="pf_name">Rudy Hamame</h1>
       <p id="pf_title">International Medical Graduate &middot; Full-Stack Developer</p>
-      <a id="pf_resume_btn" href="/resume.pdf" download="Rudy_Hamame_Resume.pdf">
+      <a id="pf_resume_btn" href={`${import.meta.env.BASE_URL}resume.pdf`} download="Rudy_Hamame_Resume.pdf">
         Download Resume
       </a>
 
