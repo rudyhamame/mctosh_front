@@ -280,6 +280,15 @@
 }
 #ue_open_btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
+#ue_zoom_badge {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  background: var(--color-border);
+  padding: 0.22rem 0.6rem;
+  border-radius: 999px;
+}
+
 .ue_spin { animation: ue_spin_anim 0.8s linear infinite; }
 @keyframes ue_spin_anim { to { transform: rotate(360deg); } }
 
@@ -310,24 +319,67 @@
 #ue_reader {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding: 1.5rem 2rem;
-  max-width: 760px;
+  overflow: auto;
+  padding: 1.25rem 1rem;
+  background: #141414;
+  /* Let vertical scroll stay native; hand pinch (multi-touch) gestures to our own handler. */
+  touch-action: pan-y;
+}
+
+#ue_canvas_wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding-bottom: 24px;
+  min-height: 100%;
+  /* Shrink-wrap to the (possibly zoomed-wider-than-viewport) content instead of
+     staying at 100% of the scroll container — otherwise align-items: center
+     overflows the canvas equally left/right, and the left overflow ends up
+     outside the scrollable range (scrollLeft can't go negative), making it
+     unreachable no matter how far right you scroll. */
+  width: fit-content;
+  min-width: 100%;
   margin: 0 auto;
-  width: 100%;
-  box-sizing: border-box;
+}
+
+.ue_page_container {
+  position: relative;
+  display: block;
+  line-height: 0;
+  flex-shrink: 0;
+}
+
+.ue_page_canvas {
+  box-shadow: 0 2px 16px rgba(0,0,0,0.5);
+  display: block;
+}
+
+/* Invisible selectable text layer, positioned over the rendered canvas */
+.ue_text_layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  overflow: visible;
+  line-height: 1;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ue_text_layer span {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
   user-select: text;
 }
 
-.ue_paragraph {
-  font-size: 0.92rem;
-  line-height: 1.75;
-  color: var(--color-text);
-  margin: 0 0 1.1rem;
-  white-space: pre-wrap;
+.ue_text_layer ::selection {
+  background: color-mix(in srgb, #b39ddb 45%, transparent);
+  color: transparent;
 }
-
-.ue_paragraph::selection { background: color-mix(in srgb, #b39ddb 45%, transparent); }
 
 /* ── Floating "Linguistic Analysis" bar ── */
 #ue_select_bar {

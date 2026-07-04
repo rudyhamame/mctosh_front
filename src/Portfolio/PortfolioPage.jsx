@@ -105,7 +105,7 @@ const PortfolioPage = () => (
         <a href="tel:4165433399" className="pf_link">(416) 543-3399</a>
         <a href="https://www.linkedin.com/in/rudyhamame" target="_blank" rel="noopener noreferrer" className="pf_link">LinkedIn</a>
         <a href="https://github.com/rudyhamame" target="_blank" rel="noopener noreferrer" className="pf_link">GitHub</a>
-        <a href="https://www.mctosh.ca" target="_blank" rel="noopener noreferrer" className="pf_link">mctosh.ca</a>
+        <a href="https://www.mctoshs.ca" target="_blank" rel="noopener noreferrer" className="pf_link">mctoshs.ca</a>
       </div>
     </header>
 
@@ -151,7 +151,7 @@ const PortfolioPage = () => (
             {TECH.map(t => <span key={t} className="pf_tag">{t}</span>)}
           </div>
           <div className="pf_project_links">
-            <a href="https://www.mctosh.ca" target="_blank" rel="noopener noreferrer" className="pf_project_link">mctosh.ca</a>
+            <a href="https://www.mctoshs.ca" target="_blank" rel="noopener noreferrer" className="pf_project_link">mctoshs.ca</a>
             <a href="https://github.com/rudyhamame" target="_blank" rel="noopener noreferrer" className="pf_project_link pf_project_link--ghost">GitHub</a>
           </div>
         </div>

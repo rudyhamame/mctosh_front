@@ -8,6 +8,9 @@ import { LINGUISTIC_UNITS } from "../Linguistics/linguisticUnits";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
+const MIN_ZOOM = 0.5;
+const MAX_ZOOM = 4;
+
 const LOG_KEY = "mctosh_units_extraction_log";
 
 const loadLog = () => {
@@ -20,6 +23,16 @@ const authFetch = (url, options = {}) => {
   return fetch(url, { ...options, headers: { ...(options.headers || {}), Authorization: `Bearer ${token}` } });
 };
 
+// Multiply two 2-D affine matrices (viewport.transform × item.transform).
+const mulTransform = (vt, [a, b, c, d, e, f]) => [
+  vt[0] * a + vt[2] * b,
+  vt[1] * a + vt[3] * b,
+  vt[0] * c + vt[2] * d,
+  vt[1] * c + vt[3] * d,
+  vt[0] * e + vt[2] * f + vt[4],
+  vt[1] * e + vt[3] * f + vt[5],
+];
+
 export default function UnitsExtraction() {
   const navigate = useNavigate();
 
@@ -28,18 +41,26 @@ export default function UnitsExtraction() {
   const [sources,          setSources]          = useState([]);
   const [selectedSourceId, setSelectedSourceId] = useState("");
 
-  const [docText,    setDocText]    = useState("");
+  const [pdfDoc,     setPdfDoc]     = useState(null);
+  const [pageCount,  setPageCount]  = useState(0);
   const [docName,    setDocName]    = useState("");
   const [docLoading, setDocLoading] = useState(false);
   const [docError,   setDocError]   = useState("");
+  const [zoom,       setZoom]       = useState(1);
 
   const [selection,    setSelection]    = useState(null); // { text, x, y }
   const [analyzing,    setAnalyzing]    = useState(false);
   const [analyzeError, setAnalyzeError] = useState("");
 
-  const fileInputRef = useRef(null);
-  const readerRef     = useRef(null);
-  const selectBarRef  = useRef(null);
+  const fileInputRef      = useRef(null);
+  const readerRef         = useRef(null); // scroll container
+  const wrapRef           = useRef(null); // canvas wrap — pinch preview transform target
+  const selectBarRef      = useRef(null);
+  const pageCanvasRefs    = useRef([]);
+  const pageContainerRefs = useRef([]);
+  const pageTextLayerRefs = useRef([]);
+  const fitScaleRef       = useRef(null);  // base fit-to-width scale, computed once per document
+  const renderedScaleRef  = useRef([]);    // scale each page's canvas was last rendered at
 
   useEffect(() => {
     authFetch(apiUrl("/api/sources"))
@@ -54,21 +75,19 @@ export default function UnitsExtraction() {
     window.getSelection()?.removeAllRanges();
   }, []);
 
-  const extractText = useCallback(async (arrayBuffer, name) => {
+  const loadPdf = useCallback(async (arrayBuffer, name) => {
     setDocLoading(true);
     setDocError("");
-    setDocText("");
+    setPdfDoc(null);
+    setPageCount(0);
+    setZoom(1);
+    pageCanvasRefs.current = []; pageContainerRefs.current = []; pageTextLayerRefs.current = [];
+    fitScaleRef.current = null; renderedScaleRef.current = [];
     dismissSelection();
     try {
       const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      const paragraphs = [];
-      for (let p = 1; p <= doc.numPages; p++) {
-        const page    = await doc.getPage(p);
-        const content = await page.getTextContent();
-        const pageText = content.items.map(it => it.str + (it.hasEOL ? "\n" : " ")).join("").trim();
-        if (pageText) paragraphs.push(pageText);
-      }
-      setDocText(paragraphs.join("\n\n"));
+      setPdfDoc(doc);
+      setPageCount(doc.numPages);
       setDocName(name);
     } catch {
       setDocError("Could not read this PDF.");
@@ -76,6 +95,165 @@ export default function UnitsExtraction() {
       setDocLoading(false);
     }
   }, [dismissSelection]);
+
+  // ── Render a single page's canvas + invisible selectable text layer ──────
+  // Skips pages already rendered at the current scale, so zooming only
+  // re-rasterizes what's actually on screen instead of the whole document.
+  const renderPage = useCallback(async (n) => {
+    if (!pdfDoc || fitScaleRef.current == null) return;
+    const canvas = pageCanvasRefs.current[n - 1];
+    if (!canvas) return;
+    const scale = fitScaleRef.current * zoom;
+    if (renderedScaleRef.current[n - 1] === scale) return;
+    const page = await pdfDoc.getPage(n);
+    const c    = pageCanvasRefs.current[n - 1];
+    if (!c) return;
+    const viewport = page.getViewport({ scale });
+    c.width  = viewport.width;
+    c.height = viewport.height;
+    renderedScaleRef.current[n - 1] = scale;
+    await page.render({ canvasContext: c.getContext("2d"), viewport }).promise.catch(() => {});
+
+    const layer = pageTextLayerRefs.current[n - 1];
+    if (!layer) return;
+    layer.innerHTML = "";
+    layer.style.width  = `${viewport.width}px`;
+    layer.style.height = `${viewport.height}px`;
+
+    const content     = await page.getTextContent();
+    const vt          = viewport.transform;
+    const scaleFactor = Math.hypot(vt[0], vt[1]);
+
+    for (const item of content.items) {
+      if (!item.str) continue;
+      const tx       = mulTransform(vt, item.transform);
+      const fontSize = Math.hypot(tx[0], tx[1]);
+      if (fontSize < 1) continue;
+      const angle     = Math.atan2(tx[1], tx[0]);
+      const itemWidth = item.width * scaleFactor;
+
+      const span = document.createElement("span");
+      span.textContent    = item.str;
+      span.style.position = "absolute";
+      span.style.left     = `${tx[4]}px`;
+      span.style.top      = `${tx[5] - fontSize * 0.8}px`;
+      span.style.height   = `${fontSize}px`;
+      span.style.fontSize = `${fontSize}px`;
+      span.style.whiteSpace      = "pre";
+      span.style.color          = "transparent";
+      span.style.transformOrigin = "0% 0%";
+      if (itemWidth > 0) span.style.width = `${itemWidth}px`;
+      if (Math.abs(angle) > 0.01) span.style.transform = `rotate(${angle}rad)`;
+      layer.appendChild(span);
+    }
+  }, [pdfDoc, zoom]);
+
+  // Compute the base fit-to-width scale once per document, then render
+  // whichever pages already happen to be on screen (usually just page 1).
+  useEffect(() => {
+    if (!pdfDoc || pageCount === 0) return;
+    let cancelled = false;
+    pdfDoc.getPage(1).then(page1 => {
+      if (cancelled) return;
+      const containerWidth = readerRef.current?.clientWidth || 700;
+      const unscaledWidth  = page1.getViewport({ scale: 1 }).width;
+      fitScaleRef.current  = Math.min(1.4, Math.max(0.2, (containerWidth - 48) / unscaledWidth));
+      const readerBox = readerRef.current?.getBoundingClientRect();
+      pageContainerRefs.current.forEach((el, i) => {
+        if (!el || !readerBox) return;
+        const r = el.getBoundingClientRect();
+        if (r.bottom >= readerBox.top && r.top <= readerBox.bottom) renderPage(i + 1);
+      });
+    });
+    return () => { cancelled = true; };
+  }, [pdfDoc, pageCount, renderPage]);
+
+  // IntersectionObserver: lazily (re)render pages as they scroll into view.
+  // Recreated whenever `renderPage` changes identity (i.e. on zoom change),
+  // and IntersectionObserver reports current intersections immediately on
+  // `.observe()`, so this also refreshes whatever's already on screen.
+  useEffect(() => {
+    if (!pdfDoc || !readerRef.current || pageCount === 0) return;
+    const root = readerRef.current;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          renderPage(parseInt(entry.target.dataset.page, 10));
+        }
+      },
+      { root, rootMargin: "300px 0px", threshold: 0.1 }
+    );
+    pageContainerRefs.current.forEach((el, i) => {
+      if (el) { el.dataset.page = String(i + 1); observer.observe(el); }
+    });
+    return () => observer.disconnect();
+  }, [pdfDoc, pageCount, renderPage]);
+
+  // ── Pinch-to-zoom (touch) + ctrl/trackpad-pinch wheel zoom ──────────────
+  useEffect(() => {
+    const el = readerRef.current;
+    const wrap = wrapRef.current;
+    if (!el || !wrap || !pdfDoc) return;
+
+    const touchDist = (touches) => {
+      const dx = touches[0].clientX - touches[1].clientX;
+      const dy = touches[0].clientY - touches[1].clientY;
+      return Math.hypot(dx, dy);
+    };
+
+    let startDist = null;
+    let startZoom = 1;
+    let originX = 0, originY = 0;
+    let lastZoom = 1;
+
+    const onTouchStart = (e) => {
+      if (e.touches.length !== 2) return;
+      startDist = touchDist(e.touches);
+      startZoom = zoom;
+      lastZoom  = startZoom;
+      const wrapRect = wrap.getBoundingClientRect();
+      originX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - wrapRect.left;
+      originY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - wrapRect.top;
+    };
+
+    const onTouchMove = (e) => {
+      if (e.touches.length !== 2 || startDist === null) return;
+      e.preventDefault();
+      lastZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, startZoom * touchDist(e.touches) / startDist));
+      wrap.style.transformOrigin = `${originX}px ${originY}px`;
+      wrap.style.transform       = `scale(${lastZoom / startZoom})`;
+    };
+
+    const onTouchEnd = (e) => {
+      if (e.touches.length >= 2 || startDist === null) return;
+      startDist = null;
+      wrap.style.transform       = "";
+      wrap.style.transformOrigin = "";
+      setZoom(lastZoom);
+    };
+
+    // Trackpad pinch gestures are delivered by the browser as wheel events with ctrlKey set.
+    const onWheel = (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+      setZoom(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * delta)));
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove",  onTouchMove,  { passive: false });
+    el.addEventListener("touchend",   onTouchEnd,   { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd,  { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove",  onTouchMove);
+      el.removeEventListener("touchend",   onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [pdfDoc, zoom]);
 
   const handleOpenSource = async () => {
     if (!selectedSourceId) return;
@@ -91,7 +269,7 @@ export default function UnitsExtraction() {
         return;
       }
       const arrayBuffer = await res.arrayBuffer();
-      extractText(arrayBuffer, src?.name || "document.pdf");
+      loadPdf(arrayBuffer, src?.name || "document.pdf");
     } catch (e) {
       setDocError(`Could not load PDF: ${e.message}`);
       setDocLoading(false);
@@ -106,11 +284,11 @@ export default function UnitsExtraction() {
     if (!file) return;
     if (file.type !== "application/pdf") { setDocError("Please choose a PDF file."); return; }
     setSelectedSourceId("");
-    file.arrayBuffer().then(buf => extractText(buf, file.name));
+    file.arrayBuffer().then(buf => loadPdf(buf, file.name));
   };
 
   // ── Text selection → floating "Linguistic Analysis" bar ─────────────────
-  const handleMouseUp = (e) => {
+  const handleMouseUp = () => {
     const sel  = window.getSelection();
     const text = sel?.toString().replace(/\s+/g, " ").trim();
     if (!text || sel.rangeCount === 0) return;
@@ -233,7 +411,7 @@ export default function UnitsExtraction() {
           </div>
         </div>
 
-        {/* ── Right: Text reader ── */}
+        {/* ── Right: PDF reader ── */}
         <div id="ue_right">
           <div id="ue_source_row">
             <select
@@ -262,6 +440,7 @@ export default function UnitsExtraction() {
               style={{ display: "none" }}
               onChange={handleLocalFile}
             />
+            {pdfDoc && <span id="ue_zoom_badge" title="Pinch (touch or ctrl+scroll) to zoom">{Math.round(zoom * 100)}%</span>}
           </div>
 
           {docError && (
@@ -270,7 +449,7 @@ export default function UnitsExtraction() {
             </div>
           )}
 
-          {!docText && !docLoading && !docError && (
+          {!pdfDoc && !docLoading && !docError && (
             <div id="ue_doc_empty">
               <i className="fi fi-rr-book-open-reader" />
               <p>{sources.length === 0 ? "No PDF sources available — upload one instead" : "Select a source and click Open, or upload a PDF"}</p>
@@ -284,11 +463,26 @@ export default function UnitsExtraction() {
             </div>
           )}
 
-          {docText && (
+          {pdfDoc && (
             <div id="ue_reader" ref={readerRef} onMouseUp={handleMouseUp}>
-              {docText.split(/\n{2,}/).map((para, i) => (
-                <p key={i} className="ue_paragraph">{para}</p>
-              ))}
+              <div id="ue_canvas_wrap" ref={wrapRef}>
+                {Array.from({ length: pageCount }, (_, i) => i + 1).map(n => (
+                  <div
+                    key={n}
+                    className="ue_page_container"
+                    ref={el => { pageContainerRefs.current[n - 1] = el; }}
+                  >
+                    <canvas
+                      className="ue_page_canvas"
+                      ref={el => { pageCanvasRefs.current[n - 1] = el; }}
+                    />
+                    <div
+                      className="ue_text_layer"
+                      ref={el => { pageTextLayerRefs.current[n - 1] = el; }}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
