@@ -989,7 +989,7 @@ const AboutPage = () => {
               <p className="about_section_body">
                 Upload a PDF in the Hyles page. The system extracts hyles and classifies
                 them into five cards — Objects, Traces, Phenomena, Concepts, and Models —
-                each further organised by biological scale (Molecule → Cell → Tissue → Organ → System → Human).
+                each further organised by biological scale (Molecule → Cell → Tissue → Organ → Organ System → Human).
               </p>
             </section>
 

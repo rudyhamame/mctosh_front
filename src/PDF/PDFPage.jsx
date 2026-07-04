@@ -84,6 +84,8 @@ const ANNOT_TOOLS = [
 ];
 
 const ANNOT_COLORS = ["#ffff00","#ff6b6b","#51cf66","#74c0fc","#f783ac","#ffa94d","#e9ecef","#212529"];
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 5;
 
 // Draw a single annotation onto a 2d canvas context.
 // Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
@@ -134,13 +136,19 @@ const deflateNounData = (hyleData) => {
   return nouns;
 };
 
-const PDFPage = () => {
+const PDFPage = ({
+  embeddedSourceId = "",
+  embeddedPdfName = "",
+  embeddedFile = null,
+  embeddedHomePath = "/hylomorphism",
+}) => {
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
   const [pageNum, setPageNum]       = useState(1);
   const [pageCount, setPageCount]   = useState(0);
   const [pdfType, setPdfType]       = useState(null);
   const [loading, setLoading]       = useState(false);
+  const [loadError, setLoadError]   = useState("");
   const [dragOver, setDragOver]     = useState(false);
   const [pageViewport, setPageViewport] = useState(null);
   const [zoom, setZoom]               = useState(1);
@@ -202,6 +210,7 @@ const PDFPage = () => {
   const pageContainerRefs = useRef([]);
   const renderTasksRef    = useRef([]);
   const pageViewportsRef  = useRef([]);
+  const renderedScaleRef  = useRef([]); // scale each page's canvas was last rendered at — lets us skip already-current pages
   const pageNumRef        = useRef(1);
   pageNumRef.current      = pageNum;  // sync during render
 
@@ -217,6 +226,31 @@ const PDFPage = () => {
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
   const mouseDownPosRef    = useRef(null); // {x,y} at last mousedown — used to detect drag vs click
+  const suppressTextSelectionRef = useRef(false);
+  const lastLoadedSourceKeyRef = useRef("");
+  const lastLoadedFileRef = useRef(null);
+  const wheelZoomStateRef  = useRef({
+    baseZoom: 1,
+    pendingZoom: 1,
+    originX: 0,
+    originY: 0,
+    midX: 0,
+    midY: 0,
+    startSL: 0,
+    startST: 0,
+    timer: null,
+  });
+
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { card: urlCard } = useParams();
+  const embedded = Boolean(embeddedSourceId) || Boolean(embeddedFile); // true when mounted inside another page (e.g. Traces Collector) rather than routed directly
+  const isNounsPage = !urlCard; // true when mounted at /hyles (no card in URL)
+  const [localCard, setLocalCard] = useState("objects");
+  const activeCard = isNounsPage
+    ? localCard
+    : (CARDS.find((c) => c.key === urlCard)?.key || "objects");
+  const canExtract = Boolean(pdfDoc) && pdfType !== "scanned";
 
   // ── Sources list (for /hyles drop-zone replacement) ─────────────────────
   const [hyleSources,        setHyleSources]        = useState([]);
@@ -230,12 +264,6 @@ const PDFPage = () => {
       .then((d) => setHyleSources((d.sources || []).filter((s) => s.type === "pdf" || s.type === "word")))
       .catch(() => {})
       .finally(() => setHyleSourcesLoading(false));
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Load from Sources page ────────────────────────────────────────────────
-  useEffect(() => {
-    const { sourceId, pdfName } = location.state || {};
-    if (sourceId) loadFromSource(sourceId, pdfName || "document.pdf");
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Fetch history on mount ─────────────────────────────────────────────────
@@ -263,44 +291,58 @@ const PDFPage = () => {
   }, []);
 
   // ── Render PDF page on canvas ──────────────────────────────────────────────
-  // Render ALL pages whenever pdfDoc or zoom changes (continuous scroll)
+  // Renders a single page at the current fitScale*zoom, skipping it if its
+  // canvas is already up to date at that scale.
+  const renderPage = useCallback(async (n) => {
+    if (!pdfDoc) return;
+    const canvas = pageCanvasRefs.current[n - 1];
+    if (!canvas) return;
+    const scale = fitScaleRef.current * zoom;
+    if (renderedScaleRef.current[n - 1] === scale) return;
+    const page     = await pdfDoc.getPage(n);
+    const c        = pageCanvasRefs.current[n - 1];
+    if (!c) return;
+    const viewport = page.getViewport({ scale });
+    pageViewportsRef.current[n - 1] = viewport;
+    renderTasksRef.current[n - 1]?.cancel();
+    c.width  = viewport.width;
+    c.height = viewport.height;
+    const task = page.render({ canvasContext: c.getContext("2d"), viewport });
+    renderTasksRef.current[n - 1] = task;
+    renderedScaleRef.current[n - 1] = scale;
+    task.promise.catch(err => { if (err?.name !== "RenderingCancelledException") console.error(err); });
+    if (n === pageNumRef.current) setPageViewport(viewport);
+  }, [pdfDoc, zoom]);
+
+  // Only the current page re-renders eagerly on zoom/doc change; other pages
+  // are marked stale and lazily (re)rendered by the IntersectionObserver
+  // below as they scroll into view — re-rasterizing every page on every zoom
+  // tick made zooming a multi-page document slow.
   useEffect(() => {
     if (!pdfDoc || pageCount === 0) return;
     let cancelled = false;
     renderTasksRef.current.forEach(t => t?.cancel());
-    renderTasksRef.current = new Array(pageCount).fill(null);
+    renderTasksRef.current  = new Array(pageCount).fill(null);
+    renderedScaleRef.current = new Array(pageCount).fill(null);
 
-    const renderOnePage = async (n) => {
-      if (cancelled) return;
-      const canvas = pageCanvasRefs.current[n - 1];
-      if (!canvas) return;
-      const page = await pdfDoc.getPage(n);
-      if (cancelled || !pageCanvasRefs.current[n - 1]) return;
-      const scale    = fitScaleRef.current * zoom;
-      const viewport = page.getViewport({ scale });
-      pageViewportsRef.current[n - 1] = viewport;
-      const c = pageCanvasRefs.current[n - 1];
-      if (!c || cancelled) return;
-      c.width  = viewport.width;
-      c.height = viewport.height;
-      const task = page.render({ canvasContext: c.getContext("2d"), viewport });
-      renderTasksRef.current[n - 1] = task;
-      task.promise.catch(err => { if (err?.name !== "RenderingCancelledException") console.error(err); });
-      if (n === pageNumRef.current && !cancelled) setPageViewport(viewport);
-    };
-
-    // Compute fitScale from page 1 first, then render all pages
+    // Embedded readers should preserve the PDF's original size instead of fitting to the container.
     pdfDoc.getPage(1).then(page1 => {
       if (cancelled) return;
-      const previewWidth = previewRef.current?.clientWidth || 480;
-      fitScaleRef.current = (previewWidth - 24) / page1.getViewport({ scale: 1 }).width;
-      const cur = pageNumRef.current;
-      renderOnePage(cur);
-      for (let n = 1; n <= pageCount; n++) { if (n !== cur) renderOnePage(n); }
+      if (embedded) {
+        fitScaleRef.current = 1;
+      } else {
+        const previewWidth = previewRef.current?.clientWidth || 480;
+        fitScaleRef.current = Math.min(
+          1,
+          (previewWidth - 24) / page1.getViewport({ scale: 1 }).width,
+        );
+      }
+      if (cancelled) return;
+      renderPage(pageNumRef.current);
     });
 
     return () => { cancelled = true; renderTasksRef.current.forEach(t => t?.cancel()); };
-  }, [pdfDoc, zoom, pageCount]);
+  }, [pdfDoc, zoom, pageCount, renderPage]);
 
   // Sync pageViewport when pageNum changes via scroll
   useEffect(() => {
@@ -310,6 +352,11 @@ const PDFPage = () => {
 
   // Keep refs in sync so event handlers always read the latest values
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+
+  useEffect(() => () => {
+    const state = wheelZoomStateRef.current;
+    if (state.timer) clearTimeout(state.timer);
+  }, []);
 
   // Apply zoom-to-point scroll correction after canvas re-renders at new zoom.
   // Also strips any CSS pinch-transform that was held until this point.
@@ -330,7 +377,8 @@ const PDFPage = () => {
       el.scrollTop  = Math.max(0, pending.top);
     });
   }, [zoom]);
-  // IntersectionObserver: update pageNum as user scrolls through pages
+  // IntersectionObserver: update pageNum as user scrolls through pages, and
+  // lazily (re)render any visible page left stale by a zoom/doc change.
   useEffect(() => {
     if (!pdfDoc || !previewRef.current || pageCount === 0) return;
     const root = previewRef.current;
@@ -341,16 +389,17 @@ const PDFPage = () => {
           if (!entry.isIntersecting) continue;
           const n = parseInt(entry.target.dataset.page, 10);
           if (topmost === null || n < topmost) topmost = n;
+          renderPage(n);
         }
         if (topmost !== null) setPageNum(topmost);
       },
-      { root, threshold: 0.15 }
+      { root, rootMargin: "200px 0px", threshold: 0.15 }
     );
     pageContainerRefs.current.forEach((el, i) => {
       if (el) { el.dataset.page = String(i + 1); observer.observe(el); }
     });
     return () => observer.disconnect();
-  }, [pdfDoc, pageCount]);
+  }, [pdfDoc, pageCount, renderPage]);
 
   useEffect(() => { extractModeRef.current = extractMode; }, [extractMode]);
   useEffect(() => { if (extractMode !== "manual") { setManualPopup(null); setManualSelection(null); } }, [extractMode]);
@@ -533,24 +582,60 @@ const PDFPage = () => {
   useEffect(() => {
     const el = previewRef.current;
     if (!el || !pdfDoc) return;
+    const commitWheelZoom = () => {
+      const state = wheelZoomStateRef.current;
+      const wrap = canvasWrapRef.current;
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      if (!wrap) return;
+      const finalZoom = state.pendingZoom;
+      const ratio = finalZoom / state.baseZoom;
+      scrollAfterZoomRef.current = {
+        left: (state.startSL + state.midX) * ratio - state.midX,
+        top: (state.startST + state.midY) * ratio - state.midY,
+      };
+      setZoom(finalZoom);
+    };
     const onWheel = (e) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      const rect    = el.getBoundingClientRect();
-      const midX    = e.clientX - rect.left;
-      const midY    = e.clientY - rect.top;
-      const delta   = e.deltaY < 0 ? 1.12 : 1 / 1.12;
-      const oldZoom = zoomRef.current;
-      const newZoom = Math.max(1, Math.min(5, oldZoom * delta));
-      const scale   = newZoom / oldZoom;
-      scrollAfterZoomRef.current = {
-        left: (el.scrollLeft + midX) * scale - midX,
-        top:  (el.scrollTop  + midY) * scale - midY,
-      };
-      setZoom(newZoom);
+      const rect = el.getBoundingClientRect();
+      const wrap = canvasWrapRef.current;
+      if (!wrap) return;
+      const state = wheelZoomStateRef.current;
+      const delta = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+
+      if (!state.timer) {
+        state.baseZoom = zoomRef.current;
+        state.pendingZoom = zoomRef.current;
+        state.startSL = el.scrollLeft;
+        state.startST = el.scrollTop;
+      }
+
+      state.midX = e.clientX - rect.left;
+      state.midY = e.clientY - rect.top;
+      const wrapRect = wrap.getBoundingClientRect();
+      state.originX = e.clientX - wrapRect.left;
+      state.originY = e.clientY - wrapRect.top;
+      state.pendingZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.pendingZoom * delta));
+
+      wrap.style.transformOrigin = `${state.originX}px ${state.originY}px`;
+      wrap.style.transform = `scale(${state.pendingZoom / state.baseZoom})`;
+
+      if (state.timer) clearTimeout(state.timer);
+      state.timer = setTimeout(commitWheelZoom, 70);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    return () => {
+      const state = wheelZoomStateRef.current;
+      if (state.timer) {
+        clearTimeout(state.timer);
+        state.timer = null;
+      }
+      el.removeEventListener("wheel", onWheel);
+    };
   }, [pdfDoc]);
 
   // ── Two-finger pinch zoom + single-finger pan + tap word selection ─────────
@@ -709,7 +794,7 @@ const PDFPage = () => {
       if (e.touches.length === 2 && startDist !== null) {
         clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         e.preventDefault();
-        const newZoom = Math.max(1, Math.min(5, startZoom * touchDist(e.touches) / startDist));
+        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, startZoom * touchDist(e.touches) / startDist));
         lastPinchZoom = newZoom;
         const factor = newZoom / startZoom;
         // CSS transform: instant visual scale centered on the pinch midpoint, no React re-render
@@ -864,36 +949,51 @@ const PDFPage = () => {
     if (!el || !pdfDoc) return;
 
     let dragging = false;
+    let armed = false;
     let startX = 0, startY = 0, scrollL = 0, scrollT = 0;
+    const PAN_THRESHOLD = 6;
 
     const onMouseDown = (e) => {
       if (e.button !== 0) return;
-      if (extractModeRef.current === "manual") return;
-      if (e.target.closest?.(".pdf_text_layer")) return;
       const tag = e.target.tagName;
       if (tag === "BUTTON" || tag === "SELECT" || tag === "INPUT" || tag === "A") return;
+      if (e.target.closest?.(".sel_handle, #manual_select_bar, #annot_text_input")) return;
 
-      dragging = true;
+      armed = true;
+      dragging = false;
       startX   = e.clientX;
       startY   = e.clientY;
       scrollL  = el.scrollLeft;
       scrollT  = el.scrollTop;
-      el.style.cursor     = "grabbing";
-      el.style.userSelect = "none";
-      e.preventDefault();
+      suppressTextSelectionRef.current = false;
     };
 
     const onMouseMove = (e) => {
+      if (!armed && !dragging) return;
+      if (!dragging) {
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        if (Math.hypot(dx, dy) < PAN_THRESHOLD) return;
+        dragging = true;
+        suppressTextSelectionRef.current = true;
+        el.style.cursor = "grabbing";
+        el.style.userSelect = "none";
+      }
       if (!dragging) return;
       el.scrollLeft = scrollL - (e.clientX - startX);
       el.scrollTop  = scrollT - (e.clientY - startY);
+      e.preventDefault();
     };
 
     const onMouseUp = () => {
+      armed = false;
       if (!dragging) return;
       dragging            = false;
       el.style.cursor     = "";
       el.style.userSelect = "";
+      requestAnimationFrame(() => {
+        suppressTextSelectionRef.current = false;
+      });
     };
 
     el.addEventListener("mousedown", onMouseDown);
@@ -1132,6 +1232,7 @@ const PDFPage = () => {
   // ── Load PDF ───────────────────────────────────────────────────────────────
   const loadPdfBytes = useCallback(async (arrayBuffer, name) => {
     setLoading(true);
+    setLoadError("");
     setFilename(name);
     setPdfDoc(null); setPdfType(null);
     setHyleData(null); setHylePage(null);
@@ -1139,7 +1240,7 @@ const PDFPage = () => {
     setPageNum(1); setPageViewport(null); setZoom(1);
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
-    pageViewportsRef.current = []; renderTasksRef.current = [];
+    pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = [];
     try {
       const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       setPdfDoc(doc);
@@ -1156,35 +1257,65 @@ const PDFPage = () => {
       const charsPerPage = sampledPages > 0 ? totalChars / sampledPages : 0;
       setPdfType(charsPerPage < 50 ? "scanned" : charsPerPage < 300 ? "mixed" : "text-based");
     } catch {
-      alert("Could not open PDF.");
+      setLoadError("Could not open PDF.");
     } finally {
       setLoading(false);
     }
   }, []);
 
   const loadFile = useCallback(async (file) => {
-    if (!file || file.type !== "application/pdf") return;
+    if (!file) return;
+    if (file.type !== "application/pdf") {
+      setLoadError("Please choose a PDF file.");
+      return;
+    }
     const arrayBuffer = await file.arrayBuffer();
     loadPdfBytes(arrayBuffer, file.name);
   }, [loadPdfBytes]);
 
   const loadFromSource = useCallback(async (sourceId, name) => {
     setLoading(true);
+    setLoadError("");
     try {
       const res = await authFetch(apiUrl(`/api/sources/${sourceId}/download`));
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        alert(`Could not load PDF: ${data.error || res.status}`);
+        setLoadError(`Could not load PDF: ${data.error || res.status}`);
         setLoading(false);
         return;
       }
       const arrayBuffer = await res.arrayBuffer();
       loadPdfBytes(arrayBuffer, name);
     } catch (err) {
-      alert(`Could not load PDF: ${err.message}`);
+      setLoadError(`Could not load PDF: ${err.message}`);
       setLoading(false);
     }
   }, [loadPdfBytes]);
+
+  // ── Load from Sources page ────────────────────────────────────────────────
+  useEffect(() => {
+    if (embeddedSourceId) {
+      const nextKey = `embedded:${embeddedSourceId}:${embeddedPdfName || "document.pdf"}`;
+      if (lastLoadedSourceKeyRef.current === nextKey) return;
+      lastLoadedSourceKeyRef.current = nextKey;
+      loadFromSource(embeddedSourceId, embeddedPdfName || "document.pdf");
+      return;
+    }
+
+    const { sourceId, pdfName } = location.state || {};
+    if (!sourceId) return;
+    const nextKey = `route:${sourceId}:${pdfName || "document.pdf"}`;
+    if (lastLoadedSourceKeyRef.current === nextKey) return;
+    lastLoadedSourceKeyRef.current = nextKey;
+    loadFromSource(sourceId, pdfName || "document.pdf");
+  }, [embeddedPdfName, embeddedSourceId, loadFromSource, location.state]);
+
+  // ── Load a locally-picked file (embedded, no server round-trip) ────────────
+  useEffect(() => {
+    if (!embeddedFile || lastLoadedFileRef.current === embeddedFile) return;
+    lastLoadedFileRef.current = embeddedFile;
+    loadFile(embeddedFile);
+  }, [embeddedFile, loadFile]);
 
   // ── History ────────────────────────────────────────────────────────────────
   const handleDeleteExtraction = useCallback(async (e, id) => {
@@ -1310,6 +1441,7 @@ const PDFPage = () => {
 
   const handleTextSelection = useCallback((e) => {
     if (extractMode !== "manual") return;
+    if (suppressTextSelectionRef.current) return;
     const down = mouseDownPosRef.current;
     mouseDownPosRef.current = null;
 
@@ -1511,7 +1643,7 @@ const PDFPage = () => {
   const handleClose = () => {
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
-    pageViewportsRef.current = []; renderTasksRef.current = [];
+    pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = [];
     setPdfDoc(null); setFilename(""); setPageNum(1); setPageCount(0);
     setPdfType(null); setHyleData(null); setHylePage(null);
     setExtractError(""); setSavedId(null); setActiveHistoryId(null);
@@ -1543,18 +1675,8 @@ const PDFPage = () => {
     );
   };
 
-  const navigate = useNavigate();
-  const location   = useLocation();
-  const { card: urlCard } = useParams();
-  const isNounsPage = !urlCard; // true when mounted at /hyles (no card in URL)
-  const [localCard, setLocalCard] = useState("objects");
-  const activeCard = isNounsPage
-    ? localCard
-    : (CARDS.find((c) => c.key === urlCard)?.key || "objects");
-  const canExtract = Boolean(pdfDoc) && pdfType !== "scanned";
-
   return (
-    <div id="pdf_page">
+    <div id="pdf_page" className={embedded ? "pdf_page--embedded" : undefined}>
       {showSysModal && <SystemMessageModal onClose={() => setShowSysModal(false)} />}
 
       {/* Manual selection popup — fixed to viewport */}
@@ -1589,7 +1711,7 @@ const PDFPage = () => {
 
       {/* Toolbar */}
       <div id="pdf_toolbar">
-        <button id="pdf_home_btn" onClick={() => navigate("/hylomorphism")} title="Hyle-to-Meaning">⌂</button>
+        <button id="pdf_home_btn" onClick={() => navigate(embeddedHomePath)} title={embedded ? "Back to Traces Collector" : "Hyle-to-Meaning"}>⌂</button>
         {pdfDoc && <>
           <button onClick={() => pageContainerRefs.current[pageNum - 2]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum <= 1}>‹</button>
           <span>{pageNum} / {pageCount}</span>
@@ -1597,8 +1719,8 @@ const PDFPage = () => {
           <span id="pdf_filename">{filename}</span>
           {pdfType && <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>{PDF_TYPE_LABEL[pdfType]}</span>}
           <div id="pdf_zoom_controls">
-            <button onClick={() => setZoom((z) => Math.max(1, z / 1.25))} title="Zoom out">−</button>
-            <button id="pdf_zoom_label" onClick={() => setZoom(1)} title="Reset to fit width">
+            <button onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.25))} title="Zoom out">−</button>
+            <button id="pdf_zoom_label" onClick={() => setZoom(1)} title="Reset zoom to original size">
               {Math.round(zoom * 100)}%
             </button>
             <button onClick={() => setZoom((z) => Math.min(5, z * 1.25))} title="Zoom in">+</button>
@@ -1844,6 +1966,28 @@ const PDFPage = () => {
                   )}
                 </div>
               ))}
+            </div>
+          ) : embedded ? (
+            <div id="pdf_source_select_zone">
+              {loading ? <p>Loading…</p> : loadError ? (
+                <>
+                  <span id="pdf_source_empty_icon">⚠️</span>
+                  <p id="pdf_source_empty_msg">{loadError}</p>
+                  <button
+                    id="pdf_pick_btn"
+                    type="button"
+                    onClick={() => {
+                      if (embeddedFile) loadFile(embeddedFile);
+                      else loadFromSource(embeddedSourceId, embeddedPdfName || "document.pdf");
+                    }}
+                  >Retry</button>
+                </>
+              ) : (
+                <>
+                  <span id="pdf_source_empty_icon">📄</span>
+                  <p id="pdf_source_empty_msg">No document loaded.</p>
+                </>
+              )}
             </div>
           ) : isNounsPage ? (
             <div id="pdf_source_select_zone">

@@ -187,7 +187,7 @@ const MCTOSHPromptModal = ({ onClose }) => {
             <h2 className="mcp_sec_title"><span className="mcp_roman">VII.</span> MCTOSHS Mode Classification</h2>
             <p className="mcp_p">Assign the narrowest valid mode. Never use Human when a narrower anatomical scale is available.</p>
             <div className="mcp_mode_grid">
-              {["Sub-molecule","Molecule","Sub-cell","Cell","Sub-tissue","Tissue","Sub-organ","Organ","Sub-system","System","Sub-human","Human"].map((m, i) => (
+              {["Sub-molecule","Molecule","Sub-cell","Cell","Sub-tissue","Tissue","Sub-organ","Organ","Sub-Organ System","Organ System","Sub-human","Human"].map((m, i) => (
                 <div key={m} className="mcp_mode_item"><span className="mcp_mode_num">{i+1}.</span> {m}</div>
               ))}
             </div>

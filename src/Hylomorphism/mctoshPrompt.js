@@ -134,8 +134,8 @@ Assign the narrowest valid mode:
 
    1. Sub-molecule       7. Sub-organ
    2. Molecule           8. Organ
-   3. Sub-cell           9. Sub-system
-   4. Cell              10. System
+   3. Sub-cell           9. Sub-organ system
+   4. Cell              10. Organ system
    5. Sub-tissue        11. Sub-human
    6. Tissue            12. Human
 

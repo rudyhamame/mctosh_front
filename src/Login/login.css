@@ -43,7 +43,6 @@
   padding: 2rem 2rem 1.5rem;
   position: relative;
   z-index: 1;
-  overflow: hidden;
 }
 
 /* ── Brand ── */
@@ -111,7 +110,6 @@
   min-height: 0;
   width: 100%;
   position: relative;
-  overflow: hidden;
   touch-action: none; /* JS pinch handler takes over here */
 }
 
@@ -138,12 +136,12 @@
    Orbital Keyframes
    ══════════════════════════════════════ */
 @keyframes orbit_cw {
-  from { transform: rotate(0deg)    translateX(var(--r)); }
-  to   { transform: rotate(360deg)  translateX(var(--r)); }
+  from { transform: rotate(-90deg) translateX(var(--r)); }
+  to   { transform: rotate(270deg) translateX(var(--r)); }
 }
 @keyframes orbit_ccw {
-  from { transform: rotate(0deg)    translateX(var(--r)); }
-  to   { transform: rotate(-360deg) translateX(var(--r)); }
+  from { transform: rotate(-90deg)  translateX(var(--r)); }
+  to   { transform: rotate(-450deg) translateX(var(--r)); }
 }
 
 /* ── Soft orbit path rings ── */
@@ -174,8 +172,8 @@
 }
 
 /* ── Counter-rotation keyframes — keep letter upright as dot orbits ── */
-@keyframes counter_cw  { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
-@keyframes counter_ccw { from { transform: rotate(0deg); } to { transform: rotate( 360deg); } }
+@keyframes counter_cw  { from { transform: rotate(90deg); } to { transform: rotate(-270deg); } }
+@keyframes counter_ccw { from { transform: rotate(90deg); } to { transform: rotate(450deg); } }
 
 /* ── Orbital dot ── */
 .orb_dot {
@@ -184,9 +182,6 @@
   margin: -16px;
   border-radius: 50%;
   background: var(--orb-color);
-  box-shadow:
-    0 0 14px var(--orb-color),
-    0 0 32px color-mix(in srgb, var(--orb-color) 40%, transparent);
 }
 
 /* ── Letter inside the dot — counter-rotates to stay upright ── */
@@ -332,24 +327,62 @@
   width: 720px;
   height: 720px;
   border-radius: 50%;
-  background:
-    radial-gradient(ellipse 46% 28% at 27% 21%,
-      rgba(255,255,255,0.15) 0%,
-      rgba(200,180,255,0.05) 42%,
-      transparent 100%
-    ),
-    radial-gradient(circle at 50% 50%,
-      transparent 38%,
-      rgba(8,0,28,0.18) 58%,
-      rgba(5,0,18,0.55) 78%,
-      rgba(3,0,12,0.82) 100%
-    );
+  background: radial-gradient(ellipse at 38% 35%,
+    rgba(200,170,255,0.07) 0%,
+    transparent 55%
+  );
   border: 1.5px solid rgba(160,110,255,0.40);
   box-shadow:
     inset 0 0 200px rgba(0,0,0,0.08),
     0 0  110px rgba(160,110,255,0.16),
     0 0  220px rgba(120,80,220,0.07);
+  overflow: hidden;
   animation: pr_breathe 7s ease-in-out infinite;
+}
+
+/* Zone divider SVG */
+#pr_zone_svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Zone labels inside PR sphere */
+#pr_zone_physio,
+#pr_zone_comp,
+#pr_zone_detr {
+  position: absolute;
+  font-family: "Courier New", monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  line-height: 1.3;
+  text-align: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+#pr_zone_physio {
+  top:   14%;
+  left:  58%;
+  color: rgba(0, 220, 110, 0.55);
+}
+
+#pr_zone_comp {
+  top:   14%;
+  right: 58%;
+  color: rgba(255, 195, 0, 0.55);
+}
+
+#pr_zone_detr {
+  bottom: 14%;
+  left:   50%;
+  transform: translateX(-50%);
+  color: rgba(255, 70, 70, 0.50);
 }
 
 @keyframes pr_breathe {
@@ -369,43 +402,14 @@
 
 /* Specular highlights on the glass surface */
 #pr_spec_a {
-  position: absolute;
-  top: 9%; left: 14%;
-  width: 38%; height: 22%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(255,255,255,0.20) 0%, transparent 100%);
-  filter: blur(14px);
-  animation: spec_drift 12s ease-in-out infinite;
-  pointer-events: none;
+  display: none;
 }
 
 #pr_spec_b {
-  position: absolute;
-  top: 15%; left: 26%;
-  width: 10%; height: 6%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(255,255,255,0.50) 0%, transparent 100%);
-  filter: blur(4px);
-  animation: spec_drift 12s ease-in-out infinite;
-  pointer-events: none;
+  display: none;
 }
 
-@keyframes spec_drift {
-  0%, 100% { transform: translate(0,     0);    opacity: 1;    }
-  33%       { transform: translate(18px, -10px); opacity: 0.68; }
-  66%       { transform: translate(-12px,  6px); opacity: 0.85; }
-}
-
-/* Rim light on opposite side — simulates light wrapping around sphere */
-#pr_rim {
-  position: absolute;
-  bottom: 12%; right: 13%;
-  width: 24%; height: 14%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(160,110,255,0.20) 0%, transparent 100%);
-  filter: blur(20px);
-  pointer-events: none;
-}
+#pr_rim { display: none; }
 
 /* MCTOSHS label — just below the MCTOSHS sphere (outside it) */
 #ms_label_wrap {
@@ -436,7 +440,7 @@
 /* Patient Reality label — just below the PR sphere (outside it) */
 #pr_label_wrap {
   position: absolute;
-  top: 855px;   /* lowered for cleaner spacing beneath Patient Reality */
+  top: 930px;
   left: 50%;
   transform: translateX(-50%);
   text-align: center;
@@ -477,8 +481,8 @@
   position: absolute;
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
-  width: 500px;
-  height: 500px;
+  width: 520px;
+  height: 520px;
   border-radius: 50%;
   background:
     radial-gradient(ellipse 46% 28% at 28% 22%,
@@ -492,7 +496,7 @@
       rgba(0,12,32,0.50) 80%,
       rgba(0,6,18,0.80) 100%
     );
-  border: 1.5px solid rgba(0,229,255,0.55);
+  border: none;
   box-shadow:
     inset 0 0 160px rgba(0,30,60,0.12),
     0 0  70px rgba(0,229,255,0.22),
@@ -514,11 +518,7 @@
   margin-top: -50px;
   margin-left: -50px;
   border-radius: 50%;
-  background: radial-gradient(circle,
-    rgba(100,60,200,0.28) 0%,
-    rgba(140,90,240,0.14) 55%,
-    transparent 100%
-  );
+  background: transparent;
   pointer-events: none;
   z-index: 2;
 }
@@ -533,17 +533,8 @@
   margin-top: -50px;
   margin-left: -50px;
   border-radius: 50%;
-  border: 1px solid rgba(0, 229, 255, 0.35);
-  box-shadow:
-    0 0 8px rgba(0, 229, 255, 0.18),
-    inset 0 0 8px rgba(0, 229, 255, 0.10);
+  border: 1px solid rgba(0, 229, 255, 0.40);
   pointer-events: none;
-  animation: ms_m_ring_pulse 5s ease-in-out infinite;
-}
-
-@keyframes ms_m_ring_pulse {
-  0%, 100% { border-color: rgba(0, 229, 255, 0.25); box-shadow: 0 0 6px rgba(0,229,255,0.14), inset 0 0 6px rgba(0,229,255,0.07); }
-  50%       { border-color: rgba(0, 229, 255, 0.50); box-shadow: 0 0 12px rgba(0,229,255,0.28), inset 0 0 10px rgba(0,229,255,0.14); }
 }
 
 #ms_rim {
@@ -593,7 +584,132 @@
   text-transform: uppercase;
 }
 
+
 /* Tagline */
+/* ── Disease timeline selector ── */
+#disease_selector {
+  position: absolute;
+  bottom: 2.8rem;
+  left: 2rem;
+  z-index: 15;
+  width: fit-content;
+  background: rgba(4,6,15,0.82);
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 7px;
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+}
+
+#ds_head {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.22rem 0.5rem;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.28);
+  font-size: 0.6rem;
+}
+
+#ds_collapse_btn {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.28);
+  font-size: 0.6rem;
+  cursor: pointer;
+  padding: 0 0.1rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  transition: color 0.12s;
+}
+#ds_collapse_btn:hover { color: rgba(255,255,255,0.60); }
+
+#ds_list.ds_list--hidden {
+  display: none;
+}
+
+#ds_disease_select {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.60);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  outline: none;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+#ds_disease_select option { background: #0a0e1e; color: #dde3ef; }
+
+#ds_list {
+  max-height: 110px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.ds_item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.18rem 0.5rem;
+  background: none;
+  border: none;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.10s;
+  white-space: nowrap;
+}
+.ds_item:last-child { border-bottom: none; }
+.ds_item:hover { background: rgba(255,255,255,0.04); }
+.ds_item--active { background: color-mix(in srgb, var(--sc) 10%, transparent) !important; }
+
+.ds_dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sc);
+  flex-shrink: 0;
+}
+
+.ds_abbr {
+  font-family: 'Courier New', monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  color: var(--sc);
+  min-width: 36px;
+}
+
+.ds_desc {
+  font-size: 0.58rem;
+  color: rgba(255,255,255,0.38);
+}
+
+.ds_engaged {
+  display: flex;
+  gap: 0.12rem;
+  flex-shrink: 0;
+  margin-left: 0.2rem;
+}
+
+.ds_badge {
+  font-family: 'Courier New', monospace;
+  font-size: 0.48rem;
+  font-weight: 700;
+  color: var(--sc);
+  background: color-mix(in srgb, var(--sc) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sc) 25%, transparent);
+  border-radius: 2px;
+  padding: 0.02rem 0.16rem;
+  opacity: 0.70;
+  line-height: 1.3;
+}
+.ds_item--active .ds_badge { opacity: 1; }
+
+
 #login_tagline {
   margin: 0;
   font-size: 0.68rem;
@@ -606,14 +722,104 @@
 /* ══════════════════════════════════════
    RIGHT — Glassmorphism Form Panel
    ══════════════════════════════════════ */
+
+#login_video_toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.9rem 1.25rem 0;
+  padding: 0.3rem 0.75rem;
+  background: none;
+  border: 1px solid rgba(0,229,255,0.18);
+  border-radius: 6px;
+  color: rgba(0,229,255,0.60);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+#login_video_toggle:hover {
+  color: rgba(0,229,255,0.90);
+  border-color: rgba(0,229,255,0.40);
+  background: rgba(0,229,255,0.06);
+}
+
+#login_video_container {
+  padding: 1.25rem 1.25rem 0.75rem;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  position: relative;
+}
+
+#login_video_btn {
+  position: absolute;
+  bottom: 1.3rem;
+  right: 1.7rem;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(0,229,255,0.30);
+  background: rgba(4,6,15,0.65);
+  backdrop-filter: blur(6px);
+  color: rgba(0,229,255,0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.18s, border-color 0.18s, color 0.18s;
+}
+#login_video_btn svg { width: 12px; height: 12px; display: block; }
+#login_video_btn:hover {
+  background: rgba(0,229,255,0.15);
+  border-color: rgba(0,229,255,0.65);
+  color: #fff;
+}
+
+#login_intro_video {
+  width: 100%;
+  height: 190px;
+  object-fit: cover;
+  display: block;
+  border-radius: 10px;
+  border: 1px solid rgba(0,229,255,0.10);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
+}
+
+/* ── Panel collapse toggle ── */
+#login_panel_toggle {
+  position: absolute;
+  right: 400px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 20;
+  background: rgba(10,14,30,0.82);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-right: none;
+  color: rgba(255,255,255,0.45);
+  width: 22px;
+  height: 52px;
+  border-radius: 7px 0 0 7px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  transition: color 0.15s, background 0.15s, right 0.35s cubic-bezier(0.22,1,0.36,1);
+  backdrop-filter: blur(8px);
+}
+#login_panel_toggle:hover { color: rgba(255,255,255,0.85); background: rgba(20,28,55,0.90); }
+
 #login_panel {
   width: 400px;
   flex-shrink: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding: 3rem 3.5rem 5rem;
+  justify-content: flex-start;
+  padding: 0;
   background: rgba(255,255,255,0.022);
   border-left: 1px solid rgba(255,255,255,0.06);
   backdrop-filter: blur(24px);
@@ -622,6 +828,30 @@
   position: relative;
   z-index: 1;
   animation: panel_enter 0.6s cubic-bezier(0.22,1,0.36,1) both;
+  transition: width 0.35s cubic-bezier(0.22,1,0.36,1),
+              opacity 0.25s ease;
+}
+
+.login_panel_hidden {
+  width: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* When panel is hidden, move the toggle to the far right edge */
+#login_page:has(.login_panel_hidden) #login_panel_toggle {
+  right: 0;
+  border-radius: 7px 0 0 7px;
+}
+
+#login_form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding: 2rem 3rem 5rem;
+  overflow-y: auto;
 }
 
 @keyframes panel_enter {
@@ -653,12 +883,6 @@
 }
 
 /* Fields */
-#login_form {
-  display: flex;
-  flex-direction: column;
-  gap: 1.1rem;
-}
-
 .login_field {
   display: flex;
   flex-direction: column;
@@ -849,3 +1073,4 @@
     margin-top: 2rem;
   }
 }
+

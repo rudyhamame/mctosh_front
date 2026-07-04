@@ -89,8 +89,9 @@
 #app_pipeline_section {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.85rem;
+  align-self: stretch;
 }
 
 #app_pipeline_label {
@@ -101,12 +102,18 @@
   opacity: 0.45;
   font-weight: 700;
   margin: 0;
+  align-self: center;
 }
 
 #app_pipeline_row {
   display: flex;
   align-items: stretch;
   gap: 0;
+  overflow-x: auto;
+  width: 100%;
+  padding-bottom: 0.35rem; /* room for scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
 }
 
 /* ── Pipeline card ── */

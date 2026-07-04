@@ -7,7 +7,7 @@ const ORBITS = [
   { id: "c",  letter: "C", r:  82, hex: 0x4da6ff, tiltX: -28, tiltZ:  12, speed: (Math.PI*2)/(14*60) },
   { id: "t",  letter: "T", r: 116, hex: 0xa678f5, tiltX:  35, tiltZ: -10, speed: (Math.PI*2)/(20*60) },
   { id: "o",  letter: "O", r: 150, hex: 0xffab40, tiltX: -20, tiltZ:  18, speed: (Math.PI*2)/(27*60) },
-  { id: "s1", letter: "S", r: 182, hex: 0x5cf5a0, tiltX:  28, tiltZ:  -8, speed: (Math.PI*2)/(35*60) },
+  { id: "s1", letter: "OS", r: 182, hex: 0x5cf5a0, tiltX:  28, tiltZ:  -8, speed: (Math.PI*2)/(35*60) },
   { id: "h",  letter: "H", r: 214, hex: 0xff7aa2, tiltX: -14, tiltZ:  10, speed: (Math.PI*2)/(45*60) },
   { id: "s2", letter: "S", r: 244, hex: 0xffd54f, tiltX:  18, tiltZ: -16, speed: (Math.PI*2)/(54*60) },
 ];

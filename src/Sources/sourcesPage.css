@@ -104,6 +104,10 @@
   width: 1.4rem;
   text-align: center;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--src-color);
 }
 
 .sources_drop_label {
@@ -119,6 +123,18 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-muted);
+}
+
+.sources_drop_divider {
+  padding: 0.3rem 0.85rem 0.15rem;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+  border-top: 1px solid var(--color-border);
+  margin-top: 0.15rem;
 }
 
 /* ── YouTube bar ── */

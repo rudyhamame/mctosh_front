@@ -62,6 +62,7 @@ const emptyDraft = () => ({
 const getUserId = () => readStoredSession()?.userId || readStoredSession()?._id || "";
 const newItem   = () => ({ name: "", description: "" });
 
+
 export default function PatientModelling() {
   const navigate = useNavigate();
   const userId  = getUserId();
@@ -73,6 +74,7 @@ export default function PatientModelling() {
   const [saving,    setSaving]    = useState(false);
   const [saved,     setSaved]     = useState(false);
   const saveTimer = useRef(null);
+
 
   const loadMorphes = useCallback(async () => {
     if (!userId) return;
@@ -182,6 +184,7 @@ export default function PatientModelling() {
   const isHylo      = isEditing && !!draft.patientId;
   const designatedPt = patients.find(p => p._id === draft.patientDbId);
 
+
   return (
     <div id="pm_root">
 
@@ -290,56 +293,6 @@ export default function PatientModelling() {
                     </select>
                   </div>
                 </div>
-
-                {/* Formal dimensions */}
-                <p className="pm_section_label">Formal Morphe Dimensions</p>
-
-                {DIMENSIONS.map(({ key, name, dot, hint }) => (
-                  <div key={key} className="pm_cat_section">
-                    <div className="pm_cat_header">
-                      <span className="pm_cat_dot" style={{ background: dot }} />
-                      <span className="pm_cat_name">{name}</span>
-                      <span className="pm_cat_hint">{hint}</span>
-                      <span className="pm_cat_count">{draft[key].length}</span>
-                      <button className="pm_cat_add" onClick={() => addItem(key)}>
-                        <i className="fi fi-rr-plus" /> Add
-                      </button>
-                    </div>
-                    <div className="pm_cat_items">
-                      {draft[key].length === 0 ? (
-                        <p className="pm_cat_empty">No {name.toLowerCase()} defined</p>
-                      ) : (
-                        draft[key].map((item, idx) => (
-                          <div key={idx} className="pm_item">
-                            <div className="pm_item_fields">
-                              <input
-                                className="pm_item_input"
-                                type="text"
-                                placeholder="Formal name"
-                                value={item.name}
-                                onChange={e => updateItem(key, idx, "name", e.target.value)}
-                              />
-                              <input
-                                className="pm_item_input"
-                                type="text"
-                                placeholder="Formal definition"
-                                value={item.description}
-                                onChange={e => updateItem(key, idx, "description", e.target.value)}
-                              />
-                            </div>
-                            <button
-                              className="pm_item_remove"
-                              onClick={() => removeItem(key, idx)}
-                              title="Remove"
-                            >
-                              <i className="fi fi-rr-cross-small" />
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                ))}
 
                 {/* Notes */}
                 <div className="pm_notes_section">

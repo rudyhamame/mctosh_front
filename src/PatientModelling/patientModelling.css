@@ -538,3 +538,162 @@
   font-size: 0.72rem;
   color: var(--color-text-muted);
 }
+
+/* ══════════════════════════════════════
+   Trace Observation Bar
+   ══════════════════════════════════════ */
+#pm_trace_bar {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 80%, #f57c00 6%);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+#pm_trace_bar_label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #f57c00;
+  opacity: 0.85;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+#pm_trace_bar_controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+#pm_trace_select {
+  flex: 1;
+  min-width: 180px;
+  max-width: 280px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 0.78rem;
+  padding: 0.3rem 0.6rem;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+#pm_trace_select:focus { border-color: #f57c00; }
+
+#pm_trace_value {
+  flex: 1;
+  min-width: 140px;
+  max-width: 220px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 0.78rem;
+  padding: 0.3rem 0.6rem;
+  outline: none;
+  transition: border-color 0.15s;
+}
+#pm_trace_value:focus { border-color: #f57c00; }
+#pm_trace_value:disabled { opacity: 0.35; cursor: not-allowed; }
+
+#pm_trace_readout {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  padding: 0.3rem 0.7rem;
+  background: color-mix(in srgb, var(--color-bg) 60%, #f57c00 12%);
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, #f57c00 30%);
+  border-radius: 6px;
+}
+#pm_trace_readout strong {
+  color: #f57c00;
+  font-weight: 700;
+}
+
+/* ══════════════════════════════════════
+   Trace Registry (inside Traces section)
+   ══════════════════════════════════════ */
+#pm_trace_registry {
+  margin-top: 0.75rem;
+  padding: 0.75rem 1rem;
+  background: color-mix(in srgb, var(--color-bg) 85%, #f57c00 8%);
+  border: 1px dashed color-mix(in srgb, var(--color-border) 60%, #f57c00 30%);
+  border-radius: 8px;
+}
+
+.pm_trace_registry_title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #f57c00;
+  opacity: 0.8;
+  margin-bottom: 0.6rem;
+}
+
+.pm_trace_registry_add {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.pm_trace_registry_list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.pm_trace_tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: #f57c00;
+  background: color-mix(in srgb, var(--color-bg) 70%, #f57c00 12%);
+  border: 1px solid color-mix(in srgb, var(--color-border) 50%, #f57c00 35%);
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem 0.18rem 0.65rem;
+}
+
+.pm_trace_tag_remove {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0;
+  transition: opacity 0.15s;
+}
+.pm_trace_tag_remove:hover { opacity: 1; }
+
+/* Pin button inside trace items */
+.pm_item_pin {
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--color-border) 60%, #f57c00 30%);
+  border-radius: 5px;
+  color: #f57c00;
+  opacity: 0.65;
+  cursor: pointer;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.75rem;
+  transition: opacity 0.15s, border-color 0.15s;
+  flex-shrink: 0;
+}
+.pm_item_pin:hover { opacity: 1; border-color: #f57c00; }

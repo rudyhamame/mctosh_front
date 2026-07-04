@@ -29,8 +29,8 @@ const MODES = [
   { key: "tissue",       label: "Tissue",       sub: false },
   { key: "sub-organ",    label: "sub-Organ",    sub: true  },
   { key: "organ",        label: "Organ",        sub: false },
-  { key: "sub-system",   label: "sub-System",   sub: true  },
-  { key: "system",       label: "System",       sub: false },
+  { key: "sub-system",   label: "Sub-Organ System", sub: true  },
+  { key: "system",       label: "Organ System",     sub: false },
   { key: "sub-human",    label: "sub-Human",    sub: true  },
   { key: "human",        label: "Human",        sub: false },
 ];

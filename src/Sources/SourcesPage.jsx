@@ -4,8 +4,16 @@ import { readStoredSession } from "../utils/sessionCleanup";
 import { apiUrl } from "../config/api";
 import "./sourcesPage.css";
 
-const TYPE_LABELS = { pdf: "PDF", word: "Word", youtube: "YouTube", image: "Image" };
-const TYPE_COLORS = { pdf: "#4fc3f7", word: "#4fc3f7", youtube: "#e53935", image: "#81c784" };
+const TYPE_LABELS = {
+  pdf: "PDF", word: "Word", youtube: "YouTube", image: "Image",
+  textbook: "Textbook", reference: "Reference", review: "Review",
+  xray: "X-Ray", ct: "CT Scan", mri: "MRI", ultrasound: "Ultrasound",
+};
+const TYPE_COLORS = {
+  pdf: "#4fc3f7", word: "#4fc3f7", youtube: "#e53935", image: "#81c784",
+  textbook: "#4fc3f7", reference: "#a5d6a7", review: "#ce93d8",
+  xray: "#b0bec5", ct: "#4dd0e1", mri: "#9575cd", ultrasound: "#4db6ac",
+};
 
 const authHeader = () => {
   const token = readStoredSession()?.token || "";
@@ -14,10 +22,12 @@ const authHeader = () => {
 
 const SourcesPage = () => {
   const navigate = useNavigate();
-  const fileDocRef  = useRef(null);
-  const fileImgRef  = useRef(null);
-  const dropdownRef = useRef(null);
-  const addBtnRef   = useRef(null);
+  const fileDocRef      = useRef(null);
+  const fileImgRef      = useRef(null);
+  const pendingDocType  = useRef("textbook");
+  const pendingImgType  = useRef("image");
+  const dropdownRef     = useRef(null);
+  const addBtnRef       = useRef(null);
 
   const [sources,  setSources]  = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -121,9 +131,7 @@ const SourcesPage = () => {
         setError(`"${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is 100 MB.`);
         continue;
       }
-      const resolvedType = type === "doc"
-        ? (file.name.toLowerCase().endsWith(".pdf") ? "pdf" : "word")
-        : "image";
+      const resolvedType = type === "doc" ? pendingDocType.current : type;
       uploadFile(file, resolvedType);
     }
   };
@@ -149,22 +157,59 @@ const SourcesPage = () => {
           {dropOpen && (
             <div id="sources_dropdown" ref={dropdownRef}>
               <button className="sources_drop_item" style={{ "--src-color": "#4fc3f7" }}
-                onClick={() => { setDropOpen(false); fileDocRef.current?.click(); }}>
-                <span className="sources_drop_icon">📄</span>
-                <span className="sources_drop_label">PDF or Word</span>
+                onClick={() => { pendingDocType.current = "textbook"; setDropOpen(false); fileDocRef.current?.click(); }}>
+                <i className="fi fi-rr-book-alt sources_drop_icon" />
+                <span className="sources_drop_label">Textbook Document</span>
+                <span className="sources_drop_tag">Document</span>
+              </button>
+              <button className="sources_drop_item" style={{ "--src-color": "#a5d6a7" }}
+                onClick={() => { pendingDocType.current = "reference"; setDropOpen(false); fileDocRef.current?.click(); }}>
+                <i className="fi fi-rr-book-bookmark sources_drop_icon" />
+                <span className="sources_drop_label">Reference Book Document</span>
+                <span className="sources_drop_tag">Document</span>
+              </button>
+              <button className="sources_drop_item" style={{ "--src-color": "#ce93d8" }}
+                onClick={() => { pendingDocType.current = "review"; setDropOpen(false); fileDocRef.current?.click(); }}>
+                <i className="fi fi-rr-document sources_drop_icon" />
+                <span className="sources_drop_label">Review Document</span>
                 <span className="sources_drop_tag">Document</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#e53935" }}
                 onClick={() => { setDropOpen(false); setYtInput(true); }}>
-                <span className="sources_drop_icon">▶</span>
+                <i className="fi fi-rr-play-alt sources_drop_icon" />
                 <span className="sources_drop_label">YouTube Link</span>
                 <span className="sources_drop_tag">Transcription</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#81c784" }}
-                onClick={() => { setDropOpen(false); fileImgRef.current?.click(); }}>
-                <span className="sources_drop_icon">🖼</span>
+                onClick={() => { pendingImgType.current = "image"; setDropOpen(false); fileImgRef.current?.click(); }}>
+                <i className="fi fi-rr-picture sources_drop_icon" />
                 <span className="sources_drop_label">Image</span>
                 <span className="sources_drop_tag">OCR</span>
+              </button>
+              <div className="sources_drop_divider">Imaging</div>
+              <button className="sources_drop_item" style={{ "--src-color": "#b0bec5" }}
+                onClick={() => { pendingImgType.current = "xray"; setDropOpen(false); fileImgRef.current?.click(); }}>
+                <i className="fi fi-rr-body-scan sources_drop_icon" />
+                <span className="sources_drop_label">Radiograph (X-Ray)</span>
+                <span className="sources_drop_tag">Imaging</span>
+              </button>
+              <button className="sources_drop_item" style={{ "--src-color": "#4dd0e1" }}
+                onClick={() => { pendingImgType.current = "ct"; setDropOpen(false); fileImgRef.current?.click(); }}>
+                <i className="fi fi-rr-circle-scan sources_drop_icon" />
+                <span className="sources_drop_label">CT Scan</span>
+                <span className="sources_drop_tag">Imaging</span>
+              </button>
+              <button className="sources_drop_item" style={{ "--src-color": "#9575cd" }}
+                onClick={() => { pendingImgType.current = "mri"; setDropOpen(false); fileImgRef.current?.click(); }}>
+                <i className="fi fi-rr-scanner sources_drop_icon" />
+                <span className="sources_drop_label">MRI</span>
+                <span className="sources_drop_tag">Imaging</span>
+              </button>
+              <button className="sources_drop_item" style={{ "--src-color": "#4db6ac" }}
+                onClick={() => { pendingImgType.current = "ultrasound"; setDropOpen(false); fileImgRef.current?.click(); }}>
+                <i className="fi fi-rr-pulse sources_drop_icon" />
+                <span className="sources_drop_label">Ultrasound</span>
+                <span className="sources_drop_tag">Imaging</span>
               </button>
             </div>
           )}
@@ -174,8 +219,8 @@ const SourcesPage = () => {
       {/* Hidden file inputs */}
       <input ref={fileDocRef} type="file" accept=".pdf,.doc,.docx" multiple style={{ display: "none" }}
         onChange={(e) => handleFile(e, "doc")} />
-      <input ref={fileImgRef} type="file" accept="image/*" multiple style={{ display: "none" }}
-        onChange={(e) => handleFile(e, "image")} />
+      <input ref={fileImgRef} type="file" accept="image/*,.dcm" multiple style={{ display: "none" }}
+        onChange={(e) => handleFile(e, pendingImgType.current)} />
 
       {/* ── YouTube URL bar ── */}
       {ytInput && (

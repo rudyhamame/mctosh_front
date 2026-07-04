@@ -1,0 +1,392 @@
+#ue_root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-bg);
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+/* ── Header ── */
+#ue_header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#ue_back {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  transition: color 0.15s;
+}
+#ue_back:hover { color: var(--color-text); }
+
+#ue_header_titles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+}
+
+#ue_title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  line-height: 1;
+}
+
+#ue_subtitle {
+  font-size: 0.6rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #b39ddb;
+  opacity: 0.75;
+  line-height: 1;
+}
+
+#ue_header_meta { margin-left: auto; }
+
+#ue_log_count {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  background: var(--color-border);
+  padding: 0.22rem 0.65rem;
+  border-radius: 999px;
+}
+
+/* ── Layout ── */
+#ue_layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Left: Linguistic Analysis log ── */
+#ue_left {
+  width: 380px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ue_panel_head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1.1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #b39ddb;
+  flex-shrink: 0;
+}
+.ue_panel_head i { font-size: 0.9rem; }
+
+.ue_clear_all {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  padding: 0.2rem 0.55rem;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.ue_clear_all:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+
+#ue_log_list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.85rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ue_empty {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  opacity: 0.7;
+  margin: 0;
+}
+
+.ue_log_entry {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--color-surface);
+}
+
+.ue_entry_top {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.ue_entry_snippet {
+  flex: 1;
+  font-size: 0.78rem;
+  color: var(--color-text);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ue_entry_remove {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 0.1rem;
+  line-height: 1;
+  transition: color 0.12s;
+}
+.ue_entry_remove:hover { color: #ef5350; }
+
+.ue_entry_units {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ue_unit_group {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.ue_unit_label {
+  flex-shrink: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--lu-color);
+  min-width: 4.6rem;
+}
+
+.ue_unit_chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.ue_unit_chip {
+  font-size: 0.7rem;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-bg) 70%, var(--lu-color) 20%);
+  border: 1px solid var(--lu-color);
+  color: var(--color-text);
+}
+
+.ue_entry_meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.66rem;
+  color: var(--color-text-muted);
+  opacity: 0.75;
+}
+.ue_entry_source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+.ue_entry_time { margin-left: auto; }
+
+/* ── Right: text reader ── */
+#ue_right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#ue_source_row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#ue_source_select {
+  flex: 1;
+  min-width: 0;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 0.78rem;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s;
+}
+#ue_source_select:focus { border-color: #b39ddb; }
+
+#ue_open_btn,
+#ue_upload_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: color-mix(in srgb, var(--color-bg) 60%, #b39ddb 12%);
+  border: 1px solid color-mix(in srgb, var(--color-border) 50%, #b39ddb 38%);
+  border-radius: 6px;
+  color: #b39ddb;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 0.35rem 0.8rem;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, opacity 0.12s;
+}
+#ue_open_btn:hover:not(:disabled),
+#ue_upload_btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-bg) 40%, #b39ddb 20%);
+}
+#ue_open_btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.ue_spin { animation: ue_spin_anim 0.8s linear infinite; }
+@keyframes ue_spin_anim { to { transform: rotate(360deg); } }
+
+#ue_doc_error {
+  padding: 0.6rem 1.25rem;
+  font-size: 0.75rem;
+  color: #ef5350;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+#ue_doc_empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: var(--color-text-muted);
+  opacity: 0.35;
+  font-size: 0.82rem;
+}
+#ue_doc_empty i { font-size: 2.2rem; }
+#ue_doc_empty p { margin: 0; }
+
+#ue_reader {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+  max-width: 760px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  user-select: text;
+}
+
+.ue_paragraph {
+  font-size: 0.92rem;
+  line-height: 1.75;
+  color: var(--color-text);
+  margin: 0 0 1.1rem;
+  white-space: pre-wrap;
+}
+
+.ue_paragraph::selection { background: color-mix(in srgb, #b39ddb 45%, transparent); }
+
+/* ── Floating "Linguistic Analysis" bar ── */
+#ue_select_bar {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 9999;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+  box-shadow: 0 6px 28px rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 90vw;
+}
+
+#ue_select_snippet {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+  padding: 0 0.2rem;
+}
+
+#ue_analyze_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+  background: color-mix(in srgb, var(--color-bg) 55%, #b39ddb 18%);
+  border: 1px solid #b39ddb;
+  border-radius: 6px;
+  color: #b39ddb;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  transition: background 0.12s, opacity 0.12s;
+}
+#ue_analyze_btn:hover:not(:disabled) { background: color-mix(in srgb, var(--color-bg) 30%, #b39ddb 28%); }
+#ue_analyze_btn:disabled { opacity: 0.55; cursor: default; }
+
+#ue_select_cancel {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2rem;
+  transition: color 0.12s;
+}
+#ue_select_cancel:hover { color: var(--color-text); }
+
+#ue_select_err {
+  font-size: 0.68rem;
+  color: #ef5350;
+  white-space: nowrap;
+}

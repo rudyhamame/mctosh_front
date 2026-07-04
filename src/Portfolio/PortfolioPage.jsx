@@ -3,25 +3,24 @@ import "./portfolioPage.css";
 
 const CLINICAL = [
   {
-    title: "Emergency Department Training",
-    org: "Latakia University Hospital",
+    title: "Surgery Observership",
+    org: "Lattakia University",
     loc: "Latakia, Syria",
-    dates: "May 2017 – Sep 2017",
+    dates: "Sept 2024 – Sept 2025",
     bullets: [
-      "Participated in ED workflow and patient flow processes.",
-      "Observed triage, prioritization, vital signs assessment, and escalation pathways.",
-      "Observed interdisciplinary coordination in acute care (nursing–physician communication).",
+      "Observed surgical procedures and operating room workflow, including pre-operative assessment, intra-operative protocols, and post-operative handover.",
+      "Noted multidisciplinary coordination and perioperative safety processes.",
     ],
   },
   {
-    title: "Surgery Observership",
-    org: "Al-Othman Hospital",
+    title: "Internal Medicine Observership",
+    org: "Lattakia University",
     loc: "Latakia, Syria",
-    dates: "Jan 2017 – May 2017",
+    dates: "Sept 2024 – Sept 2025",
     bullets: [
-      "Observed surgical cases and operating room workflow.",
-      "Observed perioperative processes: pre-op preparation, intra-op flow, post-op handover.",
-      "Observed multidisciplinary team coordination in the surgical setting.",
+      "Shadowed attendings and residents during ward rounds on General Internal Medicine wards.",
+      "Observed inpatient assessments, diagnostic reasoning, case presentations, management and discharge planning.",
+      "Noted multidisciplinary coordination, medication reconciliation, and common internal-medicine workflows.",
     ],
   },
   {
@@ -30,8 +29,8 @@ const CLINICAL = [
     loc: "Prince George, BC",
     dates: "Jan 2018 – Mar 2018",
     bullets: [
-      "Exposure to medication dispensing workflow.",
-      "Observed outpatient pharmaceutical services in a Canadian setting.",
+      "Supported prescription processing and safe dispensing in a community pharmacy.",
+      "Managed labeling, inventory, documentation, and patient guidance.",
     ],
   },
 ];
@@ -61,9 +60,9 @@ const VOLUNTEER = [
 ];
 
 const WORK = [
-  { title: "Team Leader",  org: "Mary Brown's", loc: "Hamilton, ON",      dates: "Feb 2019 – May 2021" },
-  { title: "Team Member",  org: "Karma Candy",  loc: "Hamilton, ON",      dates: "Dec 2018 – Feb 2019" },
-  { title: "Team Member",  org: "Wendy's",      loc: "Prince George, BC", dates: "Nov 2017 – Jan 2018" },
+  { title: "Team Leader",  org: "Wendy's",      loc: "Prince George, BC", dates: "Feb 2019 – May 2021" },
+  { title: "Team Member",  org: "Mary Brown's", loc: "Hamilton, ON",      dates: "Dec 2018 – Feb 2019" },
+  { title: "Team Member",  org: "Karma Candy",  loc: "Hamilton, ON",      dates: "Nov 2017 – Jan 2018" },
 ];
 
 const EDUCATION = [
@@ -116,16 +115,15 @@ const PortfolioPage = () => (
       <section className="pf_section">
         <h2 className="pf_section_title">About</h2>
         <p className="pf_body">
-          Canadian citizen and International Medical Graduate (MD, 2025) from Latakia University,
-          Syria. Formal medical education with hospital-based clinical exposure including emergency
-          department training, surgical observership, and pharmaceutical experience. Prior volunteer
-          service in Prince George, BC at the BC Cancer Centre for the North and the Heart and
-          Stroke Foundation.
+          Canadian citizen and International Medical Graduate (MD, Dec 2025) with hands-on clinical
+          training across internal medicine, surgery, pediatrics, obstetrics &amp; gynecology, and
+          emergency medicine. Proven at delivering patient-centred care and supporting
+          multidisciplinary teams through hospital clinical exposure and volunteer work at BC Cancer
+          Centre and the Heart &amp; Stroke Foundation.
         </p>
         <p className="pf_body" style={{ marginTop: "0.75rem" }}>
-          Seeking clinical or medically related roles while preparing for postgraduate training and
-          a future residency application through CaRMS. Also active in full-stack web development,
-          with hands-on experience building the MCTOSHS medical modeling platform from the ground up.
+          Seeking clinical or medically related roles while preparing for CaRMS. Also experienced in
+          full-stack web development and prototype development to build healthcare-focused tools.
         </p>
       </section>
 
@@ -138,25 +136,16 @@ const PortfolioPage = () => (
             <span className="pf_project_date">2020 – Present</span>
           </div>
           <p className="pf_body">
-            A learning platform for medical students. MCTOSHS teaches students to move from medical
-            language toward patient reality &mdash; to distinguish the real patient, their bodily
-            processes, the traces through which those processes become accessible, and the concepts
-            used to interpret them.
-          </p>
-          <p className="pf_body" style={{ marginTop: "0.65rem" }}>
-            A lecture, chart, image, laboratory value, or diagnosis is not the patient itself.
-            Each is only a structured route toward the patient&apos;s reality. For example, a
-            statement like &ldquo;ST-segment elevation and elevated troponin suggest myocardial
-            infarction&rdquo; contains a lived symptom, two interpreted traces, and a diagnostic
-            concept &mdash; none of which is the disease itself. MCTOSHS teaches students to separate
-            these layers so they do not confuse the diagnosis with the disease, the trace with the
-            process, or the written case with the living patient.
+            A clinical learning platform that teaches medical students to interpret clinical
+            materials by separating patient processes from diagnostic concepts. Lead developer
+            and product owner, responsible for design, implementation, and deployment.
           </p>
           <ul className="pf_project_bullets">
-            <li>Primary audience: medical students learning to read clinical materials critically</li>
-            <li>AI-assisted extraction from PDFs, lectures, and clinical texts, with SSE streaming chat</li>
-            <li>Full-stack: React + Vite frontend, Express + Node.js + MongoDB backend</li>
-            <li>Multi-provider AI integration (OpenAI, Groq, Ollama, Gemini)</li>
+            <li>Primary audience: medical students — case-based curriculum to improve clinical reasoning</li>
+            <li>Built AI-assisted extraction pipeline for PDFs, lectures, and clinical texts with SSE streaming chat</li>
+            <li>Implemented full-stack application (React + Vite frontend; Express/Node.js + MongoDB backend)</li>
+            <li>Integrated multiple AI providers (OpenAI, Groq, Ollama, Gemini) to improve answer fidelity and latency</li>
+            <li>Owned UX, feature prioritization, and prototype-to-deployment workflow</li>
           </ul>
           <div className="pf_tech_tags">
             {TECH.map(t => <span key={t} className="pf_tag">{t}</span>)}

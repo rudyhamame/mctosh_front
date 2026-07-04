@@ -14,12 +14,28 @@ const PIPELINE = [
     step: "01",
   },
   {
+    path: "/traces-collector",
+    icon: "fi-rr-signal-alt",
+    label: "MCTOSHS Traces Collector",
+    description: "Collect and log formal observable dimensions — signs, measurements, test results",
+    color: "#f57c00",
+    step: "02",
+  },
+  {
+    path: "/clinical-schemata",
+    icon: "fi-rr-network",
+    label: "Clinical Representative Schemata & Instances",
+    description: "Extract or manually define MCTOSHS schemata and their instances across the six biological dimensions",
+    color: "#26c6da",
+    step: "03",
+  },
+  {
     path: "/patient-modelling",
     icon: "fi-rr-blueprint",
     label: "MCTOSHS Objects Modelling",
     description: "Build the Morphe/schema for Patient Representative Objects across the six MCTOSHS dimensions",
     color: "#8e24aa",
-    step: "02",
+    step: "04",
   },
   {
     path: "/patient-instantiation",
@@ -27,11 +43,18 @@ const PIPELINE = [
     label: "Patient Instantiation",
     description: "Instantiate the Patient Instance — receive the Morphe to form the Hylomorphic Entity",
     color: "#26a69a",
-    step: "03",
+    step: "05",
   },
 ];
 
 const OTHER = [
+  {
+    path: "/units-extraction",
+    icon: "fi-rr-book-open-reader",
+    label: "MCTOSHS Units Extraction while Studying",
+    description: "Read a source and select any span of text to run a linguistic analysis on it",
+    color: "#b39ddb",
+  },
   {
     path: "/settings",
     icon: "fi-rr-settings",

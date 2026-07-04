@@ -7,6 +7,12 @@
   overflow: hidden;
 }
 
+/* Embedded inside another page's layout (e.g. Traces Collector) — fill the
+   parent's flex-allocated box instead of the whole browser viewport. */
+#pdf_page.pdf_page--embedded {
+  height: 100%;
+}
+
 /* ── Upload zone (inside left panel) ── */
 /* ── Hyle source selector (replaces drop zone on /hyles) ── */
 #pdf_source_select_zone {

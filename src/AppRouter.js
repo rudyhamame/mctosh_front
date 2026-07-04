@@ -22,6 +22,9 @@ import YouTubeSourcePage              from "./Hylomorphism/YouTubeSourcePage";
 import SettingsPage                   from "./Settings/SettingsPage";
 import PatientInstantiationPage       from "./PatientInstantiation/PatientInstantiationPage";
 import PatientModelling               from "./PatientModelling/PatientModelling";
+import TracesCollector                from "./TracesCollector/TracesCollector";
+import ClinicalSchemata              from "./ClinicalSchemata/ClinicalSchemata";
+import UnitsExtraction                from "./UnitsExtraction/UnitsExtraction";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
@@ -106,6 +109,9 @@ const AppRouter = () => {
         <Route path="/settings"           element={auth(<SettingsPage />)} />
         <Route path="/patient-instantiation" element={auth(<PatientInstantiationPage />)} />
         <Route path="/patient-modelling"     element={auth(<PatientModelling />)} />
+        <Route path="/traces-collector"      element={auth(<TracesCollector />)} />
+        <Route path="/clinical-schemata"      element={auth(<ClinicalSchemata />)} />
+        <Route path="/units-extraction"       element={auth(<UnitsExtraction />)} />
 
         {/* Legacy redirect */}
         <Route path="/pdf/:card" element={<PdfCardRedirect />} />
