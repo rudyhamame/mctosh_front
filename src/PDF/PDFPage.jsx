@@ -9,14 +9,19 @@ import { readStoredSession } from "../utils/sessionCleanup";
 import HyleCards from "./HyleCards";
 import SystemMessageModal from "./SystemMessageModal";
 import { drawAnnotation } from "./annotationDraw";
-import { LINGUISTIC_UNITS, unitById } from "../Linguistics/linguisticUnits";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 const PDF_TYPE_LABEL = {
-  "text-based": "✅ Text-based",
-  "mixed":      "⚠️ Mixed",
-  "scanned":    "🔴 Scanned",
+  "text-based": "Text-based",
+  "mixed":      "Mixed",
+  "scanned":    "Scanned",
+};
+
+const PDF_TYPE_ICON = {
+  "text-based": "fi-rr-check-circle",
+  "mixed":      "fi-rr-triangle-warning",
+  "scanned":    "fi-rr-image",
 };
 
 const CARDS = [
@@ -84,8 +89,160 @@ const ANNOT_TOOLS = [
 ];
 
 const ANNOT_COLORS = ["#ffff00","#ff6b6b","#51cf66","#74c0fc","#f783ac","#ffa94d","#e9ecef","#212529"];
+
+// Safari reports Apple-Pencil touches with Touch.touchType === "stylus" (vs.
+// "direct" for a finger) — the only reliable signal we have to tell hand
+// from pencil on a TouchEvent.
+const isStylusTouch = (e) => Boolean(e.touches && e.touches[0] && e.touches[0].touchType === "stylus");
+
+// Averages the pixels of the rendered PDF page canvas in a small square
+// around (cx, cy) (canvas-pixel space) so "auto contrast" reacts to the
+// actual local background rather than a single noisy pixel (e.g. one letter
+// stroke in otherwise-white space).
+const sampleAreaColor = (canvas, cx, cy, radius = 14) => {
+  const x = Math.max(0, Math.round(cx - radius));
+  const y = Math.max(0, Math.round(cy - radius));
+  const w = Math.min(canvas.width  - x, radius * 2);
+  const h = Math.min(canvas.height - y, radius * 2);
+  if (w <= 0 || h <= 0) return { r: 255, g: 255, b: 255 };
+  const { data } = canvas.getContext("2d").getImageData(x, y, w, h);
+  let r = 0, g = 0, b = 0, n = 0;
+  for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2]; n++; }
+  return { r: r / n, g: g / n, b: b / n };
+};
+
+// WCAG relative luminance → picks whichever of pure black/white gives the
+// higher contrast ratio against the sampled background (the theoretical
+// best a single ink color can do).
+const bestContrastColor = ({ r, g, b }) => {
+  const toLinear = (c) => { const cs = c / 255; return cs <= 0.03928 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4); };
+  const luminance = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+  const contrastWithWhite = 1.05 / (luminance + 0.05);
+  const contrastWithBlack = (luminance + 0.05) / 0.05;
+  return contrastWithBlack > contrastWithWhite ? "#000000" : "#ffffff";
+};
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+
+// Compact draggable "knob" that replaces a native <input type="range"> for
+// annotation size — the knob's own diameter grows/shrinks live with the
+// value, so it previews the stroke/highlight/eraser size instead of just
+// pointing at a number on a track.
+const KNOB_MIN_PX  = 8;
+const KNOB_MAX_PX  = 22;
+const KNOB_PAD_PX  = 12;
+const KNOB_TRACK_W = 64;
+
+const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
+  const trackRef = useRef(null);
+  const draggingRef = useRef(false);
+
+  const updateFromClientX = useCallback((clientX) => {
+    const rect = trackRef.current.getBoundingClientRect();
+    const usable = rect.width - KNOB_PAD_PX * 2;
+    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
+    frac = Math.min(1, Math.max(0, frac));
+    let val = min + frac * (max - min);
+    val = Math.round(val / step) * step;
+    val = Math.min(max, Math.max(min, val));
+    onChange(val);
+  }, [min, max, step, onChange]);
+
+  const onPointerDown = (e) => {
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    updateFromClientX(e.clientX);
+  };
+  const onPointerMove = (e) => {
+    if (!draggingRef.current) return;
+    updateFromClientX(e.clientX);
+  };
+  const onPointerUp = (e) => {
+    draggingRef.current = false;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
+  const frac     = Math.min(1, Math.max(0, (value - min) / (max - min)));
+  const knobSize = KNOB_MIN_PX + frac * (KNOB_MAX_PX - KNOB_MIN_PX);
+  const centerX  = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
+
+  return (
+    <div
+      className="annot_size_knob"
+      ref={trackRef}
+      style={{ width: KNOB_TRACK_W }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      title="Size"
+    >
+      <div className="annot_size_knob_fill" style={{ width: centerX }} />
+      <div
+        className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}`}
+        style={{
+          width: knobSize,
+          height: knobSize,
+          left: centerX,
+          background: dashed ? "transparent" : color,
+        }}
+      />
+    </div>
+  );
+};
+
+// Same draggable-pill mechanics as SizeKnob, but the dot's diameter stays
+// fixed and its CSS opacity varies instead — previewing highlight opacity
+// directly rather than a size no one asked about.
+const OPACITY_MIN_PCT = 10;
+const OPACITY_MAX_PCT = 90;
+const OpacityKnob = ({ value, onChange, color }) => {
+  const trackRef = useRef(null);
+  const draggingRef = useRef(false);
+
+  const updateFromClientX = useCallback((clientX) => {
+    const rect = trackRef.current.getBoundingClientRect();
+    const usable = rect.width - KNOB_PAD_PX * 2;
+    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
+    frac = Math.min(1, Math.max(0, frac));
+    const val = Math.round(OPACITY_MIN_PCT + frac * (OPACITY_MAX_PCT - OPACITY_MIN_PCT));
+    onChange(val);
+  }, [onChange]);
+
+  const onPointerDown = (e) => {
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    updateFromClientX(e.clientX);
+  };
+  const onPointerMove = (e) => {
+    if (!draggingRef.current) return;
+    updateFromClientX(e.clientX);
+  };
+  const onPointerUp = (e) => {
+    draggingRef.current = false;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
+  const frac    = Math.min(1, Math.max(0, (value - OPACITY_MIN_PCT) / (OPACITY_MAX_PCT - OPACITY_MIN_PCT)));
+  const centerX = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
+
+  return (
+    <div
+      className="annot_size_knob"
+      ref={trackRef}
+      style={{ width: KNOB_TRACK_W }}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      title={`Opacity: ${value}%`}
+    >
+      <div className="annot_size_knob_fill" style={{ width: centerX }} />
+      <div
+        className="annot_size_knob_dot"
+        style={{ width: 14, height: 14, left: centerX, background: color, opacity: value / 100 }}
+      />
+    </div>
+  );
+};
 
 // Draw a single annotation onto a 2d canvas context.
 // Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
@@ -141,6 +298,7 @@ const PDFPage = ({
   embeddedPdfName = "",
   embeddedFile = null,
   embeddedHomePath = "/hylomorphism",
+  homeLabel = "Hyle-to-Meaning",   // tooltip for the ⌂ button when routed directly (not embedded)
   selectionOnly = false,           // hide Hyle-extraction/annotation chrome, force manual text-selection always on
   onSelectionAction = null,        // async (selectedText) => void — replaces the ✓ "add to Hyles" button in the selection bar
   selectionActionLabel = "Add",
@@ -194,6 +352,13 @@ const PDFPage = ({
   const [savedId, setSavedId]               = useState(null);
   const [activeHistoryId, setActiveHistoryId] = useState(null);
 
+  // ── Per-page Markdown preview (toolbar "MD" button + left column) ──────────
+  const [pageMdBusy,    setPageMdBusy]    = useState(false);
+  const [pageMdError,   setPageMdError]   = useState("");
+  const [pageMdOpen,    setPageMdOpen]    = useState(false);
+  const [pageMdText,    setPageMdText]    = useState("");
+  const [pageMdForPage, setPageMdForPage] = useState(null); // which page pageMdText is actually showing
+
   // ── Selection action (selectionOnly mode) ──────────────────────────────────
   const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
   const [selectionActionError, setSelectionActionError] = useState("");
@@ -205,12 +370,39 @@ const PDFPage = ({
   const [penSize,        setPenSize]        = useState(2);   // pen lineWidth
   const [eraserSize,     setEraserSize]     = useState(18);  // eraser radius
   const [highlightMode,  setHighlightMode]  = useState("freehand"); // "freehand" | "line"
-  const [linguisticUnit, setLinguisticUnit] = useState(null); // id from LINGUISTIC_UNITS | null
+  const [annotOpacity,      setAnnotOpacity]      = useState(35);    // % — highlight fill opacity
+  const [highlightBordered, setHighlightBordered] = useState(false); // adds a solid edge around the highlight band
+  const [toolsMenuOpen,  setToolsMenuOpen]  = useState(false); // floating tools dropdown
+  const [colorMenuOpen,  setColorMenuOpen]  = useState(false); // floating color dropdown
+  const toolsMenuRef = useRef(null);
+  const colorMenuRef = useRef(null);
+  // "Hand" mode: when on, a finger touch only pans/scrolls the page and
+  // never draws — only the pencil (stylus, per Safari's Touch.touchType)
+  // draws. Lets you rest your hand on the screen while sketching with an
+  // Apple Pencil without fighting the page underneath.
+  const [fingerScrollOnly, setFingerScrollOnly] = useState(false);
+  const fingerScrollOnlyRef = useRef(false);
+  useEffect(() => { fingerScrollOnlyRef.current = fingerScrollOnly; }, [fingerScrollOnly]);
+  // Auto-contrast: pick the ink color (black/white) with the best contrast
+  // against the page background right under where each stroke starts.
+  const [autoContrast, setAutoContrast] = useState(false);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
+  const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
   const [annotTextVal,   setAnnotTextVal]   = useState("");
   const annotCanvasRef  = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
+
+  // Close the floating tools/color dropdowns on an outside click
+  useEffect(() => {
+    if (!toolsMenuOpen && !colorMenuOpen) return;
+    const onDocPointerDown = (e) => {
+      if (toolsMenuOpen && toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) setToolsMenuOpen(false);
+      if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDocPointerDown);
+    return () => document.removeEventListener("mousedown", onDocPointerDown);
+  }, [toolsMenuOpen, colorMenuOpen]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -269,7 +461,7 @@ const PDFPage = ({
     setHyleSourcesLoading(true);
     authFetch(apiUrl("/api/sources/"))
       .then((r) => r.json())
-      .then((d) => setHyleSources((d.sources || []).filter((s) => s.type === "pdf" || s.type === "word")))
+      .then((d) => setHyleSources((d.sources || []).filter((s) => /\.(pdf|docx?)$/i.test(s.name))))
       .catch(() => {})
       .finally(() => setHyleSourcesLoading(false));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -315,6 +507,10 @@ const PDFPage = ({
     renderTasksRef.current[n - 1]?.cancel();
     c.width  = viewport.width;
     c.height = viewport.height;
+    // Clear any temporary CSS pre-scale (see the zoom effect below) now that
+    // the canvas's actual raster size matches the current zoom again.
+    c.style.width  = "";
+    c.style.height = "";
     const task = page.render({ canvasContext: c.getContext("2d"), viewport });
     renderTasksRef.current[n - 1] = task;
     renderedScaleRef.current[n - 1] = scale;
@@ -322,15 +518,17 @@ const PDFPage = ({
     if (n === pageNumRef.current) setPageViewport(viewport);
   }, [pdfDoc, zoom]);
 
-  // Only the current page re-renders eagerly on zoom/doc change; other pages
-  // are marked stale and lazily (re)rendered by the IntersectionObserver
-  // below as they scroll into view — re-rasterizing every page on every zoom
-  // tick made zooming a multi-page document slow.
+  // Full reset + initial render whenever a new document (or page count) loads.
+  // Deliberately does NOT run on zoom changes (see the effect below) — this
+  // used to fire on zoom too and reset renderedScaleRef to all-null every
+  // time, which wiped out the "last actually-rendered scale" a never-visited
+  // page needs to correctly rescale itself on the NEXT zoom tick (it would
+  // read back as null and silently stop rescaling after the first tick).
   useEffect(() => {
     if (!pdfDoc || pageCount === 0) return;
     let cancelled = false;
     renderTasksRef.current.forEach(t => t?.cancel());
-    renderTasksRef.current  = new Array(pageCount).fill(null);
+    renderTasksRef.current   = new Array(pageCount).fill(null);
     renderedScaleRef.current = new Array(pageCount).fill(null);
 
     // Embedded readers should preserve the PDF's original size instead of fitting to the container.
@@ -350,7 +548,31 @@ const PDFPage = ({
     });
 
     return () => { cancelled = true; renderTasksRef.current.forEach(t => t?.cancel()); };
-  }, [pdfDoc, zoom, pageCount, renderPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- renderPage intentionally excluded, only pdfDoc/pageCount should reset the per-page render bookkeeping
+  }, [pdfDoc, pageCount]);
+
+  // Only the current page re-renders eagerly on zoom change; every other page
+  // is instantly CSS-rescaled (approximate, no re-rasterization — cheap) and
+  // lazily re-rendered for real by the IntersectionObserver below once it's
+  // scrolled into view. Re-rasterizing every page on every zoom tick made
+  // zooming a multi-page document slow; NOT touching renderedScaleRef here
+  // (unlike the effect above) is what lets this compute the correct
+  // cumulative rescale ratio across several zoom ticks in a row, even for a
+  // page that's never actually revisited.
+  useEffect(() => {
+    if (!pdfDoc || pageCount === 0) return;
+    const newScale = fitScaleRef.current * zoom;
+    pageCanvasRefs.current.forEach((canvas, i) => {
+      if (!canvas) return;
+      const prevScale = renderedScaleRef.current[i];
+      if (!prevScale || prevScale === newScale) return;
+      const ratio = newScale / prevScale;
+      canvas.style.width  = `${canvas.width  * ratio}px`;
+      canvas.style.height = `${canvas.height * ratio}px`;
+    });
+    renderPage(pageNumRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only zoom should trigger this; renderPage/pdfDoc/pageCount changing here would re-run the doc-load effect above instead
+  }, [zoom]);
 
   // Sync pageViewport when pageNum changes via scroll
   useEffect(() => {
@@ -419,6 +641,13 @@ const PDFPage = ({
   useEffect(() => { onSelectionActionRef.current = onSelectionAction; }, [onSelectionAction]);
 
   // ── Render annotation canvas ───────────────────────────────────────────────
+  // Keyed off pageViewport (not zoom directly): renderPage() re-rasterizes the
+  // real page canvas asynchronously (it awaits pdfDoc.getPage() before touching
+  // canvas.width/height), so reading pc.width/height synchronously on a zoom
+  // change would copy the STALE pre-zoom raster size while drawing at the NEW
+  // scale — mismatched forever, since nothing re-ran this effect afterward.
+  // pageViewport is set by renderPage() at the exact moment it resizes the
+  // current page's canvas, so waiting for it keeps the two canvases in sync.
   useEffect(() => {
     const ac = annotCanvasRef.current;
     const pc = canvasRef.current;
@@ -429,7 +658,7 @@ const PDFPage = ({
     const ctx = ac.getContext("2d");
     ctx.clearRect(0, 0, ac.width, ac.height);
     for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
-  }, [annotations, pageNum, zoom]);
+  }, [annotations, pageNum, pageViewport]);
 
   // ── Annotation drawing events ──────────────────────────────────────────────
   useEffect(() => {
@@ -456,16 +685,12 @@ const PDFPage = ({
       if (extra) drawAnnotation(ctx, extra, scale);
     };
 
-    // When a linguistic unit is active it overrides the stroke color
-    const lingMeta = linguisticUnit ? unitById(linguisticUnit) : null;
-    const activeColor = lingMeta ? lingMeta.color : annotColor;
-    const unitField   = linguisticUnit ? { unit: linguisticUnit } : {};
-
     const onDown = (e) => {
       if (e.touches && e.touches.length >= 2) {
         activeAnnotRef.current = null; // cancel any in-progress stroke
         return;
       }
+      if (fingerScrollOnly && e.touches && !isStylusTouch(e)) return; // hand mode: a finger only scrolls, never draws
       if (annotTool === "text") {
         const p = toCanvas(e);
         setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y });
@@ -473,14 +698,23 @@ const PDFPage = ({
         return;
       }
       const p = toCanvas(e);
+      let strokeColor = annotColor;
+      if (autoContrast && annotTool !== "eraser") {
+        const pageCanvas = canvasRef.current;
+        if (pageCanvas) {
+          const scale = getScale();
+          strokeColor = bestContrastColor(sampleAreaColor(pageCanvas, p.x * scale, p.y * scale));
+          setAnnotColor(strokeColor);
+        }
+      }
       if (annotTool === "highlight") {
-        activeAnnotRef.current = { type: "highlight", color: activeColor, lineWidth: annotSize / getScale(), mode: highlightMode, points: [{ x: p.x, y: p.y }], ...unitField };
+        activeAnnotRef.current = { type: "highlight", color: strokeColor, lineWidth: annotSize / getScale(), mode: highlightMode, opacity: annotOpacity / 100, bordered: highlightBordered, points: [{ x: p.x, y: p.y }] };
       } else if (["underline","strikethrough","rect","circle"].includes(annotTool)) {
-        activeAnnotRef.current = { type: annotTool, color: activeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y, ...unitField };
+        activeAnnotRef.current = { type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (["line","arrow"].includes(annotTool)) {
-        activeAnnotRef.current = { type: annotTool, color: activeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y, ...unitField };
+        activeAnnotRef.current = { type: annotTool, color: strokeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y };
       } else if (annotTool === "pen") {
-        activeAnnotRef.current = { type: "pen", color: activeColor, lineWidth: penSize / getScale(), points: [{ x: p.x, y: p.y }], ...unitField };
+        activeAnnotRef.current = { type: "pen", color: strokeColor, lineWidth: penSize / getScale(), points: [{ x: p.x, y: p.y }] };
       } else if (annotTool === "eraser") {
         activeAnnotRef.current = { type: "eraser" };
         const er = eraserSize / getScale();
@@ -492,6 +726,7 @@ const PDFPage = ({
             return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
           })};
         });
+        setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       }
     };
 
@@ -527,6 +762,7 @@ const PDFPage = ({
             return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
           })};
         });
+        setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       }
     };
 
@@ -543,6 +779,7 @@ const PDFPage = ({
       if (tiny) return;
       const { _sx, _sy, ...clean } = ann;
       setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), { ...clean, id: Date.now() }] }));
+      setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
     };
 
     ac.addEventListener("mousedown",  onDown, { passive: true });
@@ -560,7 +797,7 @@ const PDFPage = ({
       ac.removeEventListener("touchend",   onUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, eraserSize, highlightMode, linguisticUnit, pageNum, annotations]);
+  }, [annotTool, annotColor, annotSize, penSize, eraserSize, highlightMode, pageNum, annotations, fingerScrollOnly, autoContrast, annotOpacity, highlightBordered]);
 
   const commitAnnotText = useCallback(() => {
     if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
@@ -573,19 +810,29 @@ const PDFPage = ({
         text: annotTextVal, fontSize: 16 / scale,
       }],
     }));
+    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
     setAnnotTextInput(null); setAnnotTextVal("");
   }, [annotTextInput, annotTextVal, annotColor, pageNum]);
 
   const handleAnnotUndo = useCallback(() => {
-    setAnnotations((prev) => {
-      const arr = [...(prev[pageNum] || [])];
-      arr.pop();
-      return { ...prev, [pageNum]: arr };
-    });
-  }, [pageNum]);
+    const arr = annotations[pageNum] || [];
+    if (arr.length === 0) return;
+    const popped = arr[arr.length - 1];
+    setAnnotations((prev) => ({ ...prev, [pageNum]: (prev[pageNum] || []).slice(0, -1) }));
+    setRedoStacks((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), popped] }));
+  }, [pageNum, annotations]);
+
+  const handleAnnotRedo = useCallback(() => {
+    const stack = redoStacks[pageNum] || [];
+    if (stack.length === 0) return;
+    const restored = stack[stack.length - 1];
+    setRedoStacks((prev) => ({ ...prev, [pageNum]: prev[pageNum].slice(0, -1) }));
+    setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), restored] }));
+  }, [pageNum, redoStacks]);
 
   const handleAnnotClear = useCallback(() => {
     setAnnotations((prev) => ({ ...prev, [pageNum]: [] }));
+    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
   }, [pageNum]);
 
   // ── Ctrl+Scroll to zoom ────────────────────────────────────────────────────
@@ -659,6 +906,15 @@ const PDFPage = ({
     let startDist = null;
     let startZoom = 1;
     let startMidX = 0, startMidY = 0, startSL = 0, startST = 0;
+    let lastMidX  = 0, lastMidY  = 0; // continuously-updated pinch midpoint (relative to el) — tracks finger drift during the gesture instead of staying pinned to the gesture-start point
+    // Fingers almost never lift simultaneously — after a pinch commits (first
+    // finger up), the second finger is often still down for a moment, and
+    // any movement/lift of THAT finger alone would otherwise be read as a
+    // brand new one-finger pan/tap using stale/uninitialized reference
+    // points. Ignore single-finger touch entirely for a short window right
+    // after a pinch ends.
+    const PINCH_COOLDOWN_MS = 350;
+    let pinchCooldownUntil = 0;
 
     // Single-finger state
     let panX = 0, panY = 0, panSL = 0, panST = 0;
@@ -726,6 +982,14 @@ const PDFPage = ({
     // Extra pinch state
     let pinchOriginX = 0, pinchOriginY = 0; // transform-origin in canvas-wrap space
     let lastPinchZoom = 1;                   // final zoom reached during gesture
+    // Captured ONCE at gesture start and reused for the whole gesture — el's
+    // rect is stable regardless (transform is only applied to wrap, a
+    // descendant, so it never affects el's own layout box), but wrap's rect
+    // must NOT be re-read mid-gesture: once we start applying our own
+    // translate+scale to wrap each frame, getBoundingClientRect() on it
+    // would reflect THAT already-applied transform, corrupting the pivot
+    // math every subsequent frame (this was causing the flicker/jitter).
+    let gestureElRect = null, gestureWrapRect = null;
 
     const onTouchStart = (e) => {
       // Handles are managed by their own React onTouchStart — don't start a pan
@@ -738,14 +1002,25 @@ const PDFPage = ({
         lastPinchZoom = startZoom;
         const elRect   = el.getBoundingClientRect();
         const wrapRect = canvasWrapRef.current?.getBoundingClientRect() || elRect;
+        gestureElRect   = elRect;
+        gestureWrapRect = wrapRect;
         startMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
         startMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
+        lastMidX  = startMidX;
+        lastMidY  = startMidY;
         startSL   = el.scrollLeft;
         startST   = el.scrollTop;
-        // transform-origin: midpoint relative to the canvas wrap element
+        // Origin point in canvas-wrap space, used as the fixed pivot for the
+        // translate+scale formula below — transform-origin itself stays at
+        // "0 0" the whole gesture (see onTouchMove) so it never needs to
+        // change mid-scale, which would itself cause a jump.
         pinchOriginX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - wrapRect.left;
         pinchOriginY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - wrapRect.top;
+        const wrap = canvasWrapRef.current;
+        if (wrap) wrap.style.transformOrigin = "0 0";
       } else if (e.touches.length === 1) {
+        if (Date.now() < pinchCooldownUntil) return; // ignore — likely the 2nd finger of a pinch that just ended, not a real new touch
+        if (fingerScrollOnlyRef.current && isStylusTouch(e)) return; // hand mode: the pencil never pans/selects, only draws
         panX = e.touches[0].clientX;
         panY = e.touches[0].clientY;
         panSL = el.scrollLeft;
@@ -807,15 +1082,32 @@ const PDFPage = ({
         const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, startZoom * touchDist(e.touches) / startDist));
         lastPinchZoom = newZoom;
         const factor = newZoom / startZoom;
-        // CSS transform: instant visual scale centered on the pinch midpoint, no React re-render
+
+        // Track the CURRENT midpoint (fingers rarely stay perfectly still
+        // while pinching) so the content under them stays put even as they
+        // drift — using a fixed transform-origin ("0 0", set once at
+        // touchstart) plus an explicit translate computed from where the
+        // origin-point has moved to, instead of moving transform-origin
+        // itself mid-scale (which would jump, since re-anchoring an already
+        // -scaled element relocates it).
+        const curMidXWrap = (e.touches[0].clientX + e.touches[1].clientX) / 2 - gestureWrapRect.left;
+        const curMidYWrap = (e.touches[0].clientY + e.touches[1].clientY) / 2 - gestureWrapRect.top;
+        lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - gestureElRect.left;
+        lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - gestureElRect.top;
+
+        const tx = curMidXWrap - pinchOriginX * factor;
+        const ty = curMidYWrap - pinchOriginY * factor;
+
+        // CSS transform: instant visual scale (+ pan to follow drift), no React re-render
         const wrap = canvasWrapRef.current;
         if (wrap) {
-          wrap.style.transformOrigin = `${pinchOriginX}px ${pinchOriginY}px`;
-          wrap.style.transform       = `scale(${factor})`;
+          wrap.style.transform = `translate(${tx}px, ${ty}px) scale(${factor})`;
         }
         return;
       }
       if (e.touches.length !== 1) return;
+      if (Date.now() < pinchCooldownUntil) return; // ignore — likely the 2nd finger of a pinch that just ended, not a real new touch
+      if (fingerScrollOnlyRef.current && isStylusTouch(e)) return; // hand mode: the pencil never pans/selects, only draws
 
       // Drag handle — handled inline so it works on the very first touchmove
       if (dragHandleRef.current) {
@@ -888,15 +1180,20 @@ const PDFPage = ({
 
       if (e.touches.length < 2 && startDist !== null) {
         startDist = null;
+        pinchCooldownUntil = Date.now() + PINCH_COOLDOWN_MS;
         const wrap = canvasWrapRef.current;
         if (wrap && wrap.style.transform) {
           // Keep the CSS transform alive — useEffect([zoom]) will strip it atomically
           // with the scroll correction after the canvas re-renders, preventing any snap.
           const finalZoom = lastPinchZoom;
           const ratio     = finalZoom / startZoom;
+          // Anchor to lastMidX/Y (where the fingers ended up), not
+          // startMidX/Y (where they started) — otherwise any drift during
+          // the gesture would be reflected in the live preview but then
+          // snapped away the instant it commits to a real scroll position.
           scrollAfterZoomRef.current = {
-            left: (startSL + startMidX) * ratio - startMidX,
-            top:  (startST + startMidY) * ratio - startMidY,
+            left: (startSL + startMidX) * ratio - lastMidX,
+            top:  (startST + startMidY) * ratio - lastMidY,
           };
           setZoom(finalZoom);
         }
@@ -1404,6 +1701,38 @@ const PDFPage = ({
     return content.items.map((item) => item.str + (item.hasEOL ? "\n" : " ")).join("").trim();
   }, [pdfDoc]);
 
+  // Shows the CURRENT page's Markdown in the left-side column (vs. Sources
+  // page's old "MD" button, which downloaded the whole document) — reuses
+  // the same GET /api/sources/:id/markdown?page=N route as getPageText
+  // above, so it's only available for source-backed docs (a local/embedded
+  // file with no currentSourceIdRef has nothing on the server to convert).
+  // Clicking again while already showing THIS page's result just closes the
+  // column; clicking on a different page re-fetches and shows that one.
+  const handleShowPageMarkdown = useCallback(async () => {
+    if (pageMdOpen && pageMdForPage === pageNum) {
+      setPageMdOpen(false);
+      return;
+    }
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId) return;
+    setPageMdOpen(true);
+    setPageMdBusy(true);
+    setPageMdError("");
+    try {
+      const res  = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?page=${pageNum}`), { signal: AbortSignal.timeout(5 * 60 * 1000) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Markdown conversion failed.");
+      setPageMdText(data.markdown || "");
+      setPageMdForPage(pageNum);
+    } catch (err) {
+      setPageMdError(err.message);
+      setPageMdText("");
+      setPageMdForPage(null);
+    } finally {
+      setPageMdBusy(false);
+    }
+  }, [pageNum, pageMdOpen, pageMdForPage]);
+
   // ── AI extraction (streaming) ──────────────────────────────────────────────
   const handleExtract = useCallback(async () => {
     if (!pdfDoc || extracting || pdfType === "scanned") return;
@@ -1690,6 +2019,30 @@ const PDFPage = ({
   const handleDragLeave   = () => setDragOver(false);
   const handleInputChange = (e) => loadFile(e.target.files[0]);
 
+  // Zoom buttons (+/-/reset) previously just called setZoom directly, which
+  // re-renders the canvas at a new size and leaves scrollLeft/scrollTop
+  // unchanged in raw pixels — since the content underneath scaled, that
+  // silently shifts what's actually visible (looks like the page "jumps"/
+  // re-centers). Anchor on the viewport's center instead, reusing the same
+  // scrollAfterZoomRef mechanism the ctrl+wheel/pinch zoom already uses to
+  // keep the point under the cursor fixed — here the "point" is just the
+  // middle of the visible area, so the page stays in place after zooming.
+  const zoomFromCenter = (nextZoom) => {
+    const el = previewRef.current;
+    const baseZoom  = zoomRef.current;
+    const rawTarget = typeof nextZoom === "function" ? nextZoom(baseZoom) : nextZoom;
+    const clamped   = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rawTarget));
+    if (!el) { setZoom(clamped); return; }
+    const ratio = clamped / baseZoom;
+    const midX  = el.clientWidth  / 2;
+    const midY  = el.clientHeight / 2;
+    scrollAfterZoomRef.current = {
+      left: (el.scrollLeft + midX) * ratio - midX,
+      top:  (el.scrollTop  + midY) * ratio - midY,
+    };
+    setZoom(clamped);
+  };
+
   const handleClose = () => {
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
@@ -1761,20 +2114,36 @@ const PDFPage = ({
 
       {/* Toolbar */}
       <div id="pdf_toolbar">
-        <button id="pdf_home_btn" onClick={() => navigate(embeddedHomePath)} title={embedded ? "Back to Traces Collector" : "Hyle-to-Meaning"}>⌂</button>
+        <button id="pdf_home_btn" onClick={() => navigate(embeddedHomePath)} title={embedded ? "Back to Traces Collector" : homeLabel}>⌂</button>
         {pdfDoc && <>
           <button onClick={() => pageContainerRefs.current[pageNum - 2]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum <= 1}>‹</button>
           <span>{pageNum} / {pageCount}</span>
           <button onClick={() => pageContainerRefs.current[pageNum]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum >= pageCount}>›</button>
           <span id="pdf_filename">{filename}</span>
-          {pdfType && <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>{PDF_TYPE_LABEL[pdfType]}</span>}
+          {pdfType && (
+            <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>
+              <i className={`fi ${PDF_TYPE_ICON[pdfType]}`} />
+              {PDF_TYPE_LABEL[pdfType]}
+            </span>
+          )}
           <div id="pdf_zoom_controls">
-            <button onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / 1.25))} title="Zoom out">−</button>
-            <button id="pdf_zoom_label" onClick={() => setZoom(1)} title="Reset zoom to original size">
+            <button onClick={() => zoomFromCenter((z) => z / 1.25)} title="Zoom out">−</button>
+            <button id="pdf_zoom_label" onClick={() => zoomFromCenter(1)} title="Reset zoom to original size">
               {Math.round(zoom * 100)}%
             </button>
-            <button onClick={() => setZoom((z) => Math.min(5, z * 1.25))} title="Zoom in">+</button>
+            <button onClick={() => zoomFromCenter((z) => z * 1.25)} title="Zoom in">+</button>
           </div>
+          {currentSourceIdRef.current && (
+            <button
+              id="pdf_page_md_btn"
+              className={pageMdOpen ? "pdf_page_md_btn--active" : ""}
+              onClick={handleShowPageMarkdown}
+              disabled={pageMdBusy}
+              title={pageMdError ? `Failed: ${pageMdError}` : `Show page ${pageNum}'s Markdown`}
+            >
+              {pageMdBusy ? "…" : `MD · p.${pageNum}`}
+            </button>
+          )}
           <button id="pdf_close" onClick={handleClose}>✕</button>
 
           {/* Hyles toggle + extraction controls */}
@@ -1809,138 +2178,170 @@ const PDFPage = ({
         </>}
       </div>
 
-      {/* Annotation toolbar + Linguistic Units bar */}
-      {pdfDoc && !selectionOnly && (<>
-        <div id="pdf_annot_toolbar">
-          <div id="pdf_annot_tools">
-            {ANNOT_TOOLS.map(({ key, icon, label }) => (
+      {/* Annotation toolbar — one compact row: a floating "Tools" dropdown
+          (was a row of 10 always-visible icon buttons), a floating color
+          swatch dropdown (was a row of 8 always-visible swatches, repeated
+          again in the old separate highlight_panel below), an inline size
+          slider + freehand/line toggle when relevant, and undo/clear. This
+          replaces both the old #pdf_annot_toolbar AND the separate
+          #highlight_panel entirely — one row instead of two. */}
+      {pdfDoc && !selectionOnly && (() => {
+        const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
+        const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser";
+        const sizeProps =
+          annotTool === "pen"     ? { min: 1, max: 20, step: 0.5, value: penSize,    onChange: setPenSize } :
+          annotTool === "eraser"  ? { min: 6, max: 48, step: 2,   value: eraserSize, onChange: setEraserSize } :
+          annotTool === "highlight" ? { min: 4, max: 64, step: 2, value: annotSize,  onChange: setAnnotSize } :
+          null;
+        return (
+          <div id="pdf_annot_toolbar">
+            <div className="annot_dd_wrap" ref={toolsMenuRef}>
               <button
-                key={key}
-                className={`annot_tool_btn${annotTool === key ? " annot_tool_btn--active" : ""}`}
-                title={label}
-                onClick={() => setAnnotTool((t) => t === key ? null : key)}
-              ><i className={`fi ${icon}`} /></button>
-            ))}
-          </div>
-          <div id="pdf_annot_colors">
-            {ANNOT_COLORS.map((c) => (
-              <button
-                key={c}
-                className={`annot_color_btn${annotColor === c ? " annot_color_btn--active" : ""}`}
-                style={{ background: c }}
-                title={c}
-                onClick={() => setAnnotColor(c)}
-              />
-            ))}
-          </div>
-          <div id="pdf_annot_actions">
-            <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
-            <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-trash" /></button>
-          </div>
-        </div>
+                type="button"
+                className={`annot_trigger${annotTool ? " annot_trigger--active" : ""}`}
+                onClick={() => { setToolsMenuOpen((o) => !o); setColorMenuOpen(false); }}
+              >
+                <i className={`fi ${activeToolMeta?.icon || "fi-rr-pencil"}`} />
+                <span className="annot_trigger_label">{activeToolMeta?.label || "Tools"}</span>
+                <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+              </button>
+              {toolsMenuOpen && (
+                <div className="annot_dd annot_dd--tools">
+                  {ANNOT_TOOLS.map(({ key, icon, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`annot_dd_item${annotTool === key ? " annot_dd_item--active" : ""}`}
+                      onClick={() => { setAnnotTool((t) => t === key ? null : key); setToolsMenuOpen(false); }}
+                    >
+                      <i className={`fi ${icon}`} />
+                      <span>{label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
-        {/* Linguistic Units bar */}
-        <div id="pdf_ling_bar">
-          <span id="pdf_ling_label">Linguistic Units</span>
-          <div id="pdf_ling_units">
-            {LINGUISTIC_UNITS.map(u => (
-              <button
-                key={u.id}
-                className={`pdf_ling_btn${linguisticUnit === u.id ? " pdf_ling_btn--active" : ""}`}
-                style={{ "--lu-color": u.color }}
-                title={u.desc}
-                onClick={() => {
-                  setLinguisticUnit(prev => prev === u.id ? null : u.id);
-                  if (!annotTool) setAnnotTool("highlight");
-                }}
-              >{u.label}</button>
-            ))}
-            {linguisticUnit && (
-              <button
-                className="pdf_ling_clear"
-                title="Clear linguistic unit"
-                onClick={() => setLinguisticUnit(null)}
-              >×</button>
-            )}
-          </div>
-        </div>
-      </>)}
-
-      {/* Tool options panel (pen / highlight / eraser) */}
-      {(annotTool === "highlight" || annotTool === "pen" || annotTool === "eraser") && (
-        <div id="highlight_panel">
-          <div id="hlp_preview">
-            <div
-              id="hlp_circle"
-              style={{
-                width:        annotTool === "pen" ? penSize * 4 : annotTool === "eraser" ? eraserSize * 2 : annotSize * 2,
-                height:       annotTool === "pen" ? penSize * 4 : annotTool === "eraser" ? eraserSize * 2 : annotSize * 2,
-                background:   annotTool === "eraser" ? "rgba(255,255,255,0.15)" : annotColor,
-                borderRadius: "50%",
-                border:       annotTool === "eraser" ? "1px dashed rgba(255,255,255,0.4)" : "none",
-                maxWidth:     "80px",
-                maxHeight:    "80px",
-              }}
-            />
-          </div>
-          <div id="hlp_controls">
-            {annotTool === "pen" && (
-              <input
-                id="hlp_slider"
-                type="range"
-                min="1" max="20" step="0.5"
-                value={penSize}
-                onChange={(e) => setPenSize(Number(e.target.value))}
-              />
-            )}
-            {annotTool === "highlight" && (
-              <input
-                id="hlp_slider"
-                type="range"
-                min="4" max="64" step="2"
-                value={annotSize}
-                onChange={(e) => setAnnotSize(Number(e.target.value))}
-              />
-            )}
-            {annotTool === "eraser" && (
-              <input
-                id="hlp_slider"
-                type="range"
-                min="6" max="48" step="2"
-                value={eraserSize}
-                onChange={(e) => setEraserSize(Number(e.target.value))}
-              />
-            )}
-            {annotTool !== "eraser" && (
-              <div id="hlp_colors">
-                {ANNOT_COLORS.map((c) => (
-                  <button
-                    key={c}
-                    className={`annot_color_btn${annotColor === c ? " annot_color_btn--active" : ""}`}
-                    style={{ background: c }}
-                    onClick={() => setAnnotColor(c)}
-                  />
-                ))}
+            {annotTool && annotTool !== "eraser" && (
+              <div className="annot_dd_wrap" ref={colorMenuRef}>
+                <button
+                  type="button"
+                  className="annot_trigger annot_trigger--color"
+                  onClick={() => { setColorMenuOpen((o) => !o); setToolsMenuOpen(false); }}
+                  title="Color"
+                >
+                  <span className="annot_swatch" style={{ background: annotColor }} />
+                  <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+                </button>
+                {colorMenuOpen && (
+                  <div className="annot_dd annot_dd--colors">
+                    {ANNOT_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        className={`annot_swatch_btn${annotColor === c ? " annot_swatch_btn--active" : ""}`}
+                        style={{ background: c }}
+                        title={c}
+                        onClick={() => { setAnnotColor(c); setColorMenuOpen(false); }}
+                      />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
+
+            {hasSize && (
+              <SizeKnob
+                min={sizeProps.min} max={sizeProps.max} step={sizeProps.step}
+                value={sizeProps.value}
+                onChange={sizeProps.onChange}
+                color={annotColor}
+                dashed={annotTool === "eraser"}
+              />
+            )}
+
             {annotTool === "highlight" && (
-              <div id="hlp_mode_toggle">
+              <div className="annot_mode_toggle">
                 <button
-                  className={`hlp_mode_btn${highlightMode === "freehand" ? " hlp_mode_btn--active" : ""}`}
+                  type="button"
+                  className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
                   onClick={() => setHighlightMode("freehand")}
-                >Freehand</button>
+                >Free</button>
                 <button
-                  className={`hlp_mode_btn${highlightMode === "line" ? " hlp_mode_btn--active" : ""}`}
+                  type="button"
+                  className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
                   onClick={() => setHighlightMode("line")}
                 >Line</button>
               </div>
             )}
+
+            {annotTool === "highlight" && (
+              <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
+            )}
+
+            {annotTool === "highlight" && (
+              <button
+                type="button"
+                className={`annot_trigger${highlightBordered ? " annot_trigger--active" : ""}`}
+                onClick={() => setHighlightBordered((v) => !v)}
+                title="Bordered highlight: adds a solid edge around the highlight band"
+              >
+                <i className="fi fi-rr-border-outer" />
+              </button>
+            )}
+
+            <button
+              type="button"
+              className={`annot_trigger${fingerScrollOnly ? " annot_trigger--active" : ""}`}
+              onClick={() => setFingerScrollOnly((v) => !v)}
+              title="Hand mode: finger only scrolls the page, the pencil draws"
+            >
+              <i className="fi fi-rr-hand" />
+              <span className="annot_trigger_label">Hand</span>
+            </button>
+
+            {annotTool && annotTool !== "eraser" && (
+              <button
+                type="button"
+                className={`annot_trigger${autoContrast ? " annot_trigger--active" : ""}`}
+                onClick={() => setAutoContrast((v) => !v)}
+                title="Auto contrast: pick black or white ink, whichever reads best against the page under the stroke"
+              >
+                <i className="fi fi-rr-eye-dropper" />
+                <span className="annot_trigger_label">Auto contrast</span>
+              </button>
+            )}
+
+            <div id="pdf_annot_actions">
+              <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
+              <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="fi fi-rr-redo" /></button>
+              <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-trash" /></button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Split area */}
       <div id="pdf_content" ref={contentRef}>
+
+        {/* Far left — Markdown preview column for the current page, opened by the toolbar "MD" button */}
+        {pageMdOpen && (
+          <div id="pdf_md_panel">
+            <div id="pdf_md_panel_header">
+              <span>Markdown — Page {pageMdForPage ?? pageNum}</span>
+              <button id="pdf_md_panel_close" onClick={() => setPageMdOpen(false)} title="Close">✕</button>
+            </div>
+            <div id="pdf_md_panel_body">
+              {pageMdBusy ? (
+                <p id="pdf_md_panel_status">Converting…</p>
+              ) : pageMdError ? (
+                <p id="pdf_md_panel_status" className="pdf_md_panel_status--error">⚠ {pageMdError}</p>
+              ) : (
+                <pre id="pdf_md_panel_text">{pageMdText || "(This page had no extractable text.)"}</pre>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Left — PDF viewer or upload zone */}
         <div

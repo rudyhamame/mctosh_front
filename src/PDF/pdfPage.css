@@ -146,16 +146,24 @@
 }
 
 .pdf_type_badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   font-size: 0.72rem;
-  padding: 0.18rem 0.55rem;
+  font-weight: 600;
+  padding: 0.22rem 0.65rem;
   border-radius: 999px;
   white-space: nowrap;
-  border: 1px solid var(--color-border);
+  color: var(--badge-color);
+  background: color-mix(in srgb, var(--badge-color) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--badge-color) 40%, transparent);
 }
 
-.pdf_type_badge--text-based { color: #4caf50; border-color: #4caf50; }
-.pdf_type_badge--mixed      { color: #ff9800; border-color: #ff9800; }
-.pdf_type_badge--scanned    { color: #f44336; border-color: #f44336; }
+.pdf_type_badge i { font-size: 0.9em; }
+
+.pdf_type_badge--text-based { --badge-color: #4caf50; }
+.pdf_type_badge--mixed      { --badge-color: #ff9800; }
+.pdf_type_badge--scanned    { --badge-color: #f44336; }
 
 #pdf_zoom_controls {
   display: flex;
@@ -200,11 +208,79 @@
   color: var(--color-text-muted);
 }
 
+#pdf_page_md_btn {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+}
+#pdf_page_md_btn:hover:not(:disabled) { color: #4fc3f7; border-color: #4fc3f7; }
+#pdf_page_md_btn:disabled { opacity: 0.5; cursor: default; }
+.pdf_page_md_btn--active { color: #4fc3f7; border-color: #4fc3f7; background: color-mix(in srgb, #4fc3f7 10%, transparent); }
+
 /* ── Split content area ── */
 #pdf_content {
   flex: 1;
   display: flex;
   overflow: hidden;
+}
+
+/* ── Far left: Markdown preview column ── */
+#pdf_md_panel {
+  flex-shrink: 0;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+#pdf_md_panel_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+#pdf_md_panel_close {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0.1rem 0.3rem;
+}
+#pdf_md_panel_close:hover { color: var(--color-text); }
+
+#pdf_md_panel_body {
+  flex: 1;
+  overflow: auto;
+  padding: 0.75rem;
+}
+
+#pdf_md_panel_status {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+.pdf_md_panel_status--error { color: #f44336; }
+
+#pdf_md_panel_text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: 1.55;
+  color: var(--color-text);
 }
 
 /* ── Left: PDF preview ── */
@@ -306,47 +382,107 @@
   z-index: 30;
 }
 
-/* ── Annotation toolbar ── */
+/* ── Annotation toolbar (single compact row, floating dropdowns) ── */
 #pdf_annot_toolbar {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.3rem 1rem;
+  gap: 0.5rem;
+  padding: 0.4rem 1rem;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
   flex-shrink: 0;
   flex-wrap: wrap;
 }
 
-#pdf_annot_tools {
-  display: flex;
-  gap: 0.2rem;
+.annot_dd_wrap {
+  position: relative;
 }
 
-.annot_tool_btn {
-  padding: 0.22rem 0.5rem;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  background: none;
+.annot_trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-bg);
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: 0.78rem;
+  font-weight: 600;
   cursor: pointer;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
-.annot_tool_btn:hover { background: var(--color-bg); color: var(--color-text); }
-.annot_tool_btn--active { background: var(--color-bg); color: var(--color-text); border-color: var(--color-highlight); }
+.annot_trigger:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.annot_trigger--active { color: var(--color-text); border-color: var(--color-highlight); }
+.annot_trigger--color { padding: 0.3rem 0.45rem; }
 
-#pdf_annot_colors {
+.annot_trigger_label {
+  white-space: nowrap;
+}
+
+.annot_trigger_chevron {
+  font-size: 0.6rem;
+  opacity: 0.6;
+}
+
+.annot_swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.25);
+}
+
+.annot_dd {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.28);
+  padding: 0.35rem;
+  min-width: 170px;
+}
+
+.annot_dd--tools {
   display: flex;
-  gap: 0.3rem;
-  align-items: center;
+  flex-direction: column;
+  gap: 0.1rem;
 }
 
-.annot_color_btn {
-  width: 18px;
-  height: 18px;
+.annot_dd_item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.55rem;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+
+.annot_dd_item:hover { background: var(--color-bg); color: var(--color-text); }
+.annot_dd_item--active { background: var(--color-bg); color: var(--color-text); }
+
+.annot_dd--colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 130px;
+}
+
+.annot_swatch_btn {
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   border: 2px solid transparent;
   cursor: pointer;
@@ -354,8 +490,64 @@
   transition: transform 0.1s, border-color 0.1s;
 }
 
-.annot_color_btn:hover { transform: scale(1.2); }
-.annot_color_btn--active { border-color: #fff; transform: scale(1.15); }
+.annot_swatch_btn:hover { transform: scale(1.15); }
+.annot_swatch_btn--active { border-color: #fff; transform: scale(1.1); }
+
+.annot_size_knob {
+  position: relative;
+  height: 28px;
+  border-radius: 99px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  touch-action: none;
+  flex-shrink: 0;
+}
+
+.annot_size_knob_fill {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: var(--color-border);
+  border-radius: 99px;
+  pointer-events: none;
+}
+
+.annot_size_knob_dot {
+  position: absolute;
+  top: 50%;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+  pointer-events: none;
+  transition: width 0.05s, height 0.05s;
+}
+
+.annot_size_knob_dot--eraser {
+  border: 2px dashed var(--color-text-muted);
+}
+
+.annot_mode_toggle {
+  display: flex;
+  gap: 0.2rem;
+}
+
+.annot_mode_btn {
+  padding: 0.24rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.annot_mode_btn:hover { color: var(--color-text); }
+.annot_mode_btn--active { background: var(--color-bg); color: var(--color-text); border-color: var(--color-highlight); }
 
 #pdf_annot_actions {
   display: flex;
@@ -376,136 +568,6 @@
 
 .annot_action_btn:hover:not(:disabled) { color: var(--color-text); }
 .annot_action_btn:disabled { opacity: 0.3; cursor: default; }
-
-/* ── Linguistic Units bar ── */
-#pdf_ling_bar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.75rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
-#pdf_ling_label {
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-#pdf_ling_units {
-  display: flex;
-  gap: 0.2rem;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.pdf_ling_btn {
-  padding: 0.12rem 0.55rem;
-  border: 1px solid var(--lu-color, #888);
-  border-radius: 20px;
-  background: none;
-  color: var(--lu-color, #888);
-  font-size: 0.67rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.1s, color 0.1s;
-  white-space: nowrap;
-}
-.pdf_ling_btn:hover {
-  background: color-mix(in srgb, var(--lu-color) 15%, transparent);
-}
-.pdf_ling_btn--active {
-  background: var(--lu-color);
-  color: #000;
-}
-
-.pdf_ling_clear {
-  padding: 0.08rem 0.4rem;
-  border: none;
-  background: none;
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-  cursor: pointer;
-  line-height: 1;
-}
-.pdf_ling_clear:hover { color: var(--color-text); }
-
-/* ── Highlight panel ── */
-#highlight_panel {
-  display: flex;
-  align-items: center;
-  gap: 1.25rem;
-  padding: 0.55rem 1rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg);
-  flex-shrink: 0;
-}
-
-#hlp_preview {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 72px;
-  height: 72px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  background: var(--color-surface);
-  flex-shrink: 0;
-}
-
-#hlp_circle {
-  opacity: 0.5;
-  transition: width 0.12s, height 0.12s, background 0.12s;
-  min-width: 8px;
-  min-height: 8px;
-  max-width: 64px;
-  max-height: 64px;
-}
-
-#hlp_controls {
-  display: flex;
-  flex-direction: column;
-  gap: 0.55rem;
-  flex: 1;
-}
-
-#hlp_slider {
-  width: 100%;
-  accent-color: var(--color-highlight);
-  cursor: pointer;
-}
-
-#hlp_colors {
-  display: flex;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
-
-#hlp_mode_toggle {
-  display: flex;
-  gap: 0.3rem;
-}
-
-.hlp_mode_btn {
-  padding: 0.22rem 0.75rem;
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  background: none;
-  color: var(--color-text-muted);
-  font-size: 0.74rem;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-
-.hlp_mode_btn:hover { color: var(--color-text); }
-.hlp_mode_btn--active { background: var(--color-surface); color: var(--color-text); border-color: var(--color-highlight); }
 
 .pdf_page_canvas {
   box-shadow: 0 2px 16px rgba(0,0,0,0.5);

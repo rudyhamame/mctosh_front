@@ -20,12 +20,40 @@ const authHeader = () => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+const CLOUDINARY_RAW_LIMIT_BYTES = 10 * 1024 * 1024;
+
+const formatMb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const isPdfFile = (file) =>
+  file?.type === "application/pdf" || /\.pdf$/i.test(String(file?.name || ""));
+
+const isCloudinarySizeError = (message = "", status = 0) => {
+  if (status === 413) return true;
+  return /cloudinary|file size|too large|payload too large|maximum|max size|limit exceeded/i.test(message);
+};
+
+const readResponsePayload = async (res) => {
+  const text = await res.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text };
+  }
+};
+
+const COMPRESSION_LABELS = {
+  low: "Low compression",
+  recommended: "Recommended",
+  extreme: "Extreme",
+};
+
 const SourcesPage = () => {
   const navigate = useNavigate();
   const fileDocRef      = useRef(null);
   const fileImgRef      = useRef(null);
   const pendingDocType  = useRef("textbook");
-  const pendingImgType  = useRef("image");
+  const pendingImgType  = useRef("xray");
   const dropdownRef     = useRef(null);
   const addBtnRef       = useRef(null);
 
@@ -36,6 +64,8 @@ const SourcesPage = () => {
   const [dropOpen, setDropOpen] = useState(false);
   const [ytInput,  setYtInput]  = useState(false);
   const [ytUrl,    setYtUrl]    = useState("");
+  const [compressionPrompt, setCompressionPrompt] = useState(null);
+  const [compressionBusy, setCompressionBusy] = useState(false);
 
   /* ── Load sources ── */
   useEffect(() => {
@@ -65,7 +95,58 @@ const SourcesPage = () => {
   /* ── Upload file ── */
   const [uploadCount, setUploadCount] = useState(0);
 
-  const uploadFile = useCallback(async (file, type) => {
+  // Split preview is local (pdf-lib page count) and free — no iLovePDF call,
+  // no credits spent — unlike the old per-level compression size check
+  // (confirmed by direct measurement to cost 3 real credits per prompt-open,
+  // low/recommended/extreme, even when the user never compressed anything).
+  // Compression itself is now offered as a single static "Recommended"
+  // button with no upfront size check; a real compression call only happens
+  // if the user actually clicks it.
+  const fetchSplitPreview = useCallback(async (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch(apiUrl("/api/sources/split-preview"), {
+      method: "POST",
+      headers: authHeader(),
+      body: form,
+    });
+    const data = await readResponsePayload(res);
+    if (!res.ok) throw new Error(data.error || "Failed to check split options.");
+    return data;
+  }, []);
+
+  const offerPdfCompression = useCallback(async (file, type, reason, knownOptions = null) => {
+    setCompressionPrompt({
+      file,
+      type,
+      reason,
+      currentSizeBytes: knownOptions?.currentSizeBytes ?? file.size,
+      maxSizeBytes: knownOptions?.maxSizeBytes ?? CLOUDINARY_RAW_LIMIT_BYTES,
+      attemptedCompressionLevel: knownOptions?.attemptedCompressionLevel || null,
+      attemptedSizeBytes: knownOptions?.attemptedSizeBytes || null,
+      compressionError: knownOptions?.compressionError || null,
+      splitSuggestion: knownOptions?.splitSuggestion || null,
+      loadingSplit: !knownOptions,
+    });
+
+    if (knownOptions) return;
+
+    try {
+      const data = await fetchSplitPreview(file);
+      setCompressionPrompt((prev) => {
+        if (!prev || prev.file !== file) return prev;
+        return { ...prev, splitSuggestion: data.splitSuggestion || null, loadingSplit: false };
+      });
+    } catch (e) {
+      setCompressionPrompt((prev) => {
+        if (!prev || prev.file !== file) return prev;
+        return { ...prev, compressionError: e.message, loadingSplit: false };
+      });
+    }
+  }, [fetchSplitPreview]);
+
+  const uploadFile = useCallback(async (file, type, options = {}) => {
+    const { compressPdf = false, compressPdfLevel = "" } = options;
     setError(null);
     setInfo(null);
     setUploadCount((n) => n + 1);
@@ -74,9 +155,22 @@ const SourcesPage = () => {
       form.append("file", file);
       form.append("type", type);
       form.append("name", file.name);
+      if (compressPdf) form.append("compressPdf", "true");
+      if (compressPdfLevel) form.append("compressPdfLevel", compressPdfLevel);
       const res  = await fetch(apiUrl("/api/sources/save"), { method: "POST", headers: authHeader(), body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `"${file.name}" failed.`);
+      const data = await readResponsePayload(res);
+      if (!res.ok) {
+        const message = data.error || `"${file.name}" failed.`;
+        if (isPdfFile(file) && data.needsCompression) {
+          void offerPdfCompression(file, type, message, data);
+          return;
+        }
+        if (isPdfFile(file) && isCloudinarySizeError(message, res.status)) {
+          void offerPdfCompression(file, type, `"${file.name}" is over the Cloudinary upload limit. Compress it and retry?`);
+          return;
+        }
+        throw new Error(message);
+      }
       if (data.duplicate) {
         setInfo(`"${file.name}" is already in your sources.`);
         return;
@@ -87,7 +181,60 @@ const SourcesPage = () => {
     } finally {
       setUploadCount((n) => n - 1);
     }
-  }, []);
+  }, [offerPdfCompression]);
+
+  const handleCompressAndUpload = useCallback(async (compressionLevel) => {
+    if (!compressionPrompt?.file || !compressionPrompt?.type || !compressionLevel) return;
+    setCompressionBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      setInfo(`Compressing "${compressionPrompt.file.name}" with iLovePDF (${COMPRESSION_LABELS[compressionLevel] || compressionLevel}) and uploading now…`);
+      setCompressionPrompt(null);
+      await uploadFile(compressionPrompt.file, compressionPrompt.type, {
+        compressPdf: true,
+        compressPdfLevel: compressionLevel,
+      });
+    } catch (e) {
+      setError(e.message || "Failed to compress this PDF.");
+    } finally {
+      setCompressionBusy(false);
+    }
+  }, [compressionPrompt, uploadFile]);
+
+  const handleSplitAndUpload = useCallback(async () => {
+    const prompt = compressionPrompt;
+    const parts = prompt?.splitSuggestion?.suggestedParts;
+    if (!prompt?.file || !prompt?.type || !parts) return;
+    setCompressionBusy(true);
+    setError(null);
+    setInfo(null);
+    try {
+      setInfo(`Splitting "${prompt.file.name}" into ${parts} parts and uploading each…`);
+      setCompressionPrompt(null);
+      const form = new FormData();
+      form.append("file", prompt.file);
+      form.append("type", prompt.type);
+      form.append("name", prompt.file.name);
+      form.append("parts", String(parts));
+      setUploadCount((n) => n + 1);
+      const res  = await fetch(apiUrl("/api/sources/split-and-save"), { method: "POST", headers: authHeader(), body: form });
+      const data = await readResponsePayload(res);
+      if (!res.ok) throw new Error(data.error || `Failed to split "${prompt.file.name}".`);
+      setSources((prev) => [...data.sources, ...prev]);
+      const reusedCount = data.parts.filter((p) => p.duplicate || p.reused).length;
+      setInfo(
+        `Split "${prompt.file.name}" into ${data.parts.length} parts and uploaded them` +
+        (data.oversizedParts ? ` (${data.oversizedParts} part${data.oversizedParts > 1 ? "s" : ""} still over the limit even after splitting/compressing).` : ".") +
+        (reusedCount ? ` ${reusedCount} part${reusedCount > 1 ? "s were" : " was"} already in your sources.` : "")
+      );
+    } catch (e) {
+      setError(e.message || "Failed to split this PDF.");
+    } finally {
+      setCompressionBusy(false);
+      setUploadCount((n) => n - 1);
+    }
+  }, [compressionPrompt]);
 
   /* ── Save YouTube link ── */
   const saveYoutube = useCallback(async (url) => {
@@ -119,43 +266,25 @@ const SourcesPage = () => {
     } catch {}
   }, []);
 
-  /* ── Download as Markdown ── */
-  const [markdownBusyId, setMarkdownBusyId] = useState(null);
-
-  const downloadMarkdown = useCallback(async (id, name) => {
-    setError(null);
-    setMarkdownBusyId(id);
-    try {
-      const res  = await fetch(apiUrl(`/api/sources/${id}/markdown`), { headers: authHeader() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Markdown conversion failed.");
-      const blob = new Blob([data.markdown], { type: "text/markdown" });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a");
-      a.href = url;
-      a.download = `${name.replace(/\.[^./]+$/, "")}.md`;
-      a.click();
-      URL.revokeObjectURL(url);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setMarkdownBusyId(null);
-    }
-  }, []);
-
   /* ── File picker ── */
-  const MAX_BYTES = 100 * 1024 * 1024; // 100 MB
-
   const handleFile = (e, type) => {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
     e.target.value = "";
     for (const file of files) {
-      if (file.size > MAX_BYTES) {
-        setError(`"${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Maximum is 100 MB.`);
+      const resolvedType = type === "doc" ? pendingDocType.current : type;
+      if (file.size > MAX_UPLOAD_BYTES) {
+        if (isPdfFile(file)) {
+          void offerPdfCompression(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the 100 MB Cloudinary limit. Compress it before upload?`);
+        } else {
+          setError(`"${file.name}" is too large (${formatMb(file.size)}). Maximum is 100 MB.`);
+        }
         continue;
       }
-      const resolvedType = type === "doc" ? pendingDocType.current : type;
+      if (isPdfFile(file) && file.size > CLOUDINARY_RAW_LIMIT_BYTES) {
+        void offerPdfCompression(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the ${formatMb(CLOUDINARY_RAW_LIMIT_BYTES)} Cloudinary PDF upload limit. Compress it with iLovePDF before uploading?`);
+        continue;
+      }
       uploadFile(file, resolvedType);
     }
   };
@@ -183,20 +312,20 @@ const SourcesPage = () => {
               <button className="sources_drop_item" style={{ "--src-color": "#4fc3f7" }}
                 onClick={() => { pendingDocType.current = "textbook"; setDropOpen(false); fileDocRef.current?.click(); }}>
                 <i className="fi fi-rr-book-alt sources_drop_icon" />
-                <span className="sources_drop_label">Textbook Document</span>
-                <span className="sources_drop_tag">Document</span>
+                <span className="sources_drop_label">Textbook</span>
+                <span className="sources_drop_tag">PDF</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#a5d6a7" }}
                 onClick={() => { pendingDocType.current = "reference"; setDropOpen(false); fileDocRef.current?.click(); }}>
                 <i className="fi fi-rr-book-bookmark sources_drop_icon" />
-                <span className="sources_drop_label">Reference Book Document</span>
-                <span className="sources_drop_tag">Document</span>
+                <span className="sources_drop_label">Reference Book</span>
+                <span className="sources_drop_tag">PDF</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#ce93d8" }}
                 onClick={() => { pendingDocType.current = "review"; setDropOpen(false); fileDocRef.current?.click(); }}>
                 <i className="fi fi-rr-document sources_drop_icon" />
-                <span className="sources_drop_label">Review Document</span>
-                <span className="sources_drop_tag">Document</span>
+                <span className="sources_drop_label">Review</span>
+                <span className="sources_drop_tag">PDF</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#e53935" }}
                 onClick={() => { setDropOpen(false); setYtInput(true); }}>
@@ -204,34 +333,28 @@ const SourcesPage = () => {
                 <span className="sources_drop_label">YouTube Link</span>
                 <span className="sources_drop_tag">Transcription</span>
               </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#81c784" }}
-                onClick={() => { pendingImgType.current = "image"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-picture sources_drop_icon" />
-                <span className="sources_drop_label">Image</span>
-                <span className="sources_drop_tag">OCR</span>
-              </button>
-              <div className="sources_drop_divider">Imaging</div>
+              <div className="sources_drop_divider">Radiological Imaging</div>
               <button className="sources_drop_item" style={{ "--src-color": "#b0bec5" }}
                 onClick={() => { pendingImgType.current = "xray"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-body-scan sources_drop_icon" />
+                <i className="fi fi-rr-x-ray sources_drop_icon" />
                 <span className="sources_drop_label">Radiograph (X-Ray)</span>
                 <span className="sources_drop_tag">Imaging</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#4dd0e1" }}
                 onClick={() => { pendingImgType.current = "ct"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-circle-scan sources_drop_icon" />
+                <i className="fi fi-rr-target sources_drop_icon" />
                 <span className="sources_drop_label">CT Scan</span>
                 <span className="sources_drop_tag">Imaging</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#9575cd" }}
                 onClick={() => { pendingImgType.current = "mri"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-scanner sources_drop_icon" />
+                <i className="fi fi-rr-brain sources_drop_icon" />
                 <span className="sources_drop_label">MRI</span>
                 <span className="sources_drop_tag">Imaging</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#4db6ac" }}
                 onClick={() => { pendingImgType.current = "ultrasound"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-pulse sources_drop_icon" />
+                <i className="fi fi-rr-wave-sine sources_drop_icon" />
                 <span className="sources_drop_label">Ultrasound</span>
                 <span className="sources_drop_tag">Imaging</span>
               </button>
@@ -262,6 +385,87 @@ const SourcesPage = () => {
       {/* ── Feedback ── */}
       {error && <div id="sources_error">{error}</div>}
       {info  && <div id="sources_info">{info}</div>}
+      {compressionPrompt && (
+        <div id="sources_compress_prompt">
+          <div className="sources_compress_prompt__copy">
+            <strong>Compress PDF for upload?</strong>
+            <p>{compressionPrompt.reason}</p>
+            <p>
+              Current size: <span>{formatMb(compressionPrompt.currentSizeBytes || compressionPrompt.file.size)}</span>
+            </p>
+            {compressionPrompt.attemptedCompressionLevel && compressionPrompt.attemptedSizeBytes ? (
+              <p className="sources_compress_prompt__note">
+                Last attempt: <span>{COMPRESSION_LABELS[compressionPrompt.attemptedCompressionLevel] || compressionPrompt.attemptedCompressionLevel}</span> produced {formatMb(compressionPrompt.attemptedSizeBytes)}.
+              </p>
+            ) : null}
+
+            {/* Split is offered up front, before compression — it's instant
+                and free (local pdf-lib page count, no iLovePDF call), so
+                users who'd rather just split don't wait on anything. */}
+            {compressionPrompt.loadingSplit ? (
+              <p className="sources_compress_prompt__loading">Checking whether this PDF can be split…</p>
+            ) : compressionPrompt.splitSuggestion ? (
+              <div className="sources_split_option">
+                <p className="sources_compress_prompt__note">
+                  Split it into {compressionPrompt.splitSuggestion.suggestedParts} separate PDFs instead (~{formatMb(compressionPrompt.splitSuggestion.estimatedPartSizeBytes)} each, {compressionPrompt.splitSuggestion.numPages} pages total) — each part is saved as its own source, no compression needed.
+                </p>
+                <button
+                  type="button"
+                  className="sources_compress_option"
+                  disabled={compressionBusy}
+                  onClick={handleSplitAndUpload}
+                >
+                  <strong>Split into {compressionPrompt.splitSuggestion.suggestedParts} parts</strong>
+                  <span>Each part uploaded separately, no re-compression needed unless a part is still too large</span>
+                </button>
+              </div>
+            ) : (
+              <p className="sources_compress_prompt__note">
+                This PDF can't be split further (too few pages) — compression is the only option below.
+              </p>
+            )}
+
+            {/* No upfront size check here on purpose (that cost 3 real
+                iLovePDF credits per prompt-open just to show estimates,
+                confirmed by direct measurement) — "Recommended" is offered
+                as a static, immediately-clickable action; the real
+                compression call only happens if actually clicked. Falls
+                forward to "Extreme" only if Recommended genuinely wasn't
+                enough. */}
+            <p className="sources_compress_prompt__note">Or compress it instead, via the existing iLovePDF flow on the backend:</p>
+            {compressionPrompt.attemptedCompressionLevel === "extreme" ? (
+              <p className="sources_compress_prompt__note">
+                Extreme compression still wasn't enough — splitting (above) is the remaining option.
+              </p>
+            ) : (
+              <div className="sources_compress_options">
+                <button
+                  type="button"
+                  className="sources_compress_option"
+                  disabled={compressionBusy || compressionPrompt.compressionAvailable === false}
+                  onClick={() => handleCompressAndUpload(compressionPrompt.attemptedCompressionLevel === "recommended" ? "extreme" : "recommended")}
+                >
+                  <strong>{compressionPrompt.attemptedCompressionLevel === "recommended" ? "Try extreme compression" : "Compress (recommended)"}</strong>
+                  <span>Runs the real iLovePDF compression and retries the upload — no preview, size isn't known until this finishes</span>
+                </button>
+              </div>
+            )}
+            {compressionPrompt.compressionError ? (
+              <p className="sources_compress_prompt__error">{compressionPrompt.compressionError}</p>
+            ) : null}
+          </div>
+          <div className="sources_compress_prompt__actions">
+            <button
+              type="button"
+              className="sources_compress_btn"
+              disabled={compressionBusy}
+              onClick={() => setCompressionPrompt(null)}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Table ── */}
       <div id="sources_body">
@@ -269,6 +473,7 @@ const SourcesPage = () => {
           <thead>
             <tr>
               <th>Type</th>
+              <th>Format</th>
               <th>Name</th>
               <th>Open</th>
               <th></th>
@@ -276,9 +481,9 @@ const SourcesPage = () => {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={4} className="sources_td_status">Loading…</td></tr>
+              <tr><td colSpan={5} className="sources_td_status">Loading…</td></tr>
             ) : sources.length === 0 ? (
-              <tr><td colSpan={4} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
+              <tr><td colSpan={5} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
             ) : sources.map((s) => (
               <tr key={s._id}>
                 <td>
@@ -286,6 +491,7 @@ const SourcesPage = () => {
                     {TYPE_LABELS[s.type] || s.type}
                   </span>
                 </td>
+                <td className="sources_td_format">{s.format || "—"}</td>
                 <td className="sources_td_name">{s.name}</td>
                 <td className="sources_td_url">
                   {s.url
@@ -295,22 +501,12 @@ const SourcesPage = () => {
                           {s.name}
                         </button>
                       : <button className="sources_url_link"
-                          onClick={() => navigate("/hylomorphism/pdf_source", { state: { sourceId: s._id, pdfName: s.name } })}>
+                          onClick={() => navigate("/pdf-reader", { state: { sourceId: s._id, pdfName: s.name } })}>
                           {s.name}
                         </button>
                     : <span className="sources_url_none">—</span>}
                 </td>
                 <td className="sources_td_actions">
-                  {s.key && s.type !== "youtube" && s.type !== "image" && (
-                    <button
-                      className="sources_md_btn"
-                      onClick={() => downloadMarkdown(s._id, s.name)}
-                      disabled={markdownBusyId === s._id}
-                      title="Download as Markdown"
-                    >
-                      {markdownBusyId === s._id ? "…" : "MD"}
-                    </button>
-                  )}
                   <button className="sources_del_btn" onClick={() => deleteSource(s._id)}>✕</button>
                 </td>
               </tr>

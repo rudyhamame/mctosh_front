@@ -34,7 +34,7 @@ export default function UnitsExtraction() {
   useEffect(() => {
     authFetch(apiUrl("/api/sources"))
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.sources) setSources(d.sources.filter(s => s.type === "pdf")); })
+      .then(d => { if (d?.sources) setSources(d.sources.filter(s => /\.pdf$/i.test(s.name))); })
       .catch(() => {});
   }, []);
 

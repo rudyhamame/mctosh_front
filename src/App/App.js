@@ -49,6 +49,13 @@ const PIPELINE = [
 
 const OTHER = [
   {
+    path: "/pdf-reader",
+    icon: "fi-rr-file-pdf",
+    label: "PDF Reader",
+    description: "Open and annotate any PDF source — highlight, draw, and extract markdown page by page",
+    color: "#ef5350",
+  },
+  {
     path: "/units-extraction",
     icon: "fi-rr-book-open-reader",
     label: "MCTOSHS Units Extraction while Studying",

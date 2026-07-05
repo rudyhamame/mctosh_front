@@ -56,7 +56,7 @@ export default function TracesCollector() {
   useEffect(() => {
     fetch(apiUrl("/api/sources"), { headers: authHeader() })
       .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.sources) setSources(d.sources.filter(s => s.type === "pdf")); })
+      .then(d => { if (d?.sources) setSources(d.sources.filter(s => /\.pdf$/i.test(s.name))); })
       .catch(() => {});
   }, []);
 

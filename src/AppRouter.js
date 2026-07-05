@@ -103,6 +103,7 @@ const AppRouter = () => {
         <Route path="/hylomorphism/youtube_source" element={auth(<YouTubeSourcePage />)} />
         <Route path="/hylomorphism/pdf_source"     element={auth(<PDFPage />)} />
         <Route path="/hylomorphism"       element={auth(<HylomorphismPage />)} />
+        <Route path="/pdf-reader"         element={auth(<PDFPage embeddedHomePath="/home" homeLabel="Home" />)} />
         <Route path="/sources"            element={auth(<SourcesPage />)} />
         <Route path="/youtube"            element={auth(<YouTubePage />)} />
         <Route path="/ai"                 element={auth(<AIChat />)} />
