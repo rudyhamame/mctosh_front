@@ -3,7 +3,12 @@ import { useNavigate } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { MCTOSH_PROMPT_TEXT } from "../Hylomorphism/mctoshPrompt";
+import { getPredictionPools, setPredictionPoolEnabled, rebuildPredictionPool, ingestPredictionPool } from "../utils/predictionApi";
+import objectivesEn from "../MCC/mccqeObjectivesData.json";
+import objectivesAr from "../MCC/mccqeObjectivesArabicData.json";
 import "./settingsPage.css";
+
+const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
 
 const authHeader = () => {
   const token = readStoredSession()?.token || "";
@@ -17,10 +22,11 @@ const THEMES = [
 ];
 
 const SECTIONS = [
-  { id: "prompts",   label: "Prompts",       icon: "fi fi-rr-document" },
-  { id: "ai",        label: "AI Providers",  icon: "fi fi-rr-microchip-ai" },
-  { id: "ai_access", label: "AI Access",     icon: "fi fi-rr-shield-check" },
-  { id: "theme",     label: "Theme",         icon: "fi fi-rr-palette" },
+  { id: "prompts",    label: "Prompts",         icon: "fi fi-rr-document" },
+  { id: "ai",         label: "AI Providers",    icon: "fi fi-rr-microchip-ai" },
+  { id: "ai_access",  label: "AI Access",       icon: "fi fi-rr-shield-check" },
+  { id: "prediction", label: "Predictive Text", icon: "fi fi-rr-keyboard" },
+  { id: "theme",      label: "Theme",           icon: "fi fi-rr-palette" },
 ];
 
 const applyTheme = (id) => {
@@ -107,6 +113,10 @@ const SettingsPage = () => {
   const [providers, setProviders] = useState([]);
   const [aiLoading, setAiLoading] = useState(true);
   const [defProvider, setDefProvider] = useState(() => localStorage.getItem("mctosh_ai_provider") || "groq");
+  const [predictPools,   setPredictPools]   = useState([]);
+  const [predictLoading, setPredictLoading] = useState(true);
+  const [predictBusyKey, setPredictBusyKey] = useState(null);
+  const [predictError,   setPredictError]   = useState("");
 
   useEffect(() => {
     fetch(apiUrl("/api/settings/ai-status"))
@@ -116,9 +126,47 @@ const SettingsPage = () => {
       .finally(() => setAiLoading(false));
   }, []);
 
+  useEffect(() => {
+    getPredictionPools()
+      .then(setPredictPools)
+      .catch((e) => setPredictError(e.message))
+      .finally(() => setPredictLoading(false));
+  }, []);
+
   const handleTheme = (id) => {
     setTheme(id);
     applyTheme(id);
+  };
+
+  const handleTogglePredictPool = async (key, enabled) => {
+    setPredictPools((prev) => prev.map((p) => (p.key === key ? { ...p, enabled } : p)));
+    try {
+      await setPredictionPoolEnabled(key, enabled);
+    } catch (e) {
+      setPredictError(e.message);
+      setPredictPools((prev) => prev.map((p) => (p.key === key ? { ...p, enabled: !enabled } : p)));
+    }
+  };
+
+  const handleRefreshPredictPool = async (pool) => {
+    setPredictBusyKey(pool.key);
+    setPredictError("");
+    try {
+      let wordCount;
+      if (pool.source === "computed") {
+        wordCount = await rebuildPredictionPool(pool.key);
+      } else if (pool.key === "mccqe_objectives") {
+        const text = [...objectivesEn, ...objectivesAr]
+          .map((o) => `${o.title || ""} ${stripHtml(o.content || "")}`)
+          .join("\n");
+        wordCount = await ingestPredictionPool(pool.key, text);
+      }
+      setPredictPools((prev) => prev.map((p) => (p.key === pool.key ? { ...p, wordCount, builtAt: new Date().toISOString() } : p)));
+    } catch (e) {
+      setPredictError(e.message);
+    } finally {
+      setPredictBusyKey(null);
+    }
   };
 
   const handleProvider = (id) => {
@@ -301,6 +349,52 @@ const SettingsPage = () => {
                   <li><strong>Network requests</strong> — the AI cannot make external HTTP calls on your behalf during a conversation.</li>
                 </ul>
               </div>
+            </div>
+          )}
+
+          {/* ═══ PREDICTIVE TEXT ═══ */}
+          {section === "prediction" && (
+            <div className="sett_section">
+              <h2 className="sett_section_title">Predictive Text</h2>
+              <p className="sett_section_desc">
+                Word suggestions appear while typing in any text field across MCTOSHS. Check which text pools feed the
+                suggestion list below — each pool's word frequencies are combined, so you can mix and match. Turning
+                everything off disables suggestions entirely.
+              </p>
+
+              {predictError && <p className="sett_section_desc" style={{ color: "#f44336" }}>⚠ {predictError}</p>}
+
+              {predictLoading ? (
+                <div className="sett_ai_loading">Loading pools…</div>
+              ) : (
+                <div id="sett_predict_pools">
+                  {predictPools.map((pool) => (
+                    <label key={pool.key} className="sett_predict_pool_row">
+                      <input
+                        type="checkbox"
+                        checked={pool.enabled}
+                        onChange={(e) => handleTogglePredictPool(pool.key, e.target.checked)}
+                      />
+                      <div className="sett_predict_pool_info">
+                        <span className="sett_predict_pool_label">{pool.label}</span>
+                        <span className="sett_predict_pool_meta">
+                          {pool.wordCount > 0
+                            ? `${pool.wordCount.toLocaleString()} words indexed${pool.builtAt ? ` · updated ${new Date(pool.builtAt).toLocaleDateString()}` : ""}`
+                            : "Not indexed yet"}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        className="sett_btn sett_btn--ghost"
+                        onClick={(e) => { e.preventDefault(); handleRefreshPredictPool(pool); }}
+                        disabled={predictBusyKey === pool.key}
+                      >
+                        {predictBusyKey === pool.key ? "Working…" : pool.source === "computed" ? "Rebuild" : "Sync"}
+                      </button>
+                    </label>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

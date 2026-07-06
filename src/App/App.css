@@ -79,10 +79,77 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 2.5rem;
   padding: 2.5rem;
   overflow-y: auto;
+}
+
+/* ── Quote banner ── a compact horizontal pull-quote, not a big centered
+   block — icon and text sit side by side so it stays short, with a
+   pulsing glow + shimmering tagline so it doesn't just sit flat. */
+#app_quote_banner {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 1.15rem 2rem;
+  border-radius: 14px;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--color-highlight) 10%, var(--color-surface)), var(--color-surface) 55%);
+  border: 1px solid color-mix(in srgb, var(--color-highlight) 35%, var(--color-border));
+  animation: app_quote_glow 3.5s ease-in-out infinite;
+}
+
+@keyframes app_quote_glow {
+  0%, 100% { box-shadow: 0 0 16px -6px color-mix(in srgb, var(--color-highlight) 45%, transparent); }
+  50%      { box-shadow: 0 0 28px -4px color-mix(in srgb, var(--color-highlight) 70%, transparent); }
+}
+
+#app_quote_mark {
+  flex-shrink: 0;
+  font-size: 2.5rem;
+  color: var(--color-highlight);
+  opacity: 0.55;
+  line-height: 1;
+}
+
+#app_quote_body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+#app_quote_text {
+  margin: 0;
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  font-style: italic;
+  font-size: 1.02rem;
+  line-height: 1.45;
+  color: var(--color-text);
+}
+
+#app_quote_tagline {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  background: linear-gradient(90deg, var(--color-highlight), #ff9d7a 45%, var(--color-highlight));
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: app_quote_tagline_shimmer 4s linear infinite;
+}
+
+@keyframes app_quote_tagline_shimmer {
+  to { background-position: -200% 0; }
+}
+
+@media (max-width: 720px) {
+  #app_quote_banner { flex-direction: column; text-align: center; }
+  #app_quote_body { align-items: center; }
 }
 
 /* ── Pipeline section ── */

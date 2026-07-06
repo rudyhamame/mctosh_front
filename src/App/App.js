@@ -63,6 +63,27 @@ const OTHER = [
     color: "#b39ddb",
   },
   {
+    path: "/linguistic-analysis",
+    icon: "fi-rr-language",
+    label: "Clinical Linguistic Analysis",
+    description: "Extract morphemes, words, syntagms, clauses, sentences, and paragraphs from any converted PDF page",
+    color: "#69f0ae",
+  },
+  {
+    path: "/mcc/mccqe/objectives",
+    icon: "fi-rr-document-signed",
+    label: "MCCQE Objectives",
+    description: "Browse the MCCQE objectives dataset with search, group filters, and rendered objective content",
+    color: "#d4a24c",
+  },
+  {
+    path: "/draft",
+    icon: "fi-rr-notebook",
+    label: "MCTOSHS Draft",
+    description: "A running scratchpad for notes you find while reading — autosaves as you write",
+    color: "#ffca28",
+  },
+  {
     path: "/settings",
     icon: "fi-rr-settings",
     label: "Settings",
@@ -101,6 +122,20 @@ const App = ({ onLogout }) => {
       </div>
 
       <div id="app_home_grid">
+
+        {/* Quote banner — the same line whispered on the Login page, given
+            room to breathe here instead of hiding in the corner. */}
+        <div id="app_quote_banner">
+          <i className="fi fi-rr-quote-right" id="app_quote_mark" />
+          <div id="app_quote_body">
+            <p id="app_quote_text">
+              A worm born inside the human intestine cannot observe or
+              imagine the unity of the larger reality that contains it, even
+              if such a unity truly exists.
+            </p>
+            <span id="app_quote_tagline">From representation to reality — MCTOSHS</span>
+          </div>
+        </div>
 
         {/* Pipeline section */}
         <div id="app_pipeline_section">

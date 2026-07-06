@@ -5,6 +5,12 @@
   background: var(--color-bg);
   color: var(--color-text);
   overflow: hidden;
+  /* Long-press-to-select should only ever act on the PDF's own text (see
+     .pdf_text_layer below, which opts back in) — not on toolbar/button/panel
+     labels, where a long press should just be a long press, never trigger
+     the browser's native text-selection callout. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Embedded inside another page's layout (e.g. Traces Collector) — fill the
@@ -87,7 +93,6 @@
   box-sizing: border-box;
 }
 
-#pdf_drop_zone:hover,
 #pdf_drop_zone.drag_over {
   border-color: var(--color-highlight);
 }
@@ -145,6 +150,9 @@
   font-size: 0.82rem;
 }
 
+@keyframes pdf_icon_spin { to { transform: rotate(360deg); } }
+.pdf_icon_spin { display: inline-block; animation: pdf_icon_spin 0.9s linear infinite; }
+
 .pdf_type_badge {
   display: inline-flex;
   align-items: center;
@@ -185,8 +193,6 @@
   line-height: 1;
 }
 
-#pdf_zoom_controls button:hover { color: var(--color-text); background: var(--color-surface); }
-
 #pdf_zoom_label {
   min-width: 3.2rem;
   text-align: center;
@@ -202,21 +208,87 @@
   padding: 0.18rem 0.45rem;
 }
 
-#pdf_home_btn:hover { color: var(--color-text); }
-
 #pdf_close {
   color: var(--color-text-muted);
 }
 
-#pdf_page_md_btn {
+#pdf_actions_btn {
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.03em;
   color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
 }
-#pdf_page_md_btn:hover:not(:disabled) { color: #4fc3f7; border-color: #4fc3f7; }
-#pdf_page_md_btn:disabled { opacity: 0.5; cursor: default; }
-.pdf_page_md_btn--active { color: #4fc3f7; border-color: #4fc3f7; background: color-mix(in srgb, #4fc3f7 10%, transparent); }
+#pdf_actions_btn:disabled { opacity: 0.5; cursor: default; }
+.pdf_actions_btn--active { color: #4fc3f7; border-color: #4fc3f7; background: color-mix(in srgb, #4fc3f7 10%, transparent); }
+
+#pdf_range_picker {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.6rem;
+}
+
+#pdf_range_picker_title {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+#pdf_range_all_row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+#pdf_range_inputs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+#pdf_range_inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  flex: 1;
+}
+
+#pdf_range_inputs input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.78rem;
+}
+
+#pdf_range_actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+}
+
+#pdf_annot_history_btn {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.pdf_annot_history_btn--active { color: #ab47bc; border-color: #ab47bc; background: color-mix(in srgb, #ab47bc 10%, transparent); }
 
 /* ── Split content area ── */
 #pdf_content {
@@ -227,13 +299,42 @@
 
 /* ── Far left: Markdown preview column ── */
 #pdf_md_panel {
+  position: relative;
   flex-shrink: 0;
-  width: 340px;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--color-border);
   background: var(--color-surface);
   overflow: hidden;
+}
+
+/* Wide invisible hit area (easy to grab) with a slim, always-visible grip
+   line centered inside it (so the panel reads as resizable at a glance,
+   not just on hover). */
+#pdf_md_panel_resize_handle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  bottom: 0;
+  width: 13px;
+  cursor: col-resize;
+  z-index: 5;
+  display: flex;
+  justify-content: center;
+  touch-action: none;
+}
+
+#pdf_md_panel_resize_handle::before {
+  content: "";
+  width: 3px;
+  height: 100%;
+  background: var(--color-border);
+  transition: background 0.15s, width 0.15s;
+}
+
+#pdf_md_panel_resize_handle.pdf_md_panel_resize_handle--active::before {
+  width: 4px;
+  background: var(--color-highlight);
 }
 
 #pdf_md_panel_header {
@@ -259,12 +360,276 @@
   line-height: 1;
   padding: 0.1rem 0.3rem;
 }
-#pdf_md_panel_close:hover { color: var(--color-text); }
+
+#pdf_md_stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  row-gap: 0.3rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#pdf_md_pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  row-gap: 0.3rem;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+
+/* One bordered pill housing prev/‹, the editable page number, the total and
+   next/› as a single unified control, instead of separate loose buttons. */
+#pdf_md_page_nav {
+  display: inline-flex;
+  align-items: center;
+  height: 1.5rem;
+  padding: 0 0.15rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  flex-shrink: 0;
+}
+
+#pdf_md_page_nav button {
+  width: 1.1rem;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+#pdf_md_page_nav button:disabled { opacity: 0.35; cursor: default; }
+
+#pdf_md_page_nav input[type="number"] {
+  -webkit-appearance: textfield;
+  -moz-appearance: textfield;
+  width: 1.7rem;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1;
+  text-align: right;
+  padding: 0;
+}
+
+#pdf_md_page_nav input[type="number"]::-webkit-inner-spin-button,
+#pdf_md_page_nav input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+#pdf_md_page_nav_total {
+  font-size: 0.72rem;
+  padding: 0 0.15rem 0 0.1rem;
+  white-space: nowrap;
+}
+
+.pdf_md_icon_btn {
+  height: 1.6rem;
+  padding: 0 0.55rem;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+.pdf_md_icon_btn i { font-size: 0.9em; }
+.pdf_md_icon_btn:disabled { opacity: 0.4; cursor: default; }
+
+.pdf_md_icon_btn--active {
+  color: #64b5f6;
+  border-color: #64b5f6;
+  background: color-mix(in srgb, #64b5f6 12%, var(--color-bg));
+}
+
+#pdf_md_all_pages_btn.pdf_md_all_pages_btn--active {
+  border-color: #4caf50;
+  background: color-mix(in srgb, #4caf50 12%, var(--color-bg));
+  color: #4caf50;
+}
+
+.pdf_md_delete_btn {
+  border-color: color-mix(in srgb, #ef5350 55%, var(--color-border));
+  background: color-mix(in srgb, #ef5350 10%, var(--color-bg));
+  color: #ef9a9a;
+}
+
+.pdf_md_delete_btn--all {
+  border-color: color-mix(in srgb, #ff7043 60%, var(--color-border));
+  background: color-mix(in srgb, #ff7043 12%, var(--color-bg));
+  color: #ffccbc;
+}
+
+#pdf_md_voice_btn {
+  height: 1.7rem;
+  padding: 0 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+}
+
+#pdf_md_voice_btn i { font-size: 0.95em; }
+
+.pdf_md_voice_btn--active {
+  color: #fff;
+  border-color: #e53935;
+  background: #e53935;
+  animation: md_voice_pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes md_voice_pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 57, 53, 0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(229, 57, 53, 0); }
+}
+
+#pdf_md_voice_status {
+  padding: 0.3rem 0.75rem;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.md_voice_hl {
+  background: color-mix(in srgb, #e53935 45%, transparent);
+  border-radius: 2px;
+}
+
+#pdf_md_font_controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+#pdf_md_font_controls button {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+
+#pdf_md_font_controls button:disabled { opacity: 0.35; cursor: default; }
+
+#pdf_md_font_label {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  min-width: 2.2em;
+  text-align: center;
+}
+
+.pdf_md_stat_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.pdf_md_stat_btn i { font-size: 0.85em; }
+
+.pdf_md_stat_btn--active {
+  color: #ffca28;
+  border-color: #ffca28;
+  background: color-mix(in srgb, #ffca28 12%, transparent);
+}
 
 #pdf_md_panel_body {
   flex: 1;
   overflow: auto;
   padding: 0.75rem;
+}
+
+.pdf_md_compare_layout {
+  display: block;
+}
+
+.pdf_md_compare_layout--split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  min-height: 100%;
+}
+
+.pdf_md_compare_col {
+  min-width: 0;
+}
+
+.pdf_md_compare_col--ai {
+  border-left: 1px solid var(--color-border);
+  padding-left: 0.75rem;
+}
+
+.pdf_md_compare_head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.pdf_md_compare_meta {
+  font-size: 0.66rem;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-text-muted);
 }
 
 #pdf_md_panel_status {
@@ -273,14 +638,140 @@
 }
 .pdf_md_panel_status--error { color: #f44336; }
 
-#pdf_md_panel_text {
+#pdf_md_panel_text,
+.pdf_md_panel_text_compare {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 0.8rem;
   line-height: 1.55;
   color: var(--color-text);
+  /* #pdf_page defaults the whole reader to user-select: none (so a long-press
+     only ever selects PDF text, never button/UI labels) — the markdown
+     preview isn't part of that toolbar chrome though, so opt it back in. */
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.pdf_md_panel_text_compare {
+  color: color-mix(in srgb, var(--color-text) 94%, #8fd3ff);
+}
+
+.md_char_hl {
+  background: color-mix(in srgb, #ffca28 45%, transparent);
+  border-radius: 2px;
+}
+
+.md_line {
+  margin: 0 0 0.7em;
+}
+
+.md_line:last-child {
+  margin-bottom: 0;
+}
+
+.md_heading {
+  font-weight: 700;
+  color: #64b5f6;
+}
+
+.md_heading--h1 { font-size: 1.4em; }
+.md_heading--h2 { font-size: 1.25em; }
+.md_heading--h3 { font-size: 1.12em; }
+.md_heading--h4,
+.md_heading--h5,
+.md_heading--h6 { font-size: 1em; text-decoration: underline; text-underline-offset: 2px; }
+
+.md_bold { font-weight: 700; color: var(--color-text); }
+
+/* ── Far left: Annotation History column ── */
+#pdf_annot_history_panel {
+  flex-shrink: 0;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+#pdf_annot_history_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+#pdf_annot_history_close {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 0.1rem 0.3rem;
+}
+
+#pdf_annot_history_body {
+  flex: 1;
+  overflow: auto;
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.anh_row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+}
+
+.anh_icon {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  width: 1rem;
+  text-align: center;
+}
+
+.anh_main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.anh_label {
+  font-size: 0.78rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.anh_meta {
+  font-size: 0.66rem;
+  color: var(--color-text-muted);
+}
+
+.anh_swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.25);
+  flex-shrink: 0;
 }
 
 /* ── Left: PDF preview ── */
@@ -310,7 +801,6 @@
   z-index: 10;
 }
 
-#pdf_resize_handle:hover,
 #pdf_resize_handle:active {
   background: var(--color-highlight);
 }
@@ -330,11 +820,6 @@
   font-size: 0.9rem;
   cursor: pointer;
   line-height: 1;
-}
-
-#pdf_preview_toggle:hover {
-  color: var(--color-text);
-  border-color: var(--color-text-muted);
 }
 
 #pdf_canvas_wrap {
@@ -414,7 +899,6 @@
   line-height: 1.3;
 }
 
-.annot_trigger:hover { color: var(--color-text); border-color: var(--color-text-muted); }
 .annot_trigger--active { color: var(--color-text); border-color: var(--color-highlight); }
 .annot_trigger--color { padding: 0.3rem 0.45rem; }
 
@@ -448,6 +932,15 @@
   min-width: 170px;
 }
 
+/* The Actions trigger lives near the right edge of the top toolbar — a
+   left-aligned dropdown there overflows off-screen (clipped by #pdf_page's
+   overflow: hidden). Anchor it to the trigger's right edge instead. */
+#pdf_actions_dd,
+#pdf_range_picker {
+  left: auto;
+  right: 0;
+}
+
 .annot_dd--tools {
   display: flex;
   flex-direction: column;
@@ -470,7 +963,6 @@
   white-space: nowrap;
 }
 
-.annot_dd_item:hover { background: var(--color-bg); color: var(--color-text); }
 .annot_dd_item--active { background: var(--color-bg); color: var(--color-text); }
 
 .annot_dd--colors {
@@ -490,10 +982,16 @@
   transition: transform 0.1s, border-color 0.1s;
 }
 
-.annot_swatch_btn:hover { transform: scale(1.15); }
 .annot_swatch_btn--active { border-color: #fff; transform: scale(1.1); }
 
 .annot_size_knob {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.annot_size_knob_track {
   position: relative;
   height: 28px;
   border-radius: 99px;
@@ -502,6 +1000,14 @@
   cursor: pointer;
   touch-action: none;
   flex-shrink: 0;
+}
+
+.annot_size_label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  min-width: 2.4em;
+  text-align: left;
 }
 
 .annot_size_knob_fill {
@@ -546,13 +1052,18 @@
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.annot_mode_btn:hover { color: var(--color-text); }
 .annot_mode_btn--active { background: var(--color-bg); color: var(--color-text); border-color: var(--color-highlight); }
+
+#pdf_annot_right_group {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
 
 #pdf_annot_actions {
   display: flex;
   gap: 0.25rem;
-  margin-left: auto;
 }
 
 .annot_action_btn {
@@ -566,7 +1077,6 @@
   transition: color 0.12s;
 }
 
-.annot_action_btn:hover:not(:disabled) { color: var(--color-text); }
 .annot_action_btn:disabled { opacity: 0.3; cursor: default; }
 
 .pdf_page_canvas {
@@ -671,7 +1181,6 @@
   flex-shrink: 0;
 }
 
-.msb_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
 .msb_btn:disabled { opacity: 0.25; cursor: default; }
 
 #msb_confirm {
@@ -695,8 +1204,6 @@
   cursor: pointer;
   flex-shrink: 0;
 }
-
-#msb_cancel:hover { color: var(--color-text); }
 
 .msb_action_btn { white-space: nowrap; }
 #msb_confirm:disabled { opacity: 0.6; cursor: default; }
@@ -777,8 +1284,6 @@
   cursor: pointer;
 }
 
-#manual_cancel_btn:hover { color: var(--color-text); }
-
 /* ── Right: Nouns panel ── */
 #pdf_hyles_panel {
   flex: 1;
@@ -815,8 +1320,6 @@
   font-size: 0.74rem;
   cursor: pointer;
 }
-
-.pdf_action_btn:hover { color: var(--color-text); }
 
 .pdf_action_btn--saved {
   border-color: #4caf50;
@@ -859,7 +1362,6 @@
   width: 100%;
 }
 
-.phi_row:hover { background: var(--color-surface); }
 .phi_row--active { background: var(--color-surface); border-left: 2px solid var(--color-highlight); }
 
 .phi_td_name, .phi_td_meta, .phi_td_del {
@@ -885,12 +1387,6 @@
   display: none;
 }
 
-.phi_row:hover .phi_td_del {
-  display: block;
-  text-align: right;
-  padding-top: 0;
-}
-
 .phi_delete_btn {
   padding: 0.1rem 0.32rem;
   border: 1px solid transparent;
@@ -901,8 +1397,6 @@
   cursor: pointer;
   transition: color 0.12s, border-color 0.12s;
 }
-
-.phi_delete_btn:hover { color: #f44336; border-color: #f44336; }
 
 #pdf_hyles_panel_header span {
   font-size: 0.78rem;
@@ -925,8 +1419,6 @@
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-#pdf_hyles_toggle_btn:hover { color: var(--color-text); }
-
 #pdf_hyles_toggle_btn.pdf_hyles_toggle_btn--active {
   background: #e53935;
   border-color: #e53935;
@@ -942,8 +1434,6 @@
   font-size: 0.74rem;
   cursor: pointer;
 }
-
-#pdf_sys_btn:hover { color: var(--color-text); }
 
 /* ── Segmented toggle (shared by mode + provider) ── */
 #pdf_mode_toggle,
@@ -976,22 +1466,11 @@
   border-right: none;
 }
 
-#pdf_toolbar .pdf_mode_btn:hover:not(:disabled),
-#pdf_toolbar .pdf_provider_btn:hover:not(:disabled) {
-  background: var(--color-bg);
-  color: var(--color-text);
-}
-
 #pdf_toolbar #pdf_mode_toggle .pdf_mode_btn--active,
 #pdf_toolbar #pdf_provider_toggle .pdf_provider_btn--active {
   background: #e53935 !important;
   color: #fff !important;
   font-weight: 600;
-}
-
-#pdf_toolbar #pdf_mode_toggle .pdf_mode_btn--active:hover,
-#pdf_toolbar #pdf_provider_toggle .pdf_provider_btn--active:hover {
-  background: #c62828 !important;
 }
 
 #pdf_toolbar .pdf_mode_btn:disabled,
@@ -1115,8 +1594,6 @@
   flex-shrink: 0;
 }
 
-.hyle_card_tab:hover { color: var(--color-text); }
-
 .hyle_card_tab--active {
   color: #e53935;
   border-bottom-color: #e53935;
@@ -1136,8 +1613,6 @@
   transition: color 0.12s, border-color 0.12s, background 0.12s;
   flex-shrink: 0;
 }
-
-#hyle_type_toggle_btn:hover { color: var(--color-text); }
 
 #hyle_type_toggle_btn.hyle_type_toggle_btn--open,
 #hyle_type_toggle_btn:has(+ #hyle_type_panel) {
@@ -1197,11 +1672,6 @@
   transition: color 0.1s, background 0.1s, border-color 0.1s;
 }
 
-.hyle_type_leaf:hover {
-  color: var(--color-text);
-  background: var(--color-bg);
-}
-
 .hyle_type_leaf--active {
   color: #e53935;
   border-color: rgba(229, 57, 53, 0.35);
@@ -1218,4 +1688,55 @@
 
 .hyle_type_leaf--active .hyle_type_note {
   color: rgba(229, 57, 53, 0.7);
+}
+
+/* ── Hover-only effects ──────────────────────────────────────────────────────
+   Scoped to (hover: hover) so a tap on a touch device (Safari/iPadOS above
+   all) never leaves a button "stuck" showing its hover color after the
+   finger lifts — touch has no real hover, but WebKit will hold a :hover
+   style engaged post-tap until something else is tapped, which made toggle
+   buttons (Hand, Auto contrast, Select Text, tool triggers, ...) impossible
+   to read as on/off. Real pointer devices (mouse/trackpad) are unaffected. */
+@media (hover: hover) {
+  #pdf_drop_zone:hover { border-color: var(--color-highlight); }
+  #pdf_zoom_controls button:hover { color: var(--color-text); background: var(--color-surface); }
+  #pdf_home_btn:hover { color: var(--color-text); }
+  #pdf_actions_btn:hover:not(:disabled) { color: #4fc3f7; border-color: #4fc3f7; }
+  #pdf_annot_history_btn:hover { color: #ab47bc; border-color: #ab47bc; }
+  #pdf_md_panel_close:hover { color: var(--color-text); }
+  #pdf_annot_history_close:hover { color: var(--color-text); }
+  .pdf_md_stat_btn:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+  .pdf_md_delete_btn:hover:not(:disabled) { filter: brightness(1.08); }
+  #pdf_md_font_controls button:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+  #pdf_md_voice_btn:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+  .anh_row:hover { background: var(--color-bg); }
+  #pdf_resize_handle:hover { background: var(--color-highlight); }
+  #pdf_md_panel_resize_handle:hover::before { width: 4px; background: var(--color-highlight); }
+  #pdf_preview_toggle:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+  .annot_trigger:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+  .annot_dd_item:hover { background: var(--color-bg); color: var(--color-text); }
+  .annot_swatch_btn:hover { transform: scale(1.15); }
+  .annot_mode_btn:hover { color: var(--color-text); }
+  .annot_action_btn:hover:not(:disabled) { color: var(--color-text); }
+  .msb_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+  #msb_cancel:hover { color: var(--color-text); }
+  #manual_cancel_btn:hover { color: var(--color-text); }
+  .pdf_action_btn:hover { color: var(--color-text); }
+  .phi_row:hover { background: var(--color-surface); }
+  .phi_row:hover .phi_td_del { display: block; text-align: right; padding-top: 0; }
+  .phi_delete_btn:hover { color: #f44336; border-color: #f44336; }
+  #pdf_hyles_toggle_btn:hover { color: var(--color-text); }
+  #pdf_sys_btn:hover { color: var(--color-text); }
+  #pdf_toolbar .pdf_mode_btn:hover:not(:disabled),
+  #pdf_toolbar .pdf_provider_btn:hover:not(:disabled) {
+    background: var(--color-bg);
+    color: var(--color-text);
+  }
+  #pdf_toolbar #pdf_mode_toggle .pdf_mode_btn--active:hover,
+  #pdf_toolbar #pdf_provider_toggle .pdf_provider_btn--active:hover {
+    background: #c62828 !important;
+  }
+  .hyle_card_tab:hover { color: var(--color-text); }
+  #hyle_type_toggle_btn:hover { color: var(--color-text); }
+  .hyle_type_leaf:hover { color: var(--color-text); background: var(--color-bg); }
 }

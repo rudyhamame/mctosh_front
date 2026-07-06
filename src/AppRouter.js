@@ -10,6 +10,8 @@ import App from "./App/App";
 import Login from "./Login/Login";
 import AIChat                         from "./AI/AIChat";
 import HomeChat                       from "./App/HomeChat";
+import PredictionOverlay              from "./Prediction/PredictionOverlay";
+import DraftPage                      from "./Draft/DraftPage";
 import PDFPage                        from "./PDF/PDFPage";
 import CardPage                       from "./Card/CardPage";
 import PhenomenaPage                  from "./Phenomena/PhenomenaPage";
@@ -25,6 +27,8 @@ import PatientModelling               from "./PatientModelling/PatientModelling"
 import TracesCollector                from "./TracesCollector/TracesCollector";
 import ClinicalSchemata              from "./ClinicalSchemata/ClinicalSchemata";
 import UnitsExtraction                from "./UnitsExtraction/UnitsExtraction";
+import LinguisticAnalysisPage          from "./LinguisticAnalysis/LinguisticAnalysisPage";
+import MCCQEObjectivesPage            from "./MCC/MCCQEObjectivesPage";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
@@ -92,6 +96,7 @@ const AppRouter = () => {
 
         <Route path="/about"     element={<AboutPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
+        <Route path="/mcc/mccqe/objectives" element={<MCCQEObjectivesPage />} />
 
         <Route path="/login" element={
           canAccessAuthenticatedRoutes
@@ -103,18 +108,20 @@ const AppRouter = () => {
         <Route path="/hylomorphism/youtube_source" element={auth(<YouTubeSourcePage />)} />
         <Route path="/hylomorphism/pdf_source"     element={auth(<PDFPage />)} />
         <Route path="/hylomorphism"       element={auth(<HylomorphismPage />)} />
-        <Route path="/pdf-reader"         element={auth(<PDFPage embeddedHomePath="/home" homeLabel="Home" />)} />
+        <Route path="/pdf-reader"         element={auth(<PDFPage embeddedHomePath="/home" homeLabel="Home" hideHyleControls />)} />
         <Route path="/sources"            element={auth(<SourcesPage />)} />
         <Route path="/youtube"            element={auth(<YouTubePage />)} />
         <Route path="/ai"                 element={auth(<AIChat />)} />
         <Route path="/card/:card"         element={auth(<CardPage />)} />
         <Route path="/phenomena"          element={auth(<PhenomenaPage />)} />
         <Route path="/settings"           element={auth(<SettingsPage />)} />
+        <Route path="/draft"              element={auth(<DraftPage />)} />
         <Route path="/patient-instantiation" element={auth(<PatientInstantiationPage />)} />
         <Route path="/patient-modelling"     element={auth(<PatientModelling />)} />
         <Route path="/traces-collector"      element={auth(<TracesCollector />)} />
         <Route path="/clinical-schemata"      element={auth(<ClinicalSchemata />)} />
         <Route path="/units-extraction"       element={auth(<UnitsExtraction />)} />
+        <Route path="/linguistic-analysis"    element={auth(<LinguisticAnalysisPage />)} />
 
         {/* Legacy redirect */}
         <Route path="/pdf/:card" element={<PdfCardRedirect />} />
@@ -125,6 +132,7 @@ const AppRouter = () => {
       </Routes>
 
       {canAccessAuthenticatedRoutes && <HomeChat />}
+      {canAccessAuthenticatedRoutes && <PredictionOverlay />}
     </Router>
   );
 };

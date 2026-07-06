@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import AboutContentAR from "./AboutContentAR";
+import { useLongPressSelect } from "../utils/longPressSelect";
 import "./aboutPage.css";
 
 const SECTIONS_EN = [
@@ -46,6 +47,11 @@ const AboutPage = () => {
   const [copied,   setCopied]   = useState(false);
   const [lang,     setLang]     = useState("en");
   const bodyRef = useRef(null);
+  const arBodyRef = useRef(null);
+  // Long, static prose — selection only turns on after a long press so a
+  // quick click/scroll never accidentally starts selecting.
+  useLongPressSelect(bodyRef);
+  useLongPressSelect(arBodyRef);
 
   const SECTIONS = lang === "ar" ? SECTIONS_AR : SECTIONS_EN;
 
@@ -165,7 +171,7 @@ const AboutPage = () => {
 
         <div id="about_scroll" ref={scrollRef}>
           {lang === "ar" ? (
-            <div id="about_ar_body" dir="rtl" lang="ar" style={{ fontSize: `${scale}rem` }}>
+            <div id="about_ar_body" ref={arBodyRef} dir="rtl" lang="ar" style={{ fontSize: `${scale}rem` }}>
               <AboutContentAR />
             </div>
           ) : (

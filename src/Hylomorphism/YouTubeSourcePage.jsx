@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { LINGUISTIC_UNITS } from "../Linguistics/linguisticUnits";
+import { useLongPressSelect } from "../utils/longPressSelect";
 import "./youtubeSourcePage.css";
 
 const authHeader = () => {
@@ -43,6 +44,9 @@ const YouTubeSourcePage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { sourceId, sourceName, sourceUrl } = location.state || {};
+  // Read-only transcript display — selection only turns on after a long press.
+  const transcriptTextRef = useRef(null);
+  useLongPressSelect(transcriptTextRef);
 
   const [transcript,   setTranscript]   = useState("");
   const [loading,      setLoading]      = useState(true);
@@ -138,7 +142,7 @@ const YouTubeSourcePage = () => {
             {loading
               ? <p id="ytsrc_loading">Loading…</p>
               : transcript
-                ? <p id="ytsrc_transcript_text">{transcript}</p>
+                ? <p id="ytsrc_transcript_text" ref={transcriptTextRef}>{transcript}</p>
                 : <p id="ytsrc_transcript_empty">No transcript yet — open the Transcript Editor to fetch one.</p>
             }
           </div>

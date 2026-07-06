@@ -15,27 +15,16 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       if (!ann.points || ann.points.length < 2) break;
       const opacity = ann.opacity ?? 0.35;
       const width   = (ann.lineWidth || 16) * s;
-      const buildHighlightPath = () => {
-        ctx.beginPath();
-        if (ann.mode === "line") {
-          const [fx, fy] = pt(ann.points[0]);
-          const [lx, ly] = pt(ann.points[ann.points.length - 1]);
-          ctx.moveTo(fx, fy); ctx.lineTo(lx, ly);
-        } else {
-          const [fx, fy] = pt(ann.points[0]);
-          ctx.moveTo(fx, fy);
-          for (let i = 1; i < ann.points.length; i++) { const [x, y] = pt(ann.points[i]); ctx.lineTo(x, y); }
-        }
-      };
-      // Bordered mode: stroke a slightly wider, more opaque pass first so a
-      // solid edge peeks out around the translucent fill on top of it.
-      if (ann.bordered) {
-        buildHighlightPath();
-        ctx.globalAlpha = Math.min(1, opacity + 0.45);
-        ctx.lineWidth   = width + 3 * s;
-        ctx.stroke();
+      ctx.beginPath();
+      if (ann.mode === "line") {
+        const [fx, fy] = pt(ann.points[0]);
+        const [lx, ly] = pt(ann.points[ann.points.length - 1]);
+        ctx.moveTo(fx, fy); ctx.lineTo(lx, ly);
+      } else {
+        const [fx, fy] = pt(ann.points[0]);
+        ctx.moveTo(fx, fy);
+        for (let i = 1; i < ann.points.length; i++) { const [x, y] = pt(ann.points[i]); ctx.lineTo(x, y); }
       }
-      buildHighlightPath();
       ctx.globalAlpha = opacity;
       ctx.lineWidth   = width;
       ctx.stroke();

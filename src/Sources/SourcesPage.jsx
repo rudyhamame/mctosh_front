@@ -66,6 +66,11 @@ const SourcesPage = () => {
   const [ytUrl,    setYtUrl]    = useState("");
   const [compressionPrompt, setCompressionPrompt] = useState(null);
   const [compressionBusy, setCompressionBusy] = useState(false);
+  const [convertingId, setConvertingId] = useState(null); // source _id currently being converted to Markdown
+  const [convertError, setConvertError] = useState(null); // { id, message }
+  const [enhancingId, setEnhancingId] = useState(null);
+  const [enhanceError, setEnhanceError] = useState(null); // { id, message }
+  const [enhancedViewer, setEnhancedViewer] = useState(null); // { sourceId, name, pageCount, page, original, enhanced, loading, error }
 
   /* ── Load sources ── */
   useEffect(() => {
@@ -265,6 +270,111 @@ const SourcesPage = () => {
       setSources((prev) => prev.filter((s) => s._id !== id));
     } catch {}
   }, []);
+
+  // Convert a source to Markdown — the whole document converts in one shot
+  // (Mistral OCR has no per-page mode), so this lives here rather than
+  // behind a per-page button in the PDF Reader.
+  const handleConvertMarkdown = useCallback(async (id) => {
+    setConvertingId(id);
+    setConvertError(null);
+    try {
+      const res  = await fetch(apiUrl(`/api/sources/${id}/markdown`), { headers: authHeader() });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Conversion failed (${res.status}).`);
+      setSources((prev) => prev.map((s) => s._id === id ? { ...s, hasMarkdown: true } : s));
+    } catch (err) {
+      setConvertError({ id, message: err.message });
+    } finally {
+      setConvertingId(null);
+    }
+  }, []);
+
+  const loadEnhancedViewerPage = useCallback(async (sourceId, name, pageCount, page) => {
+    setEnhancedViewer((prev) => ({
+      sourceId,
+      name,
+      pageCount,
+      page,
+      original: prev?.sourceId === sourceId ? prev.original : "",
+      enhanced: prev?.sourceId === sourceId ? prev.enhanced : "",
+      loading: true,
+      error: "",
+    }));
+
+    try {
+      const [origRes, aiRes] = await Promise.all([
+        fetch(apiUrl(`/api/sources/${sourceId}/markdown?page=${page}`), { headers: authHeader() }),
+        fetch(apiUrl(`/api/sources/${sourceId}/markdown-enhanced?page=${page}`), { headers: authHeader() }),
+      ]);
+
+      const origData = await origRes.json().catch(() => ({}));
+      const aiData = await aiRes.json().catch(() => ({}));
+      if (!origRes.ok) throw new Error(origData.error || "Failed to load original markdown page.");
+      if (!aiRes.ok) throw new Error(aiData.error || "Failed to load AI-enhanced markdown page.");
+
+      setEnhancedViewer({
+        sourceId,
+        name,
+        pageCount: aiData.pageCount || pageCount,
+        page,
+        original: origData.markdown || "",
+        enhanced: aiData.markdown || "",
+        aiConfidence: aiData.aiConfidence ?? null,
+        similarity: aiData.similarity ?? null,
+        loading: false,
+        error: "",
+      });
+    } catch (err) {
+      setEnhancedViewer({
+        sourceId,
+        name,
+        pageCount,
+        page,
+        original: "",
+        enhanced: "",
+        loading: false,
+        error: err.message,
+      });
+    }
+  }, []);
+
+  const openEnhancedViewer = useCallback(async (source) => {
+    await loadEnhancedViewerPage(source._id, source.name, source.pageCount || 1, 1);
+  }, [loadEnhancedViewerPage]);
+
+  const handleAiEnhance = useCallback(async (source) => {
+    setEnhanceError(null);
+    if (source.hasAiEnhancedMarkdown) {
+      await openEnhancedViewer(source);
+      return;
+    }
+
+    setEnhancingId(source._id);
+    try {
+      const res = await fetch(apiUrl(`/api/sources/${source._id}/markdown-enhanced`), {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "AI enhancement failed.");
+
+      setSources((prev) => prev.map((item) => (
+        item._id === source._id
+          ? { ...item, hasAiEnhancedMarkdown: Boolean(data.hasAiEnhancedMarkdown), pageCount: data.pageCount || item.pageCount }
+          : item
+      )));
+
+      await openEnhancedViewer({
+        ...source,
+        hasAiEnhancedMarkdown: Boolean(data.hasAiEnhancedMarkdown),
+        pageCount: data.pageCount || source.pageCount || 1,
+      });
+    } catch (err) {
+      setEnhanceError({ id: source._id, message: err.message });
+    } finally {
+      setEnhancingId(null);
+    }
+  }, [openEnhancedViewer]);
 
   /* ── File picker ── */
   const handleFile = (e, type) => {
@@ -476,14 +586,15 @@ const SourcesPage = () => {
               <th>Format</th>
               <th>Name</th>
               <th>Open</th>
+              <th>Markdown</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={5} className="sources_td_status">Loading…</td></tr>
+              <tr><td colSpan={6} className="sources_td_status">Loading…</td></tr>
             ) : sources.length === 0 ? (
-              <tr><td colSpan={5} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
+              <tr><td colSpan={6} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
             ) : sources.map((s) => (
               <tr key={s._id}>
                 <td>
@@ -506,6 +617,48 @@ const SourcesPage = () => {
                         </button>
                     : <span className="sources_url_none">—</span>}
                 </td>
+                <td className="sources_td_markdown">
+                  {s.format === "youtube" ? (
+                    <span className="sources_url_none">—</span>
+                  ) : s.hasMarkdown ? (
+                    <div className="sources_md_actions">
+                      <span className="sources_md_badge sources_md_badge--done">
+                        <i className="fi fi-rr-check" /> Converted
+                      </span>
+                      {enhancingId === s._id ? (
+                        <span className="sources_md_badge sources_md_badge--busy">Enhancing…</span>
+                      ) : s.hasAiEnhancedMarkdown ? (
+                        <button
+                          className="sources_md_badge sources_md_badge--ai"
+                          onClick={() => handleAiEnhance(s)}
+                          title="View the stored AI-enhanced markdown page by page"
+                        >
+                          <i className="fi fi-rr-sparkles" /> AI Enhanced
+                        </button>
+                      ) : (
+                        <button
+                          className="sources_md_ai_btn"
+                          onClick={() => handleAiEnhance(s)}
+                          title={enhanceError?.id === s._id
+                            ? enhanceError.message
+                            : "Enhance the whole document's markdown with AI, then store and view it page by page"}
+                        >
+                          AI Enhance
+                        </button>
+                      )}
+                    </div>
+                  ) : convertingId === s._id ? (
+                    <span className="sources_md_badge sources_md_badge--busy">Converting…</span>
+                  ) : (
+                    <button
+                      className="sources_md_convert_btn"
+                      onClick={() => handleConvertMarkdown(s._id)}
+                      title={convertError?.id === s._id ? convertError.message : "Convert this document to Markdown (all pages, one shot)"}
+                    >
+                      {convertError?.id === s._id ? "Retry" : "Convert"}
+                    </button>
+                  )}
+                </td>
                 <td className="sources_td_actions">
                   <button className="sources_del_btn" onClick={() => deleteSource(s._id)}>✕</button>
                 </td>
@@ -514,6 +667,80 @@ const SourcesPage = () => {
           </tbody>
         </table>
       </div>
+
+      {enhancedViewer && (
+        <div id="sources_ai_viewer_overlay" onClick={() => setEnhancedViewer(null)}>
+          <div id="sources_ai_viewer" onClick={(e) => e.stopPropagation()}>
+            <div id="sources_ai_viewer_header">
+              <div id="sources_ai_viewer_title_group">
+                <span id="sources_ai_viewer_title">AI Enhanced Markdown</span>
+                <span id="sources_ai_viewer_name">{enhancedViewer.name}</span>
+              </div>
+              <div id="sources_ai_viewer_controls">
+                <button
+                  type="button"
+                  className="sources_ai_nav_btn"
+                  disabled={enhancedViewer.loading || enhancedViewer.page <= 1}
+                  onClick={() => loadEnhancedViewerPage(enhancedViewer.sourceId, enhancedViewer.name, enhancedViewer.pageCount, enhancedViewer.page - 1)}
+                >
+                  ‹
+                </button>
+                <span id="sources_ai_viewer_page_label">Page {enhancedViewer.page} / {enhancedViewer.pageCount}</span>
+                <button
+                  type="button"
+                  className="sources_ai_nav_btn"
+                  disabled={enhancedViewer.loading || enhancedViewer.page >= enhancedViewer.pageCount}
+                  onClick={() => loadEnhancedViewerPage(enhancedViewer.sourceId, enhancedViewer.name, enhancedViewer.pageCount, enhancedViewer.page + 1)}
+                >
+                  ›
+                </button>
+                <button type="button" id="sources_ai_viewer_close" onClick={() => setEnhancedViewer(null)}>✕</button>
+              </div>
+            </div>
+
+            <div id="sources_ai_viewer_body">
+              {enhancedViewer.loading ? (
+                <p className="sources_ai_status">Loading markdown comparison…</p>
+              ) : enhancedViewer.error ? (
+                <p className="sources_ai_status sources_ai_status--error">⚠ {enhancedViewer.error}</p>
+              ) : (
+                <div id="sources_ai_compare_grid">
+                  <section className="sources_ai_compare_col">
+                    <div className="sources_ai_compare_head">Original Markdown</div>
+                    <pre className="sources_ai_compare_text">{enhancedViewer.original || "(This page had no cached markdown.)"}</pre>
+                  </section>
+                  <section className="sources_ai_compare_col">
+                    <div className="sources_ai_compare_head">
+                      <span>AI Enhanced</span>
+                      {(enhancedViewer.aiConfidence != null || enhancedViewer.similarity != null) && (
+                        <span className="sources_ai_score_row">
+                          {enhancedViewer.aiConfidence != null && (
+                            <span
+                              className="sources_ai_score_badge"
+                              title="The AI's own self-reported confidence that it preserved all facts and meaning from the original — a judgment call, not a measurement."
+                            >
+                              AI confidence {enhancedViewer.aiConfidence}%
+                            </span>
+                          )}
+                          {enhancedViewer.similarity != null && (
+                            <span
+                              className="sources_ai_score_badge sources_ai_score_badge--similarity"
+                              title="Deterministic word-overlap between the original and enhanced text, computed in code — how much of the same wording survived, independent of the AI's own judgment."
+                            >
+                              Similarity {enhancedViewer.similarity}%
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <pre className="sources_ai_compare_text">{enhancedViewer.enhanced || "(No AI-enhanced markdown was stored for this page.)"}</pre>
+                  </section>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

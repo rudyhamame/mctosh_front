@@ -1,0 +1,32 @@
+#predict_overlay {
+  position: fixed;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  max-width: min(90vw, 420px);
+  overflow-x: auto;
+}
+
+.predict_chip {
+  flex-shrink: 0;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.predict_chip--active {
+  color: var(--color-highlight);
+  border-color: var(--color-highlight);
+  background: color-mix(in srgb, var(--color-highlight) 12%, transparent);
+}

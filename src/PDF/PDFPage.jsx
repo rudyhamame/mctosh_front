@@ -6,6 +6,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { useLongPressSelect } from "../utils/longPressSelect";
 import HyleCards from "./HyleCards";
 import SystemMessageModal from "./SystemMessageModal";
 import { drawAnnotation } from "./annotationDraw";
@@ -90,6 +91,14 @@ const ANNOT_TOOLS = [
 
 const ANNOT_COLORS = ["#ffff00","#ff6b6b","#51cf66","#74c0fc","#f783ac","#ffa94d","#e9ecef","#212529"];
 
+const ANNOT_HISTORY_META = {
+  add:   { icon: "fi-rr-plus",       verb: "Added" },
+  undo:  { icon: "fi-rr-undo",       verb: "Undid" },
+  redo:  { icon: "fi-rr-redo",       verb: "Redid" },
+  erase: { icon: "fi-rr-eraser",     verb: "Erased" },
+  clear: { icon: "fi-rr-trash",      verb: "Cleared" },
+};
+
 // Safari reports Apple-Pencil touches with Touch.touchType === "stylus" (vs.
 // "direct" for a finger) — the only reliable signal we have to tell hand
 // from pencil on a TouchEvent.
@@ -167,25 +176,29 @@ const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
   const centerX  = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
 
   return (
-    <div
-      className="annot_size_knob"
-      ref={trackRef}
-      style={{ width: KNOB_TRACK_W }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      title="Size"
-    >
-      <div className="annot_size_knob_fill" style={{ width: centerX }} />
+    <div className="annot_size_knob">
       <div
-        className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}`}
-        style={{
-          width: knobSize,
-          height: knobSize,
-          left: centerX,
-          background: dashed ? "transparent" : color,
-        }}
-      />
+        className="annot_size_knob_track"
+        ref={trackRef}
+        style={{ width: KNOB_TRACK_W }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        title="Size"
+      >
+        <div className="annot_size_knob_fill" style={{ width: centerX }} />
+        <div
+          className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}`}
+          style={{
+            width: knobSize,
+            height: knobSize,
+            left: centerX,
+            background: dashed ? "transparent" : color,
+          }}
+        />
+      </div>
+      {/* Shown in "pt" — the unit these tools' size is conventionally read in, same as font size */}
+      <span className="annot_size_label">{Number.isInteger(value) ? value : value.toFixed(1)}pt</span>
     </div>
   );
 };
@@ -227,7 +240,7 @@ const OpacityKnob = ({ value, onChange, color }) => {
 
   return (
     <div
-      className="annot_size_knob"
+      className="annot_size_knob_track"
       ref={trackRef}
       style={{ width: KNOB_TRACK_W }}
       onPointerDown={onPointerDown}
@@ -302,6 +315,7 @@ const PDFPage = ({
   selectionOnly = false,           // hide Hyle-extraction/annotation chrome, force manual text-selection always on
   onSelectionAction = null,        // async (selectedText) => void — replaces the ✓ "add to Hyles" button in the selection bar
   selectionActionLabel = "Add",
+  hideHyleControls = false,        // hide just the "Hyles" toggle + extraction panel (plain reading/annotation use, e.g. /pdf-reader)
 }) => {
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
@@ -314,6 +328,7 @@ const PDFPage = ({
   const [pageViewport, setPageViewport] = useState(null);
   const [zoom, setZoom]               = useState(1);
   const [splitRatio,     setSplitRatio]    = useState(1);
+  const [mdPanelWidth,   setMdPanelWidth]  = useState(340); // resizable width of the Markdown/Actions left column
   const [extractionOpen, setExtractionOpen] = useState(false);
   const savedRatioRef                 = useRef(0.42);
   const contentRef                    = useRef(null);
@@ -331,6 +346,12 @@ const PDFPage = ({
 
   // AI vs Manual toggle
   const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
+  // Click/tap-and-hold word selection is normally part of manual Hyle extraction
+  // (always on there). A plain reader (Hyles hidden, e.g. /pdf-reader) only
+  // gets it once the user explicitly turns on "Select Text" — off by default
+  // so idle scrolling/reading never accidentally triggers a selection.
+  const [selectTextMode, setSelectTextMode] = useState(false);
+  const textSelectable = extractMode === "manual" || (hideHyleControls && selectTextMode);
   const [extractionType, setExtractionType] = useState(null); // selected hyle type key
   const [typeTreeOpen,   setTypeTreeOpen]   = useState(false);
 
@@ -353,11 +374,103 @@ const PDFPage = ({
   const [activeHistoryId, setActiveHistoryId] = useState(null);
 
   // ── Per-page Markdown preview (toolbar "MD" button + left column) ──────────
+  // View-only here: converting a document to Markdown happens from the Sources
+  // table (it's a whole-document operation, not a per-page one) — this button
+  // just opens the reader for a document that's already been converted there.
+  const [hasStoredMarkdown, setHasStoredMarkdown] = useState(false);
   const [pageMdBusy,    setPageMdBusy]    = useState(false);
   const [pageMdError,   setPageMdError]   = useState("");
   const [pageMdOpen,    setPageMdOpen]    = useState(false);
   const [pageMdText,    setPageMdText]    = useState("");
-  const [pageMdForPage, setPageMdForPage] = useState(null); // which page pageMdText is actually showing
+  const [pageMdRange,   setPageMdRange]   = useState(null); // { from, to, all } — which range pageMdText is actually showing
+  const [pageMdDeleteBusy, setPageMdDeleteBusy] = useState(false);
+  const [mdPageIdx,     setMdPageIdx]     = useState(0); // index into mdPages — which single real page of the fetched range is displayed
+  const [mdPageInputVal, setMdPageInputVal] = useState("1"); // editable page-number field's raw text, synced from mdCurrentPage.page
+  const [pdfMdCountHighlight, setPdfMdCountHighlight] = useState(null); // null | "words" | "chars" — which markdown count is currently overlaid on the PDF page
+  const [aiMdBusy, setAiMdBusy] = useState(false);
+  const [aiMdOpen, setAiMdOpen] = useState(false);
+  const [aiMdText, setAiMdText] = useState("");
+  const [aiMdError, setAiMdError] = useState("");
+  const [aiMdInfo, setAiMdInfo] = useState(null); // { page, provider, model }
+  const [mdFontScale,   setMdFontScale]   = useState(1); // multiplier on the panel's base rem size — relative, so it scales with the root font-size same as everything else
+  const [voiceListening, setVoiceListening] = useState(false);
+  const [voiceQuery,     setVoiceQuery]     = useState("");
+  const [voiceMatch,     setVoiceMatch]     = useState(null); // { start, end } char indices local to the displayed md page's text, or null
+  const [voiceError,     setVoiceError]     = useState("");
+  const voiceRecognitionRef = useRef(null);
+
+  // Split the fetched range's Markdown into one chunk per real PDF page (the
+  // server always tags each page with a "=== Page N ===" line via
+  // pageMarkers=1) so the panel can show — and count — a single page at a
+  // time instead of the whole range at once.
+  const mdPages = useMemo(() => {
+    const text = pageMdText || "";
+    const re = /^=== Page (\d+) ===\r?\n?/gm;
+    const marks = [...text.matchAll(re)];
+    if (marks.length === 0) return text ? [{ page: pageMdRange?.from ?? pageNum, text, startOffset: 0 }] : [];
+    return marks.map((m, i) => {
+      const start = m.index + m[0].length;
+      const end   = i + 1 < marks.length ? marks[i + 1].index : text.length;
+      return { page: Number(m[1]), text: text.slice(start, end), startOffset: start };
+    });
+  }, [pageMdText, pageMdRange, pageNum]);
+
+  // Which real page to land on once a fresh fetch's mdPages are ready — set
+  // right before calling fetchMarkdownRange so the reset effect below can
+  // jump straight to it instead of always defaulting to the first page.
+  const mdFocusPageRef = useRef(null);
+  useEffect(() => {
+    const idx = mdFocusPageRef.current != null ? mdPages.findIndex((p) => p.page === mdFocusPageRef.current) : -1;
+    setMdPageIdx(idx >= 0 ? idx : 0);
+    mdFocusPageRef.current = null;
+  }, [pageMdText]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const mdCurrentPage = mdPages[mdPageIdx] || mdPages[0] || { page: pageNum, text: "", startOffset: 0 };
+  useEffect(() => { setMdPageInputVal(String(mdCurrentPage.page)); }, [mdCurrentPage.page]);
+  const mdChars = useMemo(() => Array.from(mdCurrentPage.text || ""), [mdCurrentPage]);
+  const mdLines = useMemo(() => (mdCurrentPage.text || "").split("\n"), [mdCurrentPage]);
+  const mdStats = useMemo(() => ({
+    words: (mdCurrentPage.text.match(/\S+/g) || []).length,
+    chars: mdChars.length,
+  }), [mdCurrentPage, mdChars]);
+
+  useEffect(() => {
+    setAiMdOpen(false);
+    setAiMdBusy(false);
+    setAiMdText("");
+    setAiMdError("");
+    setAiMdInfo(null);
+  }, [mdCurrentPage.page, pageMdText]);
+
+  // Bring a page into view in the main reader — fired by the word/char
+  // counter buttons and by the panel's own page navigation, so the reader
+  // always shows the page currently displayed in the panel.
+  const scrollReaderToPage = useCallback((page) => {
+    pageContainerRefs.current[page - 1]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const showMarkdownPageInPdf = useCallback((mode) => {
+    const targetPage = mdCurrentPage.page;
+    setPdfMdCountHighlight((prev) => {
+      const next = prev === mode ? null : mode;
+      if (!next) return null;
+      if (splitRatio === 0) setSplitRatio(savedRatioRef.current || 0.42);
+      setPageNum(targetPage);
+      setZoom(1);
+      scrollReaderToPage(targetPage);
+      return next;
+    });
+  }, [mdCurrentPage.page, scrollReaderToPage, splitRatio]);
+
+  // ── Annotation History (toolbar "History" button + left column) ────────────
+  // A running, in-session log of every annotation step taken (add/undo/redo/
+  // clear), independent of the annotations themselves — so you can see what
+  // you did and when, not just the current end result.
+  const [annotHistory,     setAnnotHistory]     = useState([]);
+  const [annotHistoryOpen, setAnnotHistoryOpen] = useState(false);
+  const logAnnotHistory = useCallback((entry) => {
+    setAnnotHistory((prev) => [...prev, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300));
+  }, []);
 
   // ── Selection action (selectionOnly mode) ──────────────────────────────────
   const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
@@ -371,11 +484,17 @@ const PDFPage = ({
   const [eraserSize,     setEraserSize]     = useState(18);  // eraser radius
   const [highlightMode,  setHighlightMode]  = useState("freehand"); // "freehand" | "line"
   const [annotOpacity,      setAnnotOpacity]      = useState(35);    // % — highlight fill opacity
-  const [highlightBordered, setHighlightBordered] = useState(false); // adds a solid edge around the highlight band
   const [toolsMenuOpen,  setToolsMenuOpen]  = useState(false); // floating tools dropdown
   const [colorMenuOpen,  setColorMenuOpen]  = useState(false); // floating color dropdown
   const toolsMenuRef = useRef(null);
   const colorMenuRef = useRef(null);
+  // "Actions" toolbar dropdown (Markdown / Linguistic Analysis) + its page-range picker popover
+  const [actionsMenuOpen,    setActionsMenuOpen]    = useState(false);
+  const actionsMenuRef = useRef(null);
+  const [rangePickerAction, setRangePickerAction]   = useState(null); // null | "markdown" | "linguistic"
+  const [rangeFrom,          setRangeFrom]          = useState(1);
+  const [rangeTo,            setRangeTo]            = useState(1);
+  const [rangeAll,           setRangeAll]           = useState(false);
   // "Hand" mode: when on, a finger touch only pans/scrolls the page and
   // never draws — only the pencil (stylus, per Safari's Touch.touchType)
   // draws. Lets you rest your hand on the screen while sketching with an
@@ -388,21 +507,39 @@ const PDFPage = ({
   const [autoContrast, setAutoContrast] = useState(false);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
+
+  // Autosave the annotation session in the background — debounced so a whole
+  // stroke's worth of state updates only writes once, a beat after the user
+  // pauses. Server-side model (SourceAnnotation) already existed, just unused.
+  useEffect(() => {
+    if (skipNextAnnotationAutosaveRef.current) { skipNextAnnotationAutosaveRef.current = false; return; }
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId) return; // local/unsaved file — nothing to persist against
+    const timer = setTimeout(() => {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layers: annotations }),
+      }).catch(() => {}); // best-effort background autosave — a failed write shouldn't interrupt reading/annotating
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [annotations]);
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
   const [annotTextVal,   setAnnotTextVal]   = useState("");
   const annotCanvasRef  = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
 
-  // Close the floating tools/color dropdowns on an outside click
+  // Close the floating tools/color/actions dropdowns on an outside click
   useEffect(() => {
-    if (!toolsMenuOpen && !colorMenuOpen) return;
+    if (!toolsMenuOpen && !colorMenuOpen && !actionsMenuOpen) return;
     const onDocPointerDown = (e) => {
       if (toolsMenuOpen && toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) setToolsMenuOpen(false);
       if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
+      if (actionsMenuOpen && actionsMenuRef.current && !actionsMenuRef.current.contains(e.target)) setActionsMenuOpen(false);
     };
     document.addEventListener("mousedown", onDocPointerDown);
     return () => document.removeEventListener("mousedown", onDocPointerDown);
-  }, [toolsMenuOpen, colorMenuOpen]);
+  }, [toolsMenuOpen, colorMenuOpen, actionsMenuOpen]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -417,6 +554,13 @@ const PDFPage = ({
   const canvasRef = { get current() { return pageCanvasRefs.current[pageNumRef.current - 1] ?? null; } };
 
   const textLayerRef  = useRef(null);
+  // Markdown panel's read-only text panes — selection only turns on after a
+  // long press (see useLongPressSelect), so a quick click/scroll never
+  // accidentally starts selecting.
+  const mdTextRef        = useRef(null);
+  const mdCompareTextRef = useRef(null);
+  useLongPressSelect(mdTextRef);
+  useLongPressSelect(mdCompareTextRef);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
   const fileInputRef  = useRef(null);
@@ -429,6 +573,7 @@ const PDFPage = ({
   const lastLoadedSourceKeyRef = useRef("");
   const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
   const lastLoadedFileRef = useRef(null);
+  const skipNextAnnotationAutosaveRef = useRef(false); // set right before restoring a saved session, so that restore doesn't immediately re-trigger the autosave effect below
   const wheelZoomStateRef  = useRef({
     baseZoom: 1,
     pendingZoom: 1,
@@ -632,7 +777,10 @@ const PDFPage = ({
   }, [pdfDoc, pageCount, renderPage]);
 
   useEffect(() => { extractModeRef.current = extractMode; }, [extractMode]);
-  useEffect(() => { if (extractMode !== "manual") { setManualPopup(null); setManualSelection(null); } }, [extractMode]);
+  useEffect(() => { if (!textSelectable) { setManualPopup(null); setManualSelection(null); } }, [textSelectable]);
+
+  const textSelectableRef = useRef(false);
+  useEffect(() => { textSelectableRef.current = textSelectable; }, [textSelectable]);
 
   const manualSelectionRef = useRef(null);
   const dragHandleRef      = useRef(null); // sync mirror of dragHandle state
@@ -708,7 +856,7 @@ const PDFPage = ({
         }
       }
       if (annotTool === "highlight") {
-        activeAnnotRef.current = { type: "highlight", color: strokeColor, lineWidth: annotSize / getScale(), mode: highlightMode, opacity: annotOpacity / 100, bordered: highlightBordered, points: [{ x: p.x, y: p.y }] };
+        activeAnnotRef.current = { type: "highlight", color: strokeColor, lineWidth: annotSize / getScale(), mode: highlightMode, opacity: annotOpacity / 100, points: [{ x: p.x, y: p.y }] };
       } else if (["underline","strikethrough","rect","circle"].includes(annotTool)) {
         activeAnnotRef.current = { type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (["line","arrow"].includes(annotTool)) {
@@ -716,15 +864,17 @@ const PDFPage = ({
       } else if (annotTool === "pen") {
         activeAnnotRef.current = { type: "pen", color: strokeColor, lineWidth: penSize / getScale(), points: [{ x: p.x, y: p.y }] };
       } else if (annotTool === "eraser") {
-        activeAnnotRef.current = { type: "eraser" };
+        activeAnnotRef.current = { type: "eraser", erasedCount: 0 };
         const er = eraserSize / getScale();
         setAnnotations((prev) => {
           const pts = [...(prev[pageNum] || [])];
-          return { ...prev, [pageNum]: pts.filter((a) => {
+          const kept = pts.filter((a) => {
             if (a.type === "pen" || a.type === "highlight") return !a.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < er);
             const cx2 = (a.x ?? a.x1 ?? 0), cy2 = (a.y ?? a.y1 ?? 0);
             return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
-          })};
+          });
+          activeAnnotRef.current.erasedCount += pts.length - kept.length;
+          return { ...prev, [pageNum]: kept };
         });
         setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       }
@@ -756,11 +906,13 @@ const PDFPage = ({
         const er = eraserSize / getScale();
         setAnnotations((prev) => {
           const pts = [...(prev[pageNum] || [])];
-          return { ...prev, [pageNum]: pts.filter((a) => {
+          const kept = pts.filter((a) => {
             if (a.type === "pen" || a.type === "highlight") return !a.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < er);
             const cx2 = (a.x ?? a.x1 ?? 0), cy2 = (a.y ?? a.y1 ?? 0);
             return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
-          })};
+          });
+          ann.erasedCount = (ann.erasedCount || 0) + (pts.length - kept.length);
+          return { ...prev, [pageNum]: kept };
         });
         setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       }
@@ -769,7 +921,11 @@ const PDFPage = ({
     const onUp = () => {
       const ann = activeAnnotRef.current;
       activeAnnotRef.current = null;
-      if (!ann || ann.type === "eraser") return;
+      if (!ann) return;
+      if (ann.type === "eraser") {
+        if (ann.erasedCount > 0) logAnnotHistory({ action: "erase", page: pageNum, count: ann.erasedCount });
+        return;
+      }
       // ignore accidental tiny marks
       const tiny = ann.type === "pen"
         ? ann.points.length < 3
@@ -780,6 +936,7 @@ const PDFPage = ({
       const { _sx, _sy, ...clean } = ann;
       setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), { ...clean, id: Date.now() }] }));
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+      logAnnotHistory({ action: "add", type: clean.type, page: pageNum, color: clean.color, size: clean.lineWidth ? Math.round(clean.lineWidth * (fitScaleRef.current * zoomRef.current)) : null });
     };
 
     ac.addEventListener("mousedown",  onDown, { passive: true });
@@ -797,7 +954,7 @@ const PDFPage = ({
       ac.removeEventListener("touchend",   onUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, eraserSize, highlightMode, pageNum, annotations, fingerScrollOnly, autoContrast, annotOpacity, highlightBordered]);
+  }, [annotTool, annotColor, annotSize, penSize, eraserSize, highlightMode, pageNum, annotations, fingerScrollOnly, autoContrast, annotOpacity, logAnnotHistory]);
 
   const commitAnnotText = useCallback(() => {
     if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
@@ -811,8 +968,9 @@ const PDFPage = ({
       }],
     }));
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+    logAnnotHistory({ action: "add", type: "text", page: pageNum, color: annotColor });
     setAnnotTextInput(null); setAnnotTextVal("");
-  }, [annotTextInput, annotTextVal, annotColor, pageNum]);
+  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory]);
 
   const handleAnnotUndo = useCallback(() => {
     const arr = annotations[pageNum] || [];
@@ -820,7 +978,8 @@ const PDFPage = ({
     const popped = arr[arr.length - 1];
     setAnnotations((prev) => ({ ...prev, [pageNum]: (prev[pageNum] || []).slice(0, -1) }));
     setRedoStacks((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), popped] }));
-  }, [pageNum, annotations]);
+    logAnnotHistory({ action: "undo", type: popped.type, page: pageNum });
+  }, [pageNum, annotations, logAnnotHistory]);
 
   const handleAnnotRedo = useCallback(() => {
     const stack = redoStacks[pageNum] || [];
@@ -828,12 +987,15 @@ const PDFPage = ({
     const restored = stack[stack.length - 1];
     setRedoStacks((prev) => ({ ...prev, [pageNum]: prev[pageNum].slice(0, -1) }));
     setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), restored] }));
-  }, [pageNum, redoStacks]);
+    logAnnotHistory({ action: "redo", type: restored.type, page: pageNum });
+  }, [pageNum, redoStacks, logAnnotHistory]);
 
   const handleAnnotClear = useCallback(() => {
+    const count = (annotations[pageNum] || []).length;
     setAnnotations((prev) => ({ ...prev, [pageNum]: [] }));
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-  }, [pageNum]);
+    if (count > 0) logAnnotHistory({ action: "clear", page: pageNum, count });
+  }, [pageNum, annotations, logAnnotHistory]);
 
   // ── Ctrl+Scroll to zoom ────────────────────────────────────────────────────
   useEffect(() => {
@@ -924,6 +1086,13 @@ const PDFPage = ({
     let lpTimer = null;
     let isLpSelecting = false;
     let lpStartSpanIdx = -1;
+    // Plain reader (Hyles hidden): a long-press locks onto exactly the one
+    // word it landed on — tiny jitter while lifting the finger can't grow
+    // it, but a deliberate drag past LP_EXPAND_THRESHOLD still extends it
+    // (same continued touch, no need to find a drag handle).
+    let lpWordLocked = false;
+    let lpLockX = 0, lpLockY = 0;
+    const LP_EXPAND_THRESHOLD = 14; // px of movement before a "settling" finger counts as an intentional drag
 
     const touchDist = (t) => {
       const dx = t[0].clientX - t[1].clientX;
@@ -1027,8 +1196,9 @@ const PDFPage = ({
         panST = el.scrollTop;
         hasMoved = false;
         isLpSelecting = false;
+        lpWordLocked = false;
 
-        if (extractModeRef.current === "manual") {
+        if (textSelectableRef.current) {
           const ct = e.touches[0];
           lpTimer = setTimeout(() => {
             lpTimer = null;
@@ -1066,6 +1236,24 @@ const PDFPage = ({
               const sel = window.getSelection();
               sel.removeAllRanges();
               sel.addRange(range);
+
+              if (hideHyleControls) {
+                // Plain reader: commit to exactly this word right now — no
+                // "Add to Hyles" popup, just the ✓/✕ bar. Still draggable
+                // past LP_EXPAND_THRESHOLD (see onTouchMove) to extend it.
+                const text = sel.toString().replace(/\s+/g, " ").trim();
+                if (text) {
+                  const vr = range.getBoundingClientRect();
+                  setManualSelection({ startIdx: loIdx, endIdx: hiIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
+                }
+                sel.removeAllRanges();
+                lpWordLocked = true;
+                lpStartSpanIdx = loIdx;
+                lpLockX = ct.clientX;
+                lpLockY = ct.clientY;
+                navigator.vibrate?.(30);
+                return;
+              }
             }
             lpStartSpanIdx = loIdx;
             isLpSelecting  = true;
@@ -1130,6 +1318,19 @@ const PDFPage = ({
           }
         });
         return;
+      }
+
+      // Plain reader: the word is locked in, but a deliberate drag (past a
+      // small deadzone) still extends it — only jitter under the threshold
+      // is ignored, so lifting the finger cleanly can't silently grow it.
+      if (lpWordLocked) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - lpLockX;
+        const dy = e.touches[0].clientY - lpLockY;
+        if (Math.hypot(dx, dy) < LP_EXPAND_THRESHOLD) return;
+        lpWordLocked = false;
+        isLpSelecting = true;
+        // fall through to the extend logic below using this same event
       }
 
       // After long-press fires, dragging extends the text selection
@@ -1200,13 +1401,17 @@ const PDFPage = ({
       }
       clearTimeout(lpTimer); lpTimer = null;
 
+      // Word was already committed to manualSelection when the long-press
+      // fired — nothing left to do but consume this touchend.
+      if (lpWordLocked) { lpWordLocked = false; return; }
+
       if (isLpSelecting) {
         isLpSelecting = false;
         const sel  = window.getSelection();
         const text = sel?.toString().replace(/\s+/g, " ").trim();
         if (text) {
           const vr = sel.getRangeAt(0).getBoundingClientRect();
-          if (onSelectionActionRef.current) {
+          if (onSelectionActionRef.current || hideHyleControls) {
             setManualSelection({ startIdx: -1, endIdx: -1, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
           } else {
             const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
@@ -1221,7 +1426,7 @@ const PDFPage = ({
         return;
       }
 
-      if (extractModeRef.current === "manual" && !hasMoved && e.changedTouches.length === 1) {
+      if (textSelectableRef.current && !hasMoved && e.changedTouches.length === 1) {
         const ct     = e.changedTouches[0];
         const result = selectWordAt(ct.clientX, ct.clientY);
         if (result) {
@@ -1318,10 +1523,10 @@ const PDFPage = ({
     };
   }, [pdfDoc]);
 
-  // ── Render text layer for Manual mode ─────────────────────────────────────
+  // ── Render text layer for Manual mode (or a plain reader that still needs word-selection) ──
   useEffect(() => {
     const div = textLayerRef.current;
-    if (extractMode !== "manual" || !pdfDoc || !div) return;
+    if (!textSelectable || !pdfDoc || !div) return;
     if (!pageViewport) return;
     div.innerHTML = "";
     spansRef.current = [];
@@ -1378,7 +1583,7 @@ const PDFPage = ({
     );
 
     return () => { cancelled = true; if (textLayerRef.current) textLayerRef.current.innerHTML = ""; };
-  }, [extractMode, pdfDoc, pageNum, pageViewport]);
+  }, [textSelectable, pdfDoc, pageNum, pageViewport]);
 
   // Highlight selected text: group spans by line → one even rect per line.
   // Uses getBoundingClientRect() for real visual bounds (glyph height > em-size, width overflow, etc.)
@@ -1599,6 +1804,32 @@ const PDFPage = ({
       const arrayBuffer = await res.arrayBuffer();
       await loadPdfBytes(arrayBuffer, name);
       currentSourceIdRef.current = sourceId;
+
+      // Check (cheaply — no page param, but only reading the boolean) whether
+      // this source was already converted to Markdown from the Sources table.
+      setHasStoredMarkdown(false);
+      try {
+        const srcRes = await authFetch(apiUrl(`/api/sources/${sourceId}`));
+        if (srcRes.ok) {
+          const srcData = await srcRes.json();
+          setHasStoredMarkdown(Boolean(srcData.source?.markdown));
+        }
+      } catch {
+        // best-effort — MD button just stays disabled if this check fails
+      }
+
+      // Restore any annotation session previously auto-saved for this source —
+      // the SourceAnnotation model already existed server-side, just unused.
+      try {
+        const annRes = await authFetch(apiUrl(`/api/source-annotations/${sourceId}`));
+        if (annRes.ok) {
+          const annData = await annRes.json();
+          skipNextAnnotationAutosaveRef.current = true; // suppress the autosave effect for this restore
+          setAnnotations(annData.layers || {});
+        }
+      } catch {
+        // best-effort restore — a failure here shouldn't block reading the PDF
+      }
     } catch (err) {
       setLoadError(`Could not load PDF: ${err.message}`);
       setLoading(false);
@@ -1701,37 +1932,291 @@ const PDFPage = ({
     return content.items.map((item) => item.str + (item.hasEOL ? "\n" : " ")).join("").trim();
   }, [pdfDoc]);
 
-  // Shows the CURRENT page's Markdown in the left-side column (vs. Sources
-  // page's old "MD" button, which downloaded the whole document) — reuses
-  // the same GET /api/sources/:id/markdown?page=N route as getPageText
-  // above, so it's only available for source-backed docs (a local/embedded
-  // file with no currentSourceIdRef has nothing on the server to convert).
-  // Clicking again while already showing THIS page's result just closes the
-  // column; clicking on a different page re-fetches and shows that one.
-  const handleShowPageMarkdown = useCallback(async () => {
-    if (pageMdOpen && pageMdForPage === pageNum) {
-      setPageMdOpen(false);
-      return;
-    }
+  // Shows a page range's (or the whole document's) Markdown in the left-side
+  // column. View-only — never triggers a fresh conversion itself (the
+  // Actions dropdown that calls this is only enabled once hasStoredMarkdown
+  // is true; converting an unconverted source happens from the Sources
+  // table). Reuses GET /api/sources/:id/markdown, now extended with
+  // ?from=&to= for ranges alongside the existing ?page= and no-param forms.
+  const fetchMarkdownRange = useCallback(async (from, to, isAll) => {
     const sourceId = currentSourceIdRef.current;
     if (!sourceId) return;
     setPageMdOpen(true);
     setPageMdBusy(true);
     setPageMdError("");
+    setPdfMdCountHighlight(null);
+    setVoiceMatch(null);
+    setVoiceQuery("");
+    setVoiceError("");
     try {
-      const res  = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?page=${pageNum}`), { signal: AbortSignal.timeout(5 * 60 * 1000) });
+      // Always go through from/to (even for "All Pages") with pageMarkers=1 so
+      // the panel can show a "=== Page N ===" divider between pages.
+      const lo = isAll ? 1 : from;
+      const hi = isAll ? pageCount : to;
+      const res  = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?from=${lo}&to=${hi}&pageMarkers=1`), { signal: AbortSignal.timeout(5 * 60 * 1000) });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Markdown conversion failed.");
+      if (!res.ok) throw new Error(data.error || "Failed to load Markdown.");
       setPageMdText(data.markdown || "");
-      setPageMdForPage(pageNum);
+      setPageMdRange({ from: data.from ?? lo, to: data.to ?? hi, all: isAll });
     } catch (err) {
       setPageMdError(err.message);
       setPageMdText("");
-      setPageMdForPage(null);
+      setPageMdRange(null);
     } finally {
       setPageMdBusy(false);
     }
-  }, [pageNum, pageMdOpen, pageMdForPage]);
+  }, [pageCount]);
+
+  // Jump the Markdown panel straight to a given real page — reuses it from
+  // the already-fetched range if present (e.g. after "All Pages"), otherwise
+  // fetches just that single page on demand. Either way, scrolls the main
+  // reader to the same page so the two stay in sync.
+  const goToMarkdownPage = useCallback((targetPage) => {
+    const n = Math.max(1, Math.min(pageCount || targetPage, targetPage));
+    scrollReaderToPage(n);
+    const idx = mdPages.findIndex((p) => p.page === n);
+    if (idx !== -1) {
+      setMdPageIdx(idx);
+    } else {
+      mdFocusPageRef.current = n;
+      fetchMarkdownRange(n, n, false);
+    }
+  }, [pageCount, mdPages, scrollReaderToPage, fetchMarkdownRange]);
+
+  // Commits the panel's editable page-number field (blur / Enter).
+  const commitMdPageInput = useCallback(() => {
+    const n = parseInt(mdPageInputVal, 10);
+    if (Number.isFinite(n)) goToMarkdownPage(n);
+    else setMdPageInputVal(String(mdCurrentPage.page));
+  }, [mdPageInputVal, goToMarkdownPage, mdCurrentPage]);
+
+  // Fetches every page's Markdown in one go (it's already converted, so this
+  // is just a read) and keeps whichever page is currently displayed in view.
+  const showAllMarkdownPages = useCallback(() => {
+    mdFocusPageRef.current = mdCurrentPage.page;
+    fetchMarkdownRange(1, pageCount, true);
+  }, [fetchMarkdownRange, pageCount, mdCurrentPage]);
+
+  const handleDeleteMarkdownPage = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId || pageMdDeleteBusy) return;
+    if (!window.confirm(`Delete cached markdown for page ${mdCurrentPage.page}? The PDF source will remain intact.`)) return;
+
+    setPageMdDeleteBusy(true);
+    setPageMdError("");
+    try {
+      const res = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?page=${mdCurrentPage.page}`), {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete this markdown page.");
+
+      setHasStoredMarkdown(Boolean(data.hasMarkdown));
+      setPdfMdCountHighlight(null);
+      setVoiceMatch(null);
+      setVoiceQuery("");
+      setVoiceError("");
+      mdFocusPageRef.current = mdCurrentPage.page;
+      if (pageMdRange?.all) await fetchMarkdownRange(1, pageCount, true);
+      else await fetchMarkdownRange(mdCurrentPage.page, mdCurrentPage.page, false);
+    } catch (err) {
+      setPageMdError(err.message);
+    } finally {
+      setPageMdDeleteBusy(false);
+    }
+  }, [authFetch, fetchMarkdownRange, mdCurrentPage.page, pageCount, pageMdDeleteBusy, pageMdRange]);
+
+  const handleDeleteAllMarkdownPages = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId || pageMdDeleteBusy) return;
+    if (!window.confirm("Delete all cached markdown pages for this source? The PDF itself will remain intact.")) return;
+
+    setPageMdDeleteBusy(true);
+    setPageMdError("");
+    try {
+      const res = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?all=1`), {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete all markdown pages.");
+
+      setHasStoredMarkdown(false);
+      setPageMdText("");
+      setPageMdRange(null);
+      setPdfMdCountHighlight(null);
+      setVoiceMatch(null);
+      setVoiceQuery("");
+      setVoiceError("");
+      setPageMdOpen(false);
+    } catch (err) {
+      setPageMdError(err.message);
+    } finally {
+      setPageMdDeleteBusy(false);
+    }
+  }, [pageMdDeleteBusy]);
+
+  const handleOrganizeMarkdown = useCallback(async () => {
+    if (!mdCurrentPage.text.trim() || aiMdBusy) return;
+
+    if (aiMdOpen && aiMdText && aiMdInfo?.page === mdCurrentPage.page) {
+      setAiMdOpen(false);
+      return;
+    }
+
+    setAiMdOpen(true);
+    setAiMdBusy(true);
+    setAiMdError("");
+    setAiMdText("");
+    setAiMdInfo(null);
+    setMdPanelWidth((w) => Math.max(w, 720));
+
+    try {
+      const res = await authFetch(apiUrl("/api/ai/organize-markdown"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: mdCurrentPage.text,
+          pageNumber: mdCurrentPage.page,
+          sourceName: filename,
+          provider,
+        }),
+      });
+      const data = await res.json();
+      const errorMessage = data?.error?.message || data?.error || "Failed to organize markdown.";
+      if (!res.ok) throw new Error(errorMessage);
+
+      setAiMdText(String(data.markdown || "").trim());
+      setAiMdInfo({
+        page: mdCurrentPage.page,
+        provider: data.provider || provider,
+        model: data.model || "",
+      });
+    } catch (err) {
+      setAiMdError(err.message);
+    } finally {
+      setAiMdBusy(false);
+    }
+  }, [aiMdBusy, aiMdInfo?.page, aiMdOpen, aiMdText, filename, mdCurrentPage.page, mdCurrentPage.text, provider]);
+
+  // Confirms the Actions-dropdown page-range picker for Linguistic Analysis
+  // (the Markdown action now opens the panel directly — see the "Markdown"
+  // dropdown item below — so this only ever handles the "linguistic" case).
+  const confirmRangePicker = useCallback(() => {
+    const from = rangeAll ? 1 : Math.max(1, Math.min(rangeFrom, rangeTo));
+    const to   = rangeAll ? pageCount : Math.max(rangeFrom, rangeTo);
+    navigate("/linguistic-analysis", {
+      state: {
+        sourceId: currentSourceIdRef.current,
+        pdfName: filename,
+        rangeFrom: from,
+        rangeTo: to,
+        rangeAll,
+      },
+    });
+    setRangePickerAction(null);
+  }, [rangeAll, rangeFrom, rangeTo, pageCount, navigate, filename]);
+
+  // ── Select markdown text by voice (Web Speech API) ──────────────────────────
+  const handleVoiceSelect = useCallback(() => {
+    const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognitionCtor) {
+      setVoiceError("Voice recognition isn't supported in this browser.");
+      return;
+    }
+    if (voiceRecognitionRef.current) {
+      voiceRecognitionRef.current.stop();
+      return;
+    }
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = "en-US";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => { setVoiceListening(true); setVoiceError(""); };
+    recognition.onerror = (e) => {
+      setVoiceError(e.error === "no-speech" ? "Didn't catch that — try again." : `Voice error: ${e.error}`);
+    };
+    recognition.onend = () => { setVoiceListening(false); voiceRecognitionRef.current = null; };
+    recognition.onresult = (e) => {
+      const transcript = e.results[0][0].transcript.trim();
+      setVoiceQuery(transcript);
+      const idx = pageMdText.toLowerCase().indexOf(transcript.toLowerCase());
+      if (idx === -1) {
+        setVoiceMatch(null);
+        setVoiceError(`"${transcript}" wasn't found in this range.`);
+      } else {
+        // Match is a global index into the whole fetched range — find which
+        // page chunk it falls in, jump the panel there, then store the match
+        // as an offset local to that page's text (what the renderer uses).
+        const pIdx = mdPages.findIndex((p) => idx >= p.startOffset && idx < p.startOffset + p.text.length);
+        const page = pIdx === -1 ? mdPages[0] : mdPages[pIdx];
+        const localStart = idx - (page?.startOffset ?? 0);
+        setMdPageIdx(pIdx === -1 ? 0 : pIdx);
+        setVoiceMatch({ start: localStart, end: localStart + transcript.length });
+        setVoiceError("");
+      }
+    };
+    voiceRecognitionRef.current = recognition;
+    recognition.start();
+  }, [pageMdText, mdPages]);
+
+  useEffect(() => {
+    if (!voiceMatch) return;
+    document.querySelector(".md_voice_hl")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [voiceMatch]);
+
+  useEffect(() => {
+    const layer = textLayerRef.current;
+    const spans = spansRef.current;
+
+    layer?.querySelectorAll(".pdf_md_count_highlight").forEach((el) => el.remove());
+    if (!layer || !pdfMdCountHighlight || pageNum !== mdCurrentPage.page || spans.length === 0) return;
+
+    const layerRect = layer.getBoundingClientRect();
+    const bodyZoom = parseFloat(document.body.style.zoom) || 1;
+    const lines = [];
+
+    spans.forEach(({ el, text }) => {
+      if (!el || !/\S/.test(text || "")) return;
+
+      const r = el.getBoundingClientRect();
+      const left = (r.left - layerRect.left) / bodyZoom;
+      const top = (r.top - layerRect.top) / bodyZoom;
+      const right = (r.right - layerRect.left) / bodyZoom;
+      const bottom = (r.bottom - layerRect.top) / bodyZoom;
+      const h = bottom - top;
+      const padV = h * 0.25;
+
+      let line = lines.find((l) => Math.abs(l.refTop - top) < Math.max(8, h * 0.5));
+      if (!line) {
+        line = { refTop: top, minL: Infinity, maxR: -Infinity, minT: Infinity, maxB: -Infinity };
+        lines.push(line);
+      }
+      line.minL = Math.min(line.minL, left);
+      line.maxR = Math.max(line.maxR, right);
+      line.minT = Math.min(line.minT, top - padV);
+      line.maxB = Math.max(line.maxB, bottom + padV);
+    });
+
+    for (const l of lines) {
+      const rect = document.createElement("div");
+      rect.className = "pdf_md_count_highlight";
+      rect.style.position = "absolute";
+      rect.style.left = `${l.minL}px`;
+      rect.style.top = `${l.minT}px`;
+      rect.style.width = `${l.maxR - l.minL}px`;
+      rect.style.height = `${l.maxB - l.minT}px`;
+      rect.style.background = pdfMdCountHighlight === "chars"
+        ? "rgba(255, 167, 38, 0.28)"
+        : "rgba(56, 139, 253, 0.28)";
+      rect.style.borderRadius = "2px";
+      rect.style.pointerEvents = "none";
+      rect.style.zIndex = "1";
+      layer.insertBefore(rect, layer.firstChild);
+    }
+
+    return () => { layer?.querySelectorAll(".pdf_md_count_highlight").forEach((el) => el.remove()); };
+  }, [pdfMdCountHighlight, pageNum, mdCurrentPage.page, pageViewport]);
 
   // ── AI extraction (streaming) ──────────────────────────────────────────────
   const handleExtract = useCallback(async () => {
@@ -1801,7 +2286,7 @@ const PDFPage = ({
   }, []);
 
   const handleTextSelection = useCallback((e) => {
-    if (extractMode !== "manual") return;
+    if (!textSelectable) return;
     if (suppressTextSelectionRef.current) return;
     const down = mouseDownPosRef.current;
     mouseDownPosRef.current = null;
@@ -1816,7 +2301,7 @@ const PDFPage = ({
       const dragText = sel?.toString().trim().replace(/\s+/g, " ");
       if (dragText && sel.rangeCount > 0) {
         const rect = sel.getRangeAt(0).getBoundingClientRect();
-        if (onSelectionAction) {
+        if (onSelectionAction || hideHyleControls) {
           setManualSelection({ startIdx: -1, endIdx: -1, text: dragText, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
         } else {
           setManualHyle(dragText.toLowerCase().replace(/[.,;:]+$/, ""));
@@ -1853,7 +2338,7 @@ const PDFPage = ({
     const bx = parseFloat(target.style.left || "0") + (parseFloat(target.style.width || "0") || target.offsetWidth || 0) / 2;
     const by = parseFloat(target.style.top  || "0") +  parseFloat(target.style.height || "0") + 8;
     setManualSelection({ startIdx: spanIdx, endIdx: spanIdx, text: word, x: bx, y: by });
-  }, [extractMode, onSelectionAction]);
+  }, [textSelectable, onSelectionAction]);
 
   const handleManualAdd = useCallback(() => {
     const noun = manualHyle.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
@@ -2005,6 +2490,32 @@ const PDFPage = ({
     window.addEventListener("touchend",  onEnd);
   }, []);
 
+  // Drag handle for the Markdown/Actions left column — width in px, not a ratio
+  // (it sits alongside the PDF preview, not splitting against it 1:1).
+  const handleMdPanelResizeStart = useCallback((e) => {
+    e.preventDefault();
+    const handleEl   = e.currentTarget;
+    const startX     = e.touches ? e.touches[0].clientX : e.clientX;
+    const startWidth = mdPanelWidth;
+    handleEl.classList.add("pdf_md_panel_resize_handle--active");
+    const onMove = (ev) => {
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const next = Math.max(220, Math.min(720, startWidth + (clientX - startX)));
+      setMdPanelWidth(next);
+    };
+    const onEnd = () => {
+      handleEl.classList.remove("pdf_md_panel_resize_handle--active");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onEnd);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend",  onEnd);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onEnd);
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend",  onEnd);
+  }, [mdPanelWidth]);
+
   const togglePreview = useCallback(() => {
     setSplitRatio((r) => {
       if (r === 0) return savedRatioRef.current || 0.42;
@@ -2134,20 +2645,78 @@ const PDFPage = ({
             <button onClick={() => zoomFromCenter((z) => z * 1.25)} title="Zoom in">+</button>
           </div>
           {currentSourceIdRef.current && (
+            <div className="annot_dd_wrap" ref={actionsMenuRef}>
+              <button
+                type="button"
+                id="pdf_actions_btn"
+                className={actionsMenuOpen ? "pdf_actions_btn--active" : ""}
+                onClick={() => setActionsMenuOpen((o) => !o)}
+                disabled={!hasStoredMarkdown || pageMdBusy}
+                title={!hasStoredMarkdown ? "Not converted to Markdown yet — convert this document from the Sources table first" : "Markdown / Linguistic Analysis actions"}
+              >
+                <i className="fi fi-rr-menu-dots" /> Actions
+              </button>
+              {actionsMenuOpen && (
+                <div className="annot_dd annot_dd--tools" id="pdf_actions_dd">
+                  <button
+                    type="button"
+                    className="annot_dd_item"
+                    onClick={() => { setActionsMenuOpen(false); mdFocusPageRef.current = pageNum; fetchMarkdownRange(pageNum, pageNum, false); }}
+                  >
+                    <i className="fi fi-rr-document" />
+                    <span>Markdown</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="annot_dd_item"
+                    onClick={() => { setActionsMenuOpen(false); setRangeFrom(pageNum); setRangeTo(pageNum); setRangeAll(false); setRangePickerAction("linguistic"); }}
+                  >
+                    <i className="fi fi-rr-language" />
+                    <span>Linguistic Analysis</span>
+                  </button>
+                </div>
+              )}
+              {rangePickerAction && (
+                <div className="annot_dd" id="pdf_range_picker">
+                  <div id="pdf_range_picker_title">Analyze Language</div>
+                  <label id="pdf_range_all_row">
+                    <input type="checkbox" checked={rangeAll} onChange={(e) => setRangeAll(e.target.checked)} />
+                    All Pages ({pageCount})
+                  </label>
+                  {!rangeAll && (
+                    <div id="pdf_range_inputs">
+                      <label>
+                        From
+                        <input type="number" min={1} max={pageCount} value={rangeFrom} onChange={(e) => setRangeFrom(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
+                      </label>
+                      <label>
+                        To
+                        <input type="number" min={1} max={pageCount} value={rangeTo} onChange={(e) => setRangeTo(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
+                      </label>
+                    </div>
+                  )}
+                  <div id="pdf_range_actions">
+                    <button type="button" className="annot_trigger" onClick={() => setRangePickerAction(null)}>Cancel</button>
+                    <button type="button" className="annot_trigger annot_trigger--active" onClick={confirmRangePicker}>Analyze</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {annotHistory.length > 0 && (
             <button
-              id="pdf_page_md_btn"
-              className={pageMdOpen ? "pdf_page_md_btn--active" : ""}
-              onClick={handleShowPageMarkdown}
-              disabled={pageMdBusy}
-              title={pageMdError ? `Failed: ${pageMdError}` : `Show page ${pageNum}'s Markdown`}
+              id="pdf_annot_history_btn"
+              className={annotHistoryOpen ? "pdf_annot_history_btn--active" : ""}
+              onClick={() => setAnnotHistoryOpen((v) => !v)}
+              title="Annotation History — every step taken this session"
             >
-              {pageMdBusy ? "…" : `MD · p.${pageNum}`}
+              <i className="fi fi-rr-time-past" /> History
             </button>
           )}
           <button id="pdf_close" onClick={handleClose}>✕</button>
 
           {/* Hyles toggle + extraction controls */}
-          {!selectionOnly && <>
+          {!selectionOnly && !hideHyleControls && <>
             <button
               id="pdf_hyles_toggle_btn"
               className={extractionOpen ? "pdf_hyles_toggle_btn--active" : ""}
@@ -2279,27 +2848,6 @@ const PDFPage = ({
               <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
             )}
 
-            {annotTool === "highlight" && (
-              <button
-                type="button"
-                className={`annot_trigger${highlightBordered ? " annot_trigger--active" : ""}`}
-                onClick={() => setHighlightBordered((v) => !v)}
-                title="Bordered highlight: adds a solid edge around the highlight band"
-              >
-                <i className="fi fi-rr-border-outer" />
-              </button>
-            )}
-
-            <button
-              type="button"
-              className={`annot_trigger${fingerScrollOnly ? " annot_trigger--active" : ""}`}
-              onClick={() => setFingerScrollOnly((v) => !v)}
-              title="Hand mode: finger only scrolls the page, the pencil draws"
-            >
-              <i className="fi fi-rr-hand" />
-              <span className="annot_trigger_label">Hand</span>
-            </button>
-
             {annotTool && annotTool !== "eraser" && (
               <button
                 type="button"
@@ -2312,10 +2860,35 @@ const PDFPage = ({
               </button>
             )}
 
-            <div id="pdf_annot_actions">
-              <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
-              <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="fi fi-rr-redo" /></button>
-              <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-trash" /></button>
+            {/* Page-level controls (not tool options) — pinned to the right */}
+            <div id="pdf_annot_right_group">
+              <button
+                type="button"
+                className={`annot_trigger${fingerScrollOnly ? " annot_trigger--active" : ""}`}
+                onClick={() => setFingerScrollOnly((v) => !v)}
+                title="Hand mode: finger only scrolls the page, the pencil draws"
+              >
+                <i className="fi fi-rr-hand" />
+                <span className="annot_trigger_label">Hand</span>
+              </button>
+
+              {hideHyleControls && (
+                <button
+                  type="button"
+                  className={`annot_trigger${selectTextMode ? " annot_trigger--active" : ""}`}
+                  onClick={() => setSelectTextMode((v) => !v)}
+                  title={selectTextMode ? "Select Text is on — tap/click and hold a word to select it" : "Turn on to select words by tapping/clicking and holding"}
+                >
+                  <i className="fi fi-rr-cursor-text" />
+                  <span className="annot_trigger_label">Select Text</span>
+                </button>
+              )}
+
+              <div id="pdf_annot_actions">
+                <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
+                <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="fi fi-rr-redo" /></button>
+                <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-trash" /></button>
+              </div>
             </div>
           </div>
         );
@@ -2326,19 +2899,212 @@ const PDFPage = ({
 
         {/* Far left — Markdown preview column for the current page, opened by the toolbar "MD" button */}
         {pageMdOpen && (
-          <div id="pdf_md_panel">
+          <div id="pdf_md_panel" style={{ width: mdPanelWidth }}>
+            <div
+              id="pdf_md_panel_resize_handle"
+              onMouseDown={handleMdPanelResizeStart}
+              onTouchStart={handleMdPanelResizeStart}
+            />
             <div id="pdf_md_panel_header">
-              <span>Markdown — Page {pageMdForPage ?? pageNum}</span>
+              <span>Markdown</span>
               <button id="pdf_md_panel_close" onClick={() => setPageMdOpen(false)} title="Close">✕</button>
             </div>
+            {pageMdText && (
+              <div id="pdf_md_pager">
+                <div id="pdf_md_page_nav">
+                  <button type="button" onClick={() => goToMarkdownPage(mdCurrentPage.page - 1)} disabled={mdCurrentPage.page <= 1} title="Previous page">‹</button>
+                  <input
+                    type="number"
+                    min={1}
+                    max={pageCount}
+                    value={mdPageInputVal}
+                    onChange={(e) => setMdPageInputVal(e.target.value)}
+                    onBlur={commitMdPageInput}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                    title="Type a page number to jump straight to its Markdown"
+                  />
+                  <span id="pdf_md_page_nav_total">/ {pageCount}</span>
+                  <button type="button" onClick={() => goToMarkdownPage(mdCurrentPage.page + 1)} disabled={mdCurrentPage.page >= pageCount} title="Next page">›</button>
+                </div>
+                <button
+                  type="button"
+                  id="pdf_md_all_pages_btn"
+                  className={`pdf_md_icon_btn${pageMdRange?.all ? " pdf_md_all_pages_btn--active" : ""}`}
+                  onClick={showAllMarkdownPages}
+                  disabled={pageMdBusy || pageMdDeleteBusy || Boolean(pageMdRange?.all)}
+                  title={pageMdRange?.all ? "Every page is already loaded" : "Load every page's Markdown so you can page through the whole document without re-fetching"}
+                >
+                  <i className="fi fi-rr-layers" /> {pageMdRange?.all ? "Loaded" : "All Pages"}
+                </button>
+                <button
+                  type="button"
+                  className="pdf_md_icon_btn pdf_md_delete_btn"
+                  onClick={handleDeleteMarkdownPage}
+                  disabled={pageMdBusy || pageMdDeleteBusy || !pageMdText}
+                  title="Delete cached markdown for the currently displayed page"
+                >
+                  <i className={`fi ${pageMdDeleteBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-trash"}`} /> {pageMdDeleteBusy ? "Deleting…" : "Delete Page"}
+                </button>
+                <button
+                  type="button"
+                  className="pdf_md_icon_btn pdf_md_delete_btn pdf_md_delete_btn--all"
+                  onClick={handleDeleteAllMarkdownPages}
+                  disabled={pageMdBusy || pageMdDeleteBusy || !pageMdText}
+                  title="Delete every cached markdown page for this source"
+                >
+                  <i className={`fi ${pageMdDeleteBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-trash"}`} /> {pageMdDeleteBusy ? "Deleting…" : "Delete All"}
+                </button>
+              </div>
+            )}
+            {!pageMdBusy && !pageMdError && pageMdText && (
+              <div id="pdf_md_stats">
+                <button
+                  type="button"
+                  className={`pdf_md_stat_btn${pdfMdCountHighlight === "words" ? " pdf_md_stat_btn--active" : ""}`}
+                  onClick={() => showMarkdownPageInPdf("words")}
+                  title="Show this markdown page in the PDF viewer and highlight the counted words there"
+                >
+                  <i className="fi fi-rr-text" /> {mdStats.words} words
+                </button>
+                <button
+                  type="button"
+                  className={`pdf_md_stat_btn${pdfMdCountHighlight === "chars" ? " pdf_md_stat_btn--active" : ""}`}
+                  onClick={() => showMarkdownPageInPdf("chars")}
+                  title="Show this markdown page in the PDF viewer and highlight the counted characters there"
+                >
+                  <i className="fi fi-rr-keyboard" /> {mdStats.chars} characters
+                </button>
+                <button
+                  type="button"
+                  id="pdf_md_voice_btn"
+                  className={voiceListening ? "pdf_md_voice_btn--active" : ""}
+                  onClick={handleVoiceSelect}
+                  title="Select text by voice — say a word or phrase to find and highlight it"
+                >
+                  <i className="fi fi-rr-microphone" /> Voice
+                </button>
+                <button
+                  type="button"
+                  className={`pdf_md_icon_btn${aiMdOpen ? " pdf_md_icon_btn--active" : ""}`}
+                  onClick={handleOrganizeMarkdown}
+                  disabled={pageMdBusy || aiMdBusy || !mdCurrentPage.text.trim()}
+                  title="Use AI to organize the current markdown page and open a comparison column"
+                >
+                  <i className={`fi ${aiMdBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-eye"}`} /> AI EYE
+                </button>
+                <div id="pdf_md_font_controls">
+                  <button type="button" onClick={() => setMdFontScale((s) => Math.max(0.7, +(s - 0.1).toFixed(1)))} title="Smaller text" disabled={mdFontScale <= 0.7}>A−</button>
+                  <span id="pdf_md_font_label">{Math.round(mdFontScale * 100)}%</span>
+                  <button type="button" onClick={() => setMdFontScale((s) => Math.min(2, +(s + 0.1).toFixed(1)))} title="Larger text" disabled={mdFontScale >= 2}>A+</button>
+                </div>
+              </div>
+            )}
+            {(voiceListening || voiceQuery || voiceError) && (
+              <div id="pdf_md_voice_status">
+                {voiceListening ? "Listening…" : voiceError ? `⚠ ${voiceError}` : voiceQuery ? `Heard: "${voiceQuery}"${voiceMatch ? " — found" : ""}` : ""}
+              </div>
+            )}
             <div id="pdf_md_panel_body">
               {pageMdBusy ? (
                 <p id="pdf_md_panel_status">Converting…</p>
               ) : pageMdError ? (
                 <p id="pdf_md_panel_status" className="pdf_md_panel_status--error">⚠ {pageMdError}</p>
+              ) : mdCurrentPage.text ? (
+                <div className={`pdf_md_compare_layout${aiMdOpen ? " pdf_md_compare_layout--split" : ""}`}>
+                  <section className="pdf_md_compare_col">
+                    <div className="pdf_md_compare_head">
+                      <span>Original Markdown</span>
+                      <span className="pdf_md_compare_meta">Page {mdCurrentPage.page}</span>
+                    </div>
+                    <pre id="pdf_md_panel_text" ref={mdTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
+                      {(() => {
+                        // Every source line break reads as its own paragraph here
+                        // (a "\n" is a paragraph break, not just a wrapped line).
+                        let offset = 0;
+                        return mdLines.map((line, li) => {
+                          const lineStart = offset;
+                          const headingMatch = line.match(/^(#{1,6})\s+/);
+
+                          const boldRanges = [];
+                          const boldRe = /\*\*(.+?)\*\*|__(.+?)__/g;
+                          let m;
+                          while ((m = boldRe.exec(line))) boldRanges.push([m.index, m.index + m[0].length]);
+                          const isBoldAt = (ci) => boldRanges.some(([s, e]) => ci >= s && ci < e);
+
+                          const chars = Array.from(line).map((ch, ci) => {
+                            const globalIdx = lineStart + ci;
+                            const isVoiceMatch = voiceMatch && globalIdx >= voiceMatch.start && globalIdx < voiceMatch.end;
+                            const classes = [
+                              isVoiceMatch ? "md_voice_hl" : null,
+                              isBoldAt(ci) ? "md_bold" : null,
+                            ].filter(Boolean);
+                            return classes.length ? <span key={ci} className={classes.join(" ")}>{ch}</span> : ch;
+                          });
+                          offset += line.length + 1;
+                          const lineClasses = ["md_line", headingMatch ? `md_heading md_heading--h${headingMatch[1].length}` : null].filter(Boolean).join(" ");
+                          return <div key={li} className={lineClasses}>{chars.length ? chars : " "}</div>;
+                        });
+                      })()}
+                    </pre>
+                  </section>
+
+                  {aiMdOpen && (
+                    <section className="pdf_md_compare_col pdf_md_compare_col--ai">
+                      <div className="pdf_md_compare_head">
+                        <span>AI Organized</span>
+                        <span className="pdf_md_compare_meta">
+                          {aiMdBusy
+                            ? "Thinking…"
+                            : aiMdInfo?.model
+                              ? `${aiMdInfo.provider} · ${aiMdInfo.model}`
+                              : `Page ${mdCurrentPage.page}`}
+                        </span>
+                      </div>
+                      {aiMdBusy ? (
+                        <p id="pdf_md_panel_status">Organizing markdown…</p>
+                      ) : aiMdError ? (
+                        <p id="pdf_md_panel_status" className="pdf_md_panel_status--error">⚠ {aiMdError}</p>
+                      ) : aiMdText ? (
+                        <pre className="pdf_md_panel_text_compare" ref={mdCompareTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>{aiMdText}</pre>
+                      ) : (
+                        <p id="pdf_md_panel_status">Click AI EYE to generate an organized comparison.</p>
+                      )}
+                    </section>
+                  )}
+                </div>
               ) : (
-                <pre id="pdf_md_panel_text">{pageMdText || "(This page had no extractable text.)"}</pre>
+                <pre id="pdf_md_panel_text" style={{ fontSize: `${0.8 * mdFontScale}rem` }}>(This page had no extractable text.)</pre>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Far left — Annotation History column, opened by the toolbar "History" button */}
+        {annotHistoryOpen && (
+          <div id="pdf_annot_history_panel">
+            <div id="pdf_annot_history_header">
+              <span>Annotation History</span>
+              <button id="pdf_annot_history_close" onClick={() => setAnnotHistoryOpen(false)} title="Close">✕</button>
+            </div>
+            <div id="pdf_annot_history_body">
+              {[...annotHistory].reverse().map((h) => {
+                const meta = ANNOT_HISTORY_META[h.action] || ANNOT_HISTORY_META.add;
+                const toolLabel = ANNOT_TOOLS.find((t) => t.key === h.type)?.label || (h.type === "text" ? "Text" : h.type);
+                return (
+                  <div key={h.id} className="anh_row">
+                    <i className={`fi ${meta.icon} anh_icon`} />
+                    <div className="anh_main">
+                      <span className="anh_label">
+                        {meta.verb}{h.action === "clear" ? ` ${h.count} item${h.count === 1 ? "" : "s"}` : h.action === "erase" ? ` ${h.count} mark${h.count === 1 ? "" : "s"}` : toolLabel ? ` ${toolLabel}` : ""}
+                      </span>
+                      <span className="anh_meta">
+                        p.{h.page} · {h.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </span>
+                    </div>
+                    {h.color && <span className="anh_swatch" style={{ background: h.color }} />}
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -2347,7 +3113,11 @@ const PDFPage = ({
         <div
           id="pdf_preview"
           ref={previewRef}
-          style={{ width: splitRatio === 0 ? "0" : splitRatio >= 0.9 ? "100%" : `${splitRatio * 100}%` }}
+          style={{
+            width: splitRatio === 0
+              ? "0"
+              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0)}px)`,
+          }}
           className={splitRatio === 0 ? "pdf_preview--closed" : ""}
         >
           {pdfDoc ? (
@@ -2411,7 +3181,7 @@ const PDFPage = ({
                           {selectionActionError && <span id="msb_error">{selectionActionError}</span>}
                         </div>
                       )}
-                      {extractMode === "manual" && (
+                      {textSelectable && (
                         <div
                           ref={textLayerRef}
                           className="pdf_text_layer"

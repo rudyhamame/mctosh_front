@@ -1,0 +1,104 @@
+#draft_page {
+  display: flex;
+  flex-direction: column;
+  height: calc(var(--vh, 1vh) * 100);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+#draft_header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#draft_back_btn {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+#draft_back_btn:hover { color: var(--color-text); }
+
+#draft_title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--color-text);
+}
+
+#draft_status {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  min-width: 0;
+}
+
+#draft_word_count {
+  margin-left: auto;
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+#draft_font_controls {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+#draft_font_controls button {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+#draft_font_controls button:disabled { opacity: 0.35; cursor: default; }
+#draft_font_controls button:hover:not(:disabled) { color: var(--color-text); }
+
+#draft_font_label {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  min-width: 2.2em;
+  text-align: center;
+}
+
+#draft_status_msg {
+  margin: auto;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+.draft_status_msg--error { color: #f44336; }
+
+#draft_editor {
+  flex: 1;
+  width: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  padding: 2rem clamp(1rem, 8vw, 12rem);
+  box-sizing: border-box;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
+  line-height: 1.7;
+  caret-color: var(--color-highlight);
+}
+
+#draft_editor::placeholder {
+  color: var(--color-text-muted);
+  opacity: 0.6;
+}
