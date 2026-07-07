@@ -32,6 +32,174 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--color-text);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 30vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#draft_title i { font-size: 0.7rem; opacity: 0.5; }
+#draft_title:hover i { opacity: 1; }
+
+#draft_title_input {
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.1rem 0.35rem;
+  border: 1px solid var(--color-highlight);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  max-width: 30vw;
+}
+
+#draft_doc_actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+#draft_doc_actions button {
+  width: 1.7rem;
+  height: 1.7rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+#draft_doc_actions button:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+#draft_doc_actions button:disabled { opacity: 0.45; cursor: default; }
+
+#draft_email_modal_backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+#draft_email_modal {
+  width: min(360px, 90vw);
+  padding: 1.2rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+#draft_email_modal h3 { margin: 0; font-size: 0.95rem; }
+#draft_email_modal input {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.85rem;
+}
+#draft_email_modal_actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+#draft_email_modal_actions button {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+#draft_email_modal_actions button:hover:not(:disabled) { color: var(--color-text); }
+.draft_email_send_btn {
+  border-color: color-mix(in srgb, var(--color-highlight) 45%, var(--color-border)) !important;
+  color: var(--color-highlight) !important;
+  font-weight: 600;
+}
+.draft_email_send_btn:disabled { opacity: 0.5; }
+
+/* ── Page setup bar (format + customizable margins) ── */
+#draft_page_setup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  padding: 0.4rem 0.9rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+#draft_page_setup label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+#draft_page_setup select,
+#draft_page_setup input {
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.7rem;
+}
+#draft_page_setup input[type="number"] { width: 3.2rem; }
+
+#draft_page_indicator {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+/* ── The scrollable "desk" the fixed-size page sits on ── */
+/* Deliberately NOT `display: flex; justify-content: center` — when the
+   page is wider than the viewport (any narrow/mobile screen, since the
+   page has a real fixed physical width), a centered flex child overflows
+   symmetrically in both directions, and the portion that spills past the
+   *start* edge lands in negative scroll territory that's unreachable by
+   normal scrolling. Centering the page itself with `margin: 0 auto`
+   (applied inline in DraftPage.jsx) keeps the overflow entirely on the
+   trailing side, where scrolling right actually reaches it. */
+#draft_page_stack {
+  flex: 1;
+  overflow: auto;
+  background: var(--color-bg);
+  padding: 2rem 0 4rem;
+}
+
+/* Printing (and the browser's own "Save as PDF") should only ever show the
+   document itself — never the toolbar, ruler, header, page-setup bar, or
+   the desk background around it, which are screen-only editing affordances. */
+@media print {
+  #draft_header, #draft_toolbar, #draft_ruler_wrap, #draft_page_setup { display: none !important; }
+  /* The app-wide floating chat FAB (#home_chat_root, rendered outside this
+     page's own DOM tree by AppRouter) sits fixed on every route — it must
+     be hidden explicitly here too, not just this page's own elements. */
+  #home_chat_root { display: none !important; }
+  #draft_page {
+    height: auto;
+    background: #fff !important;
+  }
+  #draft_page_stack {
+    background: #fff !important;
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  #draft_editor {
+    background: #fff !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    color: #000 !important;
+  }
 }
 
 #draft_status {
@@ -83,22 +251,217 @@
 }
 .draft_status_msg--error { color: #f44336; }
 
+/* ── Indentation ruler, like Word's ── */
+#draft_ruler_wrap {
+  flex-shrink: 0;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: flex;
+  justify-content: center;
+}
+
+#draft_ruler {
+  position: relative;
+  height: 1.1rem;
+  flex-shrink: 0;
+}
+
+.draft_ruler_tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-border);
+}
+
+.draft_ruler_tick_label {
+  position: absolute;
+  top: 100%;
+  left: 2px;
+  font-size: 0.55rem;
+  color: var(--color-text-muted);
+  opacity: 0.6;
+  line-height: 1;
+}
+
+#draft_ruler_marker {
+  position: absolute;
+  top: -1px;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 9px solid var(--color-highlight);
+  cursor: ew-resize;
+  touch-action: none;
+}
+#draft_ruler_marker:hover,
+#draft_ruler_marker:active {
+  filter: brightness(1.2);
+}
+
 #draft_editor {
-  flex: 1;
-  width: 100%;
-  border: none;
+  flex-shrink: 0;
   outline: none;
-  resize: none;
-  padding: 2rem clamp(1rem, 8vw, 12rem);
   box-sizing: border-box;
-  background: var(--color-bg);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.35);
+  /* Ruled lines, like notebook paper — the actual pixel spacing (line-height
+     + background-image) is computed in JS from the editor's own rendered
+     font-size and applied inline, so the rule can never drift a pixel off
+     the text (see the useLayoutEffect in DraftPage.jsx for why). background-
+     attachment must be "local", not the default "scroll" — "scroll" pins the
+     background to the element's own viewport so it stays put while the text
+     scrolls past underneath it, falling further out of alignment the more
+     you've scrolled; "local" scrolls the background together with the
+     content, which is what a scrolling container needs. */
+  background-attachment: local;
   color: var(--color-text);
   font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
-  line-height: 1.7;
   caret-color: var(--color-highlight);
 }
 
-#draft_editor::placeholder {
+/* contentEditable has no native placeholder — :empty only matches when the
+   div truly has zero children, which is exactly the state right after
+   loading an empty draft. */
+#draft_editor:empty::before {
+  content: attr(data-placeholder);
   color: var(--color-text-muted);
   opacity: 0.6;
+  pointer-events: none;
+}
+
+/* ── Formatting toolbar ── */
+#draft_toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+
+.draft_tool_select {
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+
+.draft_tool_btn {
+  min-width: 1.7rem;
+  height: 1.7rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+}
+.draft_tool_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+.draft_tool_btn:disabled { opacity: 0.45; cursor: default; }
+
+.draft_tool_btn--ai {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 0 0.55rem;
+  border-color: color-mix(in srgb, var(--color-highlight) 45%, var(--color-border));
+  color: var(--color-highlight);
+}
+
+.draft_tool_color {
+  position: relative;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  overflow: hidden;
+}
+.draft_tool_color--highlight { color: #ffca28; }
+
+.draft_tool_color input[type="color"] {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.draft_toolbar_divider {
+  width: 1px;
+  align-self: stretch;
+  background: var(--color-border);
+  margin: 0 0.15rem;
+}
+
+.draft_tool_error {
+  font-size: 0.68rem;
+  color: #f44336;
+}
+
+@keyframes draft_icon_spin { to { transform: rotate(360deg); } }
+.draft_icon_spin { display: inline-block; animation: draft_icon_spin 0.9s linear infinite; }
+
+/* No dedicated "align-right" glyph in this icon set — mirror align-left. */
+.draft_icon_flip { display: inline-block; transform: scaleX(-1); }
+
+/* The still-streaming tail of the current utterance, before its "completed"
+   event finalizes it into plain text — dimmed so it visibly reads as
+   provisional while words are still arriving. */
+.draft_live_dictation {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.draft_tool_btn--mic.draft_tool_btn--recording {
+  color: #f44336;
+  border-color: #f44336;
+  animation: draft_mic_pulse 1.1s ease-in-out infinite;
+}
+@keyframes draft_mic_pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.45); }
+  50% { box-shadow: 0 0 0 5px rgba(244, 67, 54, 0); }
+}
+
+#draft_dictation_langs {
+  display: flex;
+  gap: 0.2rem;
+}
+.draft_lang_btn {
+  height: 1.7rem;
+  padding: 0 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.draft_lang_btn:hover:not(:disabled) { color: var(--color-text); }
+.draft_lang_btn:disabled { opacity: 0.6; cursor: default; }
+.draft_lang_btn--active {
+  border-color: color-mix(in srgb, var(--color-highlight) 45%, var(--color-border));
+  color: var(--color-highlight);
 }

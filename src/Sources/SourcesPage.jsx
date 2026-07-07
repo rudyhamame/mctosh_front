@@ -48,6 +48,36 @@ const COMPRESSION_LABELS = {
   extreme: "Extreme",
 };
 
+const cleanMarkdownToPlainText = (text) => String(text || "")
+  .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, "").trim())
+  .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+  .replace(/^\s*>\s?/gm, "")
+  .replace(/^\s*[-*+]\s+/gm, "")
+  .replace(/^\s*\d+\.\s+/gm, "")
+  .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+  .replace(/(`)([^`]+)\1/g, "$2")
+  .replace(/(\*\*\*|___)(.*?)\1/g, "$2")
+  .replace(/(\*\*|__)(.*?)\1/g, "$2")
+  .replace(/(\*|_)(.*?)\1/g, "$2")
+  .replace(/^\s*---+\s*$/gm, "")
+  .replace(/\n{3,}/g, "\n\n")
+  .trim();
+
+const SourcePlainTextView = ({ text, emptyText, className = "" }) => {
+  const cleaned = cleanMarkdownToPlainText(text);
+  const paragraphs = cleaned ? cleaned.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean) : [];
+
+  return (
+    <div className={`sources_ai_compare_text sources_plain_text ${className}`.trim()}>
+      {paragraphs.length
+        ? paragraphs.map((paragraph, idx) => (
+            <p key={idx}>{paragraph}</p>
+          ))
+        : <p>{emptyText}</p>}
+    </div>
+  );
+};
+
 const SourcesPage = () => {
   const navigate = useNavigate();
   const fileDocRef      = useRef(null);
@@ -707,7 +737,10 @@ const SourcesPage = () => {
                 <div id="sources_ai_compare_grid">
                   <section className="sources_ai_compare_col">
                     <div className="sources_ai_compare_head">Original Markdown</div>
-                    <pre className="sources_ai_compare_text">{enhancedViewer.original || "(This page had no cached markdown.)"}</pre>
+                    <SourcePlainTextView
+                      text={enhancedViewer.original}
+                      emptyText="(This page had no cached markdown.)"
+                    />
                   </section>
                   <section className="sources_ai_compare_col">
                     <div className="sources_ai_compare_head">
@@ -733,7 +766,10 @@ const SourcesPage = () => {
                         </span>
                       )}
                     </div>
-                    <pre className="sources_ai_compare_text">{enhancedViewer.enhanced || "(No AI-enhanced markdown was stored for this page.)"}</pre>
+                    <SourcePlainTextView
+                      text={enhancedViewer.enhanced}
+                      emptyText="(No AI-enhanced markdown was stored for this page.)"
+                    />
                   </section>
                 </div>
               )}

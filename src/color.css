@@ -43,6 +43,16 @@ html, body {
   color: var(--color-text);
 }
 
+/* Printing a dark theme as-is would waste a full page of dark ink behind
+   whatever content actually needs printing — force plain white/black,
+   app-wide, regardless of which theme is active on screen. */
+@media print {
+  html, body {
+    background-color: #fff !important;
+    color: #000 !important;
+  }
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
   margin: 0;

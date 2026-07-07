@@ -99,6 +99,72 @@ const ANNOT_HISTORY_META = {
   clear: { icon: "fi-rr-trash",      verb: "Cleared" },
 };
 
+const cleanMarkdownToPlainText = (text) => String(text || "")
+  .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, "").trim())
+  .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+  .replace(/^\s*>\s?/gm, "")
+  .replace(/^\s*[-*+]\s+/gm, "")
+  .replace(/^\s*\d+\.\s+/gm, "")
+  .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+  .replace(/(`)([^`]+)\1/g, "$2")
+  .replace(/(\*\*\*|___)(.*?)\1/g, "$2")
+  .replace(/(\*\*|__)(.*?)\1/g, "$2")
+  .replace(/(\*|_)(.*?)\1/g, "$2")
+  .replace(/^\s*---+\s*$/gm, "")
+  .replace(/\n{3,}/g, "\n\n")
+  .trim();
+
+const PdfPlainTextView = ({ text, className = "" }) => {
+  const cleaned = cleanMarkdownToPlainText(text);
+  const paragraphs = cleaned ? cleaned.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean) : [];
+
+  return (
+    <div className={`pdf_plain_text ${className}`.trim()}>
+      {paragraphs.length
+        ? paragraphs.map((paragraph, idx) => (
+            <p key={idx}>{paragraph}</p>
+          ))
+        : <p>(No AI-enhanced markdown was stored for this page.)</p>}
+    </div>
+  );
+};
+
+const renderOriginalMarkdownLine = (line, lineStart, voiceMatch) => {
+  const headingMatch = line.match(/^(#{1,6})\s+/);
+  const headingLevel = headingMatch ? headingMatch[1].length : 0;
+  const nodes = [];
+  let rawIndex = headingMatch ? headingMatch[0].length : 0;
+  let key = 0;
+  let bold = false;
+
+  while (rawIndex < line.length) {
+    const token = line.slice(rawIndex, rawIndex + 2);
+    if (token === "**" || token === "__") {
+      bold = !bold;
+      rawIndex += 2;
+      continue;
+    }
+
+    const globalIdx = lineStart + rawIndex;
+    const isVoiceMatch = voiceMatch && globalIdx >= voiceMatch.start && globalIdx < voiceMatch.end;
+    const classes = [
+      isVoiceMatch ? "md_voice_hl" : null,
+      bold ? "md_bold" : null,
+    ].filter(Boolean);
+
+    const ch = line[rawIndex];
+    nodes.push(classes.length ? <span key={key++} className={classes.join(" ")}>{ch}</span> : ch);
+    rawIndex += 1;
+  }
+
+  return {
+    headingLevel,
+    content: nodes.length ? nodes : " ",
+    isRule: /^---+$/.test(line.trim()),
+    isBlank: line.trim() === "",
+  };
+};
+
 // Safari reports Apple-Pencil touches with Touch.touchType === "stylus" (vs.
 // "direct" for a finger) — the only reliable signal we have to tell hand
 // from pencil on a TouchEvent.
@@ -378,6 +444,7 @@ const PDFPage = ({
   // table (it's a whole-document operation, not a per-page one) — this button
   // just opens the reader for a document that's already been converted there.
   const [hasStoredMarkdown, setHasStoredMarkdown] = useState(false);
+  const [hasStoredAiEnhancedMarkdown, setHasStoredAiEnhancedMarkdown] = useState(false);
   const [pageMdBusy,    setPageMdBusy]    = useState(false);
   const [pageMdError,   setPageMdError]   = useState("");
   const [pageMdOpen,    setPageMdOpen]    = useState(false);
@@ -1808,11 +1875,18 @@ const PDFPage = ({
       // Check (cheaply — no page param, but only reading the boolean) whether
       // this source was already converted to Markdown from the Sources table.
       setHasStoredMarkdown(false);
+      setHasStoredAiEnhancedMarkdown(false);
       try {
         const srcRes = await authFetch(apiUrl(`/api/sources/${sourceId}`));
         if (srcRes.ok) {
           const srcData = await srcRes.json();
-          setHasStoredMarkdown(Boolean(srcData.source?.markdown));
+          const source = srcData.source || {};
+          setHasStoredMarkdown(Boolean(source.markdown) || (Array.isArray(source.markdownPages) && source.markdownPages.some((page) => String(page || "").trim())));
+          setHasStoredAiEnhancedMarkdown(
+            Boolean(source.hasAiEnhancedMarkdown) ||
+            Boolean(source.aiMarkdown) ||
+            (Array.isArray(source.aiMarkdownPages) && source.aiMarkdownPages.some((page) => String(page || "").trim()))
+          );
         }
       } catch {
         // best-effort — MD button just stays disabled if this check fails
@@ -2055,8 +2129,9 @@ const PDFPage = ({
     }
   }, [pageMdDeleteBusy]);
 
-  const handleOrganizeMarkdown = useCallback(async () => {
-    if (!mdCurrentPage.text.trim() || aiMdBusy) return;
+  const handleShowEnhancedMarkdown = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId || !mdCurrentPage.text.trim() || aiMdBusy || !hasStoredAiEnhancedMarkdown) return;
 
     if (aiMdOpen && aiMdText && aiMdInfo?.page === mdCurrentPage.page) {
       setAiMdOpen(false);
@@ -2071,24 +2146,15 @@ const PDFPage = ({
     setMdPanelWidth((w) => Math.max(w, 720));
 
     try {
-      const res = await authFetch(apiUrl("/api/ai/organize-markdown"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: mdCurrentPage.text,
-          pageNumber: mdCurrentPage.page,
-          sourceName: filename,
-          provider,
-        }),
-      });
+      const res = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown-enhanced?page=${mdCurrentPage.page}`));
       const data = await res.json();
-      const errorMessage = data?.error?.message || data?.error || "Failed to organize markdown.";
+      const errorMessage = data?.error?.message || data?.error || "Failed to load enhanced markdown.";
       if (!res.ok) throw new Error(errorMessage);
 
       setAiMdText(String(data.markdown || "").trim());
       setAiMdInfo({
         page: mdCurrentPage.page,
-        provider: data.provider || provider,
+        provider: data.provider || "Stored",
         model: data.model || "",
       });
     } catch (err) {
@@ -2096,7 +2162,7 @@ const PDFPage = ({
     } finally {
       setAiMdBusy(false);
     }
-  }, [aiMdBusy, aiMdInfo?.page, aiMdOpen, aiMdText, filename, mdCurrentPage.page, mdCurrentPage.text, provider]);
+  }, [aiMdBusy, aiMdInfo?.page, aiMdOpen, aiMdText, authFetch, hasStoredAiEnhancedMarkdown, mdCurrentPage.page, mdCurrentPage.text]);
 
   // Confirms the Actions-dropdown page-range picker for Linguistic Analysis
   // (the Markdown action now opens the panel directly — see the "Markdown"
@@ -2986,11 +3052,11 @@ const PDFPage = ({
                 <button
                   type="button"
                   className={`pdf_md_icon_btn${aiMdOpen ? " pdf_md_icon_btn--active" : ""}`}
-                  onClick={handleOrganizeMarkdown}
-                  disabled={pageMdBusy || aiMdBusy || !mdCurrentPage.text.trim()}
-                  title="Use AI to organize the current markdown page and open a comparison column"
+                  onClick={handleShowEnhancedMarkdown}
+                  disabled={pageMdBusy || aiMdBusy || !mdCurrentPage.text.trim() || !hasStoredAiEnhancedMarkdown}
+                  title={!hasStoredAiEnhancedMarkdown ? "No stored AI-enhanced markdown exists for this source yet" : "Show the stored AI-enhanced text for this page"}
                 >
-                  <i className={`fi ${aiMdBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-eye"}`} /> AI EYE
+                  <i className={`fi ${aiMdBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-eye"}`} /> Enhanced Text
                 </button>
                 <div id="pdf_md_font_controls">
                   <button type="button" onClick={() => setMdFontScale((s) => Math.max(0.7, +(s - 0.1).toFixed(1)))} title="Smaller text" disabled={mdFontScale <= 0.7}>A−</button>
@@ -3016,42 +3082,31 @@ const PDFPage = ({
                       <span>Original Markdown</span>
                       <span className="pdf_md_compare_meta">Page {mdCurrentPage.page}</span>
                     </div>
-                    <pre id="pdf_md_panel_text" ref={mdTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
+                    <div id="pdf_md_panel_text" ref={mdTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
                       {(() => {
                         // Every source line break reads as its own paragraph here
                         // (a "\n" is a paragraph break, not just a wrapped line).
                         let offset = 0;
                         return mdLines.map((line, li) => {
                           const lineStart = offset;
-                          const headingMatch = line.match(/^(#{1,6})\s+/);
-
-                          const boldRanges = [];
-                          const boldRe = /\*\*(.+?)\*\*|__(.+?)__/g;
-                          let m;
-                          while ((m = boldRe.exec(line))) boldRanges.push([m.index, m.index + m[0].length]);
-                          const isBoldAt = (ci) => boldRanges.some(([s, e]) => ci >= s && ci < e);
-
-                          const chars = Array.from(line).map((ch, ci) => {
-                            const globalIdx = lineStart + ci;
-                            const isVoiceMatch = voiceMatch && globalIdx >= voiceMatch.start && globalIdx < voiceMatch.end;
-                            const classes = [
-                              isVoiceMatch ? "md_voice_hl" : null,
-                              isBoldAt(ci) ? "md_bold" : null,
-                            ].filter(Boolean);
-                            return classes.length ? <span key={ci} className={classes.join(" ")}>{ch}</span> : ch;
-                          });
+                          const rendered = renderOriginalMarkdownLine(line, lineStart, voiceMatch);
                           offset += line.length + 1;
-                          const lineClasses = ["md_line", headingMatch ? `md_heading md_heading--h${headingMatch[1].length}` : null].filter(Boolean).join(" ");
-                          return <div key={li} className={lineClasses}>{chars.length ? chars : " "}</div>;
+                          if (rendered.isRule) return <hr key={li} className="pdf_md_rule" />;
+                          const lineClasses = [
+                            "md_line",
+                            rendered.isBlank ? "md_line--blank" : null,
+                            rendered.headingLevel ? `md_heading md_heading--h${rendered.headingLevel}` : null,
+                          ].filter(Boolean).join(" ");
+                          return <div key={li} className={lineClasses}>{rendered.content}</div>;
                         });
                       })()}
-                    </pre>
+                    </div>
                   </section>
 
                   {aiMdOpen && (
                     <section className="pdf_md_compare_col pdf_md_compare_col--ai">
                       <div className="pdf_md_compare_head">
-                        <span>AI Organized</span>
+                        <span>AI Enhanced</span>
                         <span className="pdf_md_compare_meta">
                           {aiMdBusy
                             ? "Thinking…"
@@ -3061,13 +3116,15 @@ const PDFPage = ({
                         </span>
                       </div>
                       {aiMdBusy ? (
-                        <p id="pdf_md_panel_status">Organizing markdown…</p>
+                        <p id="pdf_md_panel_status">Loading enhanced text…</p>
                       ) : aiMdError ? (
                         <p id="pdf_md_panel_status" className="pdf_md_panel_status--error">⚠ {aiMdError}</p>
                       ) : aiMdText ? (
-                        <pre className="pdf_md_panel_text_compare" ref={mdCompareTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>{aiMdText}</pre>
+                        <div ref={mdCompareTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
+                          <PdfPlainTextView text={aiMdText} className="pdf_md_panel_text_compare" />
+                        </div>
                       ) : (
-                        <p id="pdf_md_panel_status">Click AI EYE to generate an organized comparison.</p>
+                        <p id="pdf_md_panel_status">Click Enhanced Text to show the stored AI-enhanced version for this page.</p>
                       )}
                     </section>
                   )}

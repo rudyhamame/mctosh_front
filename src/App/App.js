@@ -90,6 +90,13 @@ const OTHER = [
     description: "Control prompts, AI providers, and app theme",
     color: "#78909c",
   },
+  {
+    path: "/social-media-control",
+    icon: "fi-rr-megaphone",
+    label: "MCTOSHS Social Media Control",
+    description: "Plan campaigns, shape captions, review post drafts, and prepare Instagram publishing workflows",
+    color: "#ff8a65",
+  },
 ];
 
 const App = ({ onLogout }) => {

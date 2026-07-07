@@ -12,6 +12,7 @@ import AIChat                         from "./AI/AIChat";
 import HomeChat                       from "./App/HomeChat";
 import PredictionOverlay              from "./Prediction/PredictionOverlay";
 import DraftPage                      from "./Draft/DraftPage";
+import DraftListPage                  from "./Draft/DraftListPage";
 import PDFPage                        from "./PDF/PDFPage";
 import CardPage                       from "./Card/CardPage";
 import PhenomenaPage                  from "./Phenomena/PhenomenaPage";
@@ -29,6 +30,7 @@ import ClinicalSchemata              from "./ClinicalSchemata/ClinicalSchemata";
 import UnitsExtraction                from "./UnitsExtraction/UnitsExtraction";
 import LinguisticAnalysisPage          from "./LinguisticAnalysis/LinguisticAnalysisPage";
 import MCCQEObjectivesPage            from "./MCC/MCCQEObjectivesPage";
+import SocialMediaControlPage         from "./SocialMediaControl/SocialMediaControlPage";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
@@ -115,13 +117,15 @@ const AppRouter = () => {
         <Route path="/card/:card"         element={auth(<CardPage />)} />
         <Route path="/phenomena"          element={auth(<PhenomenaPage />)} />
         <Route path="/settings"           element={auth(<SettingsPage />)} />
-        <Route path="/draft"              element={auth(<DraftPage />)} />
+        <Route path="/draft"              element={auth(<DraftListPage />)} />
+        <Route path="/draft/:id"          element={auth(<DraftPage />)} />
         <Route path="/patient-instantiation" element={auth(<PatientInstantiationPage />)} />
         <Route path="/patient-modelling"     element={auth(<PatientModelling />)} />
         <Route path="/traces-collector"      element={auth(<TracesCollector />)} />
         <Route path="/clinical-schemata"      element={auth(<ClinicalSchemata />)} />
         <Route path="/units-extraction"       element={auth(<UnitsExtraction />)} />
         <Route path="/linguistic-analysis"    element={auth(<LinguisticAnalysisPage />)} />
+        <Route path="/social-media-control"   element={auth(<SocialMediaControlPage />)} />
 
         {/* Legacy redirect */}
         <Route path="/pdf/:card" element={<PdfCardRedirect />} />

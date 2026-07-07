@@ -107,7 +107,8 @@ export default defineConfig({
           if (
             normalizedId.includes("@ffmpeg") ||
             normalizedId.includes("tesseract.js") ||
-            normalizedId.includes("livekit-client")
+            normalizedId.includes("livekit-client") ||
+            normalizedId.includes("jspdf")
           ) {
             return "vendor-heavy";
           }

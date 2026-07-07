@@ -728,12 +728,28 @@
   margin: 0;
   padding: 0.9rem;
   overflow: auto;
-  white-space: pre-wrap;
   word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 0.76rem;
-  line-height: 1.6;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 0.84rem;
+  line-height: 1.75;
   color: var(--color-text);
+}
+
+.sources_plain_text p {
+  margin: 0.82em 0;
+}
+
+.sources_plain_text p:first-child {
+  margin-top: 0;
+}
+
+.sources_plain_text p:last-child {
+  margin-bottom: 0;
+}
+
+.sources_plain_text p + p {
+  padding-top: 0.82em;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent);
 }
 
 @media (max-width: 860px) {

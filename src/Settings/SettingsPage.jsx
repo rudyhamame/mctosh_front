@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { apiUrl } from "../config/api";
+import { useLocation, useNavigate } from "react-router-dom";
+import { API_BASE_URL, apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { MCTOSH_PROMPT_TEXT } from "../Hylomorphism/mctoshPrompt";
 import { getPredictionPools, setPredictionPoolEnabled, rebuildPredictionPool, ingestPredictionPool } from "../utils/predictionApi";
@@ -25,6 +25,7 @@ const SECTIONS = [
   { id: "prompts",    label: "Prompts",         icon: "fi fi-rr-document" },
   { id: "ai",         label: "AI Providers",    icon: "fi fi-rr-microchip-ai" },
   { id: "ai_access",  label: "AI Access",       icon: "fi fi-rr-shield-check" },
+  { id: "social",     label: "Social Publish",  icon: "fi fi-rr-megaphone" },
   { id: "prediction", label: "Predictive Text", icon: "fi fi-rr-keyboard" },
   { id: "theme",      label: "Theme",           icon: "fi fi-rr-palette" },
 ];
@@ -106,7 +107,8 @@ const PromptEditor = ({ label, desc, fetchUrl, saveUrl, method = "PATCH", field 
 // ── Main ──────────────────────────────────────────────────────────────────────
 const SettingsPage = () => {
   const navigate = useNavigate();
-  const [section,   setSection]   = useState("prompts");
+  const location = useLocation();
+  const [section,   setSection]   = useState(() => new URLSearchParams(location.search).get("section") || "prompts");
   const [theme,     setTheme]     = useState(() => localStorage.getItem("mctosh_theme") || "original");
   const [aiCodebase, setAiCodebase] = useState(() => localStorage.getItem("mctosh_ai_codebase") === "true");
   const [aiDb,       setAiDb]       = useState(() => localStorage.getItem("mctosh_ai_db")       === "true");
@@ -117,6 +119,65 @@ const SettingsPage = () => {
   const [predictLoading, setPredictLoading] = useState(true);
   const [predictBusyKey, setPredictBusyKey] = useState(null);
   const [predictError,   setPredictError]   = useState("");
+  const [socialConfig, setSocialConfig] = useState({
+    metaAppId: "",
+    metaAppSecret: "",
+    instagramAccountId: "",
+    accessToken: "",
+    graphApiVersion: "",
+    accessTokenMasked: "",
+    metaAppSecretMasked: "",
+  });
+  const [socialOauthInfo, setSocialOauthInfo] = useState({ redirectUri: "", scopes: [] });
+  const [socialOrig, setSocialOrig] = useState(null);
+  const [socialLoading, setSocialLoading] = useState(true);
+  const [socialSaving, setSocialSaving] = useState(false);
+  const [socialStatus, setSocialStatus] = useState("");
+  const [socialTesting, setSocialTesting] = useState(false);
+  const [socialConnecting, setSocialConnecting] = useState(false);
+  const [socialTestResult, setSocialTestResult] = useState(null);
+
+  const loadSocialConfig = async (statusMessage = "") => {
+    setSocialLoading(true);
+    try {
+      const r = await fetch(apiUrl("/api/settings/instagram-config"), { headers: authHeader() });
+      const d = await r.json().catch(() => ({}));
+      const next = {
+        metaAppId: d.config?.metaAppId || "",
+        metaAppSecret: "",
+        instagramAccountId: d.config?.instagramAccountId || "",
+        accessToken: "",
+        graphApiVersion: d.config?.graphApiVersion || "",
+        accessTokenMasked: d.config?.accessTokenMasked || "",
+        metaAppSecretMasked: d.config?.metaAppSecretMasked || "",
+      };
+      setSocialConfig(next);
+      setSocialOauthInfo({
+        redirectUri: d.oauth?.redirectUri || "",
+        scopes: Array.isArray(d.oauth?.scopes) ? d.oauth.scopes : [],
+      });
+      setSocialOrig(next);
+      if (statusMessage) {
+        setSocialStatus(statusMessage);
+        setTimeout(() => setSocialStatus(""), 2400);
+      }
+    } catch {
+      const next = {
+        metaAppId: "",
+        metaAppSecret: "",
+        instagramAccountId: "",
+        accessToken: "",
+        graphApiVersion: "",
+        accessTokenMasked: "",
+        metaAppSecretMasked: "",
+      };
+      setSocialConfig(next);
+      setSocialOauthInfo({ redirectUri: "", scopes: [] });
+      setSocialOrig(next);
+    } finally {
+      setSocialLoading(false);
+    }
+  };
 
   useEffect(() => {
     fetch(apiUrl("/api/settings/ai-status"))
@@ -132,6 +193,59 @@ const SettingsPage = () => {
       .catch((e) => setPredictError(e.message))
       .finally(() => setPredictLoading(false));
   }, []);
+
+  useEffect(() => {
+    void loadSocialConfig();
+  }, []);
+
+  useEffect(() => {
+    const requestedSection = new URLSearchParams(location.search).get("section");
+    if (requestedSection) setSection(requestedSection);
+
+    const oauthStatus = new URLSearchParams(location.search).get("status");
+    const oauthMessage = new URLSearchParams(location.search).get("message");
+    if (oauthStatus === "success") {
+      setSection("social");
+      void loadSocialConfig("Connected");
+      if (oauthMessage) setSocialStatus("Connected");
+    } else if (oauthStatus === "error" && oauthMessage) {
+      setSection("social");
+      setSocialStatus("Error");
+    }
+  }, [location.search]);
+
+  useEffect(() => {
+    const backendOrigin = (() => {
+      try { return new URL(API_BASE_URL).origin; } catch { return ""; }
+    })();
+    const handleMessage = (event) => {
+      if (backendOrigin && event.origin !== backendOrigin) return;
+      if (event.data?.type !== "instagram-oauth") return;
+      const payload = event.data?.payload || {};
+      setSection("social");
+      setSocialConnecting(false);
+      if (payload.status === "success") {
+        void loadSocialConfig("Connected");
+      } else {
+        setSocialStatus("Error");
+      }
+      if (payload.message) {
+        setSocialTestResult({
+          ok: payload.status === "success",
+          error: payload.status === "success" ? "" : payload.message,
+          checks: payload.status === "success" ? [{
+            key: "oauth",
+            ok: true,
+            label: "Instagram OAuth",
+            detail: payload.message,
+          }] : [],
+          graphApiVersion: socialConfig.graphApiVersion || "",
+        });
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [socialConfig.graphApiVersion]);
 
   const handleTheme = (id) => {
     setTheme(id);
@@ -172,6 +286,149 @@ const SettingsPage = () => {
   const handleProvider = (id) => {
     setDefProvider(id);
     localStorage.setItem("mctosh_ai_provider", id);
+  };
+
+  const handleSaveSocial = async () => {
+    setSocialSaving(true);
+    try {
+      const body = {
+        metaAppId: socialConfig.metaAppId,
+        instagramAccountId: socialConfig.instagramAccountId,
+        graphApiVersion: socialConfig.graphApiVersion,
+      };
+      if (socialConfig.metaAppSecret.trim()) body.metaAppSecret = socialConfig.metaAppSecret;
+      if (socialConfig.accessToken.trim()) body.accessToken = socialConfig.accessToken;
+
+      const res = await fetch(apiUrl("/api/settings/instagram-config"), {
+        method: "PATCH",
+        headers: authHeader(),
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to save Instagram configuration.");
+      const next = {
+        metaAppId: data.config?.metaAppId || "",
+        metaAppSecret: "",
+        instagramAccountId: data.config?.instagramAccountId || "",
+        accessToken: "",
+        graphApiVersion: data.config?.graphApiVersion || "",
+        accessTokenMasked: data.config?.accessTokenMasked || "",
+        metaAppSecretMasked: data.config?.metaAppSecretMasked || "",
+      };
+      setSocialConfig(next);
+      setSocialOrig(next);
+      setSocialStatus("Saved");
+    } catch (e) {
+      setSocialStatus("Error");
+    } finally {
+      setSocialSaving(false);
+      setTimeout(() => setSocialStatus(""), 1800);
+    }
+  };
+
+  const handleConnectSocial = async () => {
+    setSocialConnecting(true);
+    setSocialStatus("");
+    setSocialTestResult(null);
+    try {
+      const hasUnsavedCoreChanges = Boolean(
+        !socialOrig ||
+        socialConfig.metaAppId !== socialOrig.metaAppId ||
+        socialConfig.graphApiVersion !== socialOrig.graphApiVersion ||
+        socialConfig.instagramAccountId !== socialOrig.instagramAccountId ||
+        socialConfig.metaAppSecret.trim() ||
+        socialConfig.accessToken.trim()
+      );
+
+      if (hasUnsavedCoreChanges) {
+        const saveBody = {
+          metaAppId: socialConfig.metaAppId,
+          instagramAccountId: socialConfig.instagramAccountId,
+          graphApiVersion: socialConfig.graphApiVersion,
+        };
+        if (socialConfig.metaAppSecret.trim()) saveBody.metaAppSecret = socialConfig.metaAppSecret;
+        if (socialConfig.accessToken.trim()) saveBody.accessToken = socialConfig.accessToken;
+        const saveRes = await fetch(apiUrl("/api/settings/instagram-config"), {
+          method: "PATCH",
+          headers: authHeader(),
+          body: JSON.stringify(saveBody),
+        });
+        const saveData = await saveRes.json().catch(() => ({}));
+        if (!saveRes.ok) throw new Error(saveData.error || "Failed to save Instagram configuration before connecting.");
+        const next = {
+          metaAppId: saveData.config?.metaAppId || "",
+          metaAppSecret: "",
+          instagramAccountId: saveData.config?.instagramAccountId || "",
+          accessToken: "",
+          graphApiVersion: saveData.config?.graphApiVersion || "",
+          accessTokenMasked: saveData.config?.accessTokenMasked || "",
+          metaAppSecretMasked: saveData.config?.metaAppSecretMasked || "",
+        };
+        setSocialConfig(next);
+        setSocialOrig(next);
+      }
+
+      const returnTo = new URL("/cvs/settings?section=social", window.location.origin).toString();
+      const res = await fetch(`${apiUrl("/api/settings/instagram-connect/start")}?returnTo=${encodeURIComponent(returnTo)}`, {
+        headers: authHeader(false),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to start Instagram connection.");
+
+      const popup = window.open(data.authUrl, "mctosh-instagram-connect", "width=720,height=820,resizable=yes,scrollbars=yes");
+      if (!popup) throw new Error("The Instagram login popup was blocked by your browser.");
+      setSocialStatus("Connecting");
+      const watchPopup = window.setInterval(() => {
+        if (!popup.closed) return;
+        window.clearInterval(watchPopup);
+        setSocialConnecting(false);
+        setSocialStatus((current) => (current === "Connecting" ? "" : current));
+      }, 500);
+    } catch (e) {
+      setSocialConnecting(false);
+      setSocialStatus("Error");
+      setSocialTestResult({
+        ok: false,
+        error: e.message || "Failed to start Instagram connection.",
+        checks: [],
+        graphApiVersion: socialConfig.graphApiVersion || "",
+      });
+    }
+  };
+
+  const handleTestSocial = async () => {
+    setSocialTesting(true);
+    setSocialTestResult(null);
+    try {
+      const res = await fetch(apiUrl("/api/settings/instagram-config/test"), {
+        method: "POST",
+        headers: authHeader(),
+        body: JSON.stringify({
+          metaAppId: socialConfig.metaAppId,
+          metaAppSecret: socialConfig.metaAppSecret,
+          instagramAccountId: socialConfig.instagramAccountId,
+          accessToken: socialConfig.accessToken,
+          graphApiVersion: socialConfig.graphApiVersion,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Connection test failed.");
+      setSocialTestResult({
+        ok: Boolean(data.ok),
+        error: "",
+        checks: Array.isArray(data.checks) ? data.checks : [],
+        graphApiVersion: data.graphApiVersion || "",
+      });
+    } catch (e) {
+      setSocialTestResult({
+        ok: false,
+        error: e.message || "Connection test failed.",
+        checks: [],
+        graphApiVersion: socialConfig.graphApiVersion || "",
+      });
+    } finally {
+      setSocialTesting(false);
+    }
   };
 
   const mctoshDefaultText = localStorage.getItem("mctosh_prompt_mctosh") || MCTOSH_PROMPT_TEXT;
@@ -281,6 +538,119 @@ const SettingsPage = () => {
                   </div>
                 )
               }
+            </div>
+          )}
+
+          {section === "social" && (
+            <div className="sett_section">
+              <h2 className="sett_section_title">Social Publishing</h2>
+              <p className="sett_section_desc">
+                Save your Instagram Login publishing credentials here. These values are stored encrypted on the backend per user and are used by the Social Media Control page for publish, reel, and scheduler flows.
+              </p>
+
+              <div className="sett_prompt_block">
+                <div className="sett_prompt_header">
+                  <div>
+                    <div className="sett_prompt_label">Instagram Login Publishing Credentials</div>
+                    <div className="sett_prompt_desc">Leave secret fields blank if you want to keep the already-saved value unchanged. Facebook Page ID is no longer required for this setup.</div>
+                  </div>
+                  <div className="sett_prompt_actions">
+                    {socialStatus && <span className={`sett_save_status${socialStatus === "Error" ? " sett_save_status--err" : ""}`}>{socialStatus}</span>}
+                    <button className="sett_btn sett_btn--ghost" onClick={handleConnectSocial} disabled={socialSaving || socialLoading || socialTesting || socialConnecting}>
+                      {socialConnecting ? "Connecting…" : "Connect Instagram"}
+                    </button>
+                    <button className="sett_btn sett_btn--ghost" onClick={handleTestSocial} disabled={socialSaving || socialLoading || socialTesting}>
+                      {socialTesting ? "Testing…" : "Test Connection"}
+                    </button>
+                    <button className="sett_btn sett_btn--primary" onClick={handleSaveSocial} disabled={socialSaving || socialLoading}>
+                      {socialSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                </div>
+
+                {socialLoading ? (
+                  <div className="sett_prompt_loading">Loading…</div>
+                ) : (
+                  <>
+                    <div className="sett_social_grid">
+                      <label className="sett_social_field">
+                        <span>Instagram App ID</span>
+                        <input value={socialConfig.metaAppId} onChange={(e) => setSocialConfig((prev) => ({ ...prev, metaAppId: e.target.value }))} />
+                      </label>
+                      <label className="sett_social_field">
+                        <span>Instagram App Secret</span>
+                        <input type="password" placeholder={socialConfig.metaAppSecretMasked || "Not set"} value={socialConfig.metaAppSecret} onChange={(e) => setSocialConfig((prev) => ({ ...prev, metaAppSecret: e.target.value }))} />
+                      </label>
+                      <label className="sett_social_field">
+                        <span>Instagram Account ID</span>
+                        <input value={socialConfig.instagramAccountId} onChange={(e) => setSocialConfig((prev) => ({ ...prev, instagramAccountId: e.target.value }))} />
+                      </label>
+                      <label className="sett_social_field">
+                        <span>Access Token</span>
+                        <input type="password" placeholder={socialConfig.accessTokenMasked || "Not set"} value={socialConfig.accessToken} onChange={(e) => setSocialConfig((prev) => ({ ...prev, accessToken: e.target.value }))} />
+                      </label>
+                      <label className="sett_social_field">
+                        <span>Graph API Version</span>
+                        <input value={socialConfig.graphApiVersion} onChange={(e) => setSocialConfig((prev) => ({ ...prev, graphApiVersion: e.target.value }))} placeholder="v25.0" />
+                      </label>
+                    </div>
+
+                    <div className="sett_social_oauth_box">
+                      <div className="sett_social_oauth_title">OAuth Redirect URI for Meta Dashboard</div>
+                      <div className="sett_social_oauth_desc">
+                        Copy this exact redirect URI into the Instagram Login settings in your Meta app. The value must match exactly.
+                      </div>
+                      <input className="sett_social_oauth_input" readOnly value={socialOauthInfo.redirectUri || "Unavailable"} onFocus={(e) => e.target.select()} />
+                      {socialOauthInfo.scopes?.length > 0 && (
+                        <div className="sett_social_oauth_scopes">
+                          Requested scopes: {socialOauthInfo.scopes.join(", ")}
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {socialTestResult && (
+                <div className={`sett_social_test${socialTestResult.ok ? " sett_social_test--ok" : " sett_social_test--err"}`}>
+                  <div className="sett_social_test_title">
+                    {socialTestResult.ok ? "Connection looks good" : "Connection needs attention"}
+                  </div>
+                  {socialTestResult.graphApiVersion && (
+                    <div className="sett_social_test_meta">Graph API version: {socialTestResult.graphApiVersion}</div>
+                  )}
+                  {socialTestResult.error && (
+                    <div className="sett_social_test_error">{socialTestResult.error}</div>
+                  )}
+                  {socialTestResult.checks?.length > 0 && (
+                    <div className="sett_social_test_checks">
+                      {socialTestResult.checks.map((check) => (
+                        <div key={check.key} className={`sett_social_test_check${check.ok ? " sett_social_test_check--ok" : " sett_social_test_check--err"}`}>
+                          <div className="sett_social_test_check_label">{check.label}</div>
+                          <div className="sett_social_test_check_detail">{check.detail}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="sett_social_help">
+                <div className="sett_social_help_title">Where to get these values</div>
+                <div className="sett_social_help_intro">
+                  This page now follows the Instagram Login route. Your Instagram account must be a professional account, and this setup no longer depends on a Facebook Page ID.
+                </div>
+                <ol className="sett_social_help_list">
+                  <li>Open Meta for Developers, add the use case named <strong>Manage messaging and content on Instagram</strong>, and open the Instagram Login setup.</li>
+                  <li>Copy the Instagram App ID and App Secret from the Instagram Login area of the dashboard.</li>
+                  <li>Use Instagram Login to generate a publishing access token for your professional Instagram account.</li>
+                  <li>Copy your Instagram Account ID from the Instagram API tools or account lookup.</li>
+                  <li>Paste the values here, save them, then use Social Media Control to test the connection and publish.</li>
+                </ol>
+                <div className="sett_social_help_note">
+                  Recommended permissions usually include Instagram account access and <code>instagram_content_publish</code>. The App ID and App Secret are optional for direct publishing if you already have a valid token, but they will be needed when we add full OAuth connect flow.
+                </div>
+              </div>
             </div>
           )}
 
