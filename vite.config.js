@@ -91,7 +91,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: "build",
+    outDir: "build/cvs",
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
