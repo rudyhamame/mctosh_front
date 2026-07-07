@@ -1,6 +1,6 @@
 const DEV_API_BASE_URL = (() => {
   if (typeof window === "undefined") {
-    return "http://localhost:4000";
+    return "https://localhost:4000";
   }
 
   if (window.location.protocol === "https:") {
@@ -10,10 +10,10 @@ const DEV_API_BASE_URL = (() => {
   const currentHostname = String(window.location.hostname || "").trim();
 
   if (["localhost", "127.0.0.1"].includes(currentHostname)) {
-    return "http://localhost:4000";
+    return "https://localhost:4000";
   }
 
-  return `http://${currentHostname}:4000`;
+  return `https://${currentHostname}:4000`;
 })();
 
 const DEFAULT_API_BASE_URL = import.meta.env.DEV

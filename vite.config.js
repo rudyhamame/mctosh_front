@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 
-const backendProxyTarget = "http://localhost:4000";
+const backendProxyTarget = "https://localhost:4000";
 
 const isExpectedSocketProxyClose = (error) => {
   const errorCode = String(error?.code || "").trim();
@@ -21,10 +21,12 @@ const sharedProxyConfig = {
   "/api": {
     target: backendProxyTarget,
     changeOrigin: true,
+    secure: false,
   },
   "/socket.io": {
     target: backendProxyTarget,
     changeOrigin: true,
+    secure: false,
     ws: true,
     configure(proxy) {
       proxy.on("error", (error, req, res) => {
