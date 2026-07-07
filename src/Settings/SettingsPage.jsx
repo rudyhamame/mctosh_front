@@ -129,6 +129,7 @@ const SettingsPage = () => {
     metaAppSecretMasked: "",
   });
   const [socialOauthInfo, setSocialOauthInfo] = useState({ redirectUri: "", scopes: [] });
+  const [socialMeta, setSocialMeta] = useState({ hasAccessToken: false, hasMetaAppSecret: false, updatedAt: "" });
   const [socialOrig, setSocialOrig] = useState(null);
   const [socialLoading, setSocialLoading] = useState(true);
   const [socialSaving, setSocialSaving] = useState(false);
@@ -156,6 +157,11 @@ const SettingsPage = () => {
         redirectUri: d.oauth?.redirectUri || "",
         scopes: Array.isArray(d.oauth?.scopes) ? d.oauth.scopes : [],
       });
+      setSocialMeta({
+        hasAccessToken: Boolean(d.config?.hasAccessToken),
+        hasMetaAppSecret: Boolean(d.config?.hasMetaAppSecret),
+        updatedAt: d.config?.updatedAt || "",
+      });
       setSocialOrig(next);
       if (statusMessage) {
         setSocialStatus(statusMessage);
@@ -173,6 +179,7 @@ const SettingsPage = () => {
       };
       setSocialConfig(next);
       setSocialOauthInfo({ redirectUri: "", scopes: [] });
+      setSocialMeta({ hasAccessToken: false, hasMetaAppSecret: false, updatedAt: "" });
       setSocialOrig(next);
     } finally {
       setSocialLoading(false);
@@ -225,7 +232,9 @@ const SettingsPage = () => {
       setSection("social");
       setSocialConnecting(false);
       if (payload.status === "success") {
-        void loadSocialConfig("Connected");
+        void loadSocialConfig("Connected").then(() => {
+          void runSocialTest({ silent: true });
+        });
       } else {
         setSocialStatus("Error");
       }
@@ -240,6 +249,7 @@ const SettingsPage = () => {
             detail: payload.message,
           }] : [],
           graphApiVersion: socialConfig.graphApiVersion || "",
+          testedAt: new Date().toISOString(),
         });
       }
     };
@@ -316,6 +326,11 @@ const SettingsPage = () => {
         metaAppSecretMasked: data.config?.metaAppSecretMasked || "",
       };
       setSocialConfig(next);
+      setSocialMeta({
+        hasAccessToken: Boolean(data.config?.hasAccessToken),
+        hasMetaAppSecret: Boolean(data.config?.hasMetaAppSecret),
+        updatedAt: data.config?.updatedAt || "",
+      });
       setSocialOrig(next);
       setSocialStatus("Saved");
     } catch (e) {
@@ -323,6 +338,47 @@ const SettingsPage = () => {
     } finally {
       setSocialSaving(false);
       setTimeout(() => setSocialStatus(""), 1800);
+    }
+  };
+
+  const runSocialTest = async ({ silent = false } = {}) => {
+    if (!silent) {
+      setSocialTesting(true);
+      setSocialTestResult(null);
+    }
+    try {
+      const body = {
+        metaAppId: socialConfig.metaAppId,
+        instagramAccountId: socialConfig.instagramAccountId,
+        graphApiVersion: socialConfig.graphApiVersion,
+      };
+      if (socialConfig.metaAppSecret.trim()) body.metaAppSecret = socialConfig.metaAppSecret;
+      if (socialConfig.accessToken.trim()) body.accessToken = socialConfig.accessToken;
+
+      const res = await fetch(apiUrl("/api/settings/instagram-config/test"), {
+        method: "POST",
+        headers: authHeader(),
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Connection test failed.");
+      setSocialTestResult({
+        ok: Boolean(data.ok),
+        error: "",
+        checks: Array.isArray(data.checks) ? data.checks : [],
+        graphApiVersion: data.graphApiVersion || "",
+        testedAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      setSocialTestResult({
+        ok: false,
+        error: e.message || "Connection test failed.",
+        checks: [],
+        graphApiVersion: socialConfig.graphApiVersion || "",
+        testedAt: new Date().toISOString(),
+      });
+    } finally {
+      setSocialTesting(false);
     }
   };
 
@@ -365,6 +421,11 @@ const SettingsPage = () => {
           metaAppSecretMasked: saveData.config?.metaAppSecretMasked || "",
         };
         setSocialConfig(next);
+        setSocialMeta({
+          hasAccessToken: Boolean(saveData.config?.hasAccessToken),
+          hasMetaAppSecret: Boolean(saveData.config?.hasMetaAppSecret),
+          updatedAt: saveData.config?.updatedAt || "",
+        });
         setSocialOrig(next);
       }
 
@@ -397,39 +458,58 @@ const SettingsPage = () => {
   };
 
   const handleTestSocial = async () => {
-    setSocialTesting(true);
-    setSocialTestResult(null);
+    await runSocialTest();
+  };
+
+  const handleClearSocialToken = async () => {
+    if (!window.confirm("Clear the saved Instagram access token?")) return;
+    setSocialSaving(true);
     try {
-      const res = await fetch(apiUrl("/api/settings/instagram-config/test"), {
+      const res = await fetch(apiUrl("/api/settings/instagram-config/clear-token"), {
         method: "POST",
         headers: authHeader(),
-        body: JSON.stringify({
-          metaAppId: socialConfig.metaAppId,
-          metaAppSecret: socialConfig.metaAppSecret,
-          instagramAccountId: socialConfig.instagramAccountId,
-          accessToken: socialConfig.accessToken,
-          graphApiVersion: socialConfig.graphApiVersion,
-        }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || "Connection test failed.");
-      setSocialTestResult({
-        ok: Boolean(data.ok),
-        error: "",
-        checks: Array.isArray(data.checks) ? data.checks : [],
-        graphApiVersion: data.graphApiVersion || "",
+      if (!res.ok) throw new Error(data.error || "Failed to clear the saved Instagram token.");
+      setSocialConfig((prev) => ({
+        ...prev,
+        accessToken: "",
+        accessTokenMasked: data.config?.accessTokenMasked || "",
+      }));
+      setSocialMeta({
+        hasAccessToken: Boolean(data.config?.hasAccessToken),
+        hasMetaAppSecret: Boolean(data.config?.hasMetaAppSecret),
+        updatedAt: data.config?.updatedAt || "",
       });
+      setSocialTestResult(null);
+      setSocialStatus("Cleared");
     } catch (e) {
+      setSocialStatus("Error");
       setSocialTestResult({
         ok: false,
-        error: e.message || "Connection test failed.",
+        error: e.message || "Failed to clear the saved Instagram token.",
         checks: [],
         graphApiVersion: socialConfig.graphApiVersion || "",
+        testedAt: new Date().toISOString(),
       });
     } finally {
-      setSocialTesting(false);
+      setSocialSaving(false);
+      setTimeout(() => setSocialStatus(""), 1800);
     }
   };
+
+  const socialTokenStateLabel = socialMeta.hasAccessToken
+    ? socialTestResult?.ok === false
+      ? "Saved but failing verification"
+      : socialTestResult?.ok === true
+        ? "Saved and verified"
+        : "Saved but not verified yet"
+    : "No token saved";
+
+  const socialLastUpdatedLabel = socialMeta.updatedAt
+    ? new Date(socialMeta.updatedAt).toLocaleString()
+    : "Never";
+  const canTestSocialConnection = socialMeta.hasAccessToken || Boolean(socialConfig.accessToken.trim());
 
   const mctoshDefaultText = localStorage.getItem("mctosh_prompt_mctosh") || MCTOSH_PROMPT_TEXT;
 
@@ -559,8 +639,11 @@ const SettingsPage = () => {
                     <button className="sett_btn sett_btn--ghost" onClick={handleConnectSocial} disabled={socialSaving || socialLoading || socialTesting || socialConnecting}>
                       {socialConnecting ? "Connecting…" : "Connect Instagram"}
                     </button>
-                    <button className="sett_btn sett_btn--ghost" onClick={handleTestSocial} disabled={socialSaving || socialLoading || socialTesting}>
+                    <button className="sett_btn sett_btn--ghost" onClick={handleTestSocial} disabled={socialSaving || socialLoading || socialTesting || !canTestSocialConnection}>
                       {socialTesting ? "Testing…" : "Test Connection"}
+                    </button>
+                    <button className="sett_btn sett_btn--ghost" onClick={handleClearSocialToken} disabled={socialSaving || socialLoading || !socialMeta.hasAccessToken}>
+                      Clear Saved Token
                     </button>
                     <button className="sett_btn sett_btn--primary" onClick={handleSaveSocial} disabled={socialSaving || socialLoading}>
                       {socialSaving ? "Saving…" : "Save"}
@@ -596,6 +679,24 @@ const SettingsPage = () => {
                     </div>
 
                     <div className="sett_social_oauth_box">
+                      <div className="sett_social_status_grid">
+                        <div className="sett_social_status_item">
+                          <span>Token status</span>
+                          <strong>{socialTokenStateLabel}</strong>
+                        </div>
+                        <div className="sett_social_status_item">
+                          <span>Token stored</span>
+                          <strong>{socialMeta.hasAccessToken ? "Yes" : "No"}</strong>
+                        </div>
+                        <div className="sett_social_status_item">
+                          <span>App secret stored</span>
+                          <strong>{socialMeta.hasMetaAppSecret ? "Yes" : "No"}</strong>
+                        </div>
+                        <div className="sett_social_status_item">
+                          <span>Last credential update</span>
+                          <strong>{socialLastUpdatedLabel}</strong>
+                        </div>
+                      </div>
                       <div className="sett_social_oauth_title">OAuth Redirect URI for Meta Dashboard</div>
                       <div className="sett_social_oauth_desc">
                         Copy this exact redirect URI into the Instagram Login settings in your Meta app. The value must match exactly.
@@ -610,6 +711,11 @@ const SettingsPage = () => {
                   </>
                 )}
               </div>
+              {!canTestSocialConnection && !socialLoading && (
+                <div className="sett_social_inline_hint">
+                  No access token is saved yet. Click <strong>Connect Instagram</strong> first, then run the connection test.
+                </div>
+              )}
 
               {socialTestResult && (
                 <div className={`sett_social_test${socialTestResult.ok ? " sett_social_test--ok" : " sett_social_test--err"}`}>
@@ -618,6 +724,9 @@ const SettingsPage = () => {
                   </div>
                   {socialTestResult.graphApiVersion && (
                     <div className="sett_social_test_meta">Graph API version: {socialTestResult.graphApiVersion}</div>
+                  )}
+                  {socialTestResult.testedAt && (
+                    <div className="sett_social_test_meta">Last verification: {new Date(socialTestResult.testedAt).toLocaleString()}</div>
                   )}
                   {socialTestResult.error && (
                     <div className="sett_social_test_error">{socialTestResult.error}</div>

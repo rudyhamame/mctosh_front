@@ -31,6 +31,7 @@ import UnitsExtraction                from "./UnitsExtraction/UnitsExtraction";
 import LinguisticAnalysisPage          from "./LinguisticAnalysis/LinguisticAnalysisPage";
 import MCCQEObjectivesPage            from "./MCC/MCCQEObjectivesPage";
 import SocialMediaControlPage         from "./SocialMediaControl/SocialMediaControlPage";
+import InstagramHomePreviewPage      from "./SocialMediaControl/InstagramHomePreviewPage";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
@@ -126,6 +127,7 @@ const AppRouter = () => {
         <Route path="/units-extraction"       element={auth(<UnitsExtraction />)} />
         <Route path="/linguistic-analysis"    element={auth(<LinguisticAnalysisPage />)} />
         <Route path="/social-media-control"   element={auth(<SocialMediaControlPage />)} />
+        <Route path="/instagram-home-preview" element={auth(<InstagramHomePreviewPage />)} />
 
         {/* Legacy redirect */}
         <Route path="/pdf/:card" element={<PdfCardRedirect />} />

@@ -337,6 +337,36 @@
   background: var(--color-bg);
 }
 
+.sett_social_status_grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.sett_social_status_item {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sett_social_status_item span {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sett_social_status_item strong {
+  font-size: 12px;
+  color: var(--color-text);
+  line-height: 1.5;
+}
+
 .sett_social_oauth_title {
   font-size: 12px;
   font-weight: 700;
@@ -362,6 +392,18 @@
   color: var(--color-text);
   font-size: 12px;
   font-family: "Menlo", "Consolas", monospace;
+}
+
+.sett_social_inline_hint {
+  margin-top: -6px;
+  margin-bottom: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+
+.sett_social_inline_hint strong {
+  color: var(--color-text);
 }
 
 .sett_social_help {

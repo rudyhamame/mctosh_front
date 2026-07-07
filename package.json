@@ -21,6 +21,7 @@
         "jspdf": "^4.2.1",
         "livekit-client": "^2.18.1",
         "pdfjs-dist": "^3.11.174",
+        "polotno": "^4.2.2",
         "react": "^19.2.7",
         "react-dom": "^19.2.7",
         "react-router-dom": "^6.30.4",

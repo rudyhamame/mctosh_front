@@ -146,6 +146,13 @@ const SocialMediaControlPage = () => {
     [posts],
   );
 
+  const previewAsset = useMemo(() => {
+    const assets = Array.isArray(editor.mediaAssets) ? editor.mediaAssets : [];
+    if (assets.length) return assets[0];
+    if (editor.mediaUrl) return { url: editor.mediaUrl, kind: inferAssetKind(editor.mediaUrl, editor.format) };
+    return null;
+  }, [editor.mediaAssets, editor.mediaUrl, editor.format]);
+
   const generatedOutline = useMemo(() => ([
     `Hook for ${editor.audience}: make the pain visible in one sentence.`,
     `Demonstrate the ${selectedCampaign.label.toLowerCase()} workflow inside MCTOSHS.`,
@@ -282,6 +289,19 @@ const SocialMediaControlPage = () => {
     setPreflightState("idle");
   };
 
+  const reloadPost = async (postId) => {
+    if (!postId) return null;
+    const res = await fetch(apiUrl(`/api/social-media/posts/${postId}`), {
+      headers: authHeaders(false),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || "Failed to reload this social post.");
+    const nextPost = data.post;
+    setPosts((prev) => [nextPost, ...prev.filter((post) => post.id !== nextPost.id)]);
+    pushEditorFromPost(nextPost);
+    return nextPost;
+  };
+
   const persistPost = async (draftEditor) => {
     if (!selectedPostId) return;
     setSaveState("saving");
@@ -405,6 +425,9 @@ const SocialMediaControlPage = () => {
       window.setTimeout(() => setPublishState((state) => (state === "published" ? "idle" : state)), 1800);
     } catch (err) {
       setPublishState("error");
+      try {
+        await reloadPost(selectedPostId);
+      } catch {}
       setPostsError(err.message);
     }
   };
@@ -546,6 +569,12 @@ const SocialMediaControlPage = () => {
     scheduleSave({ ...editor, [field]: value });
   };
 
+  const handleOpenPreviewTab = () => {
+    const previewUrl = new URL(`${window.location.origin}/cvs/instagram-home-preview`);
+    if (selectedPostId) previewUrl.searchParams.set("post", selectedPostId);
+    window.open(previewUrl.toString(), "_blank", "noopener,noreferrer");
+  };
+
   return (
     <div id="smc_page">
       <header id="smc_header">
@@ -557,11 +586,14 @@ const SocialMediaControlPage = () => {
           </div>
         </div>
         <div id="smc_header_actions">
+          <button className="smc_action_btn smc_action_btn--ghost" onClick={handleOpenPreviewTab}>
+            Open Instagram Preview
+          </button>
           <button className="smc_action_btn smc_action_btn--ghost" onClick={() => window.location.reload()}>
             Refresh Status
           </button>
           <button className="smc_action_btn smc_action_btn--primary" onClick={handleCreatePost}>
-            Create New Post
+            New Post Draft
           </button>
         </div>
       </header>
@@ -626,7 +658,6 @@ const SocialMediaControlPage = () => {
                 <button
                   key={campaign.id}
                   className={`smc_campaign_card${campaign.id === selectedCampaignId ? " smc_campaign_card--active" : ""}`}
-                  style={{ "--smc-accent": campaign.accent }}
                   onClick={() => handleCampaignSelect(campaign.id)}
                 >
                   <div className="smc_campaign_top">
@@ -712,9 +743,14 @@ const SocialMediaControlPage = () => {
                 <p className="smc_section_eyebrow">Post Queue</p>
                 <h3>Real saved social drafts</h3>
               </div>
-              <button className="smc_action_btn smc_action_btn--ghost smc_action_btn--small" onClick={handleDeletePost} disabled={!selectedPostId}>
-                Delete Post
-              </button>
+              <div className="smc_panel_head_actions">
+                <button className="smc_action_btn smc_action_btn--primary smc_action_btn--small" onClick={handleCreatePost}>
+                  Create Post Here
+                </button>
+                <button className="smc_action_btn smc_action_btn--ghost smc_action_btn--small" onClick={handleDeletePost} disabled={!selectedPostId}>
+                  Delete Post
+                </button>
+              </div>
             </div>
 
             {postsLoading ? (
@@ -725,14 +761,17 @@ const SocialMediaControlPage = () => {
               <div id="smc_post_layout">
                 <div id="smc_post_list">
                   {posts.map((post) => (
-                    <button
+                    <div
                       key={post.id}
+                      role="button"
+                      tabIndex={0}
                       className={`smc_post_item${post.id === selectedPostId ? " smc_post_item--active" : ""}`}
                       onClick={() => handleSelectPost(post)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSelectPost(post); } }}
                     >
                       <div className="smc_post_item_top">
                         <span>{post.title}</span>
-                        <span className="smc_stage_badge smc_stage_badge--dynamic">{post.stage}</span>
+                        <span className="smc_stage_badge" data-stage={post.stage}>{post.stage}</span>
                       </div>
                       <span className="smc_post_item_type">{post.format}</span>
                       {post.stage === "Scheduled" && (
@@ -745,7 +784,7 @@ const SocialMediaControlPage = () => {
                           Resume
                         </button>
                       )}
-                    </button>
+                    </div>
                   ))}
                 </div>
 
@@ -757,10 +796,30 @@ const SocialMediaControlPage = () => {
                         <span>{editor.format}</span>
                       </div>
                       <div className="smc_phone_canvas">
-                        <div className="smc_phone_tag">{selectedCampaign.label}</div>
-                        <h4>{editor.title || "Untitled social post"}</h4>
-                        <p>{editor.objective || "Add an objective to frame the creative."}</p>
+                        {previewAsset ? (
+                          previewAsset.kind === "video" ? (
+                            <video className="smc_phone_media" src={previewAsset.url} controls muted playsInline />
+                          ) : (
+                            <img className="smc_phone_media" src={previewAsset.url} alt="" />
+                          )
+                        ) : null}
+                        <div className="smc_phone_content">
+                          <div className="smc_phone_tag">{selectedCampaign.label}</div>
+                          <h4>{editor.title || "Untitled social post"}</h4>
+                          <p>{editor.objective || "Add an objective to frame the creative."}</p>
+                        </div>
                       </div>
+                    </div>
+
+                    <div className="smc_preview_launch">
+                      <p className="smc_section_eyebrow">Standalone Preview</p>
+                      <strong>Review this post in a dedicated Instagram-style tab.</strong>
+                      <p>
+                        Open a cleaner preview page so you can browse the post without the crowded editor and switch between drafts there.
+                      </p>
+                      <button className="smc_action_btn smc_action_btn--primary" onClick={handleOpenPreviewTab}>
+                        Open Preview In New Tab
+                      </button>
                     </div>
                   </div>
 
