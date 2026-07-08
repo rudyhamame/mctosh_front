@@ -225,7 +225,7 @@ const RECOVERY_IDENTITIES = CARDIAC_ANNOTATIONS.map((_, i) => computeRecoveryIde
 // travelling through the track (each index step is a smaller change).
 // Cheap to raise: rendering only ever samples a fixed DOM budget (see
 // FULL_VIEW_BUDGET) regardless of how many frames actually exist here.
-const DENSE_SUBSTEPS = 40;
+const DENSE_SUBSTEPS = 60;
 const buildDenseTrack = (stageIdentities) => {
   const dense = [];
   for (let s = 0; s < CARDIAC_ANNOTATIONS.length - 1; s++) {
@@ -310,8 +310,8 @@ export default function Login({ onLogin }) {
   };
 
   // cutawayIdx: hides slices strictly in front of the plate (idx <
-  // cutawayIdx, i.e. life-ward / closer to the viewer than depthForIdx(0)
-  // puts them) so you can see past a crowded near field straight down to
+  // cutawayIdx, i.e. life-ward along the loop) so you can see past a
+  // crowded near field straight down to
   // wherever the plate currently sits. Clamped to plateIdx — it can only
   // ever clear away up TO the plate's own slice, never past it.
   const [cutawayIdx, setCutawayIdx] = useState(0);
@@ -477,11 +477,11 @@ export default function Login({ onLogin }) {
   // slices along Z, one per frame, and it never changes shape or hides
   // anything for the slider. Dragging the stage directly is the only thing
   // that rotates it. The travel slider instead moves the observation plate
-  // (PR sphere + orbit rings) to depthForIdx(plateIdx) — a marker plane
-  // scanning through the object's fixed depth, not a change to the object.
-  // Total tunnel depth stays constant (±485px) regardless of how many
-  // frames COMBINED_TRACK has — the per-step gap shrinks as DENSE_SUBSTEPS
-  // rises so raising it for smoother motion doesn't also stretch the object
+  // (PR sphere + orbit rings) to a depth along this line — a marker plane
+  // scanning through the object, not a change to the object.
+  // Total tunnel depth stays constant regardless of how many frames
+  // COMBINED_TRACK has — the per-step gap shrinks as DENSE_SUBSTEPS rises
+  // so raising it for smoother motion doesn't also stretch the object
   // absurdly deep.
   const TOTAL_DEPTH_RANGE = 970;
   const STACK_SLICE_GAP = TOTAL_DEPTH_RANGE / (COMBINED_TRACK.length - 1);
