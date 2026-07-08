@@ -144,27 +144,6 @@
   to   { transform: rotate(-450deg) translateX(var(--r)); }
 }
 
-/* Orbit system wrap — zero-size passthrough (matches #login_center's own
-   zero-size anchor) that adds the shared perspective/tilt to the rings,
-   rope canvas and dots together, so the whole solar system tilts as one
-   rigid object in sync with the Patient Reality / MCTOSHS threads. */
-#orbit_system_wrap {
-  position: absolute;
-  inset: 0;
-  perspective: 6000px;
-  perspective-origin: 50% 50%;
-  /* Above #login_center (z-index 5, which now also holds the WebGL tube
-     canvas) — dots/arc/labels are the foreground UI layer and need to stay
-     visible on top of the tube, not hidden behind its now-opaque surface. */
-  z-index: 6;
-}
-
-#orbit_system_group {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-}
-
 /* ── Soft orbit path rings ── */
 .orb_ring {
   position: absolute;
@@ -204,10 +183,6 @@
   border-radius: 50%;
   background: var(--orb-color);
 }
-
-/* Each dot's rope thread is WebGL now (see <ThreadTubes3D> in Login.jsx,
-   positioned every frame from the same physics state as this dot) — no DOM
-   thread element needed here anymore. */
 
 /* ── Letter inside the dot — counter-rotates to stay upright ── */
 .orb_dot_letter {
@@ -357,38 +332,12 @@
     transparent 55%
   );
   border: 1.5px solid rgba(160,110,255,0.40);
-  /* Blur radii trimmed way down from the original (110px/220px/200px) — that
-     was tuned for a single flat static circle; nested inside the stacked
-     ring-thread now, the same glow compounded with the rings' own soft
-     edges into a hazy "blurred vision" look. */
   box-shadow:
-    inset 0 0 60px rgba(0,0,0,0.08),
-    0 0  30px rgba(160,110,255,0.12),
-    0 0  50px rgba(120,80,220,0.05);
+    inset 0 0 200px rgba(0,0,0,0.08),
+    0 0  110px rgba(160,110,255,0.16),
+    0 0  220px rgba(120,80,220,0.07);
   overflow: hidden;
   animation: pr_breathe 7s ease-in-out infinite;
-}
-
-/* pr_sphere (flat fill + zone labels + nested mctosh_sphere) lives inside
-   this small rotating wrapper so it tilts in sync with the WebGL tube walls
-   rendered by <ThreadTubes3D> around it (the tube geometry itself — the
-   actual "rope" — is WebGL now, not stacked DOM rings; see ThreadTubes3D.jsx). */
-#pr_thread_wrap {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 720px;
-  height: 720px;
-  perspective: 6000px;
-  perspective-origin: 50% 50%;
-  pointer-events: none;
-  z-index: 4;
-}
-
-#pr_thread_group {
-  position: absolute;
-  inset: 0;
 }
 
 /* Zone divider SVG */
@@ -767,17 +716,6 @@
   color: rgba(255,255,255,0.18);
   font-style: italic;
   letter-spacing: 0.05em;
-  text-align: center;
-}
-
-#login_quote {
-  margin: 0.5rem 0 0;
-  max-width: 460px;
-  font-size: 0.64rem;
-  line-height: 1.5;
-  color: rgba(255,255,255,0.14);
-  font-style: italic;
-  letter-spacing: 0.02em;
   text-align: center;
 }
 

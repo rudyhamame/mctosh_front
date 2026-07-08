@@ -3,15 +3,8 @@ import { useNavigate } from "react-router-dom";
 import "./login.css";
 import { apiUrl } from "../config/api";
 import { writeStoredSession } from "../utils/sessionCleanup";
-import ThreadTubes3D from "./ThreadTubes3D";
 
 const STAGE = 980;
-
-// Patient Reality / MCTOSHS / orbit-dot "threads" (the rope-like tube reveal
-// on tilt) are rendered as WebGL geometry by <ThreadTubes3D> instead of
-// hundreds of stacked CSS-transformed DOM elements — that approach hung the
-// page outright once ring density got high enough to look solid at 90°. See
-// ThreadTubes3D.jsx for the actual ring/disc-stack geometry.
 
 const MCTOSHS_ORBITS = [
   { id: "m",  letter: "M",  r: 244, color: "#00e5ff", dur: "8s",   dir: "cw", delay: "0s" },
@@ -139,15 +132,9 @@ export default function Login({ onLogin }) {
   const mDraggingRef  = useRef(false);
   // Disease intensity — read by RAF, written by slider
   const diseaseRef    = useRef(0);
-  // Pan state — TWO-finger drag (trackpad swipe or touch) moves/scrolls the
-  // whole stage. Fully decoupled from the tilt state below.
+  // Pan state — one-finger drag to navigate after zoom
   const panRef        = useRef({ active: false, startX: 0, startY: 0, panX: 0, panY: 0 });
   const [panXY,      setPanXY]      = useState({ x: 0, y: 0 });
-
-  // Tilt state — ONE-finger drag (or mouse drag) rotates the 3D threads only;
-  // it never touches panXY/the stage translate, so rotating never "scrolls".
-  const tiltRef       = useRef({ active: false, startX: 0, startY: 0, baseX: 0, baseY: 0, tiltX: 0, tiltY: 0 });
-  const [tiltXY,     setTiltXY]     = useState({ x: 0, y: 0 });
 
   // Physics state — all start at 12 o'clock
   // smo: exponential moving average of each orbit's angle (used by inner orbits as rope target
@@ -188,8 +175,7 @@ export default function Login({ onLogin }) {
     return () => ro.disconnect();
   }, []);
 
-  // Two-finger touch on the animation wrap: pinch to zoom, drag to pan
-  // (single-finger touch does neither, freeing it up / avoiding accidental pans).
+  // Pinch-zoom on animation wrap only
   useEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) return;
@@ -199,21 +185,10 @@ export default function Login({ onLogin }) {
       const dy = touches[0].clientY - touches[1].clientY;
       return Math.sqrt(dx * dx + dy * dy);
     };
-    const touchCentroid = (touches) => ({
-      x: (touches[0].clientX + touches[1].clientX) / 2,
-      y: (touches[0].clientY + touches[1].clientY) / 2,
-    });
 
     const onStart = (e) => {
       if (e.touches.length === 2) {
-        tiltRef.current.active = false; // 2nd finger down — hand off from tilt to pan
-        const pr = panRef.current;
-        const centroid = touchCentroid(e.touches);
-        pr.active = true;
-        pr.startX = centroid.x;
-        pr.startY = centroid.y;
-        pr.baseX  = pr.panX;
-        pr.baseY  = pr.panY;
+        panRef.current.active = false; // cancel pan when pinch begins
         pinchRef.current = {
           active:    true,
           startDist: touchDist(e.touches),
@@ -223,69 +198,26 @@ export default function Login({ onLogin }) {
     };
 
     const onMove = (e) => {
-      // Always prevent native touch-scroll on this control (even for a lone
-      // finger driving tilt via Pointer events below) — otherwise the browser
-      // commits to scrolling on the very first touchmove and later
-      // preventDefault() calls here get silently ignored once a 2nd finger joins.
-      e.preventDefault();
       if (e.touches.length === 2 && pinchRef.current.active) {
+        e.preventDefault();
         const ratio   = touchDist(e.touches) / pinchRef.current.startDist;
         const newZoom = Math.max(0.4, Math.min(3, pinchRef.current.startZoom * ratio));
         zoomRef.current = newZoom;
         setStageScale(baseScaleRef.current * newZoom);
-
-        const pr = panRef.current;
-        const centroid = touchCentroid(e.touches);
-        const nx = pr.baseX + (centroid.x - pr.startX);
-        const ny = pr.baseY + (centroid.y - pr.startY);
-        pr.panX = nx;
-        pr.panY = ny;
-        setPanXY({ x: nx, y: ny });
       }
     };
 
-    const onEnd = (e) => {
-      pinchRef.current.active = false;
-      if (e.touches.length < 2) panRef.current.active = false;
-    };
+    const onEnd = () => { pinchRef.current.active = false; };
 
-    wrap.addEventListener("touchstart",  onStart, { passive: true });
-    wrap.addEventListener("touchmove",   onMove,  { passive: false });
-    wrap.addEventListener("touchend",    onEnd,   { passive: true });
-    wrap.addEventListener("touchcancel", onEnd,   { passive: true });
+    wrap.addEventListener("touchstart", onStart, { passive: true });
+    wrap.addEventListener("touchmove",  onMove,  { passive: false });
+    wrap.addEventListener("touchend",   onEnd,   { passive: true });
 
     return () => {
-      wrap.removeEventListener("touchstart",  onStart);
-      wrap.removeEventListener("touchmove",   onMove);
-      wrap.removeEventListener("touchend",    onEnd);
-      wrap.removeEventListener("touchcancel", onEnd);
+      wrap.removeEventListener("touchstart", onStart);
+      wrap.removeEventListener("touchmove",  onMove);
+      wrap.removeEventListener("touchend",   onEnd);
     };
-  }, []);
-
-  // Trackpad two-finger swipe pans the stage (reported as wheel deltaX/deltaY);
-  // trackpad pinch-to-zoom is reported as wheel + ctrlKey by the browser.
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) return;
-
-    const onWheel = (e) => {
-      e.preventDefault();
-      if (e.ctrlKey) {
-        const newZoom = Math.max(0.4, Math.min(3, zoomRef.current * (1 - e.deltaY * 0.01)));
-        zoomRef.current = newZoom;
-        setStageScale(baseScaleRef.current * newZoom);
-        return;
-      }
-      const pr = panRef.current;
-      const nx = pr.panX - e.deltaX;
-      const ny = pr.panY - e.deltaY;
-      pr.panX = nx;
-      pr.panY = ny;
-      setPanXY({ x: nx, y: ny });
-    };
-
-    wrap.addEventListener("wheel", onWheel, { passive: false });
-    return () => wrap.removeEventListener("wheel", onWheel);
   }, []);
 
   // Unified 60-fps loop: disease physics + homeostasis cascade + rope + control canvas
@@ -393,9 +325,6 @@ export default function Login({ onLogin }) {
         el.style.opacity   = '1';
         const dotEl = el.firstElementChild;
         if (dotEl) dotEl.style.transform = `rotate(${-cssDeg}deg)`;
-        // (The orbit-dot rope threads are WebGL now — see ThreadTubes3D,
-        // which reads s._x/_y directly each frame. No DOM counter-rotation
-        // needed; Three.js's scene graph inherits the shared tilt correctly.)
         s._x = 450 + Math.cos(rad) * orb.r;
         s._y = 450 + Math.sin(rad) * orb.r;
       });
@@ -458,16 +387,16 @@ export default function Login({ onLogin }) {
     orbStateRef.current[0].omega = 0;
   };
 
-  // One-finger drag (mouse or touch) rotates the 3D threads only — it never
-  // writes to panXY, so rotating the tube never moves/scrolls the stage.
   const handleWrapPointerDown = (e) => {
+    // Only start pan for the primary pointer (not M-dot or arc — those stopPropagation)
     if (!e.isPrimary || pinchRef.current.active) return;
-    const tr = tiltRef.current;
-    tr.active = true;
-    tr.startX = e.clientX;
-    tr.startY = e.clientY;
-    tr.baseX  = tr.tiltX;
-    tr.baseY  = tr.tiltY;
+    const pr = panRef.current;
+    pr.active = true;
+    pr.startX = e.clientX;
+    pr.startY = e.clientY;
+    // snapshot current pan as base for this drag
+    pr.baseX  = pr.panX;
+    pr.baseY  = pr.panY;
   };
 
   const handleStagePointerMove = (e) => {
@@ -481,19 +410,19 @@ export default function Login({ onLogin }) {
       const s0 = orbStateRef.current[0];
       s0.angle = Math.atan2(dy, dx) + Math.PI / 2;
       s0.omega = 0;
-    } else if (tiltRef.current.active && e.isPrimary && !pinchRef.current.active && !arcDraggingRef.current) {
-      const tr = tiltRef.current;
-      const nx = tr.baseX + (e.clientX - tr.startX);
-      const ny = tr.baseY + (e.clientY - tr.startY);
-      tr.tiltX = nx;
-      tr.tiltY = ny;
-      setTiltXY({ x: nx, y: ny });
+    } else if (panRef.current.active && e.isPrimary && !arcDraggingRef.current) {
+      const pr = panRef.current;
+      const nx = pr.baseX + (e.clientX - pr.startX);
+      const ny = pr.baseY + (e.clientY - pr.startY);
+      pr.panX = nx;
+      pr.panY = ny;
+      setPanXY({ x: nx, y: ny });
     }
   };
 
   const handleStagePointerUp = () => {
     mDraggingRef.current   = false;
-    tiltRef.current.active = false;
+    panRef.current.active  = false;
   };
 
   // Arc control: angle from wrap center maps to disease intensity [0, 0.20]
@@ -560,22 +489,20 @@ export default function Login({ onLogin }) {
 
   const toggle = () => { setMode(m => m === "login" ? "signup" : "login"); setError(""); };
 
-  // Shared one-finger-tilt-driven rotation for all 3D threads (Patient Reality,
-  // MCTOSHS, and the orbit dots) so they all rotate together in lockstep.
-  const threadRotation =
-    `rotateX(${Math.max(-90, Math.min(90, -tiltXY.y * 0.4))}deg) ` +
-    `rotateY(${Math.max(-90, Math.min(90,  tiltXY.x * 0.4))}deg)`;
+  // Spheres always at full size (no sagittal cross-section)
+  const prR_disp = 360;
+  const msR_disp = 260;
 
   return (
     <div id="login_page">
 
-      {/* ── LEFT: Orbital Animation ── */}
+      {/* ── LEFT: 2D Orbital Animation ── */}
       <div id="login_anim_panel" className={panelHidden ? "login_panel_expanded" : ""}>
         <div id="login_brand">
           <div id="login_sigil"><span>M</span></div>
           <div id="login_brand_text">
             <h1 id="login_wordmark">MCTOSHS | CVS</h1>
-            <p id="login_platform_label">Cardiovascular Thread of Clinical Patient Reality</p>
+            <p id="login_platform_label">Cardiovascular Clinical Intelligence Platform</p>
           </div>
         </div>
 
@@ -587,68 +514,62 @@ export default function Login({ onLogin }) {
         >
           <div id="login_stage" style={{ transform: `translate(${panXY.x}px,${panXY.y}px) scale(${stageScale})` }}>
 
+            {/* Spheres + zone labels on PR sphere */}
             <div id="login_center">
               <div id="login_center_glow" />
-
-              <ThreadTubes3D tiltXYRef={tiltRef} orbStateRef={orbStateRef} orbits={MCTOSHS_ORBITS} />
+              <div id="pr_sphere">
+                {/* Zone sector labels — positioned within the PR sphere */}
+                <div id="pr_zone_detr">Deterioration</div>
+                {/* Divider lines at 3 o'clock / 9 o'clock / 12 o'clock */}
+                <svg id="pr_zone_svg" viewBox="0 0 720 720" aria-hidden="true">
+                  <line x1="360" y1="0"   x2="360" y2="360" stroke="rgba(255,255,255,0.08)" strokeWidth="1"/>
+                </svg>
+                <div id="pr_spec_a" />
+                <div id="pr_spec_b" />
+                <div id="pr_rim" />
+                <div id="mctosh_sphere">
+                  <div id="ms_rim" />
+                </div>
+              </div>
             </div>
 
-            {/* Orbit system (path rings + rope canvas + dots + labels) tilts
-                together with the same rotation as the Patient Reality /
-                MCTOSHS threads, so the whole solar system reads as one rigid
-                3D object instead of a flat disk floating inside a tilted
-                tube. The two text labels were the one part left flat before —
-                they'd sit stuck in place while the tube warped around them. */}
-            <div id="orbit_system_wrap">
-              <div id="orbit_system_group" style={{ transform: threadRotation }}>
+            {/* MCTOSHS label */}
+            <div id="ms_label_wrap" style={{ top: `${450 + msR_disp + 15}px` }}>
+              <span id="ms_label_name">MCTOSHS</span>
+            </div>
 
-                {/* Soft orbit path rings — always full size */}
-                {MCTOSHS_ORBITS.map(orb => (
-                  <div
-                    key={`ring-${orb.id}`}
-                    className="orb_ring"
-                    style={{
-                      "--orb-color": orb.color,
-                      width:      `${orb.r * 2}px`,
-                      height:     `${orb.r * 2}px`,
-                      marginTop:  `-${orb.r}px`,
-                      marginLeft: `-${orb.r}px`,
-                    }}
-                  />
-                ))}
+            {/* Patient Reality label */}
+            <div id="pr_label_wrap">
+              <span id="pr_name">Patient Reality</span>
+            </div>
 
-                {/* Rope canvas — drawn by RAF loop */}
-                <canvas
-                  ref={ropeCanvasRef}
-                  width={900} height={900}
-                  style={{
-                    position: 'absolute', top: 0, left: 0,
-                    width: '900px', height: '900px',
-                    pointerEvents: 'none', zIndex: 7,
-                  }}
-                />
+            {/* Soft orbit path rings — always full size */}
+            {MCTOSHS_ORBITS.map(orb => (
+              <div
+                key={`ring-${orb.id}`}
+                className="orb_ring"
+                style={{
+                  "--orb-color": orb.color,
+                  width:      `${orb.r * 2}px`,
+                  height:     `${orb.r * 2}px`,
+                  marginTop:  `-${orb.r}px`,
+                  marginLeft: `-${orb.r}px`,
+                }}
+              />
+            ))}
 
-                {/* Orbiting letter dots — M (i=0) is draggable to set disease state */}
-                {MCTOSHS_ORBITS.map((orb, i) => (
-                  <div
-                    key={orb.id}
-                    ref={el => { dotElsRef.current[i] = el; }}
-                    className="bio_particle"
-                    style={{ "--orb-color": orb.color, ...(i === 0 ? { cursor: 'grab', touchAction: 'none' } : {}) }}
-                    onPointerDown={i === 0 ? handleMDotPointerDown : undefined}
-                  >
-                    <div className="orb_dot">
-                      <span className="orb_dot_letter">{orb.letter}</span>
-                    </div>
-                    {/* This dot's rope thread is WebGL now (ThreadTubes3D),
-                        positioned every frame from orbStateRef — no DOM
-                        thread element needed here anymore. */}
-                  </div>
-                ))}
+            {/* Rope canvas — drawn by RAF loop */}
+            <canvas
+              ref={ropeCanvasRef}
+              width={900} height={900}
+              style={{
+                position: 'absolute', top: 0, left: 0,
+                width: '900px', height: '900px',
+                pointerEvents: 'none', zIndex: 7,
+              }}
+            />
 
-                {/* Curved disease control — right half of PR sphere border.
-                    Lives inside the tilted group too so it rotates with
-                    everything else instead of floating flat in the gap. */}
+            {/* Curved disease control — right half of PR sphere border */}
             {(() => {
               const ARC_R  = 390;
               const t      = diseaseLevel / 0.20;
@@ -786,8 +707,20 @@ export default function Login({ onLogin }) {
               );
             })()}
 
+            {/* Orbiting letter dots — M (i=0) is draggable to set disease state */}
+            {MCTOSHS_ORBITS.map((orb, i) => (
+              <div
+                key={orb.id}
+                ref={el => { dotElsRef.current[i] = el; }}
+                className="bio_particle"
+                style={{ "--orb-color": orb.color, ...(i === 0 ? { cursor: 'grab', touchAction: 'none' } : {}) }}
+                onPointerDown={i === 0 ? handleMDotPointerDown : undefined}
+              >
+                <div className="orb_dot">
+                  <span className="orb_dot_letter">{orb.letter}</span>
+                </div>
               </div>
-            </div>
+            ))}
 
           </div>
         </div>
@@ -834,11 +767,6 @@ export default function Login({ onLogin }) {
 
 
         <p id="login_tagline">&ldquo;From representation to reality&rdquo;</p>
-        <p id="login_quote">
-          &ldquo;A worm born inside the human intestine cannot observe or
-          imagine the unity of the larger reality that contains it, even if
-          such a unity truly exists.&rdquo;
-        </p>
 
 
       </div>
