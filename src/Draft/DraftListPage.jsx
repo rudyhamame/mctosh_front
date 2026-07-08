@@ -75,11 +75,13 @@ const DraftListPage = () => {
   const deleteDraft = useCallback(async (e, id) => {
     e.stopPropagation();
     if (!window.confirm("Delete this document? This can't be undone.")) return;
+    setError("");
     setDeletingId(id);
     try {
       const res = await fetch(apiUrl(`/api/draft/${id}`), { method: "DELETE", headers: authHeader() });
-      if (!res.ok) throw new Error("Failed to delete that document.");
-      setDrafts((prev) => prev.filter((d) => d.id !== id));
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to delete that document.");
+      setDrafts((prev) => prev.filter((d) => String(d.id) !== String(id)));
     } catch (err) {
       setError(err.message);
     } finally {

@@ -1,0 +1,29 @@
+.draft_text_viewer {
+  white-space: normal;
+  word-break: break-word;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.75;
+  color: var(--color-text);
+}
+
+.draft_text_viewer__paragraph {
+  margin: 0.82em 0;
+}
+
+.draft_text_viewer__paragraph:first-child {
+  margin-top: 0;
+}
+
+.draft_text_viewer__paragraph:last-child {
+  margin-bottom: 0;
+}
+
+.draft_text_viewer__paragraph + .draft_text_viewer__paragraph {
+  padding-top: 0.82em;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent);
+}
+
+.draft_text_viewer__highlight {
+  background: color-mix(in srgb, #ffd54f 55%, transparent);
+  border-radius: 0.18em;
+}

@@ -713,7 +713,7 @@ const SettingsPage = () => {
               </div>
               {!canTestSocialConnection && !socialLoading && (
                 <div className="sett_social_inline_hint">
-                  No access token is saved yet. Click <strong>Connect Instagram</strong> first, then run the connection test.
+                  No access token saved. <strong>Connect Instagram</strong> first, then test the connection.
                 </div>
               )}
 

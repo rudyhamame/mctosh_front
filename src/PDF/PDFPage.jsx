@@ -7,6 +7,7 @@ import "./pdfPage.css";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { useLongPressSelect } from "../utils/longPressSelect";
+import DraftTextViewer, { cleanMarkdownToPlainText } from "../components/DraftTextViewer";
 import HyleCards from "./HyleCards";
 import SystemMessageModal from "./SystemMessageModal";
 import { drawAnnotation } from "./annotationDraw";
@@ -89,7 +90,25 @@ const ANNOT_TOOLS = [
   { key: "eraser",        icon: "fi-rr-eraser",               label: "Eraser",        hasSize: true  },
 ];
 
-const ANNOT_COLORS = ["#ffff00","#ff6b6b","#51cf66","#74c0fc","#f783ac","#ffa94d","#e9ecef","#212529"];
+// Open Color (yeun.github.io/open-color) — the standard "professional" web
+// UI palette, three shades (light/mid/deep) per hue family plus a grayscale
+// anchor set, so annotations always land on a color that already looks
+// intentional next to everything else in the app instead of a raw/neon pick.
+const ANNOT_COLORS = [
+  "#000000", "#212529", "#868e96", "#e9ecef", "#ffffff",
+  "#ff8787", "#fa5252", "#e03131",
+  "#f783ac", "#e64980", "#c2255c",
+  "#da77f2", "#be4bdb", "#9c36b5",
+  "#9775fa", "#7950f2", "#6741d9",
+  "#748ffc", "#4c6ef5", "#3b5bdb",
+  "#74c0fc", "#339af0", "#1c7ed6",
+  "#66d9e8", "#22b8cf", "#1098ad",
+  "#63e6be", "#20c997", "#0ca678",
+  "#8ce99a", "#51cf66", "#37b24d",
+  "#c0eb75", "#94d82d", "#74b816",
+  "#ffe066", "#fcc419", "#f59f00",
+  "#ffa94d", "#fd7e14", "#e8590c",
+];
 
 const ANNOT_HISTORY_META = {
   add:   { icon: "fi-rr-plus",       verb: "Added" },
@@ -97,72 +116,6 @@ const ANNOT_HISTORY_META = {
   redo:  { icon: "fi-rr-redo",       verb: "Redid" },
   erase: { icon: "fi-rr-eraser",     verb: "Erased" },
   clear: { icon: "fi-rr-trash",      verb: "Cleared" },
-};
-
-const cleanMarkdownToPlainText = (text) => String(text || "")
-  .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, "").trim())
-  .replace(/^\s{0,3}#{1,6}\s*/gm, "")
-  .replace(/^\s*>\s?/gm, "")
-  .replace(/^\s*[-*+]\s+/gm, "")
-  .replace(/^\s*\d+\.\s+/gm, "")
-  .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
-  .replace(/(`)([^`]+)\1/g, "$2")
-  .replace(/(\*\*\*|___)(.*?)\1/g, "$2")
-  .replace(/(\*\*|__)(.*?)\1/g, "$2")
-  .replace(/(\*|_)(.*?)\1/g, "$2")
-  .replace(/^\s*---+\s*$/gm, "")
-  .replace(/\n{3,}/g, "\n\n")
-  .trim();
-
-const PdfPlainTextView = ({ text, className = "" }) => {
-  const cleaned = cleanMarkdownToPlainText(text);
-  const paragraphs = cleaned ? cleaned.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean) : [];
-
-  return (
-    <div className={`pdf_plain_text ${className}`.trim()}>
-      {paragraphs.length
-        ? paragraphs.map((paragraph, idx) => (
-            <p key={idx}>{paragraph}</p>
-          ))
-        : <p>(No AI-enhanced markdown was stored for this page.)</p>}
-    </div>
-  );
-};
-
-const renderOriginalMarkdownLine = (line, lineStart, voiceMatch) => {
-  const headingMatch = line.match(/^(#{1,6})\s+/);
-  const headingLevel = headingMatch ? headingMatch[1].length : 0;
-  const nodes = [];
-  let rawIndex = headingMatch ? headingMatch[0].length : 0;
-  let key = 0;
-  let bold = false;
-
-  while (rawIndex < line.length) {
-    const token = line.slice(rawIndex, rawIndex + 2);
-    if (token === "**" || token === "__") {
-      bold = !bold;
-      rawIndex += 2;
-      continue;
-    }
-
-    const globalIdx = lineStart + rawIndex;
-    const isVoiceMatch = voiceMatch && globalIdx >= voiceMatch.start && globalIdx < voiceMatch.end;
-    const classes = [
-      isVoiceMatch ? "md_voice_hl" : null,
-      bold ? "md_bold" : null,
-    ].filter(Boolean);
-
-    const ch = line[rawIndex];
-    nodes.push(classes.length ? <span key={key++} className={classes.join(" ")}>{ch}</span> : ch);
-    rawIndex += 1;
-  }
-
-  return {
-    headingLevel,
-    content: nodes.length ? nodes : " ",
-    isRule: /^---+$/.test(line.trim()),
-    isBlank: line.trim() === "",
-  };
 };
 
 // Safari reports Apple-Pencil touches with Touch.touchType === "stylus" (vs.
@@ -412,12 +365,11 @@ const PDFPage = ({
 
   // AI vs Manual toggle
   const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
-  // Click/tap-and-hold word selection is normally part of manual Hyle extraction
-  // (always on there). A plain reader (Hyles hidden, e.g. /pdf-reader) only
-  // gets it once the user explicitly turns on "Select Text" — off by default
-  // so idle scrolling/reading never accidentally triggers a selection.
-  const [selectTextMode, setSelectTextMode] = useState(false);
-  const textSelectable = extractMode === "manual" || (hideHyleControls && selectTextMode);
+  // Click/tap-and-hold word selection is part of manual Hyle extraction
+  // (always on there). A plain reader (Hyles hidden, e.g. /pdf-reader) never
+  // gets it — no "Select Text" toggle to accidentally trigger a selection
+  // while just scrolling/reading.
+  const textSelectable = extractMode === "manual";
   const [extractionType, setExtractionType] = useState(null); // selected hyle type key
   const [typeTreeOpen,   setTypeTreeOpen]   = useState(false);
 
@@ -444,21 +396,17 @@ const PDFPage = ({
   // table (it's a whole-document operation, not a per-page one) — this button
   // just opens the reader for a document that's already been converted there.
   const [hasStoredMarkdown, setHasStoredMarkdown] = useState(false);
-  const [hasStoredAiEnhancedMarkdown, setHasStoredAiEnhancedMarkdown] = useState(false);
   const [pageMdBusy,    setPageMdBusy]    = useState(false);
   const [pageMdError,   setPageMdError]   = useState("");
   const [pageMdOpen,    setPageMdOpen]    = useState(false);
   const [pageMdText,    setPageMdText]    = useState("");
   const [pageMdRange,   setPageMdRange]   = useState(null); // { from, to, all } — which range pageMdText is actually showing
   const [pageMdDeleteBusy, setPageMdDeleteBusy] = useState(false);
+  const [mdDraftBusy,  setMdDraftBusy]  = useState(false); // Actions -> Markdown: spinning up (or reopening) a Draft document, separate from the pageMdOpen panel's own busy state
+  const [mdDraftError, setMdDraftError] = useState("");
   const [mdPageIdx,     setMdPageIdx]     = useState(0); // index into mdPages — which single real page of the fetched range is displayed
   const [mdPageInputVal, setMdPageInputVal] = useState("1"); // editable page-number field's raw text, synced from mdCurrentPage.page
   const [pdfMdCountHighlight, setPdfMdCountHighlight] = useState(null); // null | "words" | "chars" — which markdown count is currently overlaid on the PDF page
-  const [aiMdBusy, setAiMdBusy] = useState(false);
-  const [aiMdOpen, setAiMdOpen] = useState(false);
-  const [aiMdText, setAiMdText] = useState("");
-  const [aiMdError, setAiMdError] = useState("");
-  const [aiMdInfo, setAiMdInfo] = useState(null); // { page, provider, model }
   const [mdFontScale,   setMdFontScale]   = useState(1); // multiplier on the panel's base rem size — relative, so it scales with the root font-size same as everything else
   const [voiceListening, setVoiceListening] = useState(false);
   const [voiceQuery,     setVoiceQuery]     = useState("");
@@ -494,20 +442,12 @@ const PDFPage = ({
 
   const mdCurrentPage = mdPages[mdPageIdx] || mdPages[0] || { page: pageNum, text: "", startOffset: 0 };
   useEffect(() => { setMdPageInputVal(String(mdCurrentPage.page)); }, [mdCurrentPage.page]);
-  const mdChars = useMemo(() => Array.from(mdCurrentPage.text || ""), [mdCurrentPage]);
-  const mdLines = useMemo(() => (mdCurrentPage.text || "").split("\n"), [mdCurrentPage]);
+  const cleanedMdCurrentText = useMemo(() => cleanMarkdownToPlainText(mdCurrentPage.text || ""), [mdCurrentPage.text]);
+  const mdChars = useMemo(() => Array.from(cleanedMdCurrentText || ""), [cleanedMdCurrentText]);
   const mdStats = useMemo(() => ({
-    words: (mdCurrentPage.text.match(/\S+/g) || []).length,
+    words: (cleanedMdCurrentText.match(/\S+/g) || []).length,
     chars: mdChars.length,
-  }), [mdCurrentPage, mdChars]);
-
-  useEffect(() => {
-    setAiMdOpen(false);
-    setAiMdBusy(false);
-    setAiMdText("");
-    setAiMdError("");
-    setAiMdInfo(null);
-  }, [mdCurrentPage.page, pageMdText]);
+  }), [cleanedMdCurrentText, mdChars]);
 
   // Bring a page into view in the main reader — fired by the word/char
   // counter buttons and by the panel's own page navigation, so the reader
@@ -625,9 +565,7 @@ const PDFPage = ({
   // long press (see useLongPressSelect), so a quick click/scroll never
   // accidentally starts selecting.
   const mdTextRef        = useRef(null);
-  const mdCompareTextRef = useRef(null);
   useLongPressSelect(mdTextRef);
-  useLongPressSelect(mdCompareTextRef);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
   const fileInputRef  = useRef(null);
@@ -1875,18 +1813,12 @@ const PDFPage = ({
       // Check (cheaply — no page param, but only reading the boolean) whether
       // this source was already converted to Markdown from the Sources table.
       setHasStoredMarkdown(false);
-      setHasStoredAiEnhancedMarkdown(false);
       try {
         const srcRes = await authFetch(apiUrl(`/api/sources/${sourceId}`));
         if (srcRes.ok) {
           const srcData = await srcRes.json();
           const source = srcData.source || {};
           setHasStoredMarkdown(Boolean(source.markdown) || (Array.isArray(source.markdownPages) && source.markdownPages.some((page) => String(page || "").trim())));
-          setHasStoredAiEnhancedMarkdown(
-            Boolean(source.hasAiEnhancedMarkdown) ||
-            Boolean(source.aiMarkdown) ||
-            (Array.isArray(source.aiMarkdownPages) && source.aiMarkdownPages.some((page) => String(page || "").trim()))
-          );
         }
       } catch {
         // best-effort — MD button just stays disabled if this check fails
@@ -2007,11 +1939,12 @@ const PDFPage = ({
   }, [pdfDoc]);
 
   // Shows a page range's (or the whole document's) Markdown in the left-side
-  // column. View-only — never triggers a fresh conversion itself (the
-  // Actions dropdown that calls this is only enabled once hasStoredMarkdown
-  // is true; converting an unconverted source happens from the Sources
-  // table). Reuses GET /api/sources/:id/markdown, now extended with
-  // ?from=&to= for ranges alongside the existing ?page= and no-param forms.
+  // column (the "All Pages"/pager/delete tools, not the Actions -> Text
+  // Extraction flow below, which has its own dedicated fetch). The backend's
+  // GET /api/sources/:id/markdown lazily converts on first read via
+  // ensureSourceMarkdown, so this can be called on an unconverted source too.
+  // Extended with ?from=&to= for ranges alongside the existing ?page= and
+  // no-param forms.
   const fetchMarkdownRange = useCallback(async (from, to, isAll) => {
     const sourceId = currentSourceIdRef.current;
     if (!sourceId) return;
@@ -2040,6 +1973,81 @@ const PDFPage = ({
       setPageMdBusy(false);
     }
   }, [pageCount]);
+
+  // Actions -> Text Extraction: instead of the inline pageMdOpen panel, spins
+  // up a real MCTOSHS Draft document containing the WHOLE document's text
+  // (every page, in order — not just the one currently open), and navigates
+  // there. Each PDF page's text lands as its own run of literal-text blocks
+  // (escaped, one line per <div> — not parsed into rich formatting), preceded
+  // by a `data-page-break` marker div for every page after the first, so the
+  // draft's structure mirrors the PDF's page-by-page layout: the on-screen
+  // editor shows a plain "— Page N —" divider (real pixel-perfect on-screen
+  // pagination isn't something this editor's decorative page background can
+  // do), and the PDF exporter (see buildDocumentPdf's data-page-break check)
+  // turns each marker into a *real* forced page break in the exported PDF.
+  // Posting with sourceId (no sourcePage — this is the one whole-document
+  // draft, not a per-page one) lets the backend hand back the SAME draft on
+  // a repeat click instead of creating duplicates, and the draft carries
+  // sourceId/sourceName back so its own page can render a link back to this
+  // PDF — that pair is the "back and forth" between the two.
+  const openMarkdownAsDraft = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId) return;
+    setActionsMenuOpen(false);
+    setMdDraftBusy(true);
+    setMdDraftError("");
+    try {
+      const mdRes = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?from=1&to=${pageCount}&includePages=1`));
+      const mdData = await mdRes.json();
+      if (!mdRes.ok) throw new Error(mdData.error || "Failed to load Markdown.");
+
+      const escapeHtml = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const toDraftParagraphs = (text) => {
+        const cleaned = cleanMarkdownToPlainText(text);
+        const paragraphs = cleaned
+          ? cleaned.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean)
+          : [];
+
+        if (!paragraphs.length) return "<div><br></div>";
+
+        return paragraphs.map((paragraph) => {
+          const lines = paragraph
+            .split("\n")
+            .map((line) => escapeHtml(line))
+            .join("<br />");
+          return `<div>${lines || "<br>"}</div>`;
+        }).join("");
+      };
+      const pages = Array.isArray(mdData.pages) && mdData.pages.length
+        ? mdData.pages
+        : [{ pageNumber: 1, markdown: mdData.markdown || "" }];
+
+      const content = pages.map(({ pageNumber, markdown }, idx) => {
+        const marker = idx > 0
+          ? `<div data-page-break="1" class="draft_page_break_marker">— Page ${pageNumber} —</div>`
+          : "";
+        return marker + toDraftParagraphs(markdown);
+      }).join("");
+
+      const draftRes = await authFetch(apiUrl("/api/draft"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: filename || "Document",
+          content,
+          sourceId,
+          sourceName: filename,
+        }),
+      });
+      const draftData = await draftRes.json();
+      if (!draftRes.ok) throw new Error(draftData.error || "Failed to create the document.");
+      navigate(`/draft/${draftData.id}`);
+    } catch (err) {
+      setMdDraftError(err.message);
+    } finally {
+      setMdDraftBusy(false);
+    }
+  }, [pageCount, filename, navigate]);
 
   // Jump the Markdown panel straight to a given real page — reuses it from
   // the already-fetched range if present (e.g. after "All Pages"), otherwise
@@ -2129,41 +2137,6 @@ const PDFPage = ({
     }
   }, [pageMdDeleteBusy]);
 
-  const handleShowEnhancedMarkdown = useCallback(async () => {
-    const sourceId = currentSourceIdRef.current;
-    if (!sourceId || !mdCurrentPage.text.trim() || aiMdBusy || !hasStoredAiEnhancedMarkdown) return;
-
-    if (aiMdOpen && aiMdText && aiMdInfo?.page === mdCurrentPage.page) {
-      setAiMdOpen(false);
-      return;
-    }
-
-    setAiMdOpen(true);
-    setAiMdBusy(true);
-    setAiMdError("");
-    setAiMdText("");
-    setAiMdInfo(null);
-    setMdPanelWidth((w) => Math.max(w, 720));
-
-    try {
-      const res = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown-enhanced?page=${mdCurrentPage.page}`));
-      const data = await res.json();
-      const errorMessage = data?.error?.message || data?.error || "Failed to load enhanced markdown.";
-      if (!res.ok) throw new Error(errorMessage);
-
-      setAiMdText(String(data.markdown || "").trim());
-      setAiMdInfo({
-        page: mdCurrentPage.page,
-        provider: data.provider || "Stored",
-        model: data.model || "",
-      });
-    } catch (err) {
-      setAiMdError(err.message);
-    } finally {
-      setAiMdBusy(false);
-    }
-  }, [aiMdBusy, aiMdInfo?.page, aiMdOpen, aiMdText, authFetch, hasStoredAiEnhancedMarkdown, mdCurrentPage.page, mdCurrentPage.text]);
-
   // Confirms the Actions-dropdown page-range picker for Linguistic Analysis
   // (the Markdown action now opens the panel directly — see the "Markdown"
   // dropdown item below — so this only ever handles the "linguistic" case).
@@ -2206,29 +2179,22 @@ const PDFPage = ({
     recognition.onresult = (e) => {
       const transcript = e.results[0][0].transcript.trim();
       setVoiceQuery(transcript);
-      const idx = pageMdText.toLowerCase().indexOf(transcript.toLowerCase());
+      const idx = cleanedMdCurrentText.toLowerCase().indexOf(transcript.toLowerCase());
       if (idx === -1) {
         setVoiceMatch(null);
-        setVoiceError(`"${transcript}" wasn't found in this range.`);
+        setVoiceError(`"${transcript}" wasn't found on this page.`);
       } else {
-        // Match is a global index into the whole fetched range — find which
-        // page chunk it falls in, jump the panel there, then store the match
-        // as an offset local to that page's text (what the renderer uses).
-        const pIdx = mdPages.findIndex((p) => idx >= p.startOffset && idx < p.startOffset + p.text.length);
-        const page = pIdx === -1 ? mdPages[0] : mdPages[pIdx];
-        const localStart = idx - (page?.startOffset ?? 0);
-        setMdPageIdx(pIdx === -1 ? 0 : pIdx);
-        setVoiceMatch({ start: localStart, end: localStart + transcript.length });
+        setVoiceMatch({ start: idx, end: idx + transcript.length });
         setVoiceError("");
       }
     };
     voiceRecognitionRef.current = recognition;
     recognition.start();
-  }, [pageMdText, mdPages]);
+  }, [cleanedMdCurrentText]);
 
   useEffect(() => {
     if (!voiceMatch) return;
-    document.querySelector(".md_voice_hl")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    document.querySelector(".draft_text_viewer__highlight")?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [voiceMatch]);
 
   useEffect(() => {
@@ -2717,20 +2683,21 @@ const PDFPage = ({
                 id="pdf_actions_btn"
                 className={actionsMenuOpen ? "pdf_actions_btn--active" : ""}
                 onClick={() => setActionsMenuOpen((o) => !o)}
-                disabled={!hasStoredMarkdown || pageMdBusy}
-                title={!hasStoredMarkdown ? "Not converted to Markdown yet — convert this document from the Sources table first" : "Markdown / Linguistic Analysis actions"}
+                disabled={pageMdBusy || mdDraftBusy}
+                title={hasStoredMarkdown ? "Text Extraction / Linguistic Analysis actions" : "Text Extraction / Linguistic Analysis actions — this document hasn't been extracted yet, Text Extraction will do that first"}
               >
-                <i className="fi fi-rr-menu-dots" /> Actions
+                <i className={`fi ${mdDraftBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-menu-dots"}`} /> Actions
               </button>
+              {mdDraftError && <span className="pdf_actions_error" title={mdDraftError}>⚠ {mdDraftError}</span>}
               {actionsMenuOpen && (
                 <div className="annot_dd annot_dd--tools" id="pdf_actions_dd">
                   <button
                     type="button"
                     className="annot_dd_item"
-                    onClick={() => { setActionsMenuOpen(false); mdFocusPageRef.current = pageNum; fetchMarkdownRange(pageNum, pageNum, false); }}
+                    onClick={openMarkdownAsDraft}
                   >
                     <i className="fi fi-rr-document" />
-                    <span>Markdown</span>
+                    <span>Text Extraction</span>
                   </button>
                   <button
                     type="button"
@@ -2938,18 +2905,6 @@ const PDFPage = ({
                 <span className="annot_trigger_label">Hand</span>
               </button>
 
-              {hideHyleControls && (
-                <button
-                  type="button"
-                  className={`annot_trigger${selectTextMode ? " annot_trigger--active" : ""}`}
-                  onClick={() => setSelectTextMode((v) => !v)}
-                  title={selectTextMode ? "Select Text is on — tap/click and hold a word to select it" : "Turn on to select words by tapping/clicking and holding"}
-                >
-                  <i className="fi fi-rr-cursor-text" />
-                  <span className="annot_trigger_label">Select Text</span>
-                </button>
-              )}
-
               <div id="pdf_annot_actions">
                 <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
                 <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="fi fi-rr-redo" /></button>
@@ -3049,15 +3004,6 @@ const PDFPage = ({
                 >
                   <i className="fi fi-rr-microphone" /> Voice
                 </button>
-                <button
-                  type="button"
-                  className={`pdf_md_icon_btn${aiMdOpen ? " pdf_md_icon_btn--active" : ""}`}
-                  onClick={handleShowEnhancedMarkdown}
-                  disabled={pageMdBusy || aiMdBusy || !mdCurrentPage.text.trim() || !hasStoredAiEnhancedMarkdown}
-                  title={!hasStoredAiEnhancedMarkdown ? "No stored AI-enhanced markdown exists for this source yet" : "Show the stored AI-enhanced text for this page"}
-                >
-                  <i className={`fi ${aiMdBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-eye"}`} /> Enhanced Text
-                </button>
                 <div id="pdf_md_font_controls">
                   <button type="button" onClick={() => setMdFontScale((s) => Math.max(0.7, +(s - 0.1).toFixed(1)))} title="Smaller text" disabled={mdFontScale <= 0.7}>A−</button>
                   <span id="pdf_md_font_label">{Math.round(mdFontScale * 100)}%</span>
@@ -3076,61 +3022,25 @@ const PDFPage = ({
               ) : pageMdError ? (
                 <p id="pdf_md_panel_status" className="pdf_md_panel_status--error">⚠ {pageMdError}</p>
               ) : mdCurrentPage.text ? (
-                <div className={`pdf_md_compare_layout${aiMdOpen ? " pdf_md_compare_layout--split" : ""}`}>
+                <div className="pdf_md_compare_layout">
                   <section className="pdf_md_compare_col">
                     <div className="pdf_md_compare_head">
-                      <span>Original Markdown</span>
+                      <span>Draft Text View</span>
                       <span className="pdf_md_compare_meta">Page {mdCurrentPage.page}</span>
                     </div>
                     <div id="pdf_md_panel_text" ref={mdTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
-                      {(() => {
-                        // Every source line break reads as its own paragraph here
-                        // (a "\n" is a paragraph break, not just a wrapped line).
-                        let offset = 0;
-                        return mdLines.map((line, li) => {
-                          const lineStart = offset;
-                          const rendered = renderOriginalMarkdownLine(line, lineStart, voiceMatch);
-                          offset += line.length + 1;
-                          if (rendered.isRule) return <hr key={li} className="pdf_md_rule" />;
-                          const lineClasses = [
-                            "md_line",
-                            rendered.isBlank ? "md_line--blank" : null,
-                            rendered.headingLevel ? `md_heading md_heading--h${rendered.headingLevel}` : null,
-                          ].filter(Boolean).join(" ");
-                          return <div key={li} className={lineClasses}>{rendered.content}</div>;
-                        });
-                      })()}
+                      <DraftTextViewer
+                        text={mdCurrentPage.text}
+                        highlightRange={voiceMatch}
+                        emptyText="(This page had no extractable text.)"
+                      />
                     </div>
                   </section>
-
-                  {aiMdOpen && (
-                    <section className="pdf_md_compare_col pdf_md_compare_col--ai">
-                      <div className="pdf_md_compare_head">
-                        <span>AI Enhanced</span>
-                        <span className="pdf_md_compare_meta">
-                          {aiMdBusy
-                            ? "Thinking…"
-                            : aiMdInfo?.model
-                              ? `${aiMdInfo.provider} · ${aiMdInfo.model}`
-                              : `Page ${mdCurrentPage.page}`}
-                        </span>
-                      </div>
-                      {aiMdBusy ? (
-                        <p id="pdf_md_panel_status">Loading enhanced text…</p>
-                      ) : aiMdError ? (
-                        <p id="pdf_md_panel_status" className="pdf_md_panel_status--error">⚠ {aiMdError}</p>
-                      ) : aiMdText ? (
-                        <div ref={mdCompareTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
-                          <PdfPlainTextView text={aiMdText} className="pdf_md_panel_text_compare" />
-                        </div>
-                      ) : (
-                        <p id="pdf_md_panel_status">Click Enhanced Text to show the stored AI-enhanced version for this page.</p>
-                      )}
-                    </section>
-                  )}
                 </div>
               ) : (
-                <pre id="pdf_md_panel_text" style={{ fontSize: `${0.8 * mdFontScale}rem` }}>(This page had no extractable text.)</pre>
+                <div id="pdf_md_panel_text" style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
+                  <DraftTextViewer text="" emptyText="(This page had no extractable text.)" />
+                </div>
               )}
             </div>
           </div>

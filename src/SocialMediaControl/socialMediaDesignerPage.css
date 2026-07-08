@@ -1,0 +1,341 @@
+#smd_page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255, 122, 89, 0.16), transparent 24%),
+    radial-gradient(circle at top right, rgba(79, 195, 247, 0.12), transparent 28%),
+    linear-gradient(180deg, color-mix(in srgb, var(--color-primary) 88%, #120f27), var(--color-bg) 56%);
+  color: var(--color-text);
+}
+
+#smd_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 84%, transparent);
+  backdrop-filter: blur(12px);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.smd_header_title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.smd_eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #ffb28f;
+  font-weight: 700;
+}
+
+#smd_header .smd_eyebrow {
+  white-space: nowrap;
+}
+
+#smd_header h1 {
+  margin: 0;
+  font-size: clamp(1rem, 1.6vw, 1.35rem);
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.smd_header_actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.smd_btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.smd_btn--ghost {
+  background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+}
+
+.smd_btn--primary {
+  background: linear-gradient(135deg, #ff7a59, #ffb366);
+  color: #1c1025;
+  border-color: transparent;
+}
+
+#smd_layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  min-height: calc(100vh - 64px);
+}
+
+.smd_sidebar,
+.smd_editor_shell {
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
+}
+
+.smd_sidebar {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.smd_sidebar_block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.smd_help,
+.smd_sidebar_block p,
+.smd_empty {
+  color: var(--color-text-muted);
+  line-height: 1.6;
+}
+
+.smd_empty--error {
+  color: #ff9d95;
+}
+
+.smd_post_list,
+.smd_preset_list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.smd_post_item,
+.smd_preset_btn {
+  width: 100%;
+  text-align: left;
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.smd_post_item span,
+.smd_post_item small {
+  display: block;
+  color: var(--color-text-muted);
+}
+
+.smd_post_item strong {
+  display: block;
+  margin: 4px 0;
+}
+
+.smd_post_item--active,
+.smd_preset_btn--active {
+  border-color: rgba(255, 122, 89, 0.42);
+  background: linear-gradient(180deg, rgba(255, 122, 89, 0.12), rgba(255, 255, 255, 0.02));
+}
+
+.smd_button_grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.smd_inspector {
+  padding: 12px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+}
+
+.smd_field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.smd_field + .smd_field,
+.smd_field + .smd_btn {
+  margin-top: 10px;
+}
+
+.smd_field span {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.smd_field textarea,
+.smd_field input[type="color"] {
+  width: 100%;
+}
+
+.smd_field textarea {
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  color: var(--color-text);
+  padding: 10px;
+  resize: vertical;
+}
+
+.smd_field input[type="range"] {
+  width: 100%;
+}
+
+.smd_field input[type="color"] {
+  border: none;
+  height: 42px;
+  padding: 0;
+  background: transparent;
+}
+
+.smd_media_card {
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+  width: 100%;
+  max-width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.smd_media_card img {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.smd_editor_shell {
+  height: calc(100vh - 70px);
+  min-height: 0;
+  max-height: calc(100vh - 70px);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  overflow: auto;
+}
+
+.smd_canvas_toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 72%, transparent);
+}
+
+.smd_canvas_toolbar p:last-child {
+  max-width: 48ch;
+  color: var(--color-text-muted);
+  line-height: 1.55;
+}
+
+.smd_canvas_wrap {
+  flex: 1 1 auto;
+  min-height: clamp(320px, 52vh, 620px);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  overflow: auto;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+  background:
+    linear-gradient(45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(255, 255, 255, 0.03) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(255, 255, 255, 0.03) 75%);
+  background-size: 26px 26px;
+  background-position: 0 0, 0 13px, 13px -13px, -13px 0;
+}
+
+.smd_canvas_stage {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+}
+
+@media (max-width: 1100px) {
+  #smd_layout {
+    grid-template-columns: 1fr;
+  }
+
+  .smd_editor_shell {
+    height: min(900px, calc(100vh - 80px));
+    max-height: calc(100vh - 80px);
+  }
+}
+
+@media (max-width: 720px) {
+  #smd_header {
+    padding: 8px 14px;
+    flex-wrap: wrap;
+  }
+
+  .smd_header_title {
+    flex-wrap: wrap;
+  }
+
+  #smd_header h1 {
+    white-space: normal;
+  }
+
+  #smd_layout {
+    padding: 10px;
+  }
+
+  .smd_header_actions {
+    width: 100%;
+  }
+
+  .smd_btn {
+    flex: 1 1 170px;
+    text-align: center;
+  }
+
+  .smd_button_grid {
+    grid-template-columns: 1fr;
+  }
+
+  .smd_canvas_toolbar {
+    flex-direction: column;
+  }
+
+  .smd_canvas_wrap {
+    padding: 10px;
+    min-height: clamp(260px, 42vh, 420px);
+  }
+}

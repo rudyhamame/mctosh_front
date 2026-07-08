@@ -111,9 +111,49 @@
   width: 100%;
   position: relative;
   touch-action: none; /* JS pinch handler takes over here */
+  cursor: grab;
+  perspective: 2200px; /* lives on the parent so #login_stage's own 3D transform gets a vanishing point */
 }
+#login_stage_wrap:active { cursor: grabbing; }
 
-/* ── Stage (900×900, absolutely centered, scaled via JS) ── */
+/* ── Object details overlay — flat, never rotates with the stage ── */
+#object_info {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(4,6,15,0.78);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+}
+.object_info_row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 0.62rem;
+  white-space: nowrap;
+}
+.object_info_row--hint { justify-content: flex-end; }
+.object_info_label {
+  color: rgba(255,255,255,0.35);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.55rem;
+}
+.object_info_value { color: rgba(150,220,255,0.92); font-weight: 700; }
+.object_info_sub { color: rgba(255,255,255,0.4); font-weight: 400; }
+
+/* ── Stage (900×900, absolutely centered, scaled via JS) ──
+   Everything inside — spheres, orbit rings, labels, the arc control, the
+   identity stack — is one rigid 3D object now: the rotation lives here, not
+   on some inner piece, so the whole thing tilts and spins together. */
 #login_stage {
   position: absolute;
   top: 50%;
@@ -123,6 +163,204 @@
   margin-top: -450px;
   margin-left: -450px;
   will-change: transform;
+  transform-style: preserve-3d;
+  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+#login_stage.login_stage--dragging { transition: none; }
+
+/* ── Travel slider — flat 2D, sits below the object entirely (not
+   overlapping it at all) so it never competes with or gets disrupted by
+   the 3D rotation. ── */
+#travel_slider_wrap {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  width: 220px;
+}
+#travel_slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    rgba(0,220,110,0.7) 0%,
+    rgba(255,60,60,0.7) var(--slider-fill, 0%),
+    rgba(255,255,255,0.12) var(--slider-fill, 0%)
+  );
+  cursor: pointer;
+  outline: none;
+}
+#travel_slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(160,110,255,0.8);
+  box-shadow: 0 0 6px rgba(160,110,255,0.5);
+  cursor: pointer;
+}
+#travel_slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(160,110,255,0.8);
+  box-shadow: 0 0 6px rgba(160,110,255,0.5);
+  cursor: pointer;
+  border: none;
+}
+.slider_label {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.58rem;
+  letter-spacing: 0.04em;
+  color: rgba(255,255,255,0.45);
+  text-transform: uppercase;
+}
+
+/* ── Cutaway slider — sits just above the travel slider ── */
+#cutaway_slider_wrap {
+  position: absolute;
+  bottom: 2.6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  width: 220px;
+}
+#cutaway_slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    rgba(160,110,255,0.75) 0%,
+    rgba(160,110,255,0.75) var(--slider-fill, 0%),
+    rgba(255,255,255,0.12) var(--slider-fill, 0%)
+  );
+  cursor: pointer;
+  outline: none;
+}
+#cutaway_slider:disabled { cursor: not-allowed; opacity: 0.35; }
+#cutaway_slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(150,130,210,0.85);
+  box-shadow: 0 0 6px rgba(150,130,210,0.5);
+  cursor: pointer;
+}
+#cutaway_slider::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid rgba(150,130,210,0.85);
+  box-shadow: 0 0 6px rgba(150,130,210,0.5);
+  cursor: pointer;
+  border: none;
+}
+
+/* ── The identity stack: precomputed identities layered along Z ──
+   No rotation of its own — #login_stage carries that for the whole object.
+   Just preserve-3d so translateZ actually separates the slices in depth
+   instead of flattening onto the stage plane. */
+#identity_stack {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+
+.identity_slice {
+  position: absolute;
+  inset: 0;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+/* No filter/drop-shadow here — those force expensive per-layer compositing
+   once dozens of these sit in a 3D transform context, which is exactly
+   what made this unusable on iPad. Border-color/width swaps on the shell
+   ring (below) carry the "current" highlight instead.
+   Opacity dims the CONTENT (dots + rope lines) per slice, not the whole
+   slice — the shell ring is styled separately, below, so every slice's
+   border stays clearly visible and the stack reads as real depth (a tunnel
+   of rings), while only the ontic slice's dots/ropes are fully lit. */
+.identity_rope_svg,
+.identity_slice .bio_particle {
+  opacity: 0.12;
+  transition: opacity 0.35s ease;
+}
+.identity_slice--current .identity_rope_svg,
+.identity_slice--current .bio_particle {
+  opacity: 1;
+}
+/* Recovery-track slices — the "healing hasn't caught up yet" possibility
+   for each severity — read as dimmer/cooler than their onset counterpart
+   so the two tracks stay visually distinguishable inside the full stack. */
+.identity_slice--recovery .identity_rope_svg,
+.identity_slice--recovery .bio_particle {
+  opacity: 0.07;
+}
+.identity_slice--recovery.identity_slice--current .identity_rope_svg,
+.identity_slice--recovery.identity_slice--current .bio_particle {
+  opacity: 0.85;
+}
+
+.identity_rope_svg {
+  position: absolute;
+  inset: 0;
+  width: 900px;
+  height: 900px;
+  pointer-events: none;
+  z-index: 7;
+}
+
+/* Patient Reality border cross-section, one per slice depth — matches
+   #pr_sphere's own diameter/center exactly so the extruded tube lines up
+   with the static front sphere rather than floating independently.
+   Kept at a consistently visible weight/opacity (not tied to the slice's
+   own dimming) across every slice, ontic or not, so the whole stack of
+   rings reads as real depth rather than disappearing into the fog. */
+.identity_shell_ring {
+  position: absolute;
+  width: 720px;
+  height: 720px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid rgba(150,130,210,0.4);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 1;
+}
+.identity_slice--recovery .identity_shell_ring { opacity: 0.32; }
+/* The ontic slice's border needs to stay legible even as it recedes deep
+   into the object (smaller on screen from perspective, and everything
+   around it is intentionally dimmed) — thicker and a touch more defined
+   rather than just a thin line the same weight as every other slice. Same
+   muted purple family as the rest, not a bright per-slice color, so the
+   whole stack reads as one coherent object instead of a rainbow. */
+.identity_slice--current .identity_shell_ring {
+  opacity: 1;
+  border-width: 3px;
+  border-color: rgba(180,160,225,0.75);
+  box-shadow: 0 0 10px rgba(150,130,210,0.3);
 }
 
 #login_svg {
@@ -150,10 +388,11 @@
   top: 50%;
   left: 50%;
   border-radius: 50%;
-  border: 1px solid color-mix(in srgb, var(--orb-color) 30%, transparent);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--orb-color) 12%, transparent);
+  border: 1.75px solid color-mix(in srgb, var(--orb-color) 45%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--orb-color) 22%, transparent);
   pointer-events: none;
   z-index: 4;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* ── Base particle ── */
@@ -169,6 +408,7 @@
   pointer-events: none;
   will-change: transform;
   z-index: 8;  /* above spheres (z-index 5) */
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* ── Counter-rotation keyframes — keep letter upright as dot orbits ── */
@@ -182,6 +422,7 @@
   margin: -16px;
   border-radius: 50%;
   background: var(--orb-color);
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* ── Letter inside the dot — counter-rotates to stay upright ── */
@@ -293,6 +534,7 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 5;
 }
 
@@ -305,8 +547,8 @@
   left: 50%;
   transform: translate(-50%, -50%);
   background: radial-gradient(circle,
-    rgba(160,110,255,0.07) 0%,
-    rgba(120,80,220,0.03) 50%,
+    rgba(160,110,255,0.14) 0%,
+    rgba(120,80,220,0.07) 50%,
     transparent 78%
   );
   pointer-events: none;
@@ -327,15 +569,20 @@
   width: 720px;
   height: 720px;
   border-radius: 50%;
+  /* Deliberately near-opaque — this is a solid plate blocking the ghost
+     slices behind it, not a tinted window onto them. A translucent gradient
+     over a dark page just reads as "still see-through" no matter how much
+     you raise its alpha in isolation. */
   background: radial-gradient(ellipse at 38% 35%,
-    rgba(200,170,255,0.07) 0%,
-    transparent 55%
+    rgba(60,44,100,0.97) 0%,
+    rgba(30,22,58,0.98) 55%,
+    rgba(8,6,18,0.99) 100%
   );
-  border: 1.5px solid rgba(160,110,255,0.40);
+  border: 2px solid rgba(160,110,255,0.68);
   box-shadow:
-    inset 0 0 200px rgba(0,0,0,0.08),
-    0 0  110px rgba(160,110,255,0.16),
-    0 0  220px rgba(120,80,220,0.07);
+    inset 0 0 200px rgba(0,0,0,0.16),
+    0 0  110px rgba(160,110,255,0.22),
+    0 0  220px rgba(120,80,220,0.1);
   overflow: hidden;
   animation: pr_breathe 7s ease-in-out infinite;
 }
@@ -411,66 +658,86 @@
 
 #pr_rim { display: none; }
 
-/* MCTOSHS label — just below the MCTOSHS sphere (outside it) */
-#ms_label_wrap {
+/* ── Labels card — MCTOSHS / Patient Reality naming + item legend ──
+   Flat, outside #login_stage like #object_info, so it never rotates,
+   curves, or tilts with the 3D object and stays legible at all times. */
+#labels_card {
   position: absolute;
-  top: 727px;   /* lowered to clear the larger MCTOSHS sphere */
-  left: 50%;
-  transform: translateX(-50%);
-  text-align: center;
-  white-space: nowrap;
+  top: 0.5rem;
+  left: 0.5rem;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.7rem;
+  background: rgba(4,6,15,0.78);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+  backdrop-filter: blur(10px);
   pointer-events: none;
-  z-index: 9;
-  padding: 6px 14px 7px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(2, 18, 34, 0.58), rgba(2, 12, 26, 0.26));
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.14);
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  max-width: 210px;
 }
 
-#ms_label_name {
-  display: block;
+#labels_card_head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+#labels_card_mctoshs {
   font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(0, 229, 255, 0.65);
-  font-family: ui-monospace, "Cascadia Code", monospace;
+  color: rgba(0, 229, 255, 0.75);
 }
 
-/* Patient Reality label — just below the PR sphere (outside it) */
-#pr_label_wrap {
-  position: absolute;
-  top: 930px;
-  left: 50%;
-  transform: translateX(-50%);
-  text-align: center;
-  white-space: nowrap;
-  pointer-events: none;
-  z-index: 9;
-  padding: 7px 16px 8px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(22, 10, 44, 0.48), rgba(12, 8, 28, 0.18));
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
-}
-
-#pr_step {
-  display: block;
+#labels_card_pr {
   font-size: 0.62rem;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-weight: 700;
-  color: rgba(180,140,255,0.60);
-  letter-spacing: 0.14em;
-  margin-bottom: 3px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(210,190,255,0.65);
 }
 
-#pr_name {
-  display: block;
-  font-size: 0.9rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(210,190,255,0.72);
-  line-height: 1.1;
+#labels_card_list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+#labels_card_list li {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  font-size: 0.58rem;
+  white-space: nowrap;
+}
+
+.labels_card_dot {
+  width: 7px;
+  height: 7px;
+  min-width: 7px;
+  border-radius: 50%;
+  background: var(--orb-color);
+  box-shadow: 0 0 5px var(--orb-color);
+  align-self: center;
+}
+
+.labels_card_name {
+  color: rgba(255,255,255,0.75);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.labels_card_letter {
+  color: rgba(255,255,255,0.35);
 }
 
 /* ══════════════════════════════════════
@@ -610,8 +877,27 @@
   font-size: 0.6rem;
 }
 
-#ds_collapse_btn {
+#ds_stack_toggle {
   margin-left: auto;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 4px;
+  color: rgba(255,255,255,0.55);
+  font-size: 0.56rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0.12rem 0.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: inherit;
+  transition: color 0.12s, border-color 0.12s;
+}
+#ds_stack_toggle:hover { color: rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.24); }
+
+#ds_collapse_btn {
   background: none;
   border: none;
   color: rgba(255,255,255,0.28);

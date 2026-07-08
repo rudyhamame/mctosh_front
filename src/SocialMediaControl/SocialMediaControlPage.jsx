@@ -575,6 +575,12 @@ const SocialMediaControlPage = () => {
     window.open(previewUrl.toString(), "_blank", "noopener,noreferrer");
   };
 
+  const handleOpenDesignerTab = () => {
+    const designerUrl = new URL(`${window.location.origin}/cvs/social-media-designer`);
+    if (selectedPostId) designerUrl.searchParams.set("post", selectedPostId);
+    window.open(designerUrl.toString(), "_blank", "noopener,noreferrer");
+  };
+
   return (
     <div id="smc_page">
       <header id="smc_header">
@@ -586,13 +592,16 @@ const SocialMediaControlPage = () => {
           </div>
         </div>
         <div id="smc_header_actions">
+          <button className="smc_action_btn smc_action_btn--primary" onClick={handleOpenDesignerTab}>
+            Open Design Studio
+          </button>
           <button className="smc_action_btn smc_action_btn--ghost" onClick={handleOpenPreviewTab}>
             Open Instagram Preview
           </button>
           <button className="smc_action_btn smc_action_btn--ghost" onClick={() => window.location.reload()}>
             Refresh Status
           </button>
-          <button className="smc_action_btn smc_action_btn--primary" onClick={handleCreatePost}>
+          <button className="smc_action_btn smc_action_btn--ghost" onClick={handleCreatePost}>
             New Post Draft
           </button>
         </div>
@@ -644,373 +653,41 @@ const SocialMediaControlPage = () => {
           </div>
         </section>
 
-        <section className="smc_grid smc_grid--top">
-          <article className="smc_panel">
-            <div className="smc_panel_head">
-              <div>
-                <p className="smc_section_eyebrow">Campaign Templates</p>
-                <h3>Choose the post strategy</h3>
-              </div>
-            </div>
-
-            <div className="smc_campaign_list">
+        <section className="smc_designer_strip">
+          <div className="smc_designer_strip_copy">
+            <p className="smc_section_eyebrow">Designer Flow</p>
+            <h3>The separate designer is now the main creation workspace.</h3>
+            <p>
+              Choose a campaign here, then open the standalone designer to build the artwork. Social Media Control stays focused on drafts, publishing, and queue management.
+            </p>
+          </div>
+          <div className="smc_designer_strip_controls">
+            <div className="smc_designer_campaigns">
               {CAMPAIGNS.map((campaign) => (
                 <button
                   key={campaign.id}
-                  className={`smc_campaign_card${campaign.id === selectedCampaignId ? " smc_campaign_card--active" : ""}`}
+                  className={`smc_campaign_pill${campaign.id === selectedCampaignId ? " smc_campaign_pill--active" : ""}`}
                   onClick={() => handleCampaignSelect(campaign.id)}
                 >
-                  <div className="smc_campaign_top">
-                    <span className="smc_campaign_name">{campaign.label}</span>
-                    <span className="smc_campaign_formats">{campaign.formats.join(" · ")}</span>
-                  </div>
-                  <p className="smc_campaign_text">{campaign.hook}</p>
-                  <p className="smc_campaign_cta">{campaign.cta}</p>
+                  {campaign.label}
                 </button>
               ))}
             </div>
-          </article>
-
-          <article className="smc_panel smc_panel--generator">
-            <div className="smc_panel_head">
-              <div>
-                <p className="smc_section_eyebrow">Caption Studio</p>
-                <h3>Shape the live post brief</h3>
-              </div>
-              <div className={`smc_save_state smc_save_state--${saveState}`}>
-                {saveState === "saving" ? "Saving…" : saveState === "saved" ? "Saved" : saveState === "error" ? "Save error" : saveState === "dirty" ? "Unsaved changes" : "Synced"}
-              </div>
-            </div>
-
-            <div className="smc_form">
-              <label className="smc_field">
-                <span>Tone</span>
-                <select value={editor.tone} onChange={(e) => handleFieldChange("tone", e.target.value)}>
-                  {TONES.map((tone) => <option key={tone}>{tone}</option>)}
-                </select>
-              </label>
-
-              <label className="smc_field">
-                <span>Audience</span>
-                <select value={editor.audience} onChange={(e) => handleFieldChange("audience", e.target.value)}>
-                  {AUDIENCES.map((audience) => <option key={audience}>{audience}</option>)}
-                </select>
-              </label>
-
-              <label className="smc_field">
-                <span>Format</span>
-                <select value={editor.format} onChange={(e) => handleFieldChange("format", e.target.value)}>
-                  {FORMATS.map((format) => <option key={format}>{format}</option>)}
-                </select>
-              </label>
-
-              <label className="smc_field">
-                <span>Stage</span>
-                <select value={editor.stage} onChange={(e) => handleFieldChange("stage", e.target.value)}>
-                  {STAGES.map((stage) => <option key={stage}>{stage}</option>)}
-                </select>
-              </label>
-            </div>
-
-            <div className="smc_toolbar_row">
-              <button className="smc_action_btn smc_action_btn--ghost smc_action_btn--small" onClick={handleGenerateCopy} disabled={!selectedPostId || copyState === "generating"}>
+            <div className="smc_designer_actions">
+              <button className="smc_action_btn smc_action_btn--ghost" onClick={handleGenerateCopy} disabled={!selectedPostId || copyState === "generating"}>
                 {copyState === "generating" ? "Generating copy…" : copyState === "done" ? "Copy generated" : "Generate AI Copy"}
               </button>
-              <label className="smc_upload_btn">
-                <input type="file" accept="image/*,video/*" multiple onChange={handleAssetUpload} />
-                {uploadState === "uploading" ? "Uploading assets…" : uploadState === "done" ? "Assets uploaded" : "Upload Assets"}
-              </label>
-              <button className="smc_action_btn smc_action_btn--ghost smc_action_btn--small" onClick={handleRunPreflight} disabled={!selectedPostId || preflightState === "loading"}>
+              <button className="smc_action_btn smc_action_btn--ghost" onClick={handleRunPreflight} disabled={!selectedPostId || preflightState === "loading"}>
                 {preflightState === "loading" ? "Checking…" : "Run Preflight"}
               </button>
+              <button className="smc_action_btn smc_action_btn--primary" onClick={handleOpenDesignerTab}>
+                Open Designer
+              </button>
             </div>
-
-            <div id="smc_generated_brief">
-              <div className="smc_brief_chip">Selected: {selectedCampaign.label}</div>
-              <ul>
-                {generatedOutline.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          </article>
+          </div>
         </section>
 
         <section className="smc_grid smc_grid--bottom">
-          <article className="smc_panel">
-            <div className="smc_panel_head">
-              <div>
-                <p className="smc_section_eyebrow">Post Queue</p>
-                <h3>Real saved social drafts</h3>
-              </div>
-              <div className="smc_panel_head_actions">
-                <button className="smc_action_btn smc_action_btn--primary smc_action_btn--small" onClick={handleCreatePost}>
-                  Create Post Here
-                </button>
-                <button className="smc_action_btn smc_action_btn--ghost smc_action_btn--small" onClick={handleDeletePost} disabled={!selectedPostId}>
-                  Delete Post
-                </button>
-              </div>
-            </div>
-
-            {postsLoading ? (
-              <p className="smc_empty_state">Loading social drafts…</p>
-            ) : posts.length === 0 ? (
-              <p className="smc_empty_state">No saved social posts yet. Create your first post to start the control queue.</p>
-            ) : (
-              <div id="smc_post_layout">
-                <div id="smc_post_list">
-                  {posts.map((post) => (
-                    <div
-                      key={post.id}
-                      role="button"
-                      tabIndex={0}
-                      className={`smc_post_item${post.id === selectedPostId ? " smc_post_item--active" : ""}`}
-                      onClick={() => handleSelectPost(post)}
-                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSelectPost(post); } }}
-                    >
-                      <div className="smc_post_item_top">
-                        <span>{post.title}</span>
-                        <span className="smc_stage_badge" data-stage={post.stage}>{post.stage}</span>
-                      </div>
-                      <span className="smc_post_item_type">{post.format}</span>
-                      {post.stage === "Scheduled" && (
-                        <button type="button" className="smc_queue_btn" onClick={(e) => { e.stopPropagation(); handleToggleScheduled(post, "Paused"); }}>
-                          Pause
-                        </button>
-                      )}
-                      {post.stage === "Paused" && (
-                        <button type="button" className="smc_queue_btn" onClick={(e) => { e.stopPropagation(); handleToggleScheduled(post, "Scheduled"); }}>
-                          Resume
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-
-                <div id="smc_post_detail">
-                  <div className="smc_post_preview">
-                    <div className="smc_phone_frame">
-                      <div className="smc_phone_topbar">
-                        <span>MCTOSHS</span>
-                        <span>{editor.format}</span>
-                      </div>
-                      <div className="smc_phone_canvas">
-                        {previewAsset ? (
-                          previewAsset.kind === "video" ? (
-                            <video className="smc_phone_media" src={previewAsset.url} controls muted playsInline />
-                          ) : (
-                            <img className="smc_phone_media" src={previewAsset.url} alt="" />
-                          )
-                        ) : null}
-                        <div className="smc_phone_content">
-                          <div className="smc_phone_tag">{selectedCampaign.label}</div>
-                          <h4>{editor.title || "Untitled social post"}</h4>
-                          <p>{editor.objective || "Add an objective to frame the creative."}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="smc_preview_launch">
-                      <p className="smc_section_eyebrow">Standalone Preview</p>
-                      <strong>Review this post in a dedicated Instagram-style tab.</strong>
-                      <p>
-                        Open a cleaner preview page so you can browse the post without the crowded editor and switch between drafts there.
-                      </p>
-                      <button className="smc_action_btn smc_action_btn--primary" onClick={handleOpenPreviewTab}>
-                        Open Preview In New Tab
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="smc_post_copy smc_editor_stack">
-                    <div className={`smc_publish_state smc_publish_state--${publishState}`}>
-                      {publishState === "publishing"
-                        ? "Publishing to Instagram…"
-                        : publishState === "published"
-                          ? "Published successfully."
-                          : publishState === "error"
-                            ? "Publishing failed."
-                            : editor.publishStatus || "Not published"}
-                    </div>
-
-                    <div className="smc_publish_meta">
-                      <span>Assets: {Math.max(Array.isArray(editor.mediaUrls) ? editor.mediaUrls.length : 0, textareaToList(editor.mediaUrlsText).length)}</span>
-                      <span>{editor.publishedAt ? `Published ${new Date(editor.publishedAt).toLocaleString()}` : "Not yet published"}</span>
-                    </div>
-
-                    <label className="smc_field">
-                      <span>Title</span>
-                      <input value={editor.title || ""} onChange={(e) => handleFieldChange("title", e.target.value)} />
-                    </label>
-
-                    <label className="smc_field">
-                      <span>Objective</span>
-                      <textarea rows={3} value={editor.objective || ""} onChange={(e) => handleFieldChange("objective", e.target.value)} />
-                    </label>
-
-                    <label className="smc_field">
-                      <span>Caption</span>
-                      <textarea rows={6} value={editor.caption || ""} onChange={(e) => handleFieldChange("caption", e.target.value)} />
-                    </label>
-
-                    <div className="smc_editor_duo">
-                      <label className="smc_field">
-                        <span>Slides</span>
-                        <textarea rows={5} value={editor.slidesText || ""} onChange={(e) => handleFieldChange("slidesText", e.target.value)} />
-                      </label>
-
-                      <label className="smc_field">
-                        <span>Hashtags</span>
-                        <textarea rows={5} value={editor.hashtagsText || ""} onChange={(e) => handleFieldChange("hashtagsText", e.target.value)} />
-                      </label>
-                    </div>
-
-                    <div className="smc_editor_duo">
-                      <label className="smc_field">
-                        <span>Primary Media URL</span>
-                        <input value={editor.mediaUrl || ""} onChange={(e) => handleFieldChange("mediaUrl", e.target.value)} placeholder="https://..." />
-                      </label>
-
-                      <label className="smc_field">
-                        <span>Call To Action</span>
-                        <input value={editor.cta || ""} onChange={(e) => handleFieldChange("cta", e.target.value)} />
-                      </label>
-                    </div>
-
-                    <div className="smc_editor_duo">
-                      <label className="smc_field">
-                        <span>All Media URLs</span>
-                        <textarea rows={5} value={editor.mediaUrlsText || ""} onChange={(e) => handleFieldChange("mediaUrlsText", e.target.value)} placeholder="One public image or video URL per line" />
-                      </label>
-
-                      <label className="smc_field">
-                        <span>Scheduled Time</span>
-                        <input type="datetime-local" value={editor.scheduledFor || ""} onChange={(e) => handleFieldChange("scheduledFor", e.target.value)} />
-                      </label>
-                    </div>
-
-                    <div className="smc_editor_duo">
-                      <label className="smc_field">
-                        <span>Instagram Publish ID</span>
-                        <input value={editor.lastPublishId || ""} readOnly placeholder="Will appear after publishing" />
-                      </label>
-
-                      <div className="smc_asset_stack">
-                        <span className="smc_asset_label">Uploaded Assets</span>
-                        <label className="smc_device_upload">
-                          <input type="file" accept="image/*,video/*" multiple onChange={handleAssetUpload} />
-                          <span className="smc_device_upload_title">
-                            {uploadState === "uploading" ? "Uploading from device…" : "Upload Media From Device"}
-                          </span>
-                          <span className="smc_device_upload_text">
-                            Choose images or videos from your computer or phone. Uploaded files are stored and added to this post automatically.
-                          </span>
-                        </label>
-                        <div className="smc_asset_list">
-                          {(editor.mediaAssets || []).length
-                            ? editor.mediaAssets.map((asset) => (
-                                <div key={`${asset.kind}:${asset.url}`} className="smc_asset_row">
-                                <a href={asset.url} target="_blank" rel="noreferrer" className="smc_asset_chip">
-                                  <span className="smc_asset_kind">{asset.kind}</span>
-                                  {asset.url}
-                                </a>
-                                <button type="button" className="smc_asset_order" onClick={() => handleMoveAsset(asset.url, "up")}>↑</button>
-                                <button type="button" className="smc_asset_order" onClick={() => handleMoveAsset(asset.url, "down")}>↓</button>
-                                <button
-                                  type="button"
-                                  className="smc_asset_remove"
-                                    onClick={() => handleRemoveAsset(asset.url)}
-                                    disabled={assetBusyUrl === asset.url}
-                                  >
-                                    {assetBusyUrl === asset.url ? "Removing…" : "Remove"}
-                                  </button>
-                                </div>
-                              ))
-                            : <span className="smc_asset_empty">No uploaded assets yet.</span>}
-                        </div>
-                      </div>
-                    </div>
-
-                    <label className="smc_field">
-                      <span>Asset Brief</span>
-                      <textarea rows={3} value={editor.assetBrief || ""} onChange={(e) => handleFieldChange("assetBrief", e.target.value)} />
-                    </label>
-
-                    <label className="smc_field">
-                      <span>Internal Notes</span>
-                      <textarea rows={3} value={editor.notes || ""} onChange={(e) => handleFieldChange("notes", e.target.value)} />
-                    </label>
-
-                    <label className="smc_field">
-                      <span>Last Publish Error</span>
-                      <textarea rows={2} value={editor.lastPublishError || ""} readOnly placeholder="If Meta rejects the publish request, the error will appear here." />
-                    </label>
-
-                    <div className="smc_publish_actions">
-                      <button
-                        className="smc_action_btn smc_action_btn--primary"
-                        onClick={handlePublishPost}
-                        disabled={publishState === "publishing" || Boolean(publishDisabledReason)}
-                      >
-                        {publishState === "publishing"
-                          ? "Publishing…"
-                          : editor.publishStatus === "Publish failed"
-                            ? "Retry Publish"
-                            : "Publish To Instagram"}
-                      </button>
-                      <span className="smc_publish_hint">
-                        Supports single-image posts, image-only carousels, and reels from a public video URL. Scheduled posts marked `Scheduled` auto-publish after their scheduled time.
-                      </span>
-                    </div>
-                    {publishDisabledReason && (
-                      <div className="smc_publish_reason">
-                        {publishDisabledReason}
-                      </div>
-                    )}
-
-                    <div className="smc_preflight_block">
-                      <h4>Preflight</h4>
-                      {preflight ? (
-                        <div className="smc_preflight_list">
-                          {preflight.checks.map((check) => (
-                            <div key={check.key} className={`smc_preflight_item smc_preflight_item--${check.level}`}>
-                              <strong>{check.label}</strong>
-                              <p>{check.detail}</p>
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="smc_empty_state">Run preflight to check caption, assets, scheduling, and server readiness before publishing.</p>
-                      )}
-                    </div>
-
-                    <div className="smc_history_block">
-                      <h4>Activity</h4>
-                      <div className="smc_history_list">
-                        {(editor.history || []).length
-                          ? editor.history.map((item, idx) => (
-                              <div key={`${item.at || idx}-${item.action || idx}`} className="smc_history_item">
-                                <div className="smc_history_top">
-                                  <strong>{item.action || "event"}</strong>
-                                  <span>{item.status || ""}</span>
-                                </div>
-                                <p>{item.detail || ""}</p>
-                                <div className="smc_history_meta">
-                                  <span>{item.at ? new Date(item.at).toLocaleString() : ""}</span>
-                                  {item.meta ? <span>{item.meta}</span> : null}
-                                </div>
-                              </div>
-                            ))
-                          : <p className="smc_empty_state">No activity yet for this post.</p>}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </article>
-
           <article className="smc_panel smc_panel--side">
             <div className="smc_panel_head">
               <div>

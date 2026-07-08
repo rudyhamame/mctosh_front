@@ -1,8 +1,6 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./App.css";
-import AIProviderSelect from "./AIProviderSelect";
-import { useAIProvider } from "../hooks/useAIProvider";
 
 const PIPELINE = [
   {
@@ -101,7 +99,6 @@ const OTHER = [
 
 const App = ({ onLogout }) => {
   const navigate = useNavigate();
-  const { provider, setProvider } = useAIProvider();
   const [scale, setScale] = useState(
     () => parseFloat(localStorage.getItem("appScale") || "1")
   );
@@ -124,7 +121,6 @@ const App = ({ onLogout }) => {
           </button>
           <button onClick={() => applyScale(scale + 0.1)} disabled={scale >= 2}>+</button>
         </div>
-        <AIProviderSelect provider={provider} setProvider={setProvider} />
         <button id="app_logout_btn" onClick={onLogout}>Logout</button>
       </div>
 

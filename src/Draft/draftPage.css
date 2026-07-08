@@ -55,6 +55,22 @@
   max-width: 30vw;
 }
 
+#draft_back_to_pdf_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid color-mix(in srgb, var(--color-highlight) 45%, var(--color-border));
+  border-radius: 6px;
+  background: none;
+  color: var(--color-highlight);
+  font-size: 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#draft_back_to_pdf_btn:hover { background: color-mix(in srgb, var(--color-highlight) 12%, transparent); }
+
 #draft_doc_actions {
   display: flex;
   align-items: center;
@@ -143,6 +159,12 @@
   align-items: center;
   gap: 0.3rem;
 }
+#draft_margin_group {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.6rem;
+}
 #draft_page_setup select,
 #draft_page_setup input {
   padding: 0.2rem 0.35rem;
@@ -170,17 +192,43 @@
    (applied inline in DraftPage.jsx) keeps the overflow entirely on the
    trailing side, where scrolling right actually reaches it. */
 #draft_page_stack {
+  position: relative;
   flex: 1;
   overflow: auto;
   background: var(--color-bg);
   padding: 2rem 0 4rem;
 }
 
+/* Per-page footer — page number bottom-left, document title bottom-right,
+   repeated once per physical page (see #draft_page_footers in DraftPage.jsx
+   for how each one is positioned to land in that page's own bottom margin). */
+#draft_page_footers {
+  pointer-events: none;
+  user-select: none;
+}
+
+.draft_page_footer {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  opacity: 0.6;
+}
+
+.draft_page_footer_title {
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Printing (and the browser's own "Save as PDF") should only ever show the
-   document itself — never the toolbar, ruler, header, page-setup bar, or
-   the desk background around it, which are screen-only editing affordances. */
+   document itself — never the toolbar, header, page-setup bar, or the desk
+   background around it, which are screen-only editing affordances. */
 @media print {
-  #draft_header, #draft_toolbar, #draft_ruler_wrap, #draft_page_setup { display: none !important; }
+  #draft_header, #draft_toolbar, #draft_page_setup { display: none !important; }
   /* The app-wide floating chat FAB (#home_chat_root, rendered outside this
      page's own DOM tree by AppRouter) sits fixed on every route — it must
      be hidden explicitly here too, not just this page's own elements. */
@@ -251,57 +299,6 @@
 }
 .draft_status_msg--error { color: #f44336; }
 
-/* ── Indentation ruler, like Word's ── */
-#draft_ruler_wrap {
-  flex-shrink: 0;
-  padding: 0.35rem 0;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
-  display: flex;
-  justify-content: center;
-}
-
-#draft_ruler {
-  position: relative;
-  height: 1.1rem;
-  flex-shrink: 0;
-}
-
-.draft_ruler_tick {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  background: var(--color-border);
-}
-
-.draft_ruler_tick_label {
-  position: absolute;
-  top: 100%;
-  left: 2px;
-  font-size: 0.55rem;
-  color: var(--color-text-muted);
-  opacity: 0.6;
-  line-height: 1;
-}
-
-#draft_ruler_marker {
-  position: absolute;
-  top: -1px;
-  width: 0;
-  height: 0;
-  transform: translateX(-50%);
-  border-left: 6px solid transparent;
-  border-right: 6px solid transparent;
-  border-top: 9px solid var(--color-highlight);
-  cursor: ew-resize;
-  touch-action: none;
-}
-#draft_ruler_marker:hover,
-#draft_ruler_marker:active {
-  filter: brightness(1.2);
-}
-
 #draft_editor {
   flex-shrink: 0;
   outline: none;
@@ -330,6 +327,20 @@
   color: var(--color-text-muted);
   opacity: 0.6;
   pointer-events: none;
+}
+
+/* Text Extraction's page divider — a real forced page break in the exported
+   PDF (see buildDocumentPdf), just a plain visual marker on screen since
+   this editor's page background can't respond to content-driven breaks. */
+.draft_page_break_marker {
+  margin: 1.1em 0;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  opacity: 0.55;
 }
 
 /* ── Formatting toolbar ── */
@@ -371,6 +382,10 @@
 }
 .draft_tool_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
 .draft_tool_btn:disabled { opacity: 0.45; cursor: default; }
+.draft_tool_btn--active {
+  border-color: color-mix(in srgb, var(--color-highlight) 45%, var(--color-border));
+  color: var(--color-highlight);
+}
 
 .draft_tool_btn--ai {
   font-size: 0.68rem;
@@ -441,6 +456,12 @@
 @keyframes draft_mic_pulse {
   0%, 100% { box-shadow: 0 0 0 0 rgba(244, 67, 54, 0.45); }
   50% { box-shadow: 0 0 0 5px rgba(244, 67, 54, 0); }
+}
+
+#draft_dictation_group {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
 }
 
 #draft_dictation_langs {

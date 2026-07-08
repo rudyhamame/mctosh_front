@@ -91,6 +91,12 @@ const InstagramHomePreviewPage = () => {
           <button className="ig_preview_btn ig_preview_btn--ghost" onClick={() => navigate("/social-media-control")}>
             Back to Control
           </button>
+          <Link
+            className="ig_preview_btn ig_preview_btn--ghost"
+            to={selectedPost?.id ? `/social-media-designer?post=${selectedPost.id}` : "/social-media-designer"}
+          >
+            Open Designer
+          </Link>
           <Link className="ig_preview_btn ig_preview_btn--primary" to="/settings">
             Open Settings
           </Link>
