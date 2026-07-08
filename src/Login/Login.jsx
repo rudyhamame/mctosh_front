@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./login.css";
 import { apiUrl } from "../config/api";
@@ -225,7 +225,7 @@ const RECOVERY_IDENTITIES = CARDIAC_ANNOTATIONS.map((_, i) => computeRecoveryIde
 // travelling through the track (each index step is a smaller change).
 // Cheap to raise: rendering only ever samples a fixed DOM budget (see
 // FULL_VIEW_BUDGET) regardless of how many frames actually exist here.
-const DENSE_SUBSTEPS = 60;
+const DENSE_SUBSTEPS = 960;
 const buildDenseTrack = (stageIdentities) => {
   const dense = [];
   for (let s = 0; s < CARDIAC_ANNOTATIONS.length - 1; s++) {
@@ -260,6 +260,361 @@ const COMBINED_TRACK = [
   ...DENSE_RECOVERY.map(e => ({ ...e, track: "recovery" })),
 ];
 
+const detectSafariIPad = () => {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  const platform = navigator.platform || "";
+  const isAppleTouchDevice =
+    /iPad/.test(ua) ||
+    (platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const isSafari =
+    /Safari/i.test(ua) &&
+    !/Chrome|CriOS|EdgiOS|Edg|FxiOS|Firefox/i.test(ua);
+  return isAppleTouchDevice && isSafari;
+};
+
+// ── Legacy 2D stage — the original live spring-physics simulation, kept
+// standalone so it can be viewed side by side with the 3D discrete-identity
+// object above. Unlike the 3D object (a stack of precomputed frames you
+// travel through), this is a genuine continuous RAF simulation: M springs
+// toward a disease target set by dragging the arc, C/T/O/OS/H/S cascade to
+// compensate (each rope-tethered deeper than the orbit it protects via
+// DEPTH_GROWTH), and — left alone long enough after settling — the whole
+// system heals itself back toward optimum physiology on its own.
+const LegacyPhysicsStage = React.forwardRef(function LegacyPhysicsStage({ onInfoChange, onDiseaseChange }, ref) {
+  const wrapRef          = useRef(null);
+  // Pointer math (arc drag, M drag) is measured against #legacy_stage
+  // itself — the actual 900x900 scaled box — not the flex wrap around it.
+  // Relying on the wrap's own rect assumed flex-centering of an oversized,
+  // transformed child was always pixel-perfect; measuring the real box
+  // directly is unambiguous regardless of aspect-ratio mismatches between
+  // the wrap and the stage.
+  const stageElRef       = useRef(null);
+  const dotElsRef        = useRef(new Array(MCTOSHS_ORBITS.length).fill(null));
+  const ropeCanvasRef    = useRef(null);
+  const orbStateRef      = useRef(MCTOSHS_ORBITS.map(() => ({ angle: 0, omega: 0 })));
+  const diseaseRef       = useRef(0);
+  const [diseaseLevel, setDiseaseLevel] = useState(0);
+  const mDraggingRef     = useRef(false);
+  const arcDraggingRef   = useRef(false);
+  const settledStreakRef = useRef(0);
+  const physicsParams    = useRef({ ...PHYS_DEFAULTS });
+  const [activeStageIdx, setActiveStageIdx] = useState(0);
+  const activeStageIdxRef = useRef(0);
+
+  // Unified 60fps loop: disease physics + homeostasis cascade + rope + stage display
+  useEffect(() => {
+    let prevT = null;
+    let raf;
+
+    const tick = (t) => {
+      raf = requestAnimationFrame(tick);
+      if (prevT === null) { prevT = t; return; }
+      const dt = Math.min((t - prevT) / 1000, 0.05);
+      prevT = t;
+
+      const N  = MCTOSHS_ORBITS.length;
+      const s0 = orbStateRef.current[0]; // M
+
+      // Healing: once every orbit has genuinely settled (not just for one
+      // frame — selectStage zeroes every omega instantly, which would
+      // otherwise look "settled" before real motion even starts) and
+      // nothing is actively dragging, the disease level decays back toward
+      // zero on its own.
+      const SETTLE_OMEGA = 0.05;
+      let allSettled = true;
+      for (let k = 0; k < N; k++) {
+        if (Math.abs(orbStateRef.current[k].omega) >= SETTLE_OMEGA) { allSettled = false; break; }
+      }
+      settledStreakRef.current = allSettled ? settledStreakRef.current + 1 : 0;
+      const trulySettled = settledStreakRef.current > 30;
+      if (!mDraggingRef.current && !arcDraggingRef.current && trulySettled && s0.angle < DEATH_THRESH && diseaseRef.current > 0) {
+        const HEAL_RATE = 0.15; // /s
+        const next = diseaseRef.current * Math.max(0, 1 - HEAL_RATE * dt);
+        diseaseRef.current = next < 0.0005 ? 0 : next;
+        setDiseaseLevel(diseaseRef.current);
+      }
+
+      // M: springs toward the disease-driven target, overwhelming any
+      // compensatory pushback (K_DISEASE dominates), overdamped so it
+      // approaches smoothly without oscillating.
+      if (!mDraggingRef.current) {
+        const TARGET_ANG = (diseaseRef.current / 0.20) * Math.PI;
+        const K_DISEASE  = 28.0;
+        const DMP_M      = 14.0;
+        const alphaM = K_DISEASE * (TARGET_ANG - s0.angle);
+        s0.omega += (alphaM - DMP_M * s0.omega) * dt;
+        s0.angle += s0.omega * dt;
+        if (s0.angle > Math.PI)      { s0.angle = Math.PI; s0.omega = 0; }
+        if (s0.angle < -Math.PI / 2) { s0.angle = -Math.PI / 2; s0.omega = 0; }
+      }
+
+      const mAng   = s0.angle;
+      const isDead = mAng >= DEATH_THRESH;
+
+      const currentD    = (Math.max(0, mAng) / Math.PI) * 0.20;
+      const dynStageIdx = CARDIAC_ANNOTATIONS.reduce((best, ann, idx) => currentD >= ann.d ? idx : best, 0);
+      const dynEngaged  = CARDIAC_ANNOTATIONS[dynStageIdx].engaged;
+
+      const pp      = physicsParams.current;
+      const K_SP    = pp.kSp;
+      const DMP_ORB = pp.dmpOrb;
+
+      // C: always compensates CCW against M's pathological pressure.
+      {
+        const sc            = orbStateRef.current[1];
+        const mPathological = Math.max(0, mAng);
+        const targetC       = -Math.min(mPathological, PHYSIO_LIMIT) * pp.cMirrorRatio;
+        const mOverload     = Math.max(0, mPathological - pp.compResilience);
+        const alpha_c = isDead
+          ? 3.0 * (-Math.PI - sc.angle) - DMP_ORB * 3.5 * sc.omega
+          : K_SP * 1.7 * (targetC - sc.angle) - DMP_ORB * 1.1 * sc.omega - pp.pressureCoeff * mOverload;
+        sc.omega += alpha_c * dt;
+        sc.angle += sc.omega * dt;
+        if (sc.angle > 0)        { sc.angle = 0;        sc.omega = 0; }
+        if (sc.angle < -Math.PI) { sc.angle = -Math.PI; sc.omega = 0; }
+      }
+
+      // T, O, OS, H, S: engaged orbits compensate deeper than the orbit
+      // they protect (DEPTH_GROWTH), tracking the outer orbit's REAL-TIME
+      // angle (not a lagged average) so each inner orbit is always pinned
+      // to stay proportionally deeper than its outer neighbor — this is
+      // what guarantees C leads recovery, T follows, and so on inward,
+      // since an inner orbit's target can only reach 0 once its outer
+      // neighbor's actual angle already has.
+      for (let i = 2; i < N; i++) {
+        const s         = orbStateRef.current[i];
+        const outer     = orbStateRef.current[i - 1];
+        const prevAng   = outer.angle;
+        const orbId     = MCTOSHS_ORBITS[i].letter;
+        const isEngaged = dynEngaged.includes(orbId);
+        const orb_k     = K_SP    * CASCADE_K_FACTORS[i - 2];
+        const orb_dmp   = DMP_ORB * CASCADE_DMP_FACTORS[i - 2] * 2.1;
+        let alpha       = -orb_dmp * s.omega;
+
+        if (isDead) {
+          alpha += 3.0 * (-Math.PI - s.angle);
+        } else if (!isEngaged) {
+          alpha += orb_k * (0 - s.angle);
+        } else {
+          const ropeTgt = prevAng * DEPTH_GROWTH;
+          alpha += orb_k * (ropeTgt - s.angle);
+          const ccw_overload = Math.max(0, -prevAng - PHYSIO_LIMIT);
+          alpha -= pp.breakdownForce * ccw_overload;
+        }
+
+        s.omega += alpha * dt;
+        s.angle += s.omega * dt;
+        if (s.angle >  0)       { s.angle =  0;       s.omega = 0; }
+        if (s.angle < -Math.PI) { s.angle = -Math.PI; s.omega = 0; }
+      }
+
+      // Death-guard rope constraint — belt-and-suspenders so no orbit ever
+      // gets more than a generous slack further toward death than the
+      // orbit holding its rope, applied innermost-out.
+      {
+        const DEATH_GUARD_SLACK = Math.PI * 0.55;
+        for (let i = N - 2; i >= 1; i--) {
+          const s     = orbStateRef.current[i];
+          const inner = orbStateRef.current[i + 1];
+          const floor = inner.angle - DEATH_GUARD_SLACK;
+          if (s.angle < floor) { s.angle = floor; if (s.omega < 0) s.omega = 0; }
+        }
+      }
+
+      // Render dots directly via DOM (no React re-render per frame).
+      MCTOSHS_ORBITS.forEach((orb, i) => {
+        const s  = orbStateRef.current[i];
+        const el = dotElsRef.current[i];
+        if (!el) return;
+        const cssDeg = s.angle * (180 / Math.PI) - 90;
+        const rad    = s.angle - Math.PI / 2;
+        el.style.transform = `rotate(${cssDeg}deg) translateX(${orb.r}px)`;
+        const dotEl = el.firstElementChild;
+        if (dotEl) dotEl.style.transform = `rotate(${-cssDeg}deg)`;
+        s._x = 450 + Math.cos(rad) * orb.r;
+        s._y = 450 + Math.sin(rad) * orb.r;
+      });
+
+      // Which canonical stage M's actual position currently reads as —
+      // reported to the parent (via the onInfoChange effect below) instead
+      // of writing into the DOM directly, since the display now lives in
+      // the shared footer, not floating over the stage itself.
+      {
+        const mD = Math.max(0, s0.angle / Math.PI) * 0.20;
+        let annIdx = 0;
+        for (let ai = CARDIAC_ANNOTATIONS.length - 1; ai >= 0; ai--) {
+          if (mD >= CARDIAC_ANNOTATIONS[ai].d) { annIdx = ai; break; }
+        }
+        if (annIdx !== activeStageIdxRef.current) {
+          activeStageIdxRef.current = annIdx;
+          setActiveStageIdx(annIdx);
+        }
+      }
+
+      // Ropes.
+      const ropeCanvas = ropeCanvasRef.current;
+      if (ropeCanvas) {
+        const ctx = ropeCanvas.getContext('2d');
+        ctx.clearRect(0, 0, 900, 900);
+        for (let i = 0; i < N - 1; i++) {
+          const a = orbStateRef.current[i];
+          const b = orbStateRef.current[i + 1];
+          ctx.beginPath();
+          ctx.moveTo(a._x, a._y);
+          ctx.lineTo(b._x, b._y);
+          ctx.strokeStyle = MCTOSHS_ORBITS[i].color + '55';
+          ctx.lineWidth   = 1.2;
+          ctx.setLineDash([4, 5]);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
+      }
+    };
+
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const handleMDotPointerDown = (e) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    mDraggingRef.current = true;
+    orbStateRef.current[0].omega = 0;
+  };
+
+  const handleStagePointerMove = (e) => {
+    if (!mDraggingRef.current) return;
+    const stageEl = stageElRef.current;
+    if (!stageEl) return;
+    const rect = stageEl.getBoundingClientRect();
+    const dx = e.clientX - (rect.left + rect.width  / 2);
+    const dy = e.clientY - (rect.top  + rect.height / 2);
+    if (Math.sqrt(dx * dx + dy * dy) < 5) return;
+    const s0 = orbStateRef.current[0];
+    s0.angle = Math.atan2(dy, dx) + Math.PI / 2;
+    s0.omega = 0;
+  };
+
+  const handleStagePointerUp = () => { mDraggingRef.current = false; };
+
+  const updateDiseaseFromPointer = (e) => {
+    const stageEl = stageElRef.current;
+    if (!stageEl) return;
+    const rect = stageEl.getBoundingClientRect();
+    const dx = e.clientX - (rect.left + rect.width  / 2);
+    const dy = e.clientY - (rect.top  + rect.height / 2);
+    const raw = Math.atan2(dy, dx);
+    const ang = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, raw));
+    const d = (ang + Math.PI / 2) / Math.PI * 0.20;
+    diseaseRef.current = d;
+    setDiseaseLevel(d);
+  };
+
+  const handleArcPointerDown = (e) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    arcDraggingRef.current = true;
+    updateDiseaseFromPointer(e);
+  };
+  const handleArcPointerMove = (e) => { if (arcDraggingRef.current) updateDiseaseFromPointer(e); };
+  const handleArcPointerUp   = () => { arcDraggingRef.current = false; };
+
+  const selectStage = (idx) => {
+    const ann = CARDIAC_ANNOTATIONS[idx];
+    diseaseRef.current = ann.d;
+    setDiseaseLevel(ann.d);
+    physicsParams.current = { ...PHYS_DEFAULTS, ...ann.config };
+    activeStageIdxRef.current = idx;
+    setActiveStageIdx(idx);
+    orbStateRef.current.forEach(s => { s.omega = 0; });
+    settledStreakRef.current = 0;
+  };
+
+  // Lets the parent trigger a stage selection from the shared footer's
+  // stage-list buttons, which live outside this component now.
+  useImperativeHandle(ref, () => ({ selectStage }));
+
+  // Reports this stage's current status up so the parent can render it in
+  // the shared footer instead of it floating over the stage itself, and so
+  // the 2D arc can drive the 3D object's observation plate in sync.
+  useEffect(() => {
+    onInfoChange?.({ stageIdx: activeStageIdx, diseaseLevel });
+  }, [activeStageIdx, diseaseLevel, onInfoChange]);
+  useEffect(() => {
+    onDiseaseChange?.(diseaseLevel);
+  }, [diseaseLevel, onDiseaseChange]);
+
+  const t      = diseaseLevel / 0.20;
+  const ARC_R  = 390;
+  const ang    = t * Math.PI - Math.PI / 2;
+  const dotX   = 450 + ARC_R * Math.cos(ang);
+  const dotY   = 450 + ARC_R * Math.sin(ang);
+  const dr     = Math.round(255 * t);
+  const dg     = Math.round(220 * (1 - t));
+  const dotCol  = `rgba(${dr},${dg},70,0.95)`;
+  const glowCol = `rgba(${dr},${dg},70,0.30)`;
+  const trackD  = `M 450 ${450 - ARC_R} A ${ARC_R} ${ARC_R} 0 0 1 450 ${450 + ARC_R}`;
+
+  return (
+    <div id="legacy_stage_wrap" ref={wrapRef}
+      onPointerMove={handleStagePointerMove}
+      onPointerUp={handleStagePointerUp}
+      onPointerCancel={handleStagePointerUp}
+    >
+      <div id="legacy_stage" ref={stageElRef}>
+        <div id="legacy_center">
+          <div id="legacy_pr_sphere" />
+          <div id="legacy_mctosh_sphere" />
+        </div>
+
+        {MCTOSHS_ORBITS.map(orb => (
+          <div
+            key={`legacy-ring-${orb.id}`}
+            className="orb_ring"
+            style={{
+              "--orb-color": orb.color,
+              width:      `${orb.r * 2}px`,
+              height:     `${orb.r * 2}px`,
+              marginTop:  `-${orb.r}px`,
+              marginLeft: `-${orb.r}px`,
+            }}
+          />
+        ))}
+
+        <canvas
+          ref={ropeCanvasRef}
+          width={900} height={900}
+          style={{ position: 'absolute', top: 0, left: 0, width: '900px', height: '900px', pointerEvents: 'none', zIndex: 7 }}
+        />
+
+        <svg viewBox="0 0 900 900" style={{ position: 'absolute', top: 0, left: 0, width: '900px', height: '900px', overflow: 'visible', pointerEvents: 'none', zIndex: 9 }}>
+          <path d={trackD} fill="none" stroke="rgba(170,170,210,0.55)" strokeWidth="1.5" strokeDasharray="5 8" strokeLinecap="round" opacity="0.7" />
+          <path d={trackD} fill="none" stroke="transparent" strokeWidth="44"
+            pointerEvents="stroke" style={{ cursor: 'ns-resize' }}
+            onPointerDown={handleArcPointerDown} onPointerMove={handleArcPointerMove}
+            onPointerUp={handleArcPointerUp} onPointerCancel={handleArcPointerUp}
+          />
+          <circle cx={dotX} cy={dotY} r="14" fill="none" stroke={glowCol} strokeWidth="8" style={{ pointerEvents: 'none' }} />
+          <circle cx={dotX} cy={dotY} r="5.5" fill={dotCol} stroke="rgba(255,255,255,0.65)" strokeWidth="1.5" style={{ pointerEvents: 'none' }} />
+        </svg>
+
+        {MCTOSHS_ORBITS.map((orb, i) => (
+          <div
+            key={orb.id}
+            ref={el => { dotElsRef.current[i] = el; }}
+            className="bio_particle"
+            style={{ "--orb-color": orb.color, opacity: 1, ...(i === 0 ? { cursor: 'grab', touchAction: 'none' } : {}) }}
+            onPointerDown={i === 0 ? handleMDotPointerDown : undefined}
+          >
+            <div className="orb_dot"><span className="orb_dot_letter">{orb.letter}</span></div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+});
+
 export default function Login({ onLogin }) {
   const navigate     = useNavigate();
   const wrapRef      = useRef(null);
@@ -270,6 +625,13 @@ export default function Login({ onLogin }) {
   const pinchRef     = useRef({ active: false, startDist: 0, startZoom: 1 });
   const zoomRef      = useRef(1);   // user pinch multiplier
   const [stageScale, setStageScale] = useState(1);
+  const [isSafariIPad] = useState(detectSafariIPad);
+  // Touch-primary devices (phones/tablets) get a much lower 3D slice render
+  // budget below — iOS/iPadOS Safari's compositor has a far smaller memory
+  // ceiling than desktop and crashes the tab under a high one.
+  const [isCoarsePointer] = useState(() =>
+    typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches
+  );
 
   const [mode,         setMode]         = useState("login");
   const [username,     setUsername]     = useState("");
@@ -309,6 +671,41 @@ export default function Login({ onLogin }) {
     setPlateIdx(v);
   };
 
+  // The legacy 2D stage's own status, reported up so the shared footer can
+  // display it and so its stage-list buttons (also in the footer) can
+  // trigger a selection back down via legacyStageRef.
+  const legacyStageRef = useRef(null);
+  const [legacyInfo, setLegacyInfo] = useState({ stageIdx: 0, diseaseLevel: 0 });
+  // Cross-link: dragging the 2D arc (or picking a 2D stage) moves the 3D
+  // object's observation plate to the matching depth simultaneously, so
+  // the two views always agree on "where" the patient currently is. Which
+  // HALF of COMBINED_TRACK it lands on matters too — DENSE_ONSET and
+  // DENSE_RECOVERY hold different per-orbit angles at the same disease
+  // level (recovery lags C→T→O→OS→H→S, same as the live 2D physics now
+  // does), so whether disease level is rising (onset) or falling
+  // (recovery/healing) in the 2D sim decides which track the 3D slice
+  // comes from — inferred from the sign of the change since onDiseaseChange
+  // only reports the level, not the direction it's moving.
+  // Memoized so the child's effect (keyed on this callback's identity)
+  // doesn't re-fire on every unrelated parent re-render — setPlate only
+  // ever touches refs + a stable state setter, so a stale closure over it
+  // is safe here.
+  const legacyDirRef  = useRef("onset");
+  const legacyPrevDRef = useRef(0);
+  const handleLegacyDiseaseChange = useCallback((d) => {
+    const prev = legacyPrevDRef.current;
+    if (d > prev + 1e-6)      legacyDirRef.current = "onset";
+    else if (d < prev - 1e-6) legacyDirRef.current = "recovery";
+    legacyPrevDRef.current = d;
+
+    const frac = d / 0.20;
+    if (legacyDirRef.current === "recovery") {
+      setPlate(DENSE_ONSET.length + Math.round(frac * (DENSE_RECOVERY.length - 1)));
+    } else {
+      setPlate(Math.round(frac * (DENSE_ONSET.length - 1)));
+    }
+  }, []);
+
   // cutawayIdx: hides slices strictly in front of the plate (idx <
   // cutawayIdx, i.e. life-ward along the loop) so you can see past a
   // crowded near field straight down to
@@ -337,9 +734,16 @@ export default function Login({ onLogin }) {
       const dt = Math.min((t - lastT) / 1000, 0.15);
       lastT = t;
 
-      if (Date.now() - lastInteractionRef.current > HEAL_DELAY_MS && plateIdxRef.current > 0) {
-        const next = plateIdxRef.current * Math.max(0, 1 - HEAL_RATE * dt);
-        const settled = next < 0.5 ? 0 : next;
+      // Decay toward the healthy end of whichever HALF of COMBINED_TRACK
+      // the plate is currently sitting in, not toward absolute index 0 —
+      // sitting in the recovery half (idx >= DENSE_ONSET.length), its own
+      // "fully healed" point is DENSE_ONSET.length, not 0, otherwise idle
+      // decay would blindly cross back into unrelated onset frames.
+      const trackStart = plateIdxRef.current >= DENSE_ONSET.length ? DENSE_ONSET.length : 0;
+      const rel = plateIdxRef.current - trackStart;
+      if (Date.now() - lastInteractionRef.current > HEAL_DELAY_MS && rel > 0) {
+        const nextRel = rel * Math.max(0, 1 - HEAL_RATE * dt);
+        const settled = trackStart + (nextRel < 0.5 ? 0 : nextRel);
         plateIdxRef.current = settled;
         setPlateIdx(settled);
       }
@@ -359,7 +763,8 @@ export default function Login({ onLogin }) {
     if (!wrapRef.current) return;
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
-      baseScaleRef.current = Math.min(width, height) / STAGE;
+      const fitSize = height > 0 ? Math.min(width, height) : width;
+      baseScaleRef.current = fitSize / STAGE;
       setStageScale(baseScaleRef.current * zoomRef.current);
     });
     ro.observe(wrapRef.current);
@@ -490,31 +895,27 @@ export default function Login({ onLogin }) {
   // death (the last idx) recedes deepest — so sliding from life to death
   // reads as travelling INTO the object's depth, not out of it.
   const depthForIdx = (idx) => -(idx - (COMBINED_TRACK.length - 1) / 2) * STACK_SLICE_GAP;
-  // A real worm isn't a rigid straight rod — it wanders side to side as it
-  // recedes. Two out-of-phase sine waves (X and Y, different frequencies)
-  // curve the whole depth axis into an S-like meander instead of a straight
-  // tube, without changing its total length (depthForIdx is untouched).
-  const CURVE_CYCLES_X = 1.6;
-  const CURVE_CYCLES_Y = 1.05;
-  const CURVE_AMP_X = 170;
-  const CURVE_AMP_Y = 110;
-  const curveForIdx = (idx) => {
-    const t = idx / (COMBINED_TRACK.length - 1);
-    return {
-      x: Math.sin(t * Math.PI * CURVE_CYCLES_X) * CURVE_AMP_X,
-      y: Math.cos(t * Math.PI * CURVE_CYCLES_Y) * CURVE_AMP_Y,
-    };
-  };
   // Every moving piece — slices, the observation plate, the orbit rings —
-  // shares this one function so they all bend along the exact same path.
-  const transformForIdx = (idx, extraZ = 0) => {
-    const { x, y } = curveForIdx(idx);
-    return `translateX(${x}px) translateY(${y}px) translateZ(${depthForIdx(idx) + extraZ}px)`;
-  };
+  // shares this one function so they all sit on the exact same straight axis.
+  const transformForIdx = (idx, extraZ = 0) => `translateZ(${depthForIdx(idx) + extraZ}px)`;
 
   // The rendered/actual position — eased (see the RAF loop above), not the
-  // raw slider target — so depth motion always reads as continuous.
-  const onticIdx = Math.max(0, Math.min(COMBINED_TRACK.length - 1, Math.round(animatedIdx)));
+  // raw slider target — so depth motion always reads as continuous. Keep the
+  // exact fractional position for transforms, and only quantize when we need
+  // to label/report which canonical slice we're nearest to.
+  const animatedDepthIdx = Math.max(0, Math.min(COMBINED_TRACK.length - 1, animatedIdx));
+  const lowerAnimatedIdx = Math.floor(animatedDepthIdx);
+  const upperAnimatedIdx = Math.min(COMBINED_TRACK.length - 1, lowerAnimatedIdx + 1);
+  const animatedMix = animatedDepthIdx - lowerAnimatedIdx;
+  const lowerEntry = COMBINED_TRACK[lowerAnimatedIdx];
+  const upperEntry = COMBINED_TRACK[upperAnimatedIdx];
+  const animatedEntry = {
+    angles: lowerEntry.angles.map((angle, i) => angle + (upperEntry.angles[i] - angle) * animatedMix),
+    d: lowerEntry.d + (upperEntry.d - lowerEntry.d) * animatedMix,
+    color: animatedMix < 0.5 ? lowerEntry.color : upperEntry.color,
+    track: animatedMix < 0.5 ? lowerEntry.track : upperEntry.track,
+  };
+  const onticIdx = Math.max(0, Math.min(COMBINED_TRACK.length - 1, Math.round(animatedDepthIdx)));
   const onticEntry = COMBINED_TRACK[onticIdx];
   let onticNearestStage = CARDIAC_ANNOTATIONS[0];
   CARDIAC_ANNOTATIONS.forEach(ann => {
@@ -535,39 +936,75 @@ export default function Login({ onLogin }) {
   // "current" highlight is just whichever already-sampled slice is
   // nearest — same stable set of DOM nodes throughout, only the isCurrent
   // flag moves between them.
-  const FULL_VIEW_BUDGET = 40;
-  const fullViewStride = Math.max(1, Math.ceil(COMBINED_TRACK.length / FULL_VIEW_BUDGET));
-  const fullViewIdxSet = new Set();
-  for (let j = 0; j < COMBINED_TRACK.length; j += fullViewStride) fullViewIdxSet.add(j);
-  let nearestSampledIdx = 0, nearestSampledDist = Infinity;
-  fullViewIdxSet.forEach(j => {
-    const dist = Math.abs(j - onticIdx);
-    if (dist < nearestSampledDist) { nearestSampledDist = dist; nearestSampledIdx = j; }
-  });
+  // Each rendered slice is now just one ring div (see renderRing/renderItems
+  // above — the heavy item dots + rope SVG are a single shared instance, not
+  // duplicated per slice), so the budget mainly costs one composited layer
+  // per slice rather than ~16. Desktop GPUs handle a high budget fine, but
+  // iOS/iPadOS Safari has a much smaller compositor memory ceiling and can
+  // still crash the tab ("A Problem Repeatedly Occurred") under enough
+  // simultaneous 3D layers — coarse-pointer devices still get a lower
+  // budget to stay safe, just a less punishing one than before.
+  const FULL_VIEW_BUDGET = isSafariIPad ? 36 : (isCoarsePointer ? 120 : 1000);
   // Clamped so the cutaway can only clear slices strictly in front of the
   // plate — it stops the moment it reaches the plate's own slice, never
   // eating into the plate or anything beyond it.
   const effectiveCutaway = Math.min(cutawayIdx, plateIdx);
-  const fullViewIndices = Array.from(fullViewIdxSet)
-    .filter(j => j >= effectiveCutaway)
-    .sort((a, b) => a - b);
+  // Expensive at this budget (Set build + sort over ~1000 entries) and only
+  // actually depends on the budget/cutaway, neither of which changes on a
+  // RAF tick — but this component re-renders on every animatedIdx tick
+  // while the plate eases, ~60x/s. Rebuilding this on every one of those
+  // renders (as a plain const used to) was slow enough to choke the easing
+  // loop into never visibly progressing once the budget went from 180 to
+  // 1000 — the same class of bug fixed earlier for the cord feature.
+  // Memoized so it only rebuilds when the budget or cutaway actually change.
+  const fullViewIndices = useMemo(() => {
+    const stride = Math.max(1, Math.ceil(COMBINED_TRACK.length / FULL_VIEW_BUDGET));
+    const idxs = [];
+    for (let j = 0; j < COMBINED_TRACK.length; j += stride) {
+      if (j >= effectiveCutaway) idxs.push(j);
+    }
+    return idxs;
+  }, [FULL_VIEW_BUDGET, effectiveCutaway]);
+  // Cheap per-tick work: a linear scan over the memoized (already sorted,
+  // already-filtered) array to find whichever sampled slice onticIdx is
+  // nearest to right now — only the stable ring stack uses this sampled
+  // notion. The moving observation plate/items use animatedDepthIdx above.
+  let nearestSampledIdx = fullViewIndices[0] ?? 0, nearestSampledDist = Infinity;
+  for (const j of fullViewIndices) {
+    const dist = Math.abs(j - onticIdx);
+    if (dist < nearestSampledDist) { nearestSampledDist = dist; nearestSampledIdx = j; }
+  }
 
-  const renderSlice = (identity, color, sliceKey, track, idx, isCurrent) => {
+  // Ring-only slice — just the Patient Reality border cross-section at this
+  // slice's own depth, repeated up to FULL_VIEW_BUDGET times to build the
+  // tunnel. Deliberately the ONLY thing duplicated per slice: no rope SVG,
+  // no item dots — those are heavy (an SVG + 7 nested divs each) and
+  // duplicating them across up to 1000 slices is what made the object
+  // unusable, without actually being needed at every depth simultaneously.
+  const renderRing = (color, sliceKey, track, idx, isCurrent) => (
+    <div
+      key={sliceKey}
+      className={`identity_slice${isCurrent ? " identity_slice--current" : ""}${track === "recovery" ? " identity_slice--recovery" : ""}`}
+      style={{ transform: transformForIdx(idx), "--slice-color": color }}
+    >
+      <div className="identity_shell_ring" aria-hidden="true" />
+    </div>
+  );
+
+  // The item dots + connecting rope: ONE shared instance, not duplicated
+  // per slice. It follows the exact eased plate position continuously, so
+  // travelling through depth reads as one smooth motion instead of hopping
+  // between sampled slices.
+  const renderItems = (entry, idx) => {
     const positions = MCTOSHS_ORBITS.map((orb, i) => {
-      const rad = identity[i] - Math.PI / 2;
+      const rad = entry.angles[i] - Math.PI / 2;
       return { x: 450 + Math.cos(rad) * orb.r, y: 450 + Math.sin(rad) * orb.r };
     });
     return (
       <div
-        key={sliceKey}
-        className={`identity_slice${isCurrent ? " identity_slice--current" : ""}${track === "recovery" ? " identity_slice--recovery" : ""}`}
-        style={{ transform: transformForIdx(idx), "--slice-color": color }}
+        className={`identity_items${entry.track === "recovery" ? " identity_items--recovery" : ""}`}
+        style={{ transform: transformForIdx(idx), "--slice-color": entry.color }}
       >
-        {/* The Patient Reality border, repeated at this slice's own depth —
-            same idea as the item dots: one cross-section per Z layer, so
-            the sphere's boundary reads as a 3D tube alongside the items
-            instead of a single flat static ring out front. */}
-        <div className="identity_shell_ring" aria-hidden="true" />
         <svg className="identity_rope_svg" viewBox="0 0 900 900" aria-hidden="true">
           {positions.slice(0, -1).map((p, i) => (
             <line
@@ -577,7 +1014,7 @@ export default function Login({ onLogin }) {
           ))}
         </svg>
         {MCTOSHS_ORBITS.map((orb, i) => {
-          const cssDeg = identity[i] * (180 / Math.PI) - 90;
+          const cssDeg = entry.angles[i] * (180 / Math.PI) - 90;
           return (
             <div key={orb.id} className="bio_particle" style={{ "--orb-color": orb.color, transform: `rotate(${cssDeg}deg) translateX(${orb.r}px)` }}>
               <div className="orb_dot" style={{ transform: `rotate(${-cssDeg}deg)` }}>
@@ -603,52 +1040,15 @@ export default function Login({ onLogin }) {
           </div>
         </div>
 
+        {/* ── Dual view: the 3D discrete-identity object next to the
+            original 2D live-physics stage, side by side for comparison. ── */}
+        <div id="dual_stage_row" className={isSafariIPad ? "dual_stage_row--single" : ""}>
         <div id="login_stage_wrap" ref={wrapRef}
           onPointerDown={handleWrapPointerDown}
           onPointerMove={handleStagePointerMove}
           onPointerUp={handleStagePointerUp}
           onPointerCancel={handleStagePointerUp}
         >
-          {/* Object details — outside #login_stage so it never rotates with
-              the object, always readable: how many 2D slices make up the
-              whole thing, and which one is ontic (actually the case) now. */}
-          <div id="object_info">
-            <div className="object_info_row">
-              <span className="object_info_label">Slices</span>
-              <span className="object_info_value">{COMBINED_TRACK.length}</span>
-            </div>
-            <div className="object_info_row">
-              <span className="object_info_label">Ontic now</span>
-              <span className="object_info_value">
-                #{onticIdx + 1} / {COMBINED_TRACK.length}
-                <span className="object_info_sub">
-                  {" "}· {(onticEntry.d / 0.20 * 100).toFixed(1)}% · {onticEntry.track === "onset" ? "sickening" : "healing"} · near {onticNearestStage.abbr}
-                </span>
-              </span>
-            </div>
-          </div>
-
-          {/* Labels card — MCTOSHS / Patient Reality naming and the item
-              legend, pulled out of the rotating object (where they used to
-              live as floating labels that curved/tilted along with
-              everything else and were hard to read) into one flat,
-              always-legible panel. */}
-          <div id="labels_card">
-            <div id="labels_card_head">
-              <span id="labels_card_mctoshs">MCTOSHS</span>
-              <span id="labels_card_pr">Patient Reality</span>
-            </div>
-            <ul id="labels_card_list">
-              {MCTOSHS_ORBITS.map(orb => (
-                <li key={orb.id} style={{ "--orb-color": orb.color }}>
-                  <span className="labels_card_dot" />
-                  <span className="labels_card_name">{SCHEMA_NAMES[orb.letter]}</span>
-                  <span className="labels_card_letter">({orb.letter})</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-
           <div
             id="login_stage"
             className={rotateDragRef.current.active ? "login_stage--dragging" : ""}
@@ -663,7 +1063,7 @@ export default function Login({ onLogin }) {
                 the now-opaque plate never wins a same-depth tie against the
                 ontic slice's own dots — those must stay visible on top of
                 the plate, not hidden behind an opaque disc. */}
-            <div id="login_center" style={{ transform: `translate(-50%, -50%) ${transformForIdx(onticIdx, -2)}` }}>
+            <div id="login_center" style={{ transform: `translate(-50%, -50%) ${transformForIdx(animatedDepthIdx, -2)}` }}>
               <div id="login_center_glow" />
               <div id="pr_sphere">
                 {/* Zone sector labels — positioned within the PR sphere */}
@@ -688,14 +1088,14 @@ export default function Login({ onLogin }) {
             {MCTOSHS_ORBITS.map(orb => (
               <div
                 key={`ring-${orb.id}`}
-                className="orb_ring"
+                className="orb_ring observation_ring"
                 style={{
                   "--orb-color": orb.color,
                   width:      `${orb.r * 2}px`,
                   height:     `${orb.r * 2}px`,
                   marginTop:  `-${orb.r}px`,
                   marginLeft: `-${orb.r}px`,
-                  transform:  transformForIdx(onticIdx),
+                  transform:  transformForIdx(animatedDepthIdx),
                 }}
               />
             ))}
@@ -706,108 +1106,190 @@ export default function Login({ onLogin }) {
                 above) through depthForIdx. Only a direct drag on the stage
                 rotates the object itself. */}
             <div id="identity_stack">
-              {fullViewIndices.map(j => renderSlice(
-                COMBINED_TRACK[j].angles, COMBINED_TRACK[j].color, j, COMBINED_TRACK[j].track,
-                j,
-                j === nearestSampledIdx
+              {fullViewIndices.map(j => renderRing(
+                COMBINED_TRACK[j].color, j, COMBINED_TRACK[j].track, j, j === nearestSampledIdx
               ))}
+              {renderItems(animatedEntry, animatedDepthIdx)}
             </div>
 
           </div>
-
-          {/* ── Travel slider — flat 2D, sits below the object entirely so
-              it never overlaps or disrupts the 3D view. Dragging it moves
-              the observation plate through the object's depth; it doesn't
-              touch the object's rotation or shape at all. stopPropagation
-              here keeps the stage's rotate-drag handler (bound to the wrap,
-              above) from firing when the user is just touching the slider. */}
-          <div id="travel_slider_wrap" onPointerDown={e => e.stopPropagation()}>
-            <input
-              id="travel_slider"
-              type="range"
-              min={0}
-              max={COMBINED_TRACK.length - 1}
-              step={1}
-              value={plateIdx}
-              onChange={e => setPlate(Number(e.target.value))}
-              style={{ "--slider-fill": `${(plateIdx / (COMBINED_TRACK.length - 1)) * 100}%` }}
-            />
-            <span className="slider_label">
-              {onticEntry.track === "onset" ? "sickening" : "healing"} · {(onticEntry.d / 0.20 * 100).toFixed(0)}%
-            </span>
-          </div>
-
-          {/* ── Cutaway slider — clears away slices in front of the plate
-              (closer to the viewer, life-ward of it) so you can see straight
-              down to wherever the plate currently sits without a crowded
-              near field in the way. Its own range is capped at plateIdx: it
-              physically cannot drag past the plate's slice. */}
-          <div id="cutaway_slider_wrap" onPointerDown={e => e.stopPropagation()}>
-            <input
-              id="cutaway_slider"
-              type="range"
-              min={0}
-              max={plateIdx}
-              step={1}
-              value={effectiveCutaway}
-              onChange={e => setCutawayIdx(Number(e.target.value))}
-              disabled={plateIdx === 0}
-              style={{ "--slider-fill": plateIdx === 0 ? "0%" : `${(effectiveCutaway / plateIdx) * 100}%` }}
-            />
-            <span className="slider_label">
-              clear front · {effectiveCutaway} / {plateIdx}
-            </span>
-          </div>
         </div>
 
+        {!isSafariIPad && (
+          <LegacyPhysicsStage ref={legacyStageRef} onInfoChange={setLegacyInfo} onDiseaseChange={handleLegacyDiseaseChange} />
+        )}
+        </div>
 
-        {/* ── Disease timeline selector ── */}
-        <div id="disease_selector">
-          <div id="ds_head">
-            <i className="fi fi-rr-time-forward" />
-            <select
-              id="ds_disease_select"
-              value={selectedDisease}
-              onChange={e => setSelectedDisease(e.target.value)}
-            >
-              {DISEASES.map(d => (
-                <option key={d.id} value={d.id}>{d.name}</option>
-              ))}
-            </select>
-            <button
-              id="ds_stack_toggle"
-              onClick={() => setRotation({ x: -20, y: -30 })}
-              title="Recenter the view"
-            >
-              <i className="fi fi-rr-refresh" />
-              Recenter
-            </button>
-            <button id="ds_collapse_btn" onClick={() => setSelectorCollapsed(v => !v)}
-              title={selectorCollapsed ? "Expand" : "Collapse"}>
-              <i className={`fi ${selectorCollapsed ? "fi-rr-angle-up" : "fi-rr-angle-down"}`} />
-            </button>
-          </div>
-          <div id="ds_list" className={selectorCollapsed ? "ds_list--hidden" : ""}>
-            {CARDIAC_ANNOTATIONS.map((ann, idx) => (
-              <button
-                key={idx}
-                className={`ds_item${onticNearestStage.abbr === ann.abbr ? " ds_item--active" : ""}`}
-                style={{ "--sc": ann.color }}
-                onClick={() => selectStage(idx)}
-              >
-                <span className="ds_dot" />
-                <span className="ds_abbr">{ann.abbr}</span>
-                <span className="ds_desc">{ann.desc}</span>
-                <div className="ds_engaged">
-                  {ann.engaged.map(e => (
-                    <span key={e} className="ds_badge">{e}</span>
+        {/* ── Shared footer — everything that used to float over the 3D and
+            2D objects (labels, live status, sliders, the stage pickers)
+            lives here now instead, in normal document flow below both
+            stages, so nothing ever overlaps either view. Left column is the
+            3D object's info/controls, right column is the 2D stage's. ── */}
+        <div id="anim_footer">
+          <div id="anim_footer_row" className={isSafariIPad ? "anim_footer_row--single" : ""}>
+          <div id="anim_footer_3d">
+            {/* ── Section title — what this column is about, and what's
+                actually part of this particular object. ── */}
+            <div className="footer_section_title">
+              3D Object
+              <span className="footer_section_sub">discrete identity stack · {COMBINED_TRACK.length} slices · rotate + travel slider</span>
+            </div>
+
+            <div id="object_info">
+              <div className="object_info_row">
+                <span className="object_info_label">Slices</span>
+                <span className="object_info_value">{COMBINED_TRACK.length}</span>
+              </div>
+              <div className="object_info_row">
+                <span className="object_info_label">Ontic now</span>
+                <span className="object_info_value">
+                  #{onticIdx + 1} / {COMBINED_TRACK.length}
+                  <span className="object_info_sub">
+                    {" "}· {(onticEntry.d / 0.20 * 100).toFixed(1)}% · {onticEntry.track === "onset" ? "sickening" : "healing"} · near {onticNearestStage.abbr}
+                  </span>
+                </span>
+              </div>
+            </div>
+
+            {/* ── Travel slider — dragging it moves the observation plate
+                through the object's depth; it doesn't touch the object's
+                rotation or shape at all. */}
+            <div id="travel_slider_wrap">
+              <input
+                id="travel_slider"
+                type="range"
+                min={0}
+                max={COMBINED_TRACK.length - 1}
+                step={1}
+                value={plateIdx}
+                onChange={e => setPlate(Number(e.target.value))}
+                style={{ "--slider-fill": `${(plateIdx / (COMBINED_TRACK.length - 1)) * 100}%` }}
+              />
+              <span className="slider_label">
+                {onticEntry.track === "onset" ? "sickening" : "healing"} · {(onticEntry.d / 0.20 * 100).toFixed(0)}%
+              </span>
+            </div>
+
+            {/* ── Cutaway slider — clears away slices in front of the plate
+                (closer to the viewer, life-ward of it) so you can see
+                straight down to wherever the plate currently sits without a
+                crowded near field in the way. Capped at plateIdx: it
+                physically cannot drag past the plate's slice. */}
+            <div id="cutaway_slider_wrap">
+              <input
+                id="cutaway_slider"
+                type="range"
+                min={0}
+                max={plateIdx}
+                step={1}
+                value={effectiveCutaway}
+                onChange={e => setCutawayIdx(Number(e.target.value))}
+                disabled={plateIdx === 0}
+                style={{ "--slider-fill": plateIdx === 0 ? "0%" : `${(effectiveCutaway / plateIdx) * 100}%` }}
+              />
+              <span className="slider_label">
+                clear front · {effectiveCutaway} / {plateIdx}
+              </span>
+            </div>
+
+            {/* ── Disease timeline selector ── */}
+            <div id="disease_selector">
+              <div id="ds_head">
+                <i className="fi fi-rr-time-forward" />
+                <select
+                  id="ds_disease_select"
+                  value={selectedDisease}
+                  onChange={e => setSelectedDisease(e.target.value)}
+                >
+                  {DISEASES.map(d => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
                   ))}
-                </div>
-              </button>
-            ))}
+                </select>
+                <button
+                  id="ds_stack_toggle"
+                  onClick={() => setRotation({ x: -20, y: -30 })}
+                  title="Recenter the view"
+                >
+                  <i className="fi fi-rr-refresh" />
+                  Recenter
+                </button>
+                <button id="ds_collapse_btn" onClick={() => setSelectorCollapsed(v => !v)}
+                  title={selectorCollapsed ? "Expand" : "Collapse"}>
+                  <i className={`fi ${selectorCollapsed ? "fi-rr-angle-up" : "fi-rr-angle-down"}`} />
+                </button>
+              </div>
+              <div id="ds_list" className={selectorCollapsed ? "ds_list--hidden" : ""}>
+                {CARDIAC_ANNOTATIONS.map((ann, idx) => (
+                  <button
+                    key={idx}
+                    className={`ds_item${onticNearestStage.abbr === ann.abbr ? " ds_item--active" : ""}`}
+                    style={{ "--sc": ann.color }}
+                    onClick={() => selectStage(idx)}
+                  >
+                    <span className="ds_dot" />
+                    <span className="ds_abbr">{ann.abbr}</span>
+                    <span className="ds_desc">{ann.desc}</span>
+                    <div className="ds_engaged">
+                      {ann.engaged.map(e => (
+                        <span key={e} className="ds_badge">{e}</span>
+                      ))}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {!isSafariIPad && (
+          <div id="anim_footer_2d">
+            <div className="footer_section_title">
+              2D Object
+              <span className="footer_section_sub">live spring physics · M→C→T→O→OS→H→S cascade · self-healing</span>
+            </div>
+
+            <div id="legacy_stage_display">
+              <span className="dstage_abbr" style={{ color: CARDIAC_ANNOTATIONS[legacyInfo.stageIdx].color }}>
+                {CARDIAC_ANNOTATIONS[legacyInfo.stageIdx].abbr}
+              </span>
+              <span className="dstage_desc">{CARDIAC_ANNOTATIONS[legacyInfo.stageIdx].desc}</span>
+              <span className="object_info_sub">{(legacyInfo.diseaseLevel / 0.20 * 100).toFixed(0)}% disease level</span>
+            </div>
+            <div id="legacy_stage_list">
+              {CARDIAC_ANNOTATIONS.map((ann, idx) => (
+                <button
+                  key={idx}
+                  className={`ds_item${legacyInfo.stageIdx === idx ? " ds_item--active" : ""}`}
+                  style={{ "--sc": ann.color }}
+                  onClick={() => legacyStageRef.current?.selectStage(idx)}
+                >
+                  <span className="ds_dot" />
+                  <span className="ds_abbr">{ann.abbr}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+          )}
+          </div>
+
+          {/* ── Items — shared by both objects (both are built from the same
+              M/C/T/O/OS/H/S), so the legend lives once, below both columns,
+              instead of living inside just one of them. ── */}
+          <div id="anim_footer_items">
+            <div id="labels_card_head">
+              <span id="labels_card_mctoshs">MCTOSHS</span>
+              <span id="labels_card_pr">Patient Reality</span>
+            </div>
+            <ul id="labels_card_list">
+              {MCTOSHS_ORBITS.map(orb => (
+                <li key={orb.id} style={{ "--orb-color": orb.color }}>
+                  <span className="labels_card_dot" />
+                  <span className="labels_card_name">{SCHEMA_NAMES[orb.letter]}</span>
+                  <span className="labels_card_letter">({orb.letter})</span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
-
 
         <p id="login_tagline">&ldquo;From representation to reality&rdquo;</p>
 
@@ -817,6 +1299,7 @@ export default function Login({ onLogin }) {
       {/* ── Collapse toggle ── */}
       <button
         id="login_panel_toggle"
+        className={panelHidden ? "login_panel_toggle--collapsed" : ""}
         title={panelHidden ? "Show login panel" : "Hide login panel"}
         onClick={() => setPanelHidden(v => !v)}
       >

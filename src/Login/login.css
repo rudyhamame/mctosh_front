@@ -43,6 +43,8 @@
   padding: 2rem 2rem 1.5rem;
   position: relative;
   z-index: 1;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* ── Brand ── */
@@ -105,10 +107,104 @@
 }
 
 /* ── Stage wrapper ── */
-#login_stage_wrap {
+/* ── Dual view: 3D object + the original 2D live-physics stage, side by
+   side for comparison ── */
+#dual_stage_row {
   flex: 1;
   min-height: 0;
   width: 100%;
+  display: flex;
+  gap: 0.5rem;
+}
+
+#dual_stage_row.dual_stage_row--single {
+  display: flex;
+}
+
+#dual_stage_row.dual_stage_row--single #login_stage_wrap {
+  width: 100%;
+  min-height: clamp(320px, 52vh, 760px);
+}
+
+/* ── Shared footer — everything that used to float over the 3D/2D stages
+   (legend, status, sliders, stage pickers) lives here instead, in normal
+   flow below both, so nothing ever overlaps either view. Scrolls on its
+   own if content exceeds the available height rather than pushing the
+   rest of the panel around. ── */
+#anim_footer {
+  flex-shrink: 0;
+  width: 100%; /* #login_anim_panel has align-items:center, so without this
+    #anim_footer would shrink to its content width and get centered instead
+    of spanning full width like #dual_stage_row (which sets this
+    explicitly) — that mismatch was the actual cause of the two divider
+    lines not lining up. */
+  max-height: 34vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem 0;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+/* Same gap as #dual_stage_row (0.5rem) and the same flex:1/flex:1 split,
+   so the divider between the two info columns lands at the exact same X
+   position as the dashed line between the two stages above it. */
+#anim_footer_row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+#anim_footer_row.anim_footer_row--single {
+  display: block;
+}
+#anim_footer_3d,
+#anim_footer_2d {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+#anim_footer_2d {
+  border-left: 1px dashed rgba(255,255,255,0.08);
+  padding-left: 1rem;
+  align-items: flex-start;
+}
+
+.footer_section_title {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.75);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.footer_section_sub {
+  font-size: 0.54rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: rgba(255,255,255,0.4);
+}
+
+/* ── Items — shared by both objects, so it sits once below both columns
+   instead of living inside just one of them. ── */
+#anim_footer_items {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 1.1rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed rgba(255,255,255,0.08);
+}
+
+#login_stage_wrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   position: relative;
   touch-action: none; /* JS pinch handler takes over here */
   cursor: grab;
@@ -116,21 +212,134 @@
 }
 #login_stage_wrap:active { cursor: grabbing; }
 
+/* ── Legacy 2D physics stage ── */
+#legacy_stage_wrap {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  border-left: 1px dashed rgba(255,255,255,0.08);
+  /* Matches #anim_footer_2d's padding-left below — identical box model on
+     both rows' second flex child is what keeps the two divider lines
+     lined up (flex:1 splits unequally if one side carries extra padding
+     the other doesn't). */
+  padding-left: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none; /* dragging the arc/M-dot here shouldn't scroll the page */
+}
+/* .bio_particle/.orb_dot carry a CSS transition for the 3D object's
+   discrete slice-to-slice jumps — but this stage drives its dots
+   imperatively at 60fps from a live physics loop, where every frame IS
+   already a small, continuous step. Inheriting that transition made the
+   rendered dot lag noticeably behind the angle the rope canvas was
+   drawing from (computed synchronously, same frame, no lag), which is
+   exactly what read as "ropes not aligned with the items". */
+#legacy_stage .bio_particle,
+#legacy_stage .orb_dot {
+  transition: none;
+}
+
+
+#legacy_stage {
+  position: relative;
+  width: 900px;
+  height: 900px;
+  transform: scale(0.42);
+  /* Without this, being a flex item of #legacy_stage_wrap let flexbox's
+     default flex-shrink:1 squash this box's WIDTH down to fit the
+     available space while leaving height alone (there was room to spare
+     vertically) — a non-uniform pre-transform distortion. That skewed
+     scale(0.42)'s transform-origin (default 50% 50% of the now-squashed
+     box) off the box's true center, throwing off everything positioned
+     by raw top:0/left:0 + local coordinates, like the arc, while things
+     centered via their own top:50%/left:50% happened to still land right.
+     flex-shrink:0 keeps this box at its real 900x900 so the scale's
+     origin is the actual center. */
+  flex-shrink: 0;
+}
+
+#legacy_center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+}
+
+#legacy_pr_sphere {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 720px;
+  height: 720px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at 38% 35%, rgba(200,170,255,0.10) 0%, rgba(120,80,220,0.05) 55%, transparent 100%);
+  border: 1.5px solid rgba(160,110,255,0.4);
+  box-shadow: 0 0 110px rgba(160,110,255,0.16);
+}
+
+#legacy_mctosh_sphere {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 520px;
+  height: 520px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, rgba(79,195,247,0.14) 0%, transparent 70%);
+  border: 1.5px solid rgba(79,195,247,0.35);
+}
+
+#legacy_stage_display {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(4,6,15,0.6);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 6px;
+}
+
+.dstage_abbr {
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+
+.dstage_desc {
+  font-size: 0.56rem;
+  color: rgba(255,255,255,0.55);
+  letter-spacing: 0.02em;
+}
+
+#legacy_stage_list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+#legacy_stage_list .ds_item {
+  padding: 0.15rem 0.35rem;
+  gap: 0.2rem;
+}
+#legacy_stage_list .ds_desc,
+#legacy_stage_list .ds_engaged {
+  display: none;
+}
+
 /* ── Object details overlay — flat, never rotates with the stage ── */
 #object_info {
-  position: absolute;
-  top: 0.5rem;
-  right: 0.5rem;
-  z-index: 20;
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
   padding: 0.4rem 0.6rem;
-  background: rgba(4,6,15,0.78);
+  background: rgba(4,6,15,0.6);
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 6px;
-  backdrop-filter: blur(10px);
-  pointer-events: none;
   font-family: ui-monospace, "Cascadia Code", monospace;
 }
 .object_info_row {
@@ -172,16 +381,12 @@
    overlapping it at all) so it never competes with or gets disrupted by
    the 3D rotation. ── */
 #travel_slider_wrap {
-  position: absolute;
-  bottom: 0.75rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 15;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 0.2rem;
-  width: 220px;
+  width: 100%;
+  max-width: 260px;
 }
 #travel_slider {
   -webkit-appearance: none;
@@ -226,18 +431,14 @@
   text-transform: uppercase;
 }
 
-/* ── Cutaway slider — sits just above the travel slider ── */
+/* ── Cutaway slider ── */
 #cutaway_slider_wrap {
-  position: absolute;
-  bottom: 2.6rem;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 15;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   gap: 0.2rem;
-  width: 220px;
+  width: 100%;
+  max-width: 260px;
 }
 #cutaway_slider {
   -webkit-appearance: none;
@@ -295,29 +496,23 @@
 /* No filter/drop-shadow here — those force expensive per-layer compositing
    once dozens of these sit in a 3D transform context, which is exactly
    what made this unusable on iPad. Border-color/width swaps on the shell
-   ring (below) carry the "current" highlight instead.
-   Opacity dims the CONTENT (dots + rope lines) per slice, not the whole
-   slice — the shell ring is styled separately, below, so every slice's
-   border stays clearly visible and the stack reads as real depth (a tunnel
-   of rings), while only the ontic slice's dots/ropes are fully lit. */
-.identity_rope_svg,
-.identity_slice .bio_particle {
-  opacity: 0.12;
-  transition: opacity 0.35s ease;
+   ring (below) carry the "current" highlight instead. */
+
+/* The item dots + rope: ONE shared instance (see renderItems in Login.jsx),
+   not duplicated per slice — always fully visible, never dims or
+   disappears as the plate moves. It just snaps to a new transform (via the
+   .identity_slice-style transition below) whenever the plate crosses into
+   a new sampled slice's range. */
+.identity_items {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
-.identity_slice--current .identity_rope_svg,
-.identity_slice--current .bio_particle {
-  opacity: 1;
-}
-/* Recovery-track slices — the "healing hasn't caught up yet" possibility
-   for each severity — read as dimmer/cooler than their onset counterpart
-   so the two tracks stay visually distinguishable inside the full stack. */
-.identity_slice--recovery .identity_rope_svg,
-.identity_slice--recovery .bio_particle {
-  opacity: 0.07;
-}
-.identity_slice--recovery.identity_slice--current .identity_rope_svg,
-.identity_slice--recovery.identity_slice--current .bio_particle {
+/* Recovery-track items — the "healing hasn't caught up yet" possibility for
+   the current severity — read as a touch dimmer/cooler than the onset
+   track so the two remain visually distinguishable, without ever actually
+   disappearing. */
+.identity_items--recovery {
   opacity: 0.85;
 }
 
@@ -534,8 +729,11 @@
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
   z-index: 5;
+}
+
+.observation_ring {
+  transition: none;
 }
 
 #login_center_glow {
@@ -661,27 +859,10 @@
 /* ── Labels card — MCTOSHS / Patient Reality naming + item legend ──
    Flat, outside #login_stage like #object_info, so it never rotates,
    curves, or tilts with the 3D object and stays legible at all times. */
-#labels_card {
-  position: absolute;
-  top: 0.5rem;
-  left: 0.5rem;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  padding: 0.5rem 0.7rem;
-  background: rgba(4,6,15,0.78);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
-  backdrop-filter: blur(10px);
-  pointer-events: none;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  max-width: 210px;
-}
-
 #labels_card_head {
   display: flex;
   flex-direction: column;
+  font-family: ui-monospace, "Cascadia Code", monospace;
   gap: 0.1rem;
   padding-bottom: 0.35rem;
   border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -708,8 +889,10 @@
   margin: 0;
   padding: 0;
   display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.9rem;
+  font-family: ui-monospace, "Cascadia Code", monospace;
 }
 
 #labels_card_list li {
@@ -855,16 +1038,12 @@
 /* Tagline */
 /* ── Disease timeline selector ── */
 #disease_selector {
-  position: absolute;
-  bottom: 2.8rem;
-  left: 2rem;
-  z-index: 15;
-  width: fit-content;
-  background: rgba(4,6,15,0.82);
+  width: 100%;
+  max-width: 260px;
+  background: rgba(4,6,15,0.6);
   border: 1px solid rgba(255,255,255,0.07);
   border-radius: 7px;
   overflow: hidden;
-  backdrop-filter: blur(12px);
 }
 
 #ds_head {
@@ -1098,6 +1277,11 @@
 }
 #login_panel_toggle:hover { color: rgba(255,255,255,0.85); background: rgba(20,28,55,0.90); }
 
+#login_panel_toggle.login_panel_toggle--collapsed {
+  right: 0;
+  border-radius: 7px 0 0 7px;
+}
+
 #login_panel {
   width: 400px;
   flex-shrink: 0;
@@ -1126,11 +1310,6 @@
 }
 
 /* When panel is hidden, move the toggle to the far right edge */
-#login_page:has(.login_panel_hidden) #login_panel_toggle {
-  right: 0;
-  border-radius: 7px 0 0 7px;
-}
-
 #login_form {
   flex: 1;
   display: flex;
@@ -1359,4 +1538,3 @@
     margin-top: 2rem;
   }
 }
-

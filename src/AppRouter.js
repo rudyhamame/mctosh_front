@@ -34,6 +34,7 @@ import MCCQEObjectivesPage            from "./MCC/MCCQEObjectivesPage";
 import SocialMediaControlPage         from "./SocialMediaControl/SocialMediaControlPage";
 import InstagramHomePreviewPage      from "./SocialMediaControl/InstagramHomePreviewPage";
 import SocialMediaDesignerPage       from "./SocialMediaControl/SocialMediaDesignerPage";
+import PatientIntakePage              from "./PatientIntake/PatientIntakePage";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 
 const getStoredAuth = () => readStoredSession();
@@ -93,7 +94,7 @@ const AppRouter = () => {
   return (
     // MCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
     // /cvs/ instead of the domain root, so mctoshs.ca/cvs/login is the main page.
-    <Router basename="/cvs">
+    <Router basename="/cvs" future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <SplitViewProvider>
       <SplitViewFrame>
       <Routes>
@@ -133,6 +134,7 @@ const AppRouter = () => {
         <Route path="/social-media-control"   element={auth(<SocialMediaControlPage />)} />
         <Route path="/instagram-home-preview" element={auth(<InstagramHomePreviewPage />)} />
         <Route path="/social-media-designer"  element={auth(<SocialMediaDesignerPage />)} />
+        <Route path="/patient-intake"          element={auth(<PatientIntakePage />)} />
 
         {/* Legacy redirect */}
         <Route path="/pdf/:card" element={<PdfCardRedirect />} />
