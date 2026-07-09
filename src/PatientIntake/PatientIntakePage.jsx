@@ -49,14 +49,15 @@ const PatientIntakePage = () => {
   const navigate = useNavigate();
 
   const [config, setConfig] = useState(null);
-  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhooks, setWebhooks] = useState({ eventsUrl: "", recordAnswerToolUrl: "", finishIntakeToolUrl: "" });
   const [isConfigured, setIsConfigured] = useState(false);
   const [form, setForm] = useState({
-    whatsappPhoneNumberId: "", whatsappCloudApiVersion: "23.0", phoneNumberDisplay: "",
-    displayName: "", metaVerifyToken: "", whatsappAccessToken: "", metaAppSecret: "",
+    telnyxPublicKey: "", phoneNumberDisplay: "",
+    displayName: "", webhookToolSharedSecret: "", telnyxApiKey: "",
   });
   const [savingConfig, setSavingConfig] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
+  const [generatingSecret, setGeneratingSecret] = useState(false);
 
   const [calls, setCalls] = useState([]);
   const [callsFilter, setCallsFilter] = useState("pending");
@@ -72,15 +73,13 @@ const PatientIntakePage = () => {
       const data = await res.json();
       if (!res.ok) return;
       setConfig(data.config);
-      setWebhookUrl(data.webhookUrl || "");
+      setWebhooks(data.webhooks || { eventsUrl: "", recordAnswerToolUrl: "", finishIntakeToolUrl: "" });
       setIsConfigured(Boolean(data.isConfigured));
       setForm(f => ({
         ...f,
-        whatsappPhoneNumberId: data.config?.whatsappPhoneNumberId || "",
-        whatsappCloudApiVersion: data.config?.whatsappCloudApiVersion || "23.0",
+        telnyxPublicKey: data.config?.telnyxPublicKey || "",
         phoneNumberDisplay: data.config?.phoneNumberDisplay || "",
         displayName: data.config?.displayName || "",
-        metaVerifyToken: data.config?.metaVerifyToken || "",
       }));
     } finally {
       setConfigLoaded(true);
@@ -101,14 +100,12 @@ const PatientIntakePage = () => {
     setSavingConfig(true);
     try {
       const body = {
-        whatsappPhoneNumberId: form.whatsappPhoneNumberId,
-        whatsappCloudApiVersion: form.whatsappCloudApiVersion,
+        telnyxPublicKey: form.telnyxPublicKey,
         phoneNumberDisplay: form.phoneNumberDisplay,
         displayName: form.displayName,
-        metaVerifyToken: form.metaVerifyToken,
       };
-      if (form.whatsappAccessToken) body.whatsappAccessToken = form.whatsappAccessToken;
-      if (form.metaAppSecret) body.metaAppSecret = form.metaAppSecret;
+      if (form.webhookToolSharedSecret) body.webhookToolSharedSecret = form.webhookToolSharedSecret;
+      if (form.telnyxApiKey) body.telnyxApiKey = form.telnyxApiKey;
 
       const res = await fetch(apiUrl("/api/patient-intake/config"), {
         method: "PATCH", headers: authHeaders(true), body: JSON.stringify(body),
@@ -116,12 +113,25 @@ const PatientIntakePage = () => {
       const data = await res.json();
       if (res.ok) {
         setConfig(data.config);
-        setWebhookUrl(data.webhookUrl || "");
+        setWebhooks(data.webhooks || { eventsUrl: "", recordAnswerToolUrl: "", finishIntakeToolUrl: "" });
         setIsConfigured(Boolean(data.isConfigured));
-        setForm(f => ({ ...f, whatsappAccessToken: "", metaAppSecret: "" }));
+        setForm(f => ({ ...f, webhookToolSharedSecret: "", telnyxApiKey: "" }));
       }
     } finally {
       setSavingConfig(false);
+    }
+  };
+
+  const generateSecret = async () => {
+    setGeneratingSecret(true);
+    try {
+      const res = await fetch(apiUrl("/api/patient-intake/config/generate-secret"), {
+        method: "POST", headers: authHeaders(false),
+      });
+      const data = await res.json();
+      if (res.ok && data.secret) setForm(f => ({ ...f, webhookToolSharedSecret: data.secret }));
+    } finally {
+      setGeneratingSecret(false);
     }
   };
 
@@ -179,34 +189,49 @@ const PatientIntakePage = () => {
       </header>
 
       <section className="pin_section">
-        <h2>WhatsApp Business Connection</h2>
+        <h2>Telnyx WhatsApp Voice Connection</h2>
         <p className="pin_section_sub">
-          Paste the webhook URL below into Meta's App Dashboard (WhatsApp → Configuration → Callback URL), subscribe to the <code>calls</code> field, and use the same Verify Token here and there.
+          Set up manually in Telnyx's dashboard: create an AI Assistant, bind it directly to your WhatsApp-Calling-enabled Telnyx number,
+          paste the <strong>Events webhook URL</strong> into the number/connection's Call Control webhook setting, and add two
+          <strong> webhook tools</strong> to the Assistant — <code>recordAnswer</code> (params: <code>call_control_id</code>, <code>fieldKey</code>, <code>value</code>) pointed at the
+          <strong> Record-answer tool URL</strong>, and <code>finishIntake</code> (param: <code>call_control_id</code>) pointed at the
+          <strong> Finish-intake tool URL</strong>. Add a custom header <code>x-intake-secret</code> with the shared secret below to both tools.
         </p>
         {configLoaded && (
           <div className="pin_config_form">
             <div className="pin_field">
-              <label className="pin_field_label">Webhook URL</label>
-              <input className="pin_field_input" readOnly value={webhookUrl} onFocus={e => e.target.select()} />
+              <label className="pin_field_label">Events webhook URL</label>
+              <input className="pin_field_input" readOnly value={webhooks.eventsUrl} onFocus={e => e.target.select()} />
             </div>
-            <Field label="WhatsApp Phone Number ID" value={form.whatsappPhoneNumberId} onChange={v => setForm(f => ({ ...f, whatsappPhoneNumberId: v }))} />
+            <div className="pin_field">
+              <label className="pin_field_label">Record-answer tool URL</label>
+              <input className="pin_field_input" readOnly value={webhooks.recordAnswerToolUrl} onFocus={e => e.target.select()} />
+            </div>
+            <div className="pin_field">
+              <label className="pin_field_label">Finish-intake tool URL</label>
+              <input className="pin_field_input" readOnly value={webhooks.finishIntakeToolUrl} onFocus={e => e.target.select()} />
+            </div>
+            <Field label="Telnyx public key (Ed25519)" value={form.telnyxPublicKey} onChange={v => setForm(f => ({ ...f, telnyxPublicKey: v }))} />
             <Field label="Phone number (display)" value={form.phoneNumberDisplay} onChange={v => setForm(f => ({ ...f, phoneNumberDisplay: v }))} />
-            <Field label="Cloud API version" value={form.whatsappCloudApiVersion} onChange={v => setForm(f => ({ ...f, whatsappCloudApiVersion: v }))} />
             <Field label="Display name" value={form.displayName} onChange={v => setForm(f => ({ ...f, displayName: v }))} />
-            <Field label="Meta verify token" value={form.metaVerifyToken} onChange={v => setForm(f => ({ ...f, metaVerifyToken: v }))} />
             <div className="pin_field">
               <label className="pin_field_label">
-                WhatsApp access token {config?.hasAccessToken && <span className="pin_masked">({config.accessTokenMasked})</span>}
+                Webhook tool shared secret {config?.hasWebhookToolSharedSecret && <span className="pin_masked">({config.webhookToolSharedSecretMasked})</span>}
               </label>
-              <input className="pin_field_input" type="password" placeholder={config?.hasAccessToken ? "Leave blank to keep current" : ""}
-                value={form.whatsappAccessToken} onChange={e => setForm(f => ({ ...f, whatsappAccessToken: e.target.value }))} />
+              <div className="pin_secret_row">
+                <input className="pin_field_input" type="password" placeholder={config?.hasWebhookToolSharedSecret ? "Leave blank to keep current" : ""}
+                  value={form.webhookToolSharedSecret} onChange={e => setForm(f => ({ ...f, webhookToolSharedSecret: e.target.value }))} />
+                <button type="button" className="pin_generate_btn" onClick={generateSecret} disabled={generatingSecret}>
+                  {generatingSecret ? "…" : "Generate"}
+                </button>
+              </div>
             </div>
             <div className="pin_field">
               <label className="pin_field_label">
-                Meta app secret {config?.hasAppSecret && <span className="pin_masked">({config.appSecretMasked})</span>}
+                Telnyx API key <span className="pin_masked">(reserved, not required yet{config?.hasTelnyxApiKey ? `, ${config.telnyxApiKeyMasked}` : ""})</span>
               </label>
-              <input className="pin_field_input" type="password" placeholder={config?.hasAppSecret ? "Leave blank to keep current" : ""}
-                value={form.metaAppSecret} onChange={e => setForm(f => ({ ...f, metaAppSecret: e.target.value }))} />
+              <input className="pin_field_input" type="password" placeholder={config?.hasTelnyxApiKey ? "Leave blank to keep current" : ""}
+                value={form.telnyxApiKey} onChange={e => setForm(f => ({ ...f, telnyxApiKey: e.target.value }))} />
             </div>
             <button className="pin_save_btn" onClick={saveConfig} disabled={savingConfig}>
               {savingConfig ? "Saving…" : "Save configuration"}
