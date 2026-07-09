@@ -67,19 +67,6 @@
 .pin_field_textarea { resize: vertical; }
 .pin_masked { font-weight: 400; color: rgba(255,255,255,0.35); }
 
-.pin_secret_row { display: flex; gap: 0.5rem; }
-.pin_secret_row .pin_field_input { flex: 1; }
-.pin_generate_btn {
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.15);
-  color: #dde3ef;
-  border-radius: 6px;
-  padding: 0 0.7rem;
-  font-size: 0.72rem;
-  cursor: pointer;
-}
-.pin_generate_btn:disabled { opacity: 0.6; cursor: default; }
-
 .pin_save_btn, .pin_approve_btn, .pin_reject_btn {
   border: none;
   border-radius: 6px;
