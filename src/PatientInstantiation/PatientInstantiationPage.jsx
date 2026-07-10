@@ -312,6 +312,17 @@ const PhoneCodeSelect = ({ value, onChange }) => {
   );
 };
 
+// Duration for the Call Log list/detail — endedAt is null while a call is
+// still "in-progress", so that reads as "ongoing" rather than a bogus 0:00.
+const formatCallDuration = (call) => {
+  if (!call?.startedAt) return "";
+  if (!call.endedAt) return "ongoing";
+  const seconds = Math.max(0, Math.round((new Date(call.endedAt) - new Date(call.startedAt)) / 1000));
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+};
+
 const Field = ({ label, value, onChange, type = "text", textarea }) => (
   <div className="pi_field">
     <label className="pi_field_label">{label}</label>
@@ -337,6 +348,24 @@ const PatientInstantiationPage = () => {
   const [isNew,          setIsNew]          = useState(false);
   const [receivedMorphe, setReceivedMorphe] = useState(null);
 
+  // Patients Call Log — read-only. Each call is linked to the patient's own
+  // Patient instance (populated as call.patientId; see
+  // back/routes/PatientCallLogAPI.js), which the patient-side voice call
+  // collects into directly — editing still only happens via the Patients
+  // tab/PatientAPI.js, never from here.
+  const [mode,        setMode]        = useState("patients"); // "patients" | "calls" | "unclaimed"
+  const [calls,        setCalls]        = useState([]);
+  const [callsLoading, setCallsLoading] = useState(false);
+  const [selectedCall, setSelectedCall] = useState(null);
+
+  // Unclaimed queue — self-registered patients (signed up via the
+  // patient-side app) with no owning clinician yet. Any clinician can claim
+  // one here into their own roster (see back/routes/PatientAPI.js).
+  const [unclaimed,         setUnclaimed]         = useState([]);
+  const [unclaimedLoading,  setUnclaimedLoading]  = useState(false);
+  const [selectedUnclaimed, setSelectedUnclaimed] = useState(null);
+  const [claiming,          setClaiming]          = useState(false);
+
   const flash = (msg) => { setStatus(msg); setTimeout(() => setStatus(""), 2000); };
 
   const loadPatients = useCallback(async () => {
@@ -349,6 +378,72 @@ const PatientInstantiationPage = () => {
   }, [userId]);
 
   useEffect(() => { loadPatients(); }, [loadPatients]);
+
+  const loadCalls = useCallback(async () => {
+    setCallsLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/patient-call-log"), { headers: authHeader() });
+      const data = await res.json();
+      setCalls(data.calls || []);
+    } catch {}
+    finally { setCallsLoading(false); }
+  }, []);
+
+  useEffect(() => { if (mode === "calls") loadCalls(); }, [mode, loadCalls]);
+
+  const loadUnclaimed = useCallback(async () => {
+    setUnclaimedLoading(true);
+    try {
+      const res = await fetch(apiUrl("/api/patients/unclaimed"), { headers: authHeader() });
+      const data = await res.json();
+      setUnclaimed(data.patients || []);
+    } catch {}
+    finally { setUnclaimedLoading(false); }
+  }, []);
+
+  useEffect(() => { if (mode === "unclaimed") loadUnclaimed(); }, [mode, loadUnclaimed]);
+
+  const claimPatient = async () => {
+    if (!selectedUnclaimed || !userId) return;
+    setClaiming(true);
+    try {
+      const res = await fetch(apiUrl(`/api/patients/${selectedUnclaimed._id}/claim`), {
+        method: "POST",
+        headers: authHeader(),
+        body: JSON.stringify({ userId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      flash("Claimed into your roster");
+      setSelectedUnclaimed(null);
+      await loadUnclaimed();
+      await loadPatients();
+    } catch (e) { flash(`Error: ${e.message}`); }
+    finally { setClaiming(false); }
+  };
+
+  const openCallLog = async (id) => {
+    setSelectedCall(null);
+    try {
+      const res = await fetch(apiUrl(`/api/patient-call-log/${id}`), { headers: authHeader() });
+      const data = await res.json();
+      if (res.ok) setSelectedCall(data.call);
+    } catch {}
+  };
+
+  const deleteCallLog = async (id) => {
+    if (!window.confirm("Delete this call log? This cannot be undone.")) return;
+    try {
+      const res = await fetch(apiUrl(`/api/patient-call-log/${id}`), {
+        method: "DELETE",
+        headers: authHeader(),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      if (selectedCall?._id === id) setSelectedCall(null);
+      await loadCalls();
+      flash("Call log deleted");
+    } catch (e) { flash(`Error: ${e.message}`); }
+  };
 
   const loadMorpheForPatient = useCallback(async (patientDbId) => {
     if (!userId || !patientDbId) { setReceivedMorphe(null); return; }
@@ -440,7 +535,27 @@ const PatientInstantiationPage = () => {
           <i className="fi fi-rr-arrow-left" />
         </button>
         <span id="pi_title">Patient Instantiation</span>
-        {hasForm && (
+        <div id="pi_mode_toggle">
+          <button
+            className={`pi_mode_btn${mode === "patients" ? " pi_mode_btn--active" : ""}`}
+            onClick={() => setMode("patients")}
+          >
+            Patients
+          </button>
+          <button
+            className={`pi_mode_btn${mode === "calls" ? " pi_mode_btn--active" : ""}`}
+            onClick={() => setMode("calls")}
+          >
+            Call Log
+          </button>
+          <button
+            className={`pi_mode_btn${mode === "unclaimed" ? " pi_mode_btn--active" : ""}`}
+            onClick={() => setMode("unclaimed")}
+          >
+            Unclaimed{unclaimed.length > 0 ? ` (${unclaimed.length})` : ""}
+          </button>
+        </div>
+        {mode === "patients" && hasForm && (
           <div id="pi_header_actions">
             {status && <span className="pi_status">{status}</span>}
             {selected && !isNew && (
@@ -453,46 +568,228 @@ const PatientInstantiationPage = () => {
             </button>
           </div>
         )}
+        {mode === "unclaimed" && selectedUnclaimed && (
+          <div id="pi_header_actions">
+            {status && <span className="pi_status">{status}</span>}
+            <button className="pi_btn pi_btn--primary" onClick={claimPatient} disabled={claiming}>
+              {claiming ? "Claiming…" : <><i className="fi fi-rr-user-add" /> Claim into my roster</>}
+            </button>
+          </div>
+        )}
       </div>
 
       <div id="pi_layout">
 
         {/* Sidebar */}
         <div id="pi_sidebar">
-          <button id="pi_new_btn" onClick={startNew}>
-            <i className="fi fi-rr-user-add" /> New Patient
-          </button>
-          <div id="pi_patient_list">
-            {patients.length === 0 && (
-              <p id="pi_list_empty">No patients yet.</p>
-            )}
-            {patients.map(p => (
-              <button
-                key={p._id}
-                className={`pi_patient_item${selected?._id === p._id ? " pi_patient_item--active" : ""}`}
-                onClick={() => openPatient(p)}
-              >
-                <span className="pi_patient_id">{p.patientId}</span>
-                <span className="pi_patient_name">
-                  {p.personal?.firstName || p.personal?.lastName
-                    ? `${p.personal.firstName} ${p.personal.lastName}`.trim()
-                    : "Unnamed"}
-                </span>
+          {mode === "patients" && (
+            <>
+              <button id="pi_new_btn" onClick={startNew}>
+                <i className="fi fi-rr-user-add" /> New Patient
               </button>
-            ))}
-          </div>
+              <div id="pi_patient_list">
+                {patients.length === 0 && (
+                  <p id="pi_list_empty">No patients yet.</p>
+                )}
+                {patients.map(p => (
+                  <button
+                    key={p._id}
+                    className={`pi_patient_item${selected?._id === p._id ? " pi_patient_item--active" : ""}`}
+                    onClick={() => openPatient(p)}
+                  >
+                    <span className="pi_patient_id">{p.patientId}</span>
+                    <span className="pi_patient_name">
+                      {p.personal?.firstName || p.personal?.lastName
+                        ? `${p.personal.firstName} ${p.personal.lastName}`.trim()
+                        : "Unnamed"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {mode === "calls" && (
+            <div id="pi_patient_list">
+              {callsLoading && <p id="pi_list_empty">Loading…</p>}
+              {!callsLoading && calls.length === 0 && (
+                <p id="pi_list_empty">No patient calls yet.</p>
+              )}
+              {calls.map(c => (
+                <button
+                  key={c._id}
+                  className={`pi_patient_item${selectedCall?._id === c._id ? " pi_patient_item--active" : ""}`}
+                  onClick={() => openCallLog(c._id)}
+                >
+                  <span className="pi_patient_id">{c.patientName || "Unknown patient"}</span>
+                  <span className="pi_patient_name">
+                    {new Date(c.startedAt || c.createdAt).toLocaleString()} · {c.status} · {formatCallDuration(c)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+          {mode === "unclaimed" && (
+            <div id="pi_patient_list">
+              {unclaimedLoading && <p id="pi_list_empty">Loading…</p>}
+              {!unclaimedLoading && unclaimed.length === 0 && (
+                <p id="pi_list_empty">No unclaimed patients right now.</p>
+              )}
+              {unclaimed.map(p => (
+                <button
+                  key={p._id}
+                  className={`pi_patient_item${selectedUnclaimed?._id === p._id ? " pi_patient_item--active" : ""}`}
+                  onClick={() => setSelectedUnclaimed(p)}
+                >
+                  <span className="pi_patient_id">{p.patientId}</span>
+                  <span className="pi_patient_name">
+                    {p.personal?.firstName || p.personal?.lastName
+                      ? `${p.personal.firstName} ${p.personal.lastName}`.trim()
+                      : "Unnamed"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Main content */}
         <div id="pi_content">
-          {!hasForm && (
+          {mode === "calls" && !selectedCall && (
+            <div id="pi_welcome">
+              <i className="fi fi-rr-phone-call pi_welcome_icon" />
+              <p>Select a call to view the conversation.</p>
+            </div>
+          )}
+
+          {mode === "calls" && selectedCall && (
+            <div id="pi_call_detail">
+              <div id="pi_patient_header">
+                <span id="pi_patient_badge">{selectedCall.patientName || "Unknown patient"}</span>
+                <span id="pi_patient_fullname">
+                  {new Date(selectedCall.startedAt || selectedCall.createdAt).toLocaleString()} · {selectedCall.status} · {formatCallDuration(selectedCall)}
+                </span>
+                <button
+                  className="pi_btn pi_btn--danger pi_call_delete_btn"
+                  onClick={() => deleteCallLog(selectedCall._id)}
+                >
+                  <i className="fi fi-rr-trash" /> Delete
+                </button>
+              </div>
+
+              {/* The patient's own instance, collected turn-by-turn during
+                  this (and any other) call of theirs — see
+                  agent/patientCallAgent.js's recordField tool. Read-only
+                  here; edit it from the Patients tab instead. */}
+              {selectedCall.patientId && (() => {
+                const { personal = {}, clinical = {} } = selectedCall.patientId;
+                const rows = [
+                  ["First name", personal.firstName],
+                  ["Last name", personal.lastName],
+                  ["Date of birth", personal.dateOfBirth],
+                  ["Gender", personal.gender],
+                  ["Chief complaint", clinical.chiefComplaint],
+                  ["History of present illness", clinical.historyOfPresentIllness],
+                  ["Past medical history", clinical.pastMedicalHistory],
+                  ["Family history", clinical.familyHistory],
+                  ["Social history", clinical.socialHistory],
+                  ["Allergies", clinical.allergies],
+                  ["Chronic conditions", clinical.chronicConditions],
+                  ["Current medications", clinical.currentMedications],
+                ].filter(([, value]) => value);
+
+                return (
+                  <>
+                    <h3 className="pi_call_section_title">
+                      Patient instance <span className="pi_instance_id">{selectedCall.patientId.patientId}</span>
+                    </h3>
+                    <div className="pi_instance_grid">
+                      {rows.length === 0 && (
+                        <p className="pi_call_summary">Nothing collected into their profile yet.</p>
+                      )}
+                      {rows.map(([label, value]) => (
+                        <div key={label} className="pi_instance_row">
+                          <span className="pi_instance_label">{label}</span>
+                          <span className="pi_instance_value">{value}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                );
+              })()}
+
+              <h3 className="pi_call_section_title">Conversation summary</h3>
+              <p className="pi_call_summary">{selectedCall.summary || "No summary available yet."}</p>
+              <h3 className="pi_call_section_title">Full transcript</h3>
+              <div className="pi_call_transcript">
+                {(selectedCall.transcript || []).length === 0 && (
+                  <p className="pi_call_summary">No transcript available.</p>
+                )}
+                {(selectedCall.transcript || []).map((t, i) => (
+                  <div key={i} className={`pi_call_transcript_line pi_call_transcript_line--${t.role}`}>
+                    <strong>{t.role === "agent" ? "MCTOSHS" : "Patient"}:</strong> {t.text}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {mode === "unclaimed" && !selectedUnclaimed && (
+            <div id="pi_welcome">
+              <i className="fi fi-rr-user-add pi_welcome_icon" />
+              <p>Select an unclaimed patient to review and claim them into your roster.</p>
+            </div>
+          )}
+
+          {mode === "unclaimed" && selectedUnclaimed && (() => {
+            const { personal = {}, clinical = {} } = selectedUnclaimed;
+            const rows = [
+              ["First name", personal.firstName],
+              ["Last name", personal.lastName],
+              ["Date of birth", personal.dateOfBirth],
+              ["Gender", personal.gender],
+              ["Email", personal.email],
+              ["Chief complaint", clinical.chiefComplaint],
+              ["History of present illness", clinical.historyOfPresentIllness],
+              ["Past medical history", clinical.pastMedicalHistory],
+              ["Family history", clinical.familyHistory],
+              ["Social history", clinical.socialHistory],
+              ["Allergies", clinical.allergies],
+              ["Chronic conditions", clinical.chronicConditions],
+              ["Current medications", clinical.currentMedications],
+            ].filter(([, value]) => value);
+
+            return (
+              <div id="pi_call_detail">
+                <div id="pi_patient_header">
+                  <span id="pi_patient_badge">{selectedUnclaimed.patientId}</span>
+                  <span id="pi_patient_fullname">
+                    Self-registered · not yet in any clinician's roster
+                  </span>
+                </div>
+                <h3 className="pi_call_section_title">Collected so far</h3>
+                <div className="pi_instance_grid">
+                  {rows.length === 0 && (
+                    <p className="pi_call_summary">Nothing collected into their profile yet.</p>
+                  )}
+                  {rows.map(([label, value]) => (
+                    <div key={label} className="pi_instance_row">
+                      <span className="pi_instance_label">{label}</span>
+                      <span className="pi_instance_value">{value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
+
+          {mode === "patients" && !hasForm && (
             <div id="pi_welcome">
               <i className="fi fi-rr-hospital-user pi_welcome_icon" />
               <p>Select a patient or create a new one.</p>
             </div>
           )}
 
-          {hasForm && (
+          {mode === "patients" && hasForm && (
             <>
               {/* Patient ID badge */}
               <div id="pi_patient_header">

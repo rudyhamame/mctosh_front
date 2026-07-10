@@ -454,17 +454,19 @@
   gap: 0.6rem;
 }
 .tc_log_entry {
+  position: relative;
   background: color-mix(in srgb, var(--color-bg) 60%, #f57c00 5%);
   border: 1px solid color-mix(in srgb, var(--color-border) 70%, #f57c00 20%);
   border-radius: 8px;
-  padding: 0.65rem 0.85rem;
+  padding: 0.65rem 2.1rem 0.65rem 0.85rem;
   flex-shrink: 0;
 }
 
 .tc_entry_top {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
   margin-bottom: 0.3rem;
 }
 
@@ -475,14 +477,21 @@
   text-transform: uppercase;
   color: #f57c00;
   flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .tc_entry_time {
   font-size: 0.65rem;
   color: var(--color-text-muted);
+  white-space: nowrap;
 }
 
 .tc_entry_remove {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.65rem;
   background: none;
   border: none;
   color: var(--color-text-muted);

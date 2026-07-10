@@ -46,6 +46,76 @@
   gap: 0.6rem;
 }
 
+#pi_mode_toggle {
+  display: flex;
+  gap: 0.3rem;
+  background: var(--color-bg-alt, rgba(255,255,255,0.04));
+  border-radius: 999px;
+  padding: 0.2rem;
+}
+.pi_mode_btn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.3rem 0.8rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.pi_mode_btn--active {
+  background: rgba(0,229,255,0.15);
+  color: #00e5ff;
+}
+
+/* ── Call log detail ── */
+#pi_call_detail { padding: 1.25rem 1.5rem; overflow-y: auto; height: 100%; }
+.pi_call_section_title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  margin: 1.2rem 0 0.5rem;
+}
+.pi_call_summary { font-size: 0.85rem; line-height: 1.5; }
+.pi_call_transcript {
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.pi_call_transcript_line { font-size: 0.8rem; margin-bottom: 0.4rem; line-height: 1.45; }
+.pi_call_transcript_line--agent { color: #4fc3f7; }
+.pi_call_transcript_line--patient { color: var(--color-text); }
+
+/* ── Linked patient instance (see call.patientId, populated) ── */
+.pi_instance_id {
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  color: #00e5ff;
+  margin-left: 0.4rem;
+}
+.pi_instance_grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.6rem 1.2rem;
+  background: rgba(255,255,255,0.03);
+  border-radius: 8px;
+  padding: 0.8rem 1rem;
+}
+.pi_instance_row { display: flex; flex-direction: column; gap: 0.15rem; }
+.pi_instance_label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+.pi_instance_value { font-size: 0.82rem; line-height: 1.4; }
+
 .pi_status {
   font-size: 0.75rem;
   color: #43a047;
@@ -183,6 +253,8 @@
   border-bottom: 1px solid var(--color-border);
   flex-shrink: 0;
 }
+
+.pi_call_delete_btn { margin-left: auto; }
 
 #pi_patient_badge {
   font-size: 0.72rem;

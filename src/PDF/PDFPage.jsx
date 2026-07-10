@@ -362,14 +362,18 @@ const PDFPage = ({
   const [extractError, setExtractError] = useState("");
   const { provider, setProvider }     = useAIProvider();
   const [showSysModal, setShowSysModal] = useState(false);
+  const [readerTextSelectEnabled, setReaderTextSelectEnabled] = useState(false);
 
   // AI vs Manual toggle
   const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
-  // Click/tap-and-hold word selection is part of manual Hyle extraction
-  // (always on there). A plain reader (Hyles hidden, e.g. /pdf-reader) never
-  // gets it — no "Select Text" toggle to accidentally trigger a selection
-  // while just scrolling/reading.
-  const textSelectable = extractMode === "manual";
+  // Click/tap-and-hold word selection is part of manual Hyle extraction, but
+  // the plain /pdf-reader restores its own local toggle so reading mode can
+  // opt into selection without reopening the full Hyles controls.
+  const textSelectable = selectionOnly
+    ? true
+    : hideHyleControls
+      ? readerTextSelectEnabled
+      : extractMode === "manual";
   const [extractionType, setExtractionType] = useState(null); // selected hyle type key
   const [typeTreeOpen,   setTypeTreeOpen]   = useState(false);
 
@@ -569,8 +573,8 @@ const PDFPage = ({
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
   const fileInputRef  = useRef(null);
-  const popupRef      = useRef(null);
   const selBarRef          = useRef(null);
+  const footerAdjustTimerRef = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
   const mouseDownPosRef    = useRef(null); // {x,y} at last mousedown — used to detect drag vs click
@@ -1086,9 +1090,11 @@ const PDFPage = ({
     // Single-finger state
     let panX = 0, panY = 0, panSL = 0, panST = 0;
     let hasMoved = false;
+    let touchInteractionActive = false;
 
     // Long-press + drag selection state
     let lpTimer = null;
+    let lpRefineTimer = null;
     let isLpSelecting = false;
     let lpStartSpanIdx = -1;
     // Plain reader (Hyles hidden): a long-press locks onto exactly the one
@@ -1098,6 +1104,7 @@ const PDFPage = ({
     let lpWordLocked = false;
     let lpLockX = 0, lpLockY = 0;
     const LP_EXPAND_THRESHOLD = 14; // px of movement before a "settling" finger counts as an intentional drag
+    const LP_REFINE_DELAY = 320; // extra hold after the first long-press before collapsing to the exact touched word
 
     const touchDist = (t) => {
       const dx = t[0].clientX - t[1].clientX;
@@ -1144,7 +1151,7 @@ const PDFPage = ({
         text.substring(s, e),
         ...spans.slice(spanIdx + 1, hiIdx + 1).map((sp) => sp.el.textContent),
       ];
-      const word = parts.join("").trim();
+      const word = sanitizeSelectedText(parts.join(""));
       if (!word) return null;
       window.getSelection()?.removeAllRanges();
 
@@ -1193,6 +1200,7 @@ const PDFPage = ({
         const wrap = canvasWrapRef.current;
         if (wrap) wrap.style.transformOrigin = "0 0";
       } else if (e.touches.length === 1) {
+        touchInteractionActive = true;
         if (Date.now() < pinchCooldownUntil) return; // ignore — likely the 2nd finger of a pinch that just ended, not a real new touch
         if (fingerScrollOnlyRef.current && isStylusTouch(e)) return; // hand mode: the pencil never pans/selects, only draws
         panX = e.touches[0].clientX;
@@ -1233,36 +1241,51 @@ const PDFPage = ({
             while (hiIdx < lpSpans.length - 1 && !/^\s/.test(lpSpans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
             const fromNode = lpSpans[loIdx]?.el.firstChild;
             const toNode   = lpSpans[hiIdx]?.el.firstChild;
-            if (fromNode && fromNode.nodeType === Node.TEXT_NODE &&
-                toNode   && toNode.nodeType   === Node.TEXT_NODE) {
-              const range = document.createRange();
-              range.setStart(fromNode, 0);
-              range.setEnd(toNode, toNode.textContent.length);
-              const sel = window.getSelection();
-              sel.removeAllRanges();
-              sel.addRange(range);
-
-              if (hideHyleControls) {
-                // Plain reader: commit to exactly this word right now — no
-                // "Add to Hyles" popup, just the ✓/✕ bar. Still draggable
-                // past LP_EXPAND_THRESHOLD (see onTouchMove) to extend it.
-                const text = sel.toString().replace(/\s+/g, " ").trim();
-                if (text) {
-                  const vr = range.getBoundingClientRect();
-                  setManualSelection({ startIdx: loIdx, endIdx: hiIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
-                }
-                sel.removeAllRanges();
-                lpWordLocked = true;
-                lpStartSpanIdx = loIdx;
-                lpLockX = ct.clientX;
-                lpLockY = ct.clientY;
-                navigator.vibrate?.(30);
-                return;
+	            if (fromNode && fromNode.nodeType === Node.TEXT_NODE &&
+	                toNode   && toNode.nodeType   === Node.TEXT_NODE) {
+	              const range = document.createRange();
+	              range.setStart(fromNode, 0);
+	              range.setEnd(toNode, toNode.textContent.length);
+	              window.getSelection()?.removeAllRanges();
+	              const text = getSpanRangeText(loIdx, hiIdx);
+	              if (!text) return;
+	              const vr = range.getBoundingClientRect();
+              if (hideHyleControls || onSelectionActionRef.current) {
+                setManualSelection({ startIdx: loIdx, endIdx: hiIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
+              } else {
+                const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
+                setManualHyle(noun);
+                setManualPopup({ x: vr.left + vr.width / 2, y: vr.bottom + 10 });
+                setManualSelection(null);
               }
+	              lpWordLocked = true;
+              lpStartSpanIdx = loIdx;
+              lpLockX = ct.clientX;
+              lpLockY = ct.clientY;
+              clearTimeout(lpRefineTimer);
+              lpRefineTimer = setTimeout(() => {
+                if (!lpWordLocked) return;
+                const exact = selectWordAt(ct.clientX, ct.clientY);
+                if (!exact) return;
+                if (hideHyleControls || onSelectionActionRef.current) {
+                  setManualSelection({
+                    startIdx: exact.spanIdx,
+                    endIdx: exact.endIdx,
+                    text: exact.text,
+                    x: exact.x,
+                    y: exact.y,
+                  });
+                } else {
+                  const noun = exact.text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
+                  setManualHyle(noun);
+                  setManualPopup({ x: exact.x, y: exact.y + 2 });
+                  setManualSelection(null);
+                }
+                lpStartSpanIdx = exact.spanIdx;
+              }, LP_REFINE_DELAY);
+              navigator.vibrate?.(30);
+              return;
             }
-            lpStartSpanIdx = loIdx;
-            isLpSelecting  = true;
-            navigator.vibrate?.(30);
           }, 400);
         }
       }
@@ -1304,6 +1327,7 @@ const PDFPage = ({
 
       // Drag handle — handled inline so it works on the very first touchmove
       if (dragHandleRef.current) {
+        clearTimeout(lpRefineTimer); lpRefineTimer = null;
         e.preventDefault();
         const ct     = e.touches[0];
         const target = document.elementFromPoint(ct.clientX, ct.clientY);
@@ -1316,10 +1340,10 @@ const PDFPage = ({
           if (!sel) return sel;
           if (which === "start") {
             const newStart = Math.min(idx, sel.endIdx);
-            return { ...sel, startIdx: newStart, text: spansRef.current.slice(newStart, sel.endIdx + 1).map((s) => s.text).join(" ").trim() };
+            return { ...sel, startIdx: newStart, text: getSpanRangeText(newStart, sel.endIdx) };
           } else {
             const newEnd = Math.max(idx, sel.startIdx);
-            return { ...sel, endIdx: newEnd, text: spansRef.current.slice(sel.startIdx, newEnd + 1).map((s) => s.text).join(" ").trim() };
+            return { ...sel, endIdx: newEnd, text: getSpanRangeText(sel.startIdx, newEnd) };
           }
         });
         return;
@@ -1333,6 +1357,7 @@ const PDFPage = ({
         const dx = e.touches[0].clientX - lpLockX;
         const dy = e.touches[0].clientY - lpLockY;
         if (Math.hypot(dx, dy) < LP_EXPAND_THRESHOLD) return;
+        clearTimeout(lpRefineTimer); lpRefineTimer = null;
         lpWordLocked = false;
         isLpSelecting = true;
         // fall through to the extend logic below using this same event
@@ -1351,14 +1376,24 @@ const PDFPage = ({
             const toIdx   = Math.max(lpStartSpanIdx, spanIdx);
             const fromEl  = spansRef.current[fromIdx]?.el;
             const toEl    = spansRef.current[toIdx]?.el;
-            if (fromEl?.firstChild && toEl?.firstChild) {
-              const range = document.createRange();
-              range.setStart(fromEl.firstChild, 0);
-              range.setEnd(toEl.firstChild, toEl.firstChild.textContent.length);
-              const sel = window.getSelection();
-              sel.removeAllRanges();
-              sel.addRange(range);
-            }
+	            if (fromEl?.firstChild && toEl?.firstChild) {
+	              const range = document.createRange();
+	              range.setStart(fromEl.firstChild, 0);
+	              range.setEnd(toEl.firstChild, toEl.firstChild.textContent.length);
+	              window.getSelection()?.removeAllRanges();
+	              const text = getSpanRangeText(fromIdx, toIdx);
+	              const vr = range.getBoundingClientRect();
+	              if (text) {
+                if (hideHyleControls || onSelectionActionRef.current) {
+                  setManualSelection({ startIdx: fromIdx, endIdx: toIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
+                } else {
+                  const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
+                  setManualHyle(noun);
+                  setManualPopup({ x: vr.left + vr.width / 2, y: vr.bottom + 10 });
+                  setManualSelection(null);
+                }
+              }
+	            }
           }
         }
         return;
@@ -1378,6 +1413,7 @@ const PDFPage = ({
     };
 
     const onTouchEnd = (e) => {
+      touchInteractionActive = e.touches.length > 0;
       if (dragHandleRef.current) {
         dragHandleRef.current = null;
         setDragHandle(null);
@@ -1405,62 +1441,41 @@ const PDFPage = ({
         }
       }
       clearTimeout(lpTimer); lpTimer = null;
+      clearTimeout(lpRefineTimer); lpRefineTimer = null;
 
       // Word was already committed to manualSelection when the long-press
       // fired — nothing left to do but consume this touchend.
-      if (lpWordLocked) { lpWordLocked = false; return; }
+      if (lpWordLocked) { lpWordLocked = false; window.getSelection()?.removeAllRanges(); return; }
 
       if (isLpSelecting) {
         isLpSelecting = false;
-        const sel  = window.getSelection();
-        const text = sel?.toString().replace(/\s+/g, " ").trim();
-        if (text) {
-          const vr = sel.getRangeAt(0).getBoundingClientRect();
-          if (onSelectionActionRef.current || hideHyleControls) {
-            setManualSelection({ startIdx: -1, endIdx: -1, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
-          } else {
-            const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
-            setManualHyle(noun);
-            setManualPopup({
-              x: vr.left + vr.width  / 2,
-              y: vr.bottom + 10,
-            });
-          }
-        }
-        sel?.removeAllRanges();
+        window.getSelection()?.removeAllRanges();
         return;
       }
 
-      if (textSelectableRef.current && !hasMoved && e.changedTouches.length === 1) {
-        const ct     = e.changedTouches[0];
-        const result = selectWordAt(ct.clientX, ct.clientY);
-        if (result) {
-          // Tapping inside an existing selection: keep it, don't replace
-          const curSel = manualSelectionRef.current;
-          if (curSel) {
-            const lo = Math.min(curSel.startIdx, curSel.endIdx);
-            const hi = Math.max(curSel.startIdx, curSel.endIdx);
-            if (result.spanIdx >= lo && result.spanIdx <= hi) return;
-          }
-          setManualSelection({ startIdx: result.spanIdx, endIdx: result.endIdx, text: result.text, x: result.x, y: result.y });
-        }
-      }
     };
 
     const onContextMenu = (e) => e.preventDefault();
+    const onSelectStart = (e) => {
+      if (touchInteractionActive) e.preventDefault();
+    };
 
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
     el.addEventListener("touchmove",   onTouchMove,   { passive: false });
     el.addEventListener("touchend",    onTouchEnd,    { passive: true });
     el.addEventListener("touchcancel", onTouchEnd,    { passive: true });
     el.addEventListener("contextmenu", onContextMenu);
+    el.addEventListener("selectstart", onSelectStart);
 
     return () => {
+      clearTimeout(lpTimer);
+      clearTimeout(lpRefineTimer);
       el.removeEventListener("touchstart",  onTouchStart);
       el.removeEventListener("touchmove",   onTouchMove);
       el.removeEventListener("touchend",    onTouchEnd);
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("contextmenu", onContextMenu);
+      el.removeEventListener("selectstart", onSelectStart);
     };
   }, [pdfDoc]);
 
@@ -1564,10 +1579,17 @@ const PDFPage = ({
           const angle      = Math.atan2(tx[1], tx[0]);
           const itemWidth  = item.width * scale; // PDF advance width → canvas pixels
 
-          const span = document.createElement("span");
-          span.dataset.spanIdx    = String(spansRef.current.length);
-          spansRef.current.push({ text: item.str, el: span });
-          span.textContent        = item.str;
+	          const span = document.createElement("span");
+	          span.dataset.spanIdx    = String(spansRef.current.length);
+	          spansRef.current.push({
+	            text: item.str,
+	            el: span,
+	            left: tx[4],
+	            top: tx[5] - fontSize * 0.8,
+	            height: fontSize,
+	            width: itemWidth,
+	          });
+	          span.textContent        = item.str;
           span.style.position     = "absolute";
           span.style.left         = `${tx[4]}px`;
           span.style.top          = `${tx[5] - fontSize * 0.8}px`;
@@ -1725,19 +1747,6 @@ const PDFPage = ({
       window.removeEventListener("mouseup",   onUp);
     };
   }, [dragHandle]);
-
-  // ── Dismiss popup when clicking outside ───────────────────────────────────
-  useEffect(() => {
-    if (!manualPopup) return;
-    const handler = (e) => {
-      if (popupRef.current && !popupRef.current.contains(e.target)) {
-        setManualPopup(null);
-        window.getSelection()?.removeAllRanges();
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [manualPopup]);
 
   // ── Clear results on page change ───────────────────────────────────────────
   useEffect(() => {
@@ -2343,33 +2352,6 @@ const PDFPage = ({
       return;
     }
 
-    // Single click → find word under cursor → show selection bar
-    const target  = document.elementFromPoint(e.clientX, e.clientY);
-    const layer   = textLayerRef.current;
-    if (!target || !layer || !layer.contains(target)) return;
-    const spanIdx = parseInt(target.dataset.spanIdx ?? "-1", 10);
-    if (spanIdx < 0) return;
-    const tn = target.firstChild;
-    if (!tn || tn.nodeType !== Node.TEXT_NODE || !tn.textContent.trim()) return;
-    const txt   = tn.textContent;
-    const r     = target.getBoundingClientRect();
-    const ratio = r.width > 0 ? (e.clientX - r.left) / r.width : 0;
-    let s = Math.round(ratio * txt.length), end = s;
-    while (s > 0            && /\S/.test(txt[s - 1])) s--;
-    while (end < txt.length && /\S/.test(txt[end]))   end++;
-    if (s >= end) return;
-    const range = document.createRange();
-    range.setStart(tn, s);
-    range.setEnd(tn, end);
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-    const word = sel.toString().trim();
-    if (!word) return;
-    sel.removeAllRanges(); // clear browser selection highlight
-    const bx = parseFloat(target.style.left || "0") + (parseFloat(target.style.width || "0") || target.offsetWidth || 0) / 2;
-    const by = parseFloat(target.style.top  || "0") +  parseFloat(target.style.height || "0") + 8;
-    setManualSelection({ startIdx: spanIdx, endIdx: spanIdx, text: word, x: bx, y: by });
   }, [textSelectable, onSelectionAction]);
 
   const handleManualAdd = useCallback(() => {
@@ -2396,24 +2378,139 @@ const PDFPage = ({
     window.getSelection()?.removeAllRanges();
   }, [manualHyle, manualCard, manualMode, hylePage, pageNum]);
 
+  const sanitizeSelectedText = useCallback((text) => (
+    String(text || "")
+      // Drop decorative leader runs at the start of the whole selection
+      // or at the start of a new line, e.g. "........" / "------".
+      .replace(/(^|\n)[ \t]*([.\-_=*~]{4,})+(?=\s|[\p{L}\p{N}]|$)/gu, "$1")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  ), []);
+
+  const getSpanRangeText = useCallback((startIdx, endIdx) => {
+    const lo = Math.min(startIdx, endIdx);
+    const hi = Math.max(startIdx, endIdx);
+    const spans = spansRef.current.slice(lo, hi + 1);
+    if (spans.length === 0) return "";
+
+    const NO_SPACE_BEFORE = /^[,.;:!?%)\]\}]/;
+    const NO_SPACE_AFTER  = /[(\[\{]$/;
+
+    let text = "";
+    for (let i = 0; i < spans.length; i++) {
+      const cur = spans[i];
+      if (i === 0) {
+        text += cur.text;
+        continue;
+      }
+
+      const prev = spans[i - 1];
+      const prevText = String(prev.text || "");
+      const curText  = String(cur.text || "");
+      const prevRight = Number.isFinite(prev.left) && Number.isFinite(prev.width)
+        ? prev.left + Math.max(prev.width, 0)
+        : null;
+      const curLeft = Number.isFinite(cur.left) ? cur.left : null;
+      const lineBreak =
+        Number.isFinite(prev.top) &&
+        Number.isFinite(cur.top) &&
+        Math.abs(cur.top - prev.top) > Math.max((prev.height || 0), (cur.height || 0)) * 0.45;
+      const paragraphBreak =
+        Number.isFinite(prev.top) &&
+        Number.isFinite(cur.top) &&
+        Math.abs(cur.top - prev.top) > Math.max((prev.height || 0), (cur.height || 0)) * 1.15;
+      const sameLineGap =
+        !lineBreak &&
+        prevRight !== null &&
+        curLeft !== null &&
+        (curLeft - prevRight) > Math.max((prev.height || 0), (cur.height || 0)) * 0.12;
+      const hyphenatedWrap =
+        lineBreak &&
+        /[\p{L}\p{N}]-$/u.test(prevText) &&
+        /^[\p{L}\p{N}]/u.test(curText);
+      const needsBoundarySpace =
+        !hyphenatedWrap &&
+        (lineBreak || sameLineGap) &&
+        prevText &&
+        curText &&
+        !/\s$/.test(prevText) &&
+        !/^\s/.test(curText) &&
+        !NO_SPACE_BEFORE.test(curText) &&
+        !NO_SPACE_AFTER.test(prevText);
+
+      if (hyphenatedWrap) {
+        text = text.replace(/-\s*$/, "");
+      } else if (paragraphBreak) {
+        text += "\n";
+      } else if (needsBoundarySpace) {
+        text += " ";
+      }
+      text += curText;
+    }
+
+    return sanitizeSelectedText(text);
+  }, [sanitizeSelectedText]);
+
   // ── Selection bar: expand / confirm ───────────────────────────────────────
   const expandLeft = useCallback(() => {
     setManualSelection((sel) => {
       if (!sel || sel.startIdx === 0) return sel;
       const idx  = sel.startIdx - 1;
-      const text = spansRef.current.slice(idx, sel.endIdx + 1).map((s) => s.text).join(" ").trim();
+      const text = getSpanRangeText(idx, sel.endIdx);
       return { ...sel, startIdx: idx, text };
     });
-  }, []);
+  }, [getSpanRangeText]);
 
   const expandRight = useCallback(() => {
     setManualSelection((sel) => {
       if (!sel || sel.endIdx >= spansRef.current.length - 1) return sel;
       const idx  = sel.endIdx + 1;
-      const text = spansRef.current.slice(sel.startIdx, idx + 1).map((s) => s.text).join(" ").trim();
+      const text = getSpanRangeText(sel.startIdx, idx);
       return { ...sel, endIdx: idx, text };
     });
+  }, [getSpanRangeText]);
+
+  const adjustLeftBoundary = useCallback(() => {
+    setManualSelection((sel) => {
+      if (!sel || sel.startIdx < 0 || sel.endIdx < 0) return sel;
+      const width = Math.abs(sel.endIdx - sel.startIdx);
+      const nextStart = width > 0
+        ? Math.min(sel.startIdx + 1, sel.endIdx)
+        : Math.max(0, sel.startIdx - 1);
+      if (nextStart === sel.startIdx) return sel;
+      return { ...sel, startIdx: nextStart, text: getSpanRangeText(nextStart, sel.endIdx) };
+    });
+  }, [getSpanRangeText]);
+
+  const adjustRightBoundary = useCallback(() => {
+    setManualSelection((sel) => {
+      if (!sel || sel.startIdx < 0 || sel.endIdx < 0) return sel;
+      const width = Math.abs(sel.endIdx - sel.startIdx);
+      const nextEnd = width > 0
+        ? Math.max(sel.startIdx, sel.endIdx - 1)
+        : Math.min(spansRef.current.length - 1, sel.endIdx + 1);
+      if (nextEnd === sel.endIdx) return sel;
+      return { ...sel, endIdx: nextEnd, text: getSpanRangeText(sel.startIdx, nextEnd) };
+    });
+  }, [getSpanRangeText]);
+
+  const stopFooterAdjust = useCallback(() => {
+    if (footerAdjustTimerRef.current) {
+      window.clearInterval(footerAdjustTimerRef.current);
+      footerAdjustTimerRef.current = null;
+    }
   }, []);
+
+  const startFooterAdjust = useCallback((fn) => {
+    fn();
+    stopFooterAdjust();
+    footerAdjustTimerRef.current = window.setInterval(fn, 140);
+  }, [stopFooterAdjust]);
+
+  useEffect(() => stopFooterAdjust, [stopFooterAdjust]);
 
   const confirmSelection = useCallback(() => {
     if (!manualSelection) return;
@@ -2443,6 +2540,12 @@ const PDFPage = ({
       setSelectionActionBusy(false);
     }
   }, [manualSelection, onSelectionAction, selectionActionBusy]);
+
+  const footerSelectionText =
+    manualPopup
+      ? manualHyle
+      : (hideHyleControls && manualSelection ? manualSelection.text : "");
+  const showFooterSelection = Boolean(manualPopup || (hideHyleControls && manualSelection));
 
   // Dismiss selection bar when clicking outside
   useEffect(() => {
@@ -2622,38 +2725,14 @@ const PDFPage = ({
   };
 
   return (
-    <div id="pdf_page" className={embedded ? "pdf_page--embedded" : undefined}>
+    <div
+      id="pdf_page"
+      className={[
+        embedded ? "pdf_page--embedded" : "",
+        showFooterSelection ? "pdf_page--footer-open" : "",
+      ].filter(Boolean).join(" ") || undefined}
+    >
       {showSysModal && <SystemMessageModal onClose={() => setShowSysModal(false)} />}
-
-      {/* Manual selection popup — fixed to viewport */}
-      {manualPopup && (
-        <div
-          ref={popupRef}
-          id="manual_popup"
-          style={{ left: manualPopup.x, top: manualPopup.y }}
-          onKeyDown={(e) => { if (e.key === "Enter") handleManualAdd(); if (e.key === "Escape") { setManualPopup(null); window.getSelection()?.removeAllRanges(); } }}
-        >
-          <input
-            id="manual_noun_input"
-            value={manualHyle}
-            onChange={(e) => setManualHyle(e.target.value)}
-            placeholder="Hyle"
-            autoFocus
-          />
-          <div id="manual_selects">
-            <select value={manualCard} onChange={(e) => setManualCard(e.target.value)}>
-              {CARDS.map(({ key, label }) => <option key={key} value={key}>{label}</option>)}
-            </select>
-            <select value={manualMode} onChange={(e) => setManualMode(e.target.value)}>
-              {ALL_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </div>
-          <div id="manual_actions">
-            <button id="manual_add_btn" onClick={handleManualAdd}>Add</button>
-            <button id="manual_cancel_btn" onClick={() => { setManualPopup(null); window.getSelection()?.removeAllRanges(); }}>Cancel</button>
-          </div>
-        </div>
-      )}
 
       {/* Toolbar */}
       <div id="pdf_toolbar">
@@ -2735,6 +2814,16 @@ const PDFPage = ({
                 </div>
               )}
             </div>
+          )}
+          {hideHyleControls && (
+            <button
+              id="pdf_text_select_btn"
+              className={textSelectable ? "pdf_text_select_btn--active" : ""}
+              onClick={() => setReaderTextSelectEnabled((enabled) => !enabled)}
+              title={textSelectable ? "Disable text selection" : "Enable text selection"}
+            >
+              Select Text
+            </button>
           )}
           {annotHistory.length > 0 && (
             <button
@@ -3118,7 +3207,7 @@ const PDFPage = ({
                           style={{ left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left, top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top }}
                         />
                       )}
-                      {manualSelection && !manualPopup && selHandles && (
+                      {manualSelection && !manualPopup && onSelectionAction && selHandles && (
                         <>
                           <div
                             className="sel_handle sel_handle--start"
@@ -3134,7 +3223,7 @@ const PDFPage = ({
                           />
                         </>
                       )}
-                      {manualSelection && !manualPopup && (
+                      {manualSelection && !manualPopup && onSelectionAction && (
                         <div ref={selBarRef} id="manual_select_bar" style={{ left: manualSelection.x, top: manualSelection.y }}>
                           <span id="msb_text">{manualSelection.text}</span>
                           {onSelectionAction ? (
@@ -3345,6 +3434,91 @@ const PDFPage = ({
 
         </div>
       </div>
+      {showFooterSelection && (
+        <div
+          id="manual_popup_footer"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && manualPopup) handleManualAdd();
+            if (e.key === "Escape") {
+              setManualPopup(null);
+              setManualSelection(null);
+              window.getSelection()?.removeAllRanges();
+            }
+          }}
+        >
+          <div id="manual_popup">
+            <div id="manual_popup_head">
+              <span>{manualPopup ? "Selected Hyle" : "Selected Text"}</span>
+            </div>
+            {manualPopup ? (
+              <>
+                <input
+                  id="manual_noun_input"
+                  value={manualHyle}
+                  onChange={(e) => setManualHyle(e.target.value)}
+                  placeholder="Hyle"
+                  autoFocus
+                />
+                <div id="manual_selects">
+                  <select value={manualCard} onChange={(e) => setManualCard(e.target.value)}>
+                    {CARDS.map(({ key, label }) => <option key={key} value={key}>{label}</option>)}
+                  </select>
+                  <select value={manualMode} onChange={(e) => setManualMode(e.target.value)}>
+                    {ALL_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </select>
+                </div>
+              </>
+            ) : (
+              <div id="manual_footer_editor">
+                <button
+                  id="manual_footer_left"
+                  type="button"
+                  onClick={adjustLeftBoundary}
+                  onMouseDown={() => startFooterAdjust(adjustLeftBoundary)}
+                  onMouseUp={stopFooterAdjust}
+                  onMouseLeave={stopFooterAdjust}
+                  onTouchStart={(e) => { e.preventDefault(); startFooterAdjust(adjustLeftBoundary); }}
+                  onTouchEnd={stopFooterAdjust}
+                  onTouchCancel={stopFooterAdjust}
+                  disabled={!(manualSelection && manualSelection.startIdx >= 0 && manualSelection.endIdx >= 0)}
+                  title="Trim left edge, then extend to the previous word once only one word remains"
+                >
+                  ←
+                </button>
+                <textarea
+                  id="manual_footer_text"
+                  value={footerSelectionText}
+                  onChange={(e) => setManualSelection((sel) => sel ? { ...sel, text: e.target.value } : sel)}
+                  rows={2}
+                />
+                <button
+                  id="manual_footer_right"
+                  type="button"
+                  onClick={adjustRightBoundary}
+                  onMouseDown={() => startFooterAdjust(adjustRightBoundary)}
+                  onMouseUp={stopFooterAdjust}
+                  onMouseLeave={stopFooterAdjust}
+                  onTouchStart={(e) => { e.preventDefault(); startFooterAdjust(adjustRightBoundary); }}
+                  onTouchEnd={stopFooterAdjust}
+                  onTouchCancel={stopFooterAdjust}
+                  disabled={!(manualSelection && manualSelection.startIdx >= 0 && manualSelection.endIdx >= 0)}
+                  title="Trim right edge, then extend to the next word once only one word remains"
+                >
+                  →
+                </button>
+              </div>
+            )}
+            <div id="manual_actions">
+              {manualPopup ? (
+                <button id="manual_add_btn" onClick={handleManualAdd}>Add</button>
+              ) : (
+                <button id="manual_add_btn" onClick={() => { setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>Done</button>
+              )}
+              <button id="manual_cancel_btn" onClick={() => { setManualPopup(null); setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

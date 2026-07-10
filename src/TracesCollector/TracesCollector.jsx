@@ -400,16 +400,16 @@ export default function TracesCollector() {
                 <div id="tc_log_list">
                   {log.map(entry => (
                     <div key={entry.id} className="tc_log_entry">
+                      <button
+                        className="tc_entry_remove"
+                        onClick={() => removeLogEntry(entry.id)}
+                        title="Remove"
+                      >
+                        <i className="fi fi-rr-cross-small" />
+                      </button>
                       <div className="tc_entry_top">
                         <span className="tc_entry_name">{entry.trace}</span>
                         <span className="tc_entry_time">{fmt(entry.timestamp)}</span>
-                        <button
-                          className="tc_entry_remove"
-                          onClick={() => removeLogEntry(entry.id)}
-                          title="Remove"
-                        >
-                          <i className="fi fi-rr-cross-small" />
-                        </button>
                       </div>
                       <div className="tc_entry_value">
                         {entry.value}

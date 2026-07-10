@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./login.css";
 import { apiUrl } from "../config/api";
@@ -55,11 +55,6 @@ const DEPTH_GROWTH = 1.35;
 //   H  (Hylomorphic state)    → slower:   syndrome integration lags signs
 //   S  (Social/systemic)      → slowest:  systemic burden accumulates last
 const CASCADE_K_FACTORS   = [1.00, 0.58, 0.32, 0.17, 0.09]; // spring scale per orbit
-const CASCADE_DMP_FACTORS = [1.00, 0.90, 0.80, 0.71, 0.63]; // damping scale per orbit
-// When a dimension is *engaged* by disease it moves CW — these are its CW targets
-// as a fraction of M's angle, decreasing inward (T most exposed → S most insulated).
-const ENGAGE_CW_SCALE = [0.78, 0.62, 0.47, 0.33, 0.21]; // T, O, OS, H, S
-
 const PHYS_DEFAULTS = {
   compResilience: 0.60,
   kSp:            2.0,   // base spring constant — T orbit uses this directly
@@ -217,24 +212,21 @@ const RECOVERY_IDENTITIES = CARDIAC_ANNOTATIONS.map((_, i) => computeRecoveryIde
 // ── Dense interpolation — a continuous physics, expressed as many discrete
 // frames instead of a live simulation. Between every pair of adjacent
 // canonical stages we linearly interpolate the full [M,C,T,O,OS,H,S] vector
-// (and severity/color) in DENSE_SUBSTEPS increments, turning 9 precomputed
-// identities into a long, smooth-stepping sequence — still fundamentally a
-// stack of 2D slices, just fine-grained enough to feel continuous when you
-// travel through it one frame at a time.
+// (and severity/color) in a configurable number of substeps, turning the
+// precomputed identities into a smooth-stepping sequence — still
+// fundamentally a stack of 2D slices, just fine-grained enough to feel
+// continuous when you travel through it one frame at a time.
 // Higher = more, finer-grained frames = smoother apparent motion when
 // travelling through the track (each index step is a smaller change).
-// Cheap to raise: rendering only ever samples a fixed DOM budget (see
-// FULL_VIEW_BUDGET) regardless of how many frames actually exist here.
-const DENSE_SUBSTEPS = 960;
-const buildDenseTrack = (stageIdentities) => {
+const buildDenseTrack = (stageIdentities, substeps) => {
   const dense = [];
   for (let s = 0; s < CARDIAC_ANNOTATIONS.length - 1; s++) {
     const fromAnn = CARDIAC_ANNOTATIONS[s];
     const toAnn   = CARDIAC_ANNOTATIONS[s + 1];
     const fromId  = stageIdentities[s];
     const toId    = stageIdentities[s + 1];
-    for (let k = 0; k < DENSE_SUBSTEPS; k++) {
-      const t = k / DENSE_SUBSTEPS;
+    for (let k = 0; k < substeps; k++) {
+      const t = k / substeps;
       dense.push({
         angles: fromId.map((a, i) => a + (toId[i] - a) * t),
         d:      fromAnn.d + (toAnn.d - fromAnn.d) * t,
@@ -246,19 +238,6 @@ const buildDenseTrack = (stageIdentities) => {
   dense.push({ angles: stageIdentities[stageIdentities.length - 1], d: last.d, color: last.color });
   return dense;
 };
-
-const DENSE_ONSET    = buildDenseTrack(ONSET_IDENTITIES);
-const DENSE_RECOVERY = buildDenseTrack(RECOVERY_IDENTITIES);
-// One continuous ordered path through the whole object, monotonically from
-// optimum physiology to full death: the onset story first (healthy →
-// death), then the recovery track's own identities in that same
-// direction (least-severe → most-severe). Both tracks end at the identical
-// full-death identity, so the very first frame is life and the very last
-// is death, with nothing beyond it.
-const COMBINED_TRACK = [
-  ...DENSE_ONSET.map(e => ({ ...e, track: "onset" })),
-  ...DENSE_RECOVERY.map(e => ({ ...e, track: "recovery" })),
-];
 
 const detectSafariIPad = () => {
   if (typeof navigator === "undefined") return false;
@@ -272,348 +251,6 @@ const detectSafariIPad = () => {
     !/Chrome|CriOS|EdgiOS|Edg|FxiOS|Firefox/i.test(ua);
   return isAppleTouchDevice && isSafari;
 };
-
-// ── Legacy 2D stage — the original live spring-physics simulation, kept
-// standalone so it can be viewed side by side with the 3D discrete-identity
-// object above. Unlike the 3D object (a stack of precomputed frames you
-// travel through), this is a genuine continuous RAF simulation: M springs
-// toward a disease target set by dragging the arc, C/T/O/OS/H/S cascade to
-// compensate (each rope-tethered deeper than the orbit it protects via
-// DEPTH_GROWTH), and — left alone long enough after settling — the whole
-// system heals itself back toward optimum physiology on its own.
-const LegacyPhysicsStage = React.forwardRef(function LegacyPhysicsStage({ onInfoChange, onDiseaseChange }, ref) {
-  const wrapRef          = useRef(null);
-  // Pointer math (arc drag, M drag) is measured against #legacy_stage
-  // itself — the actual 900x900 scaled box — not the flex wrap around it.
-  // Relying on the wrap's own rect assumed flex-centering of an oversized,
-  // transformed child was always pixel-perfect; measuring the real box
-  // directly is unambiguous regardless of aspect-ratio mismatches between
-  // the wrap and the stage.
-  const stageElRef       = useRef(null);
-  const dotElsRef        = useRef(new Array(MCTOSHS_ORBITS.length).fill(null));
-  const ropeCanvasRef    = useRef(null);
-  const orbStateRef      = useRef(MCTOSHS_ORBITS.map(() => ({ angle: 0, omega: 0 })));
-  const diseaseRef       = useRef(0);
-  const [diseaseLevel, setDiseaseLevel] = useState(0);
-  const mDraggingRef     = useRef(false);
-  const arcDraggingRef   = useRef(false);
-  const settledStreakRef = useRef(0);
-  const physicsParams    = useRef({ ...PHYS_DEFAULTS });
-  const [activeStageIdx, setActiveStageIdx] = useState(0);
-  const activeStageIdxRef = useRef(0);
-
-  // Unified 60fps loop: disease physics + homeostasis cascade + rope + stage display
-  useEffect(() => {
-    let prevT = null;
-    let raf;
-
-    const tick = (t) => {
-      raf = requestAnimationFrame(tick);
-      if (prevT === null) { prevT = t; return; }
-      const dt = Math.min((t - prevT) / 1000, 0.05);
-      prevT = t;
-
-      const N  = MCTOSHS_ORBITS.length;
-      const s0 = orbStateRef.current[0]; // M
-
-      // Healing: once every orbit has genuinely settled (not just for one
-      // frame — selectStage zeroes every omega instantly, which would
-      // otherwise look "settled" before real motion even starts) and
-      // nothing is actively dragging, the disease level decays back toward
-      // zero on its own.
-      const SETTLE_OMEGA = 0.05;
-      let allSettled = true;
-      for (let k = 0; k < N; k++) {
-        if (Math.abs(orbStateRef.current[k].omega) >= SETTLE_OMEGA) { allSettled = false; break; }
-      }
-      settledStreakRef.current = allSettled ? settledStreakRef.current + 1 : 0;
-      const trulySettled = settledStreakRef.current > 30;
-      if (!mDraggingRef.current && !arcDraggingRef.current && trulySettled && s0.angle < DEATH_THRESH && diseaseRef.current > 0) {
-        const HEAL_RATE = 0.15; // /s
-        const next = diseaseRef.current * Math.max(0, 1 - HEAL_RATE * dt);
-        diseaseRef.current = next < 0.0005 ? 0 : next;
-        setDiseaseLevel(diseaseRef.current);
-      }
-
-      // M: springs toward the disease-driven target, overwhelming any
-      // compensatory pushback (K_DISEASE dominates), overdamped so it
-      // approaches smoothly without oscillating.
-      if (!mDraggingRef.current) {
-        const TARGET_ANG = (diseaseRef.current / 0.20) * Math.PI;
-        const K_DISEASE  = 28.0;
-        const DMP_M      = 14.0;
-        const alphaM = K_DISEASE * (TARGET_ANG - s0.angle);
-        s0.omega += (alphaM - DMP_M * s0.omega) * dt;
-        s0.angle += s0.omega * dt;
-        if (s0.angle > Math.PI)      { s0.angle = Math.PI; s0.omega = 0; }
-        if (s0.angle < -Math.PI / 2) { s0.angle = -Math.PI / 2; s0.omega = 0; }
-      }
-
-      const mAng   = s0.angle;
-      const isDead = mAng >= DEATH_THRESH;
-
-      const currentD    = (Math.max(0, mAng) / Math.PI) * 0.20;
-      const dynStageIdx = CARDIAC_ANNOTATIONS.reduce((best, ann, idx) => currentD >= ann.d ? idx : best, 0);
-      const dynEngaged  = CARDIAC_ANNOTATIONS[dynStageIdx].engaged;
-
-      const pp      = physicsParams.current;
-      const K_SP    = pp.kSp;
-      const DMP_ORB = pp.dmpOrb;
-
-      // C: always compensates CCW against M's pathological pressure.
-      {
-        const sc            = orbStateRef.current[1];
-        const mPathological = Math.max(0, mAng);
-        const targetC       = -Math.min(mPathological, PHYSIO_LIMIT) * pp.cMirrorRatio;
-        const mOverload     = Math.max(0, mPathological - pp.compResilience);
-        const alpha_c = isDead
-          ? 3.0 * (-Math.PI - sc.angle) - DMP_ORB * 3.5 * sc.omega
-          : K_SP * 1.7 * (targetC - sc.angle) - DMP_ORB * 1.1 * sc.omega - pp.pressureCoeff * mOverload;
-        sc.omega += alpha_c * dt;
-        sc.angle += sc.omega * dt;
-        if (sc.angle > 0)        { sc.angle = 0;        sc.omega = 0; }
-        if (sc.angle < -Math.PI) { sc.angle = -Math.PI; sc.omega = 0; }
-      }
-
-      // T, O, OS, H, S: engaged orbits compensate deeper than the orbit
-      // they protect (DEPTH_GROWTH), tracking the outer orbit's REAL-TIME
-      // angle (not a lagged average) so each inner orbit is always pinned
-      // to stay proportionally deeper than its outer neighbor — this is
-      // what guarantees C leads recovery, T follows, and so on inward,
-      // since an inner orbit's target can only reach 0 once its outer
-      // neighbor's actual angle already has.
-      for (let i = 2; i < N; i++) {
-        const s         = orbStateRef.current[i];
-        const outer     = orbStateRef.current[i - 1];
-        const prevAng   = outer.angle;
-        const orbId     = MCTOSHS_ORBITS[i].letter;
-        const isEngaged = dynEngaged.includes(orbId);
-        const orb_k     = K_SP    * CASCADE_K_FACTORS[i - 2];
-        const orb_dmp   = DMP_ORB * CASCADE_DMP_FACTORS[i - 2] * 2.1;
-        let alpha       = -orb_dmp * s.omega;
-
-        if (isDead) {
-          alpha += 3.0 * (-Math.PI - s.angle);
-        } else if (!isEngaged) {
-          alpha += orb_k * (0 - s.angle);
-        } else {
-          const ropeTgt = prevAng * DEPTH_GROWTH;
-          alpha += orb_k * (ropeTgt - s.angle);
-          const ccw_overload = Math.max(0, -prevAng - PHYSIO_LIMIT);
-          alpha -= pp.breakdownForce * ccw_overload;
-        }
-
-        s.omega += alpha * dt;
-        s.angle += s.omega * dt;
-        if (s.angle >  0)       { s.angle =  0;       s.omega = 0; }
-        if (s.angle < -Math.PI) { s.angle = -Math.PI; s.omega = 0; }
-      }
-
-      // Death-guard rope constraint — belt-and-suspenders so no orbit ever
-      // gets more than a generous slack further toward death than the
-      // orbit holding its rope, applied innermost-out.
-      {
-        const DEATH_GUARD_SLACK = Math.PI * 0.55;
-        for (let i = N - 2; i >= 1; i--) {
-          const s     = orbStateRef.current[i];
-          const inner = orbStateRef.current[i + 1];
-          const floor = inner.angle - DEATH_GUARD_SLACK;
-          if (s.angle < floor) { s.angle = floor; if (s.omega < 0) s.omega = 0; }
-        }
-      }
-
-      // Render dots directly via DOM (no React re-render per frame).
-      MCTOSHS_ORBITS.forEach((orb, i) => {
-        const s  = orbStateRef.current[i];
-        const el = dotElsRef.current[i];
-        if (!el) return;
-        const cssDeg = s.angle * (180 / Math.PI) - 90;
-        const rad    = s.angle - Math.PI / 2;
-        el.style.transform = `rotate(${cssDeg}deg) translateX(${orb.r}px)`;
-        const dotEl = el.firstElementChild;
-        if (dotEl) dotEl.style.transform = `rotate(${-cssDeg}deg)`;
-        s._x = 450 + Math.cos(rad) * orb.r;
-        s._y = 450 + Math.sin(rad) * orb.r;
-      });
-
-      // Which canonical stage M's actual position currently reads as —
-      // reported to the parent (via the onInfoChange effect below) instead
-      // of writing into the DOM directly, since the display now lives in
-      // the shared footer, not floating over the stage itself.
-      {
-        const mD = Math.max(0, s0.angle / Math.PI) * 0.20;
-        let annIdx = 0;
-        for (let ai = CARDIAC_ANNOTATIONS.length - 1; ai >= 0; ai--) {
-          if (mD >= CARDIAC_ANNOTATIONS[ai].d) { annIdx = ai; break; }
-        }
-        if (annIdx !== activeStageIdxRef.current) {
-          activeStageIdxRef.current = annIdx;
-          setActiveStageIdx(annIdx);
-        }
-      }
-
-      // Ropes.
-      const ropeCanvas = ropeCanvasRef.current;
-      if (ropeCanvas) {
-        const ctx = ropeCanvas.getContext('2d');
-        ctx.clearRect(0, 0, 900, 900);
-        for (let i = 0; i < N - 1; i++) {
-          const a = orbStateRef.current[i];
-          const b = orbStateRef.current[i + 1];
-          ctx.beginPath();
-          ctx.moveTo(a._x, a._y);
-          ctx.lineTo(b._x, b._y);
-          ctx.strokeStyle = MCTOSHS_ORBITS[i].color + '55';
-          ctx.lineWidth   = 1.2;
-          ctx.setLineDash([4, 5]);
-          ctx.stroke();
-          ctx.setLineDash([]);
-        }
-      }
-    };
-
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-
-  const handleMDotPointerDown = (e) => {
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    mDraggingRef.current = true;
-    orbStateRef.current[0].omega = 0;
-  };
-
-  const handleStagePointerMove = (e) => {
-    if (!mDraggingRef.current) return;
-    const stageEl = stageElRef.current;
-    if (!stageEl) return;
-    const rect = stageEl.getBoundingClientRect();
-    const dx = e.clientX - (rect.left + rect.width  / 2);
-    const dy = e.clientY - (rect.top  + rect.height / 2);
-    if (Math.sqrt(dx * dx + dy * dy) < 5) return;
-    const s0 = orbStateRef.current[0];
-    s0.angle = Math.atan2(dy, dx) + Math.PI / 2;
-    s0.omega = 0;
-  };
-
-  const handleStagePointerUp = () => { mDraggingRef.current = false; };
-
-  const updateDiseaseFromPointer = (e) => {
-    const stageEl = stageElRef.current;
-    if (!stageEl) return;
-    const rect = stageEl.getBoundingClientRect();
-    const dx = e.clientX - (rect.left + rect.width  / 2);
-    const dy = e.clientY - (rect.top  + rect.height / 2);
-    const raw = Math.atan2(dy, dx);
-    const ang = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, raw));
-    const d = (ang + Math.PI / 2) / Math.PI * 0.20;
-    diseaseRef.current = d;
-    setDiseaseLevel(d);
-  };
-
-  const handleArcPointerDown = (e) => {
-    e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    arcDraggingRef.current = true;
-    updateDiseaseFromPointer(e);
-  };
-  const handleArcPointerMove = (e) => { if (arcDraggingRef.current) updateDiseaseFromPointer(e); };
-  const handleArcPointerUp   = () => { arcDraggingRef.current = false; };
-
-  const selectStage = (idx) => {
-    const ann = CARDIAC_ANNOTATIONS[idx];
-    diseaseRef.current = ann.d;
-    setDiseaseLevel(ann.d);
-    physicsParams.current = { ...PHYS_DEFAULTS, ...ann.config };
-    activeStageIdxRef.current = idx;
-    setActiveStageIdx(idx);
-    orbStateRef.current.forEach(s => { s.omega = 0; });
-    settledStreakRef.current = 0;
-  };
-
-  // Lets the parent trigger a stage selection from the shared footer's
-  // stage-list buttons, which live outside this component now.
-  useImperativeHandle(ref, () => ({ selectStage }));
-
-  // Reports this stage's current status up so the parent can render it in
-  // the shared footer instead of it floating over the stage itself, and so
-  // the 2D arc can drive the 3D object's observation plate in sync.
-  useEffect(() => {
-    onInfoChange?.({ stageIdx: activeStageIdx, diseaseLevel });
-  }, [activeStageIdx, diseaseLevel, onInfoChange]);
-  useEffect(() => {
-    onDiseaseChange?.(diseaseLevel);
-  }, [diseaseLevel, onDiseaseChange]);
-
-  const t      = diseaseLevel / 0.20;
-  const ARC_R  = 390;
-  const ang    = t * Math.PI - Math.PI / 2;
-  const dotX   = 450 + ARC_R * Math.cos(ang);
-  const dotY   = 450 + ARC_R * Math.sin(ang);
-  const dr     = Math.round(255 * t);
-  const dg     = Math.round(220 * (1 - t));
-  const dotCol  = `rgba(${dr},${dg},70,0.95)`;
-  const glowCol = `rgba(${dr},${dg},70,0.30)`;
-  const trackD  = `M 450 ${450 - ARC_R} A ${ARC_R} ${ARC_R} 0 0 1 450 ${450 + ARC_R}`;
-
-  return (
-    <div id="legacy_stage_wrap" ref={wrapRef}
-      onPointerMove={handleStagePointerMove}
-      onPointerUp={handleStagePointerUp}
-      onPointerCancel={handleStagePointerUp}
-    >
-      <div id="legacy_stage" ref={stageElRef}>
-        <div id="legacy_center">
-          <div id="legacy_pr_sphere" />
-          <div id="legacy_mctosh_sphere" />
-        </div>
-
-        {MCTOSHS_ORBITS.map(orb => (
-          <div
-            key={`legacy-ring-${orb.id}`}
-            className="orb_ring"
-            style={{
-              "--orb-color": orb.color,
-              width:      `${orb.r * 2}px`,
-              height:     `${orb.r * 2}px`,
-              marginTop:  `-${orb.r}px`,
-              marginLeft: `-${orb.r}px`,
-            }}
-          />
-        ))}
-
-        <canvas
-          ref={ropeCanvasRef}
-          width={900} height={900}
-          style={{ position: 'absolute', top: 0, left: 0, width: '900px', height: '900px', pointerEvents: 'none', zIndex: 7 }}
-        />
-
-        <svg viewBox="0 0 900 900" style={{ position: 'absolute', top: 0, left: 0, width: '900px', height: '900px', overflow: 'visible', pointerEvents: 'none', zIndex: 9 }}>
-          <path d={trackD} fill="none" stroke="rgba(170,170,210,0.55)" strokeWidth="1.5" strokeDasharray="5 8" strokeLinecap="round" opacity="0.7" />
-          <path d={trackD} fill="none" stroke="transparent" strokeWidth="44"
-            pointerEvents="stroke" style={{ cursor: 'ns-resize' }}
-            onPointerDown={handleArcPointerDown} onPointerMove={handleArcPointerMove}
-            onPointerUp={handleArcPointerUp} onPointerCancel={handleArcPointerUp}
-          />
-          <circle cx={dotX} cy={dotY} r="14" fill="none" stroke={glowCol} strokeWidth="8" style={{ pointerEvents: 'none' }} />
-          <circle cx={dotX} cy={dotY} r="5.5" fill={dotCol} stroke="rgba(255,255,255,0.65)" strokeWidth="1.5" style={{ pointerEvents: 'none' }} />
-        </svg>
-
-        {MCTOSHS_ORBITS.map((orb, i) => (
-          <div
-            key={orb.id}
-            ref={el => { dotElsRef.current[i] = el; }}
-            className="bio_particle"
-            style={{ "--orb-color": orb.color, opacity: 1, ...(i === 0 ? { cursor: 'grab', touchAction: 'none' } : {}) }}
-            onPointerDown={i === 0 ? handleMDotPointerDown : undefined}
-          >
-            <div className="orb_dot"><span className="orb_dot_letter">{orb.letter}</span></div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-});
 
 export default function Login({ onLogin }) {
   const navigate     = useNavigate();
@@ -632,6 +269,20 @@ export default function Login({ onLogin }) {
   const [isCoarsePointer] = useState(() =>
     typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches
   );
+  const useLightweightHero = !isSafariIPad && isCoarsePointer && typeof window !== "undefined" && window.innerWidth < 640;
+  const denseSubsteps = isSafariIPad ? 12 : (isCoarsePointer ? 24 : 96);
+  const { denseOnset, denseRecovery, combinedTrack } = useMemo(() => {
+    const nextDenseOnset = buildDenseTrack(ONSET_IDENTITIES, denseSubsteps);
+    const nextDenseRecovery = buildDenseTrack(RECOVERY_IDENTITIES, denseSubsteps);
+    return {
+      denseOnset: nextDenseOnset,
+      denseRecovery: nextDenseRecovery,
+      combinedTrack: [
+        ...nextDenseOnset.map((entry) => ({ ...entry, track: "onset" })),
+        ...nextDenseRecovery.map((entry) => ({ ...entry, track: "recovery" })),
+      ],
+    };
+  }, [denseSubsteps]);
 
   const [mode,         setMode]         = useState("login");
   const [username,     setUsername]     = useState("");
@@ -671,47 +322,20 @@ export default function Login({ onLogin }) {
     setPlateIdx(v);
   };
 
-  // The legacy 2D stage's own status, reported up so the shared footer can
-  // display it and so its stage-list buttons (also in the footer) can
-  // trigger a selection back down via legacyStageRef.
-  const legacyStageRef = useRef(null);
-  const [legacyInfo, setLegacyInfo] = useState({ stageIdx: 0, diseaseLevel: 0 });
-  // Cross-link: dragging the 2D arc (or picking a 2D stage) moves the 3D
-  // object's observation plate to the matching depth simultaneously, so
-  // the two views always agree on "where" the patient currently is. Which
-  // HALF of COMBINED_TRACK it lands on matters too — DENSE_ONSET and
-  // DENSE_RECOVERY hold different per-orbit angles at the same disease
-  // level (recovery lags C→T→O→OS→H→S, same as the live 2D physics now
-  // does), so whether disease level is rising (onset) or falling
-  // (recovery/healing) in the 2D sim decides which track the 3D slice
-  // comes from — inferred from the sign of the change since onDiseaseChange
-  // only reports the level, not the direction it's moving.
-  // Memoized so the child's effect (keyed on this callback's identity)
-  // doesn't re-fire on every unrelated parent re-render — setPlate only
-  // ever touches refs + a stable state setter, so a stale closure over it
-  // is safe here.
-  const legacyDirRef  = useRef("onset");
-  const legacyPrevDRef = useRef(0);
-  const handleLegacyDiseaseChange = useCallback((d) => {
-    const prev = legacyPrevDRef.current;
-    if (d > prev + 1e-6)      legacyDirRef.current = "onset";
-    else if (d < prev - 1e-6) legacyDirRef.current = "recovery";
-    legacyPrevDRef.current = d;
-
-    const frac = d / 0.20;
-    if (legacyDirRef.current === "recovery") {
-      setPlate(DENSE_ONSET.length + Math.round(frac * (DENSE_RECOVERY.length - 1)));
-    } else {
-      setPlate(Math.round(frac * (DENSE_ONSET.length - 1)));
-    }
-  }, []);
-
   // cutawayIdx: hides slices strictly in front of the plate (idx <
   // cutawayIdx, i.e. life-ward along the loop) so you can see past a
   // crowded near field straight down to
   // wherever the plate currently sits. Clamped to plateIdx — it can only
   // ever clear away up TO the plate's own slice, never past it.
   const [cutawayIdx, setCutawayIdx] = useState(0);
+
+  useEffect(() => {
+    const maxIdx = Math.max(0, combinedTrack.length - 1);
+    plateIdxRef.current = Math.min(plateIdxRef.current, maxIdx);
+    setPlateIdx((prev) => Math.min(prev, maxIdx));
+    setAnimatedIdx((prev) => Math.min(prev, maxIdx));
+    setCutawayIdx((prev) => Math.min(prev, maxIdx));
+  }, [combinedTrack.length]);
 
   // Automatic healing: left alone (no slider drag, no stage-list click) for
   // a few seconds, the plate drifts back toward optimum physiology on its
@@ -734,12 +358,12 @@ export default function Login({ onLogin }) {
       const dt = Math.min((t - lastT) / 1000, 0.15);
       lastT = t;
 
-      // Decay toward the healthy end of whichever HALF of COMBINED_TRACK
+      // Decay toward the healthy end of whichever HALF of combinedTrack
       // the plate is currently sitting in, not toward absolute index 0 —
-      // sitting in the recovery half (idx >= DENSE_ONSET.length), its own
-      // "fully healed" point is DENSE_ONSET.length, not 0, otherwise idle
+      // sitting in the recovery half (idx >= denseOnset.length), its own
+      // "fully healed" point is denseOnset.length, not 0, otherwise idle
       // decay would blindly cross back into unrelated onset frames.
-      const trackStart = plateIdxRef.current >= DENSE_ONSET.length ? DENSE_ONSET.length : 0;
+      const trackStart = plateIdxRef.current >= denseOnset.length ? denseOnset.length : 0;
       const rel = plateIdxRef.current - trackStart;
       if (Date.now() - lastInteractionRef.current > HEAL_DELAY_MS && rel > 0) {
         const nextRel = rel * Math.max(0, 1 - HEAL_RATE * dt);
@@ -756,11 +380,11 @@ export default function Login({ onLogin }) {
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, []);
+  }, [denseOnset.length]);
 
   // Fit stage to container
   useEffect(() => {
-    if (!wrapRef.current) return;
+    if (useLightweightHero || !wrapRef.current) return;
     const ro = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       const fitSize = height > 0 ? Math.min(width, height) : width;
@@ -769,10 +393,11 @@ export default function Login({ onLogin }) {
     });
     ro.observe(wrapRef.current);
     return () => ro.disconnect();
-  }, []);
+  }, [useLightweightHero]);
 
   // Pinch-zoom on animation wrap only
   useEffect(() => {
+    if (useLightweightHero) return;
     const wrap = wrapRef.current;
     if (!wrap) return;
 
@@ -814,7 +439,7 @@ export default function Login({ onLogin }) {
       wrap.removeEventListener("touchmove",  onMove);
       wrap.removeEventListener("touchend",   onEnd);
     };
-  }, []);
+  }, [useLightweightHero]);
 
   // Drag anywhere on the stage (that isn't the arc control) to orbit the
   // object freely — both axes, unclamped, so it can be panned 360° in any
@@ -846,10 +471,10 @@ export default function Login({ onLogin }) {
 
   // Stage-list click: jump the observation plate straight to that canonical
   // stage's exact onset frame (stage s sits at dense index s *
-  // DENSE_SUBSTEPS within COMBINED_TRACK, since the onset half of the track
-  // occupies its first DENSE_ONSET.length entries in that same order).
+  // denseSubsteps within combinedTrack, since the onset half of the track
+  // occupies its first denseOnset.length entries in that same order).
   const selectStage = (idx) => {
-    setPlate(idx * DENSE_SUBSTEPS);
+    setPlate(idx * denseSubsteps);
   };
 
   const handleSubmit = async (e) => {
@@ -877,7 +502,7 @@ export default function Login({ onLogin }) {
 
   const toggle = () => { setMode(m => m === "login" ? "signup" : "login"); setError(""); };
 
-  // The full object is the whole dense COMBINED_TRACK — every interpolated
+  // The full object is the whole dense combinedTrack — every interpolated
   // frame of the round trip (sicken, then heal), layered as flat, parallel
   // slices along Z, one per frame, and it never changes shape or hides
   // anything for the slider. Dragging the stage directly is the only thing
@@ -885,16 +510,16 @@ export default function Login({ onLogin }) {
   // (PR sphere + orbit rings) to a depth along this line — a marker plane
   // scanning through the object, not a change to the object.
   // Total tunnel depth stays constant regardless of how many frames
-  // COMBINED_TRACK has — the per-step gap shrinks as DENSE_SUBSTEPS rises
+  // combinedTrack has — the per-step gap shrinks as denseSubsteps rises
   // so raising it for smoother motion doesn't also stretch the object
   // absurdly deep.
   const TOTAL_DEPTH_RANGE = 970;
-  const STACK_SLICE_GAP = TOTAL_DEPTH_RANGE / (COMBINED_TRACK.length - 1);
+  const STACK_SLICE_GAP = TOTAL_DEPTH_RANGE / Math.max(1, combinedTrack.length - 1);
   // Negative translateZ recedes away from the viewer (into the screen);
   // positive comes forward, toward the viewer. Life (idx 0) sits forward,
   // death (the last idx) recedes deepest — so sliding from life to death
   // reads as travelling INTO the object's depth, not out of it.
-  const depthForIdx = (idx) => -(idx - (COMBINED_TRACK.length - 1) / 2) * STACK_SLICE_GAP;
+  const depthForIdx = (idx) => -(idx - (combinedTrack.length - 1) / 2) * STACK_SLICE_GAP;
   // Every moving piece — slices, the observation plate, the orbit rings —
   // shares this one function so they all sit on the exact same straight axis.
   const transformForIdx = (idx, extraZ = 0) => `translateZ(${depthForIdx(idx) + extraZ}px)`;
@@ -903,26 +528,26 @@ export default function Login({ onLogin }) {
   // raw slider target — so depth motion always reads as continuous. Keep the
   // exact fractional position for transforms, and only quantize when we need
   // to label/report which canonical slice we're nearest to.
-  const animatedDepthIdx = Math.max(0, Math.min(COMBINED_TRACK.length - 1, animatedIdx));
+  const animatedDepthIdx = Math.max(0, Math.min(combinedTrack.length - 1, animatedIdx));
   const lowerAnimatedIdx = Math.floor(animatedDepthIdx);
-  const upperAnimatedIdx = Math.min(COMBINED_TRACK.length - 1, lowerAnimatedIdx + 1);
+  const upperAnimatedIdx = Math.min(combinedTrack.length - 1, lowerAnimatedIdx + 1);
   const animatedMix = animatedDepthIdx - lowerAnimatedIdx;
-  const lowerEntry = COMBINED_TRACK[lowerAnimatedIdx];
-  const upperEntry = COMBINED_TRACK[upperAnimatedIdx];
+  const lowerEntry = combinedTrack[lowerAnimatedIdx];
+  const upperEntry = combinedTrack[upperAnimatedIdx];
   const animatedEntry = {
     angles: lowerEntry.angles.map((angle, i) => angle + (upperEntry.angles[i] - angle) * animatedMix),
     d: lowerEntry.d + (upperEntry.d - lowerEntry.d) * animatedMix,
     color: animatedMix < 0.5 ? lowerEntry.color : upperEntry.color,
     track: animatedMix < 0.5 ? lowerEntry.track : upperEntry.track,
   };
-  const onticIdx = Math.max(0, Math.min(COMBINED_TRACK.length - 1, Math.round(animatedDepthIdx)));
-  const onticEntry = COMBINED_TRACK[onticIdx];
+  const onticIdx = Math.max(0, Math.min(combinedTrack.length - 1, Math.round(animatedDepthIdx)));
+  const onticEntry = combinedTrack[onticIdx];
   let onticNearestStage = CARDIAC_ANNOTATIONS[0];
   CARDIAC_ANNOTATIONS.forEach(ann => {
     if (Math.abs(ann.d - onticEntry.d) < Math.abs(onticNearestStage.d - onticEntry.d)) onticNearestStage = ann;
   });
 
-  // COMBINED_TRACK stays dense (642 frames) so the plate can land on any of
+  // combinedTrack stays dense so the plate can land on any of
   // them one at a time — but rendering all of them simultaneously in the
   // full (unisolated) view is far more DOM than a phone/tablet GPU can
   // composite smoothly (each frame is ~30 elements incl. an SVG and
@@ -944,7 +569,7 @@ export default function Login({ onLogin }) {
   // still crash the tab ("A Problem Repeatedly Occurred") under enough
   // simultaneous 3D layers — coarse-pointer devices still get a lower
   // budget to stay safe, just a less punishing one than before.
-  const FULL_VIEW_BUDGET = isSafariIPad ? 36 : (isCoarsePointer ? 120 : 1000);
+  const FULL_VIEW_BUDGET = isSafariIPad ? 18 : (isCoarsePointer ? 36 : 90);
   // Clamped so the cutaway can only clear slices strictly in front of the
   // plate — it stops the moment it reaches the plate's own slice, never
   // eating into the plate or anything beyond it.
@@ -958,13 +583,13 @@ export default function Login({ onLogin }) {
   // 1000 — the same class of bug fixed earlier for the cord feature.
   // Memoized so it only rebuilds when the budget or cutaway actually change.
   const fullViewIndices = useMemo(() => {
-    const stride = Math.max(1, Math.ceil(COMBINED_TRACK.length / FULL_VIEW_BUDGET));
+    const stride = Math.max(1, Math.ceil(combinedTrack.length / FULL_VIEW_BUDGET));
     const idxs = [];
-    for (let j = 0; j < COMBINED_TRACK.length; j += stride) {
+    for (let j = 0; j < combinedTrack.length; j += stride) {
       if (j >= effectiveCutaway) idxs.push(j);
     }
     return idxs;
-  }, [FULL_VIEW_BUDGET, effectiveCutaway]);
+  }, [FULL_VIEW_BUDGET, combinedTrack.length, effectiveCutaway]);
   // Cheap per-tick work: a linear scan over the memoized (already sorted,
   // already-filtered) array to find whichever sampled slice onticIdx is
   // nearest to right now — only the stable ring stack uses this sampled
@@ -1040,9 +665,32 @@ export default function Login({ onLogin }) {
           </div>
         </div>
 
-        {/* ── Dual view: the 3D discrete-identity object next to the
-            original 2D live-physics stage, side by side for comparison. ── */}
-        <div id="dual_stage_row" className={isSafariIPad ? "dual_stage_row--single" : ""}>
+        {useLightweightHero ? (
+          <div id="login_scene_fallback" aria-hidden="true">
+            <div id="login_scene_core">
+              <div className="login_scene_ring login_scene_ring--outer" />
+              <div className="login_scene_ring login_scene_ring--mid" />
+              <div className="login_scene_ring login_scene_ring--inner" />
+              <div id="login_scene_pulse" />
+              <div id="login_scene_mark">M</div>
+            </div>
+            <div id="login_scene_copy">
+              <span id="login_scene_title">Mobile-safe access</span>
+              <p id="login_scene_text">
+                The full 3D clinical model is reduced on touch devices so the login page stays stable on iPad and Mobile Safari.
+              </p>
+              <div id="login_scene_schema_list">
+                {MCTOSHS_ORBITS.map((orb) => (
+                  <span key={orb.id} className="login_scene_schema_chip" style={{ "--orb-color": orb.color }}>
+                    {orb.letter}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+        {/* ── Main 3D object ── */}
         <div id="login_stage_wrap" ref={wrapRef}
           onPointerDown={handleWrapPointerDown}
           onPointerMove={handleStagePointerMove}
@@ -1091,11 +739,11 @@ export default function Login({ onLogin }) {
                 className="orb_ring observation_ring"
                 style={{
                   "--orb-color": orb.color,
-                  width:      `${orb.r * 2}px`,
-                  height:     `${orb.r * 2}px`,
-                  marginTop:  `-${orb.r}px`,
-                  marginLeft: `-${orb.r}px`,
-                  transform:  transformForIdx(animatedDepthIdx),
+              width:      `${orb.r * 2}px`,
+              height:     `${orb.r * 2}px`,
+              marginTop:  `-${orb.r}px`,
+              marginLeft: `-${orb.r}px`,
+              transform:  transformForIdx(animatedDepthIdx),
                 }}
               />
             ))}
@@ -1107,7 +755,7 @@ export default function Login({ onLogin }) {
                 rotates the object itself. */}
             <div id="identity_stack">
               {fullViewIndices.map(j => renderRing(
-                COMBINED_TRACK[j].color, j, COMBINED_TRACK[j].track, j, j === nearestSampledIdx
+                combinedTrack[j].color, j, combinedTrack[j].track, j, j === nearestSampledIdx
               ))}
               {renderItems(animatedEntry, animatedDepthIdx)}
             </div>
@@ -1115,35 +763,28 @@ export default function Login({ onLogin }) {
           </div>
         </div>
 
-        {!isSafariIPad && (
-          <LegacyPhysicsStage ref={legacyStageRef} onInfoChange={setLegacyInfo} onDiseaseChange={handleLegacyDiseaseChange} />
-        )}
-        </div>
-
-        {/* ── Shared footer — everything that used to float over the 3D and
-            2D objects (labels, live status, sliders, the stage pickers)
-            lives here now instead, in normal document flow below both
-            stages, so nothing ever overlaps either view. Left column is the
-            3D object's info/controls, right column is the 2D stage's. ── */}
+        {/* ── Shared footer — everything that used to float over the 3D
+            object lives here now instead, in normal document flow below it,
+            so nothing overlaps the stage. ── */}
         <div id="anim_footer">
-          <div id="anim_footer_row" className={isSafariIPad ? "anim_footer_row--single" : ""}>
+          <div id="anim_footer_row" className="anim_footer_row--single">
           <div id="anim_footer_3d">
             {/* ── Section title — what this column is about, and what's
                 actually part of this particular object. ── */}
             <div className="footer_section_title">
               3D Object
-              <span className="footer_section_sub">discrete identity stack · {COMBINED_TRACK.length} slices · rotate + travel slider</span>
+              <span className="footer_section_sub">discrete identity stack · {combinedTrack.length} slices · rotate + travel slider</span>
             </div>
 
             <div id="object_info">
               <div className="object_info_row">
                 <span className="object_info_label">Slices</span>
-                <span className="object_info_value">{COMBINED_TRACK.length}</span>
+                <span className="object_info_value">{combinedTrack.length}</span>
               </div>
               <div className="object_info_row">
                 <span className="object_info_label">Ontic now</span>
                 <span className="object_info_value">
-                  #{onticIdx + 1} / {COMBINED_TRACK.length}
+                  #{onticIdx + 1} / {combinedTrack.length}
                   <span className="object_info_sub">
                     {" "}· {(onticEntry.d / 0.20 * 100).toFixed(1)}% · {onticEntry.track === "onset" ? "sickening" : "healing"} · near {onticNearestStage.abbr}
                   </span>
@@ -1159,11 +800,11 @@ export default function Login({ onLogin }) {
                 id="travel_slider"
                 type="range"
                 min={0}
-                max={COMBINED_TRACK.length - 1}
+                max={combinedTrack.length - 1}
                 step={1}
                 value={plateIdx}
                 onChange={e => setPlate(Number(e.target.value))}
-                style={{ "--slider-fill": `${(plateIdx / (COMBINED_TRACK.length - 1)) * 100}%` }}
+                style={{ "--slider-fill": `${(plateIdx / Math.max(1, combinedTrack.length - 1)) * 100}%` }}
               />
               <span className="slider_label">
                 {onticEntry.track === "onset" ? "sickening" : "healing"} · {(onticEntry.d / 0.20 * 100).toFixed(0)}%
@@ -1239,41 +880,10 @@ export default function Login({ onLogin }) {
               </div>
             </div>
           </div>
-
-          {!isSafariIPad && (
-          <div id="anim_footer_2d">
-            <div className="footer_section_title">
-              2D Object
-              <span className="footer_section_sub">live spring physics · M→C→T→O→OS→H→S cascade · self-healing</span>
-            </div>
-
-            <div id="legacy_stage_display">
-              <span className="dstage_abbr" style={{ color: CARDIAC_ANNOTATIONS[legacyInfo.stageIdx].color }}>
-                {CARDIAC_ANNOTATIONS[legacyInfo.stageIdx].abbr}
-              </span>
-              <span className="dstage_desc">{CARDIAC_ANNOTATIONS[legacyInfo.stageIdx].desc}</span>
-              <span className="object_info_sub">{(legacyInfo.diseaseLevel / 0.20 * 100).toFixed(0)}% disease level</span>
-            </div>
-            <div id="legacy_stage_list">
-              {CARDIAC_ANNOTATIONS.map((ann, idx) => (
-                <button
-                  key={idx}
-                  className={`ds_item${legacyInfo.stageIdx === idx ? " ds_item--active" : ""}`}
-                  style={{ "--sc": ann.color }}
-                  onClick={() => legacyStageRef.current?.selectStage(idx)}
-                >
-                  <span className="ds_dot" />
-                  <span className="ds_abbr">{ann.abbr}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-          )}
           </div>
 
-          {/* ── Items — shared by both objects (both are built from the same
-              M/C/T/O/OS/H/S), so the legend lives once, below both columns,
-              instead of living inside just one of them. ── */}
+          {/* ── Items — the legend lives below the controls instead of
+              floating inside the object. ── */}
           <div id="anim_footer_items">
             <div id="labels_card_head">
               <span id="labels_card_mctoshs">MCTOSHS</span>
@@ -1290,6 +900,8 @@ export default function Login({ onLogin }) {
             </ul>
           </div>
         </div>
+          </>
+        )}
 
         <p id="login_tagline">&ldquo;From representation to reality&rdquo;</p>
 
@@ -1297,17 +909,34 @@ export default function Login({ onLogin }) {
       </div>
 
       {/* ── Collapse toggle ── */}
-      <button
-        id="login_panel_toggle"
-        className={panelHidden ? "login_panel_toggle--collapsed" : ""}
-        title={panelHidden ? "Show login panel" : "Hide login panel"}
-        onClick={() => setPanelHidden(v => !v)}
-      >
-        <i className={`fi ${panelHidden ? "fi-rr-angle-left" : "fi-rr-angle-right"}`} />
-      </button>
+      {!useLightweightHero && (
+        <button
+          id="login_panel_toggle"
+          className={panelHidden ? "login_panel_toggle--collapsed" : ""}
+          title={panelHidden ? "Show login panel" : "Hide login panel"}
+          onClick={() => setPanelHidden(v => !v)}
+        >
+          <i className={`fi ${panelHidden ? "fi-rr-angle-left" : "fi-rr-angle-right"}`} />
+        </button>
+      )}
 
       {/* ── RIGHT: Form Panel ── */}
       <div id="login_panel" className={panelHidden ? "login_panel_hidden" : ""}>
+
+        {/* Which side of MCTOSHS to sign into — clinicians use this panel's
+            own form below; patients get routed to the separate patient
+            account system (independent auth, see AppRouter). */}
+        <div id="login_role_tabs" role="tablist" aria-label="Log in as">
+          <button type="button" role="tab" aria-selected="true" className="login_role_tab login_role_tab--active">
+            Clinician
+          </button>
+          <button
+            type="button" role="tab" aria-selected="false" className="login_role_tab"
+            onClick={() => navigate("/patient/login")}
+          >
+            Patient
+          </button>
+        </div>
 
         {/* Introduction video — hidden by default, shown on request */}
         <button
