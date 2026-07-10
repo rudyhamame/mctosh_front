@@ -8,6 +8,8 @@ const PatientSignupPage = ({ onLogin }) => {
   const navigate = useNavigate();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [gender, setGender] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -26,7 +28,7 @@ const PatientSignupPage = ({ onLogin }) => {
       const res = await fetch(apiUrl("/api/patient-auth/signup"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firstName, lastName, email, password }),
+        body: JSON.stringify({ firstName, lastName, gender, dateOfBirth, email, password }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -89,6 +91,20 @@ const PatientSignupPage = ({ onLogin }) => {
           <div className="pa_field">
             <label>Last name</label>
             <input value={lastName} onChange={e => setLastName(e.target.value)} required />
+          </div>
+          <div className="pa_field">
+            <label>Gender</label>
+            <select value={gender} onChange={e => setGender(e.target.value)} required>
+              <option value="" disabled>Select…</option>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+              <option value="Other">Other</option>
+              <option value="Prefer not to say">Prefer not to say</option>
+            </select>
+          </div>
+          <div className="pa_field">
+            <label>Date of birth</label>
+            <input type="date" value={dateOfBirth} onChange={e => setDateOfBirth(e.target.value)} required />
           </div>
           <div className="pa_field">
             <label>Email</label>

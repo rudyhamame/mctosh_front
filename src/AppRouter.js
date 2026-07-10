@@ -40,6 +40,7 @@ const SocialMediaDesignerPage = lazy(() => import("./SocialMediaControl/SocialMe
 const PatientLoginPage = lazy(() => import("./PatientApp/PatientLoginPage"));
 const PatientSignupPage = lazy(() => import("./PatientApp/PatientSignupPage"));
 const PatientCallPage = lazy(() => import("./PatientApp/PatientCallPage"));
+const PatientSettingsPage = lazy(() => import("./PatientApp/PatientSettingsPage"));
 
 const getStoredAuth = () => readStoredSession();
 const getStoredPatientAuth = () => readStoredPatientSession();
@@ -181,7 +182,8 @@ const AppRouter = () => {
             ? <Navigate to="/patient/call" replace />
             : withSuspense(<PatientSignupPage onLogin={handlePatientLogin} />)
         } />
-        <Route path="/patient/call" element={authPatient(withSuspense(<PatientCallPage onLogout={handlePatientLogout} />))} />
+        <Route path="/patient/call" element={authPatient(withSuspense(<PatientCallPage />))} />
+        <Route path="/patient/settings" element={authPatient(withSuspense(<PatientSettingsPage onLogout={handlePatientLogout} />))} />
 
         {/* Legacy redirect */}
         <Route path="/pdf/:card" element={<PdfCardRedirect />} />

@@ -617,16 +617,25 @@ const PatientInstantiationPage = () => {
                 <p id="pi_list_empty">No patient calls yet.</p>
               )}
               {calls.map(c => (
-                <button
-                  key={c._id}
-                  className={`pi_patient_item${selectedCall?._id === c._id ? " pi_patient_item--active" : ""}`}
-                  onClick={() => openCallLog(c._id)}
-                >
-                  <span className="pi_patient_id">{c.patientName || "Unknown patient"}</span>
-                  <span className="pi_patient_name">
-                    {new Date(c.startedAt || c.createdAt).toLocaleString()} · {c.status} · {formatCallDuration(c)}
-                  </span>
-                </button>
+                <div key={c._id} className="pi_patient_item_row">
+                  <button
+                    className={`pi_patient_item${selectedCall?._id === c._id ? " pi_patient_item--active" : ""}`}
+                    onClick={() => openCallLog(c._id)}
+                  >
+                    <span className="pi_patient_id">{c.patientName || "Unknown patient"}</span>
+                    <span className="pi_patient_name">
+                      {new Date(c.startedAt || c.createdAt).toLocaleString()} · {c.status} · {formatCallDuration(c)}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="pi_patient_item_delete"
+                    title="Delete call log"
+                    onClick={(e) => { e.stopPropagation(); deleteCallLog(c._id); }}
+                  >
+                    <i className="fi fi-rr-trash" />
+                  </button>
+                </div>
               ))}
             </div>
           )}

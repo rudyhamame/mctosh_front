@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Room, RoomEvent } from "livekit-client";
 import { apiUrl } from "../config/api";
-import { readStoredPatientSession, logoutStoredPatientSession } from "../utils/patientSessionCleanup";
+import { readStoredPatientSession } from "../utils/patientSessionCleanup";
 import TalkingHead from "./TalkingHead";
 import "./patientApp.css";
 
@@ -35,7 +35,7 @@ const AVATAR_OPTIONS = [
 ];
 
 // idle -> connecting -> in-call -> ended
-const PatientCallPage = ({ onLogout }) => {
+const PatientCallPage = () => {
   const navigate = useNavigate();
   const session = readStoredPatientSession();
   const [status, setStatus] = useState("idle");
@@ -216,13 +216,6 @@ const PatientCallPage = ({ onLogout }) => {
     setMuted(nextMuted);
   };
 
-  const handleLogout = async () => {
-    await roomRef.current?.disconnect();
-    await logoutStoredPatientSession();
-    onLogout();
-    navigate("/patient/login");
-  };
-
   return (
     <div className="pa_call_page">
       <audio ref={audioRef} autoPlay />
@@ -232,7 +225,7 @@ const PatientCallPage = ({ onLogout }) => {
           <div className="pa_stage_copy">
             <div className="pa_stage_topbar">
               <span className="pa_stage_eyebrow">Patient-side MCTOSHS AI</span>
-              <button className="pa_logout_link" onClick={handleLogout}>Log out</button>
+              <button className="pa_logout_link" onClick={() => navigate("/patient/settings")}>Settings</button>
             </div>
             <h1 className="pa_stage_title">
               A living interface for the call.
