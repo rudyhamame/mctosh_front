@@ -13,14 +13,16 @@
       href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100..900;1,100..900&display=swap"
       rel="stylesheet"
     />
-    <link
-      rel="stylesheet"
-      href="https://cdn-uicons.flaticon.com/4.0.0/uicons-regular-rounded/css/uicons-regular-rounded.css"
-    />
-    <link
-      rel="stylesheet"
-      href="https://cdn-uicons.flaticon.com/4.0.0/uicons-bold-rounded/css/uicons-bold-rounded.css"
-    />
+    <!-- The @flaticon/flaticon-uicons npm package (imported in main.jsx,
+         bundled locally by Vite) already provides both uicons-regular-rounded
+         and uicons-bold-rounded — these CDN links duplicated that exact same
+         icon font from a second source. Two competing @font-face
+         registrations for the same font-family, one local and one remote,
+         is a known trigger for WebKit/Safari's font-swap repaint bug: the
+         glyph paints blank and never gets repainted until something else
+         (a tap) forces a reflow — reported as "icons aren't visible until
+         you click them" on iPad Safari. Removed in favor of the single
+         locally-bundled copy. -->
   </head>
   <body>
     <noscript>You need to enable JavaScript to run this app.</noscript>

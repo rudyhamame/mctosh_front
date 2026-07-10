@@ -198,15 +198,23 @@
   width: 100%;
   padding: 0.55rem 0.75rem;
   border-radius: 7px;
-  border: none;
-  background: none;
+  /* Always-visible baseline (not "none", revealed only on :hover) — a
+     hover-only background/border reads fine with a mouse (cursor motion
+     gives ambient feedback) but on a touch device like iPad Safari there
+     is no ambient hover, so every item rendered with zero background/
+     border simply had no visible shape at all until the exact moment a
+     tap briefly triggers :hover/:active — i.e. "invisible until clicked".
+     A subtle constant border/background fixes that without changing the
+     look on desktop, where :hover/--active still layer on top of it. */
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-alt, rgba(255,255,255,0.03));
   text-align: left;
   cursor: pointer;
   transition: background 0.12s;
-  margin-bottom: 2px;
+  margin-bottom: 4px;
 }
 .pi_patient_item:hover { background: var(--color-surface); }
-.pi_patient_item--active { background: #26a69a18; }
+.pi_patient_item--active { background: #26a69a18; border-color: #26a69a55; }
 
 .pi_patient_item_row {
   position: relative;
@@ -223,11 +231,16 @@
   cursor: pointer;
   padding: 0.4rem 0.5rem;
   border-radius: 6px;
-  opacity: 0;
+  /* Always at least partially visible — opacity:0-until-:hover is a
+     touch-UI anti-pattern (see .pi_patient_item above): iPad Safari has
+     no ambient hover, so the icon was simply never shown at all outside
+     the instant a tap happens to register :hover. */
+  opacity: 0.55;
   transition: opacity 0.12s, color 0.12s, background 0.12s;
 }
-.pi_patient_item_row:hover .pi_patient_item_delete { opacity: 1; }
-.pi_patient_item_delete:hover { color: #ff6b6b; background: #ff6b6b18; }
+.pi_patient_item_row:hover .pi_patient_item_delete,
+.pi_patient_item_delete:focus-visible { opacity: 1; }
+.pi_patient_item_delete:hover { color: #ff6b6b; background: #ff6b6b18; opacity: 1; }
 
 .pi_patient_id {
   font-size: 0.65rem;
