@@ -173,6 +173,9 @@
   flex-shrink: 0;
 }
 #pi_new_btn:hover { background: #26a69a33; }
+#pi_new_btn:disabled { opacity: 0.5; cursor: default; }
+#pi_new_btn.pi_new_btn--danger { background: #ff6b6b18; color: #ff6b6b; border-color: #ff6b6b55; }
+#pi_new_btn.pi_new_btn--danger:hover { background: #ff6b6b2e; }
 
 #pi_patient_list {
   flex: 1;

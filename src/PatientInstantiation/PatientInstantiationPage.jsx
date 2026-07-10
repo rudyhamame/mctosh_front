@@ -447,6 +447,21 @@ const PatientInstantiationPage = () => {
     } catch (e) { flash(`Error: ${e.message}`); }
   };
 
+  const emptyCallLogs = async () => {
+    if (calls.length === 0) return;
+    if (!window.confirm(`Delete all ${calls.length} call log${calls.length === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(apiUrl("/api/patient-call-log"), {
+        method: "DELETE",
+        headers: authHeader(),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      setSelectedCall(null);
+      await loadCalls();
+      flash("Call logs emptied");
+    } catch (e) { flash(`Error: ${e.message}`); }
+  };
+
   const loadMorpheForPatient = useCallback(async (patientDbId) => {
     if (!userId || !patientDbId) { setReceivedMorphe(null); return; }
     try {
@@ -523,6 +538,17 @@ const PatientInstantiationPage = () => {
     finally { setDeleting(false); }
   };
 
+  // Same delete, but callable straight from a list row (see pi_patient_item_row
+  // below) without first opening the patient into the detail form.
+  const deletePatientRow = async (patient) => {
+    if (!window.confirm(`Delete ${patient.patientId}?`)) return;
+    try {
+      await fetch(apiUrl(`/api/patients/${patient._id}`), { method: "DELETE", headers: authHeader() });
+      if (selected?._id === patient._id) { setSelected(null); setIsNew(false); }
+      await loadPatients();
+    } catch {}
+  };
+
   const setVital = (key, val) =>
     setClinical(c => ({ ...c, vitalSigns: { ...c.vitalSigns, [key]: val } }));
 
@@ -594,24 +620,37 @@ const PatientInstantiationPage = () => {
                   <p id="pi_list_empty">No patients yet.</p>
                 )}
                 {patients.map(p => (
-                  <button
-                    key={p._id}
-                    className={`pi_patient_item${selected?._id === p._id ? " pi_patient_item--active" : ""}`}
-                    onClick={() => openPatient(p)}
-                  >
-                    <span className="pi_patient_id">{p.patientId}</span>
-                    <span className="pi_patient_name">
-                      {p.personal?.firstName || p.personal?.lastName
-                        ? `${p.personal.firstName} ${p.personal.lastName}`.trim()
-                        : "Unnamed"}
-                    </span>
-                  </button>
+                  <div key={p._id} className="pi_patient_item_row">
+                    <button
+                      className={`pi_patient_item${selected?._id === p._id ? " pi_patient_item--active" : ""}`}
+                      onClick={() => openPatient(p)}
+                    >
+                      <span className="pi_patient_id">{p.patientId}</span>
+                      <span className="pi_patient_name">
+                        {p.personal?.firstName || p.personal?.lastName
+                          ? `${p.personal.firstName} ${p.personal.lastName}`.trim()
+                          : "Unnamed"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="pi_patient_item_delete"
+                      title="Delete patient"
+                      onClick={(e) => { e.stopPropagation(); deletePatientRow(p); }}
+                    >
+                      <i className="fi fi-rr-trash" />
+                    </button>
+                  </div>
                 ))}
               </div>
             </>
           )}
           {mode === "calls" && (
-            <div id="pi_patient_list">
+            <>
+              <button id="pi_new_btn" className="pi_new_btn--danger" onClick={emptyCallLogs} disabled={calls.length === 0}>
+                <i className="fi fi-rr-trash" /> Empty Call Logs
+              </button>
+              <div id="pi_patient_list">
               {callsLoading && <p id="pi_list_empty">Loading…</p>}
               {!callsLoading && calls.length === 0 && (
                 <p id="pi_list_empty">No patient calls yet.</p>
@@ -637,7 +676,8 @@ const PatientInstantiationPage = () => {
                   </button>
                 </div>
               ))}
-            </div>
+              </div>
+            </>
           )}
           {mode === "unclaimed" && (
             <div id="pi_patient_list">
