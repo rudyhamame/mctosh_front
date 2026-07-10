@@ -48,11 +48,11 @@ const PatientCallPage = ({ onLogout }) => {
   const [messages,   setMessages]   = useState([]);
   const [chatInput,  setChatInput]  = useState("");
   const [avatar, setAvatar] = useState("female");
-  // Required on every call start (see PatientCallAPI.js's /start) —
-  // deliberately never persisted to storage, so the patient has to have
-  // actually kept the code they were shown once at signup rather than the
-  // app silently remembering it for them.
-  const [patientCode, setPatientCode] = useState("");
+  // Required on every call start (see PatientCallAPI.js's /start) — the
+  // same stable "mctosh#N" id shown at signup and returned on every login
+  // (readStoredPatientSession, below), not a one-time secret, so it's
+  // safe to pre-fill from the session as a convenience.
+  const [patientCode, setPatientCode] = useState(session?.patientId || "");
   // Conversation language toggle — sent to the backend at call start (see
   // startCall below) and locked in for that call via dispatch metadata
   // (back/agent/patientCallAgent.js). Only the live conversation switches;
@@ -89,7 +89,7 @@ const PatientCallPage = ({ onLogout }) => {
 
   const startCall = async () => {
     if (!patientCode.trim()) {
-      setError("Enter your patient code to start a call.");
+      setError("Enter your patient ID to start a call.");
       return;
     }
     setError("");
@@ -98,7 +98,7 @@ const PatientCallPage = ({ onLogout }) => {
     setAgentState("initializing");
     try {
       const res = await fetch(apiUrl("/api/patient-calls/start"), {
-        method: "POST", headers: authHeaders(true), body: JSON.stringify({ avatar, patientCode: patientCode.trim(), language }),
+        method: "POST", headers: authHeaders(true), body: JSON.stringify({ avatar, patientId: patientCode.trim(), language }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -332,7 +332,7 @@ const PatientCallPage = ({ onLogout }) => {
               <input
                 type="text"
                 className="pa_patient_code_input"
-                placeholder="Your patient code"
+                placeholder="Your patient ID"
                 value={patientCode}
                 onChange={e => setPatientCode(e.target.value)}
                 autoComplete="off"

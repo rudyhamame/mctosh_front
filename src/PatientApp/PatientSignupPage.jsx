@@ -12,9 +12,9 @@ const PatientSignupPage = ({ onLogin }) => {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  // Signup succeeded but the patient hasn't confirmed they've saved their
-  // code yet — session data is held here rather than persisted/navigated
-  // immediately, so the code-reveal screen below is unskippable.
+  // Signup succeeded — held here rather than persisted/navigated
+  // immediately so the patient ID gets shown once, front and center,
+  // before moving on (they can also always find it again by logging in).
   const [pendingSession, setPendingSession] = useState(null);
   const [copied, setCopied] = useState(false);
 
@@ -42,7 +42,7 @@ const PatientSignupPage = ({ onLogin }) => {
   };
 
   const handleCopyCode = () => {
-    navigator.clipboard?.writeText(pendingSession.patientCode).then(() => setCopied(true)).catch(() => {});
+    navigator.clipboard?.writeText(pendingSession.patientId).then(() => setCopied(true)).catch(() => {});
   };
 
   const handleContinue = () => {
@@ -51,24 +51,25 @@ const PatientSignupPage = ({ onLogin }) => {
     navigate("/patient/call");
   };
 
-  // Every call requires this exact code (see PatientCallPage.jsx) —
-  // MCTOSHS's backend only ever stores it hashed, so this is the one and
-  // only time it can ever be shown.
+  // Every call requires this exact id (see PatientCallPage.jsx) — it's
+  // shown right away so the patient knows it exists and what it looks
+  // like; unlike a one-time secret, they can also always see it again by
+  // logging back in, since it's the same stable id their clinician sees.
   if (pendingSession) {
     return (
       <div className="pa_page">
         <div className="pa_card">
-          <h1 className="pa_title">Save your patient code</h1>
+          <h1 className="pa_title">Save your patient ID</h1>
           <p className="pa_subtitle">
-            You'll need this exact code every time you start a call — it's how MCTOSHS knows it's really you.
-            It's shown only this once and can't be recovered later, so save it somewhere safe now.
+            You'll need this exact ID every time you start a call — it's how MCTOSHS knows exactly which patient
+            it's talking to. You can always find it again by logging back in, but it's worth saving now too.
           </p>
-          <div className="pa_patient_code">{pendingSession.patientCode}</div>
+          <div className="pa_patient_code">{pendingSession.patientId}</div>
           <button type="button" className="pa_submit_btn" onClick={handleCopyCode}>
-            {copied ? "Copied!" : "Copy code"}
+            {copied ? "Copied!" : "Copy ID"}
           </button>
           <button type="button" className="pa_submit_btn pa_submit_btn--secondary" onClick={handleContinue}>
-            I've saved it — continue
+            Continue
           </button>
         </div>
       </div>

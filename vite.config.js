@@ -121,13 +121,24 @@ export default defineConfig({
             return "vendor-heavy";
           }
 
-          if (
-            normalizedId.includes("react") ||
-            normalizedId.includes("react-dom") ||
-            normalizedId.includes("react-router-dom")
-          ) {
-            return "vendor-react";
-          }
+          // NOTE: react/react-dom/react-router-dom deliberately do NOT get
+          // their own manual chunk here (they used to, as "vendor-react").
+          // That split created a genuine circular ES module dependency in
+          // production: react-dom's own "scheduler" dependency has no
+          // "react" in its package path, so it landed in the catch-all
+          // "vendor" chunk below, while things depending on React (e.g.
+          // framer-motion) also landed in "vendor" — so "vendor-react"
+          // imported from "vendor" (for scheduler) AND "vendor" imported
+          // from "vendor-react" (for React itself) at the same time. Two
+          // chunks that mutually import from each other race at module
+          // evaluation time; whichever runs first sees the other's export
+          // as still-undefined, which is exactly what threw "Cannot read
+          // properties of undefined (reading 'createContext')" in
+          // production. Letting React fall through into the same
+          // catch-all "vendor" chunk as everything that depends on it
+          // removes the cross-chunk boundary entirely, so this class of
+          // bug can't recur just because some future dependency's path
+          // doesn't happen to contain the substring "react".
 
           if (
             normalizedId.includes("@mui") ||
