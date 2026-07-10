@@ -685,7 +685,7 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
       if (modelRoot) {
         modelRoot.rotation.y = Math.sin(t * 0.32) * 0.04 + thinkingBoost * 0.015;
         modelRoot.position.x = baseRootX;
-        modelRoot.position.y = baseRootY + Math.sin(t * 1.1) * 0.008;
+        modelRoot.position.y = baseRootY;
       }
 
       camera.position.x = cameraCenterX;
@@ -733,6 +733,51 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
         headBone.rotation.y = headBone.userData.baseRotation.y + lookX * 0.025 * gazeSettle + thinkingBoost * 0.012;
         headBone.rotation.x = headBone.userData.baseRotation.x + lookY * 0.012 * gazeSettle - listeningBoost * 0.008;
         headBone.rotation.z = headBone.userData.baseRotation.z + Math.sin(t * 0.55) * 0.005;
+      }
+
+      // ── Body language — torso lean/sway per turn-taking state, plus an
+      // occasional listening nod and a small speaking-arm sway. Amplitudes
+      // here are conservative guesses (not measured against the rig the
+      // way pointBoneToward's leg/arm poses above are) since they're
+      // additive offsets on top of an already-correct base pose — worst
+      // case they're too subtle, not distorted anatomy.
+      if (spineBone?.userData.baseRotation) {
+        // Lean in a touch while listening (attentive), lean back slightly
+        // while thinking (mulling it over), gentle rock while speaking.
+        spineBone.rotation.x = spineBone.userData.baseRotation.x
+          + listeningBoost * 0.02
+          - thinkingBoost * 0.015
+          + speakingBoost * Math.sin(t * 1.7) * 0.01;
+        spineBone.rotation.z = spineBone.userData.baseRotation.z
+          + Math.sin(t * 0.22) * 0.01
+          + thinkingBoost * Math.sin(t * 0.5) * 0.012;
+      }
+
+      // A discrete small forward nod on a randomized timer (same
+      // triangular-pulse shape as the blink below), only while listening —
+      // distinct from the continuous sway above.
+      if (listeningBoost) {
+        const nodPhase = t - nextNodAt;
+        if (nodPhase >= 0 && nodPhase < 0.5) {
+          const p = nodPhase / 0.5;
+          const nodAmount = (p < 0.5 ? p * 2 : (1 - p) * 2) * 0.035;
+          if (headBone?.userData.baseRotation) headBone.rotation.x += nodAmount;
+          if (neckBone?.userData.baseRotation) neckBone.rotation.x += nodAmount * 0.6;
+        } else if (nodPhase >= 0.5) {
+          nextNodAt = t + 2.5 + Math.random() * 3.5;
+        }
+      }
+
+      // Tiny shoulder sway while speaking so the arms (resting on the
+      // hips, see relaxArm above) aren't perfectly frozen — kept small
+      // since a bigger swing would read as fighting that resting pose.
+      if (upperArmLBone?.userData.baseRotation) {
+        upperArmLBone.rotation.z = upperArmLBone.userData.baseRotation.z
+          + speakingBoost * Math.sin(t * 2.3) * 0.025;
+      }
+      if (upperArmRBone?.userData.baseRotation) {
+        upperArmRBone.rotation.z = upperArmRBone.userData.baseRotation.z
+          - speakingBoost * Math.sin(t * 2.3 + 0.6) * 0.025;
       }
 
       // ── Mouth talking — driven by live mic/agent audio level. If nothing

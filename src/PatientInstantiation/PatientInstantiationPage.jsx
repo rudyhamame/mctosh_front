@@ -238,7 +238,9 @@ const authHeader = () => {
 const EMPTY_PERSONAL = {
   firstName: "", lastName: "", dateOfBirth: "", gender: "",
   nationality: "", phoneCode: "+1", phoneNumber: "", email: "",
-  street: "", city: "", state: "", postalCode: "", country: "",
+  street: "", apartment: "", city: "", state: "", postalCode: "", country: "",
+  occupation: "", maritalStatus: "",
+  currentMood: "", character: "",
 };
 
 const EMPTY_CLINICAL = {
@@ -811,7 +813,7 @@ const PatientInstantiationPage = () => {
               {/* Tabs */}
               <div id="pi_tabs">
                 <button className={`pi_tab${tab === "personal" ? " pi_tab--active" : ""}`} onClick={() => setTab("personal")}>
-                  <i className="fi fi-rr-user" /> Personal
+                  <i className="fi fi-rr-user" /> Human
                 </button>
                 <button className={`pi_tab${tab === "clinical" ? " pi_tab--active" : ""}`} onClick={() => setTab("clinical")}>
                   <i className="fi fi-rr-stethoscope" /> Clinical
@@ -826,6 +828,7 @@ const PatientInstantiationPage = () => {
               {/* Personal tab */}
               {tab === "personal" && (
                 <div className="pi_form">
+                  <p className="pi_form_section_title">Identity</p>
                   <div className="pi_form_grid">
                     <Field label="First Name"   value={personal.firstName}   onChange={v => setPersonal(p => ({ ...p, firstName: v }))} />
                     <Field label="Last Name"    value={personal.lastName}    onChange={v => setPersonal(p => ({ ...p, lastName: v }))} />
@@ -867,7 +870,10 @@ const PatientInstantiationPage = () => {
                   </div>
 
                   <p className="pi_form_section_title">Address</p>
-                  <Field label="Street / House No." value={personal.street}     onChange={v => setPersonal(p => ({ ...p, street: v }))} />
+                  <div className="pi_form_grid">
+                    <Field label="Street / House No." value={personal.street}     onChange={v => setPersonal(p => ({ ...p, street: v }))} />
+                    <Field label="Apartment"   value={personal.apartment}   onChange={v => setPersonal(p => ({ ...p, apartment: v }))} />
+                  </div>
                   <div className="pi_form_grid">
                     <Field label="City"        value={personal.city}       onChange={v => setPersonal(p => ({ ...p, city: v }))} />
                     <Field label="State / Province" value={personal.state}  onChange={v => setPersonal(p => ({ ...p, state: v }))} />
@@ -883,6 +889,28 @@ const PatientInstantiationPage = () => {
                       </select>
                     </div>
                   </div>
+
+                  <div className="pi_form_grid">
+                    <Field label="Occupation" value={personal.occupation} onChange={v => setPersonal(p => ({ ...p, occupation: v }))} />
+                    <div className="pi_field">
+                      <label className="pi_field_label">Marital Status</label>
+                      <select className="pi_field_input" value={personal.maritalStatus} onChange={e => setPersonal(p => ({ ...p, maritalStatus: e.target.value }))}>
+                        <option value="">—</option>
+                        <option value="Single">Single</option>
+                        <option value="Married">Married</option>
+                        <option value="Divorced">Divorced</option>
+                        <option value="Widowed">Widowed</option>
+                        <option value="Separated">Separated</option>
+                        <option value="Other">Other</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <p className="pi_form_section_title">Psychological</p>
+                  <div className="pi_form_grid">
+                    <Field label="Current Mood" value={personal.currentMood} onChange={v => setPersonal(p => ({ ...p, currentMood: v }))} />
+                  </div>
+                  <Field label="Character" value={personal.character} onChange={v => setPersonal(p => ({ ...p, character: v }))} textarea />
                 </div>
               )}
 

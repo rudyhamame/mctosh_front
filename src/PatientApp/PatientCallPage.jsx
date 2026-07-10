@@ -48,6 +48,18 @@ const PatientCallPage = ({ onLogout }) => {
   const [messages,   setMessages]   = useState([]);
   const [chatInput,  setChatInput]  = useState("");
   const [avatar, setAvatar] = useState("female");
+  // Required on every call start (see PatientCallAPI.js's /start) —
+  // deliberately never persisted to storage, so the patient has to have
+  // actually kept the code they were shown once at signup rather than the
+  // app silently remembering it for them.
+  const [patientCode, setPatientCode] = useState("");
+  // Conversation language toggle — sent to the backend at call start (see
+  // startCall below) and locked in for that call via dispatch metadata
+  // (back/agent/patientCallAgent.js). Only the live conversation switches;
+  // whatever MCTOSHS records into the patient's profile (recordField) is
+  // always translated to English regardless of this setting, since the
+  // clinician-side patient instantiation page is English-only.
+  const [language, setLanguage] = useState("en");
   // MCTOSHS's turn-taking state — see AGENT_STATE_LABELS above.
   const [agentState, setAgentState] = useState("");
   const roomRef = useRef(null);
@@ -76,13 +88,17 @@ const PatientCallPage = ({ onLogout }) => {
   }, []);
 
   const startCall = async () => {
+    if (!patientCode.trim()) {
+      setError("Enter your patient code to start a call.");
+      return;
+    }
     setError("");
     setStatus("connecting");
     setMessages([]);
     setAgentState("initializing");
     try {
       const res = await fetch(apiUrl("/api/patient-calls/start"), {
-        method: "POST", headers: authHeaders(true), body: JSON.stringify({ avatar }),
+        method: "POST", headers: authHeaders(true), body: JSON.stringify({ avatar, patientCode: patientCode.trim(), language }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -131,16 +147,21 @@ const PatientCallPage = ({ onLogout }) => {
         if (!raw) return;
         let role = "assistant";
         let text = raw;
+        let interrupted = false;
         try {
           const parsed = JSON.parse(raw);
           if (parsed?.text) {
             role = parsed.role === "user" ? "user" : "assistant";
             text = parsed.text;
+            interrupted = parsed.interrupted === true;
           }
         } catch {
           // Older/malformed payload — treat as a plain assistant message.
         }
-        setMessages((prev) => [...prev, { from: role === "user" ? "patient" : "agent", text }]);
+        // Mark a barge-in reply visibly (not just the truncated words on
+        // their own) — otherwise it reads as MCTOSHS's complete, deliberate
+        // reply instead of a sentence the patient cut off mid-way.
+        setMessages((prev) => [...prev, { from: role === "user" ? "patient" : "agent", text, interrupted }]);
       });
 
       await room.connect(data.url, data.token);
@@ -257,15 +278,37 @@ const PatientCallPage = ({ onLogout }) => {
 
         <section className="pa_call_panel">
           <div className="pa_chat">
-            <div className="pa_chat_messages">
+            <div className="pa_chat_header">
+              <span className="pa_chat_header_label">Conversation</span>
+              <div className="pa_lang_toggle" role="radiogroup" aria-label="Conversation language">
+                <button
+                  type="button"
+                  className={`pa_lang_option ${language === "en" ? "pa_lang_option--active" : ""}`}
+                  onClick={() => setLanguage("en")}
+                  disabled={status === "in-call" || status === "connecting"}
+                >
+                  EN
+                </button>
+                <button
+                  type="button"
+                  className={`pa_lang_option ${language === "ar" ? "pa_lang_option--active" : ""}`}
+                  onClick={() => setLanguage("ar")}
+                  disabled={status === "in-call" || status === "connecting"}
+                >
+                  AR
+                </button>
+              </div>
+            </div>
+            <div className="pa_chat_messages" dir={language === "ar" ? "rtl" : "ltr"}>
               {messages.length === 0 && (
                 <p className="pa_chat_empty">
                   {status === "in-call" ? "Type a message below, or just start speaking." : "Start a call to talk with MCTOSHS."}
                 </p>
               )}
               {messages.map((m, i) => (
-                <div key={i} className={`pa_chat_bubble pa_chat_bubble--${m.from}`}>
+                <div key={i} className={`pa_chat_bubble pa_chat_bubble--${m.from}${m.interrupted ? " pa_chat_bubble--interrupted" : ""}`}>
                   {m.text}
+                  {m.interrupted && <span className="pa_chat_interrupted_tag">cut off — you interrupted</span>}
                 </div>
               ))}
               <div ref={messagesEndRef} />
@@ -273,6 +316,7 @@ const PatientCallPage = ({ onLogout }) => {
             <form className="pa_chat_form" onSubmit={sendMessage}>
               <input
                 type="text"
+                dir={language === "ar" ? "rtl" : "ltr"}
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
                 placeholder={status === "in-call" ? "Type a message…" : "Start a call to unlock chat…"}
@@ -284,6 +328,16 @@ const PatientCallPage = ({ onLogout }) => {
           </div>
 
           <div className="pa_call_actions pa_call_actions--footer">
+            {(status === "idle" || status === "ended") && (
+              <input
+                type="text"
+                className="pa_patient_code_input"
+                placeholder="Your patient code"
+                value={patientCode}
+                onChange={e => setPatientCode(e.target.value)}
+                autoComplete="off"
+              />
+            )}
             {status === "idle" && (
               <button className="pa_call_btn pa_call_btn--start" onClick={startCall}>Start call</button>
             )}

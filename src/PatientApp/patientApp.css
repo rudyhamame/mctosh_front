@@ -66,6 +66,25 @@
   cursor: pointer;
 }
 .pa_submit_btn:disabled { opacity: 0.6; cursor: default; }
+.pa_submit_btn--secondary {
+  margin-top: 0.7rem;
+  background: rgba(255,255,255,0.08);
+  color: #dde3ef;
+}
+.pa_patient_code {
+  text-align: center;
+  font-family: "Cascadia Code", "SF Mono", monospace;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  background: rgba(0,229,255,0.1);
+  border: 1px dashed rgba(0,229,255,0.4);
+  border-radius: 8px;
+  padding: 0.9rem;
+  margin-bottom: 1rem;
+  color: #00e5ff;
+  word-break: break-all;
+}
 
 .pa_switch {
   text-align: center;
@@ -384,6 +403,41 @@
   min-height: 0;
   flex: 1;
 }
+.pa_chat_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.85rem 0;
+  flex-shrink: 0;
+}
+.pa_chat_header_label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.4);
+}
+.pa_lang_toggle {
+  display: inline-flex;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.pa_lang_option {
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.6);
+  padding: 0.3rem 0.7rem;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.pa_lang_option--active {
+  background: linear-gradient(135deg, #00e5ff, #26a69a);
+  color: #031019;
+}
+.pa_lang_option:disabled { opacity: 0.5; cursor: default; }
 .pa_chat_messages {
   flex: 1;
   min-height: 120px;
@@ -418,6 +472,18 @@
   background: linear-gradient(135deg, #00e5ff, #26a69a);
   color: #04060f;
 }
+.pa_chat_bubble--interrupted {
+  border-style: dashed;
+  opacity: 0.85;
+}
+.pa_chat_interrupted_tag {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.68rem;
+  font-style: italic;
+  letter-spacing: 0.02em;
+  color: rgba(221,227,239,0.55);
+}
 .pa_chat_form {
   display: flex;
   gap: 0.5rem;
@@ -450,8 +516,20 @@
 .pa_call_actions { display: flex; gap: 0.8rem; }
 .pa_call_actions--footer {
   flex-shrink: 0;
+  flex-wrap: wrap;
   padding-top: 0.1rem;
 }
+.pa_patient_code_input {
+  flex: 1 1 100%;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 999px;
+  padding: 0.6rem 1rem;
+  color: #dde3ef;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+}
+.pa_patient_code_input::placeholder { color: rgba(255,255,255,0.35); }
 .pa_call_btn {
   flex: 1;
   border: none;
