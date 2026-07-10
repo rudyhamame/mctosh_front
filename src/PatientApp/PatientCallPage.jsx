@@ -224,7 +224,10 @@ const PatientCallPage = () => {
         <section className="pa_call_stage">
           <div className="pa_stage_copy">
             <div className="pa_stage_topbar">
-              <span className="pa_stage_eyebrow">Patient-side MCTOSHS AI</span>
+              <div className="pa_stage_topbar_left">
+                <span className="pa_stage_eyebrow">Patient-side MCTOSHS AI</span>
+                {session?.patientId && <span className="pa_patient_badge">{session.patientId}</span>}
+              </div>
               <button className="pa_logout_link" onClick={() => navigate("/patient/settings")}>Settings</button>
             </div>
             <h1 className="pa_stage_title">
