@@ -95,6 +95,13 @@ const OTHER = [
     description: "Plan campaigns, shape captions, review post drafts, and prepare Instagram publishing workflows",
     color: "#ff8a65",
   },
+  {
+    path: "/human-atlas",
+    icon: "fi-rr-heart",
+    label: "Human Reference Atlas",
+    description: "Browse 3D organ models, cell type and ontology trees, FTU illustrations, and tissue blocks from the Human Reference Atlas API",
+    color: "#e57373",
+  },
 ];
 
 const App = ({ onLogout }) => {

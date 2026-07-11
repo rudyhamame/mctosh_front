@@ -527,26 +527,43 @@ const PatientInstantiationPage = () => {
   };
 
   const handleDelete = async () => {
-    if (!selected || !window.confirm(`Delete ${selected.patientId}?`)) return;
+    if (!selected || !window.confirm(`Remove ${selected.patientId} from your roster? The patient record will be kept.`)) return;
     setDeleting(true);
     try {
-      await fetch(apiUrl(`/api/patients/${selected._id}`), { method: "DELETE", headers: authHeader() });
+      const res = await fetch(apiUrl(`/api/patients/${selected._id}/remove-from-roster`), {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to remove patient from roster.");
       await loadPatients();
       setSelected(null);
       setIsNew(false);
-    } catch {}
+      flash("Removed from your roster");
+    } catch (e) {
+      flash(`Error: ${e.message}`);
+    }
     finally { setDeleting(false); }
   };
 
-  // Same delete, but callable straight from a list row (see pi_patient_item_row
-  // below) without first opening the patient into the detail form.
+  // Same remove-from-roster action, but callable straight from a list row (see
+  // pi_patient_item_row below) without first opening the patient into the
+  // detail form.
   const deletePatientRow = async (patient) => {
-    if (!window.confirm(`Delete ${patient.patientId}?`)) return;
+    if (!window.confirm(`Remove ${patient.patientId} from your roster? The patient record will be kept.`)) return;
     try {
-      await fetch(apiUrl(`/api/patients/${patient._id}`), { method: "DELETE", headers: authHeader() });
+      const res = await fetch(apiUrl(`/api/patients/${patient._id}/remove-from-roster`), {
+        method: "POST",
+        headers: authHeader(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to remove patient from roster.");
       if (selected?._id === patient._id) { setSelected(null); setIsNew(false); }
       await loadPatients();
-    } catch {}
+      flash("Removed from your roster");
+    } catch (e) {
+      flash(`Error: ${e.message}`);
+    }
   };
 
   const setVital = (key, val) =>
@@ -588,7 +605,7 @@ const PatientInstantiationPage = () => {
             {status && <span className="pi_status">{status}</span>}
             {selected && !isNew && (
               <button className="pi_btn pi_btn--danger" onClick={handleDelete} disabled={deleting}>
-                {deleting ? "Deleting…" : <><i className="fi fi-rr-trash" /> Delete</>}
+                {deleting ? "Removing…" : <><i className="fi fi-rr-trash" /> Remove from roster</>}
               </button>
             )}
             <button className="pi_btn pi_btn--primary" onClick={handleSave} disabled={saving}>
@@ -635,7 +652,7 @@ const PatientInstantiationPage = () => {
                     <button
                       type="button"
                       className="pi_patient_item_delete"
-                      title="Delete patient"
+                      title="Remove from roster"
                       onClick={(e) => { e.stopPropagation(); deletePatientRow(p); }}
                     >
                       <i className="fi fi-rr-trash" />

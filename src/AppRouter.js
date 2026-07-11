@@ -37,6 +37,7 @@ const MCCQEObjectivesPage = lazy(() => import("./MCC/MCCQEObjectivesPage"));
 const SocialMediaControlPage = lazy(() => import("./SocialMediaControl/SocialMediaControlPage"));
 const InstagramHomePreviewPage = lazy(() => import("./SocialMediaControl/InstagramHomePreviewPage"));
 const SocialMediaDesignerPage = lazy(() => import("./SocialMediaControl/SocialMediaDesignerPage"));
+const HumanAtlasPage = lazy(() => import("./HumanAtlas/HumanAtlasPage"));
 const PatientLoginPage = lazy(() => import("./PatientApp/PatientLoginPage"));
 const PatientSignupPage = lazy(() => import("./PatientApp/PatientSignupPage"));
 const PatientCallPage = lazy(() => import("./PatientApp/PatientCallPage"));
@@ -168,6 +169,7 @@ const AppRouter = () => {
         <Route path="/social-media-control"   element={auth(withSuspense(<SocialMediaControlPage />))} />
         <Route path="/instagram-home-preview" element={auth(withSuspense(<InstagramHomePreviewPage />))} />
         <Route path="/social-media-designer"  element={auth(withSuspense(<SocialMediaDesignerPage />))} />
+        <Route path="/human-atlas"            element={auth(withSuspense(<HumanAtlasPage />))} />
 
         {/* Patient-facing app — separate account system, separate auth
             gate (authPatient/canAccessPatientRoutes), independent of the

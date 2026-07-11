@@ -40,7 +40,8 @@ const PatientCallPage = () => {
   const session = readStoredPatientSession();
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
-  const [muted, setMuted] = useState(false);
+  // Starts true (mic OFF) rather than false — see startCall below for why.
+  const [muted, setMuted] = useState(true);
   // Text side of the same LiveKit call — sent/received over the room's
   // "lk.chat" text-stream topic (see back/agent/patientCallAgent.js), not a
   // separate channel. Available whenever connected, whether or not the
@@ -119,12 +120,19 @@ const PatientCallPage = () => {
         }
       });
       room.on(RoomEvent.Disconnected, () => {
+        roomRef.current = null;
         setStatus("ended");
+        setAgentState("");
       });
 
       // MCTOSHS's turn-taking state — read the initial value as soon as
       // its participant joins (attributes may already be set by then),
-      // then track live changes the same way.
+      // then track live changes the same way. When MCTOSHS ends the call
+      // itself (see back/agent/patientCallAgent.js's finishCallTool), it
+      // deletes the LiveKit room outright rather than publishing a state
+      // for this side to react to — that force-disconnects every
+      // participant, including this one, so RoomEvent.Disconnected above
+      // fires on its own with no extra signal needed here.
       room.on(RoomEvent.ParticipantConnected, (participant) => {
         const state = participant.attributes?.["lk.agent.state"];
         if (state) setAgentState(state);
@@ -178,7 +186,19 @@ const PatientCallPage = () => {
         if (state) setAgentState(state);
       });
 
-      await room.localParticipant.setMicrophoneEnabled(true);
+      // Mic starts OFF, not on — it used to be enabled unconditionally the
+      // moment the call connected, which meant it stayed live picking up
+      // background noise for the entire call unless the patient thought to
+      // mute it themselves. Confirmed against real calls, TWICE: OpenAI's
+      // transcription model hallucinated a short, clean-sounding word
+      // ("Divorced") out of silence/noise and it got attributed to the
+      // patient as something they'd actually said, interrupting MCTOSHS's
+      // own reply — with the patient having said and typed nothing at all
+      // at that point. Muting-after-send (see sendMessage) only closed
+      // that gap AFTER a patient's first typed message; this closes it
+      // from the very start of the call instead, for anyone who hasn't
+      // explicitly chosen to speak yet. The patient can still enable their
+      // mic anytime via the Mute/Unmute button below.
       setStatus("in-call");
     } catch (err) {
       setError("Could not connect. Please check your microphone permissions and try again.");
@@ -198,6 +218,26 @@ const PatientCallPage = () => {
       await room.localParticipant.sendText(text, { topic: "lk.chat" });
     } catch {
       setError("Message failed to send. Please try again.");
+    }
+    // Sending a typed message is a strong signal this patient is doing the
+    // call over text, not voice — mute the still-live mic afterward so
+    // background noise/silence can't get transcribed and attributed to
+    // them as a phantom spoken turn while they read/type the next one.
+    // Confirmed against a real call: with the mic left on throughout, a
+    // hallucinated one-word STT answer ("Divorced") appeared as if spoken,
+    // interrupting MCTOSHS's own reply — nothing was actually said. The
+    // backend's RECORDING RULE (see patientCallAgent.js) only guards
+    // against ACTING on a hallucination like that; this stops it from
+    // reaching the mic pipeline at all while texting. No auto-unmute —
+    // the patient can switch back to voice explicitly via the Mute button,
+    // same as if they'd muted themselves.
+    if (!muted) {
+      try {
+        await room.localParticipant.setMicrophoneEnabled(false);
+        setMuted(true);
+      } catch {
+        // Non-fatal — worst case the mic just stays on for this message.
+      }
     }
   };
 
@@ -237,7 +277,9 @@ const PatientCallPage = () => {
               {session?.firstName ? `Hi ${session.firstName}. ` : ""}
               {status === "idle" && "Ready when you are."}
               {status === "connecting" && "Connecting…"}
-              {status === "in-call" && agentState !== "stuck" && "You're connected — speak or type, whichever you prefer."}
+              {status === "in-call" && agentState !== "stuck" && (muted
+                ? "You're connected — type below, or tap Unmute to talk instead."
+                : "You're connected — speak or type, whichever you prefer.")}
               {status === "in-call" && agentState === "stuck" && "MCTOSHS lost its train of thought — please end and start a new call."}
               {status === "ended" && "Call ended. Thank you."}
             </p>

@@ -1,0 +1,417 @@
+#ha_page {
+  display: flex;
+  flex-direction: column;
+  height: calc(var(--vh, 1vh) * 100);
+  background: var(--color-bg);
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+/* ── Header ── */
+#ha_header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#ha_back_btn {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  cursor: pointer;
+  line-height: 1;
+}
+#ha_back_btn:hover { color: var(--color-text); }
+
+#ha_header_title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  flex: 1;
+}
+
+#ha_header_link {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+#ha_header_link:hover { color: var(--color-accent); }
+
+/* ── Tabs ── */
+#ha_tabs {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.ha_tab_btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ha_tab_btn:hover { color: var(--color-text); }
+.ha_tab_btn_active {
+  background: var(--color-surface);
+  border-color: var(--color-accent);
+  color: var(--color-text);
+}
+
+#ha_tab_body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+
+.ha_tab_loading, .ha_tab_error, .ha_tab_empty {
+  padding: 1.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+.ha_tab_error { color: var(--color-highlight); }
+
+/* ── Organs tab ── */
+#ha_organs_tab {
+  display: flex;
+  width: 100%;
+  min-height: 0;
+}
+
+#ha_organs_list_col {
+  width: 260px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#ha_organs_search {
+  margin: 0.75rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8rem;
+}
+
+#ha_organs_list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 0.5rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.ha_organ_item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+.ha_organ_item:hover { color: var(--color-text); background: var(--color-surface); }
+.ha_organ_item_active {
+  color: var(--color-text);
+  background: var(--color-surface);
+  border-color: var(--color-accent);
+}
+
+.ha_organ_variant_count {
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+}
+
+#ha_organs_viewer_col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#ha_viewer_header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  flex-shrink: 0;
+}
+
+#ha_viewer_title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  flex: 1;
+}
+
+#ha_variant_switch {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.ha_variant_btn {
+  padding: 0.25rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.ha_variant_btn:hover { color: var(--color-text); }
+.ha_variant_btn_active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+}
+
+#ha_viewer_mount {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  margin: 0 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 40%, var(--color-surface), var(--color-bg));
+}
+#ha_viewer_mount canvas { display: block; width: 100%; height: 100%; }
+
+.ha_viewer_overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  pointer-events: none;
+}
+
+#ha_viewer_download {
+  margin: 0.75rem 1rem 1rem;
+  align-self: flex-start;
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+#ha_viewer_download:hover { color: var(--color-accent); }
+
+/* ── Ontology / Cell-type tree tabs ── */
+.ha_tree_tab {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ha_tree_search {
+  margin: 0.75rem 1rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8rem;
+}
+
+.ha_tree_scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 1rem 1rem;
+}
+
+.ha_tree_row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.4rem;
+  padding-left: calc(var(--depth, 0) * 1rem + 0.4rem);
+  border-radius: 5px;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.ha_tree_row:hover { background: var(--color-surface); color: var(--color-text); }
+.ha_tree_row_match { color: var(--color-text); background: var(--color-surface); }
+
+.ha_tree_caret {
+  font-size: 0.65rem;
+  width: 0.9rem;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+
+.ha_tree_label { flex: 1; text-transform: capitalize; }
+
+.ha_tree_child_count {
+  font-size: 0.62rem;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.02rem 0.35rem;
+}
+
+/* ── FTU illustrations tab ── */
+#ha_ftu_tab {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#ha_ftu_grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 1rem 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+  align-content: start;
+}
+
+.ha_ftu_card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: center;
+}
+.ha_ftu_card:hover { border-color: var(--color-accent); }
+.ha_ftu_card img { width: 100%; height: 90px; object-fit: contain; }
+.ha_ftu_no_image {
+  width: 100%;
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 1.4rem;
+}
+.ha_ftu_label { font-size: 0.72rem; font-weight: 600; color: var(--color-text); }
+.ha_ftu_organ { font-size: 0.65rem; color: var(--color-text-muted); text-transform: capitalize; }
+
+#ha_ftu_lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  z-index: 1000;
+  cursor: zoom-out;
+}
+#ha_ftu_lightbox img { max-width: 85vw; max-height: 75vh; background: #fff; border-radius: 6px; }
+#ha_ftu_lightbox_label { color: #fff; font-size: 0.85rem; }
+
+/* ── Tissue blocks tab ── */
+#ha_tissue_tab {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#ha_tissue_controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem;
+  flex-shrink: 0;
+}
+#ha_tissue_controls label { font-size: 0.78rem; color: var(--color-text-muted); }
+
+#ha_tissue_organ_select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  text-transform: capitalize;
+}
+
+#ha_tissue_count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+#ha_tissue_list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ha_tissue_row {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text);
+  text-decoration: none;
+  font-size: 0.78rem;
+}
+.ha_tissue_row:hover { border-color: var(--color-accent); }
+.ha_tissue_donor { font-weight: 600; }
+.ha_tissue_desc, .ha_tissue_tech { color: var(--color-text-muted); }
+.ha_tissue_tech { text-align: right; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  #ha_organs_tab { flex-direction: column; }
+  #ha_organs_list_col { width: 100%; max-height: 35%; border-right: none; border-bottom: 1px solid var(--color-border); }
+  .ha_tissue_row { grid-template-columns: 1fr; text-align: left; }
+  .ha_tissue_tech { text-align: left; }
+}
