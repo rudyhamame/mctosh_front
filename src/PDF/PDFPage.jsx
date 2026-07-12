@@ -83,10 +83,11 @@ const ANNOT_TOOLS = [
   { key: "strikethrough", icon: "fi-rr-strikethrough",        label: "Strikethrough", hasSize: false },
   { key: "pen",           icon: "fi-rr-pencil",               label: "Pen",           hasSize: true  },
   { key: "line",          icon: "fi-rr-minus",                label: "Line",          hasSize: false },
-  { key: "arrow",         icon: "fi-rr-arrow-small-right",    label: "Arrow",         hasSize: false },
+  { key: "arrow",         icon: "fi-rr-arrow-small-right",    label: "Arrow",         hasSize: true  },
   { key: "rect",          icon: "fi-rr-rectangle-horizontal", label: "Rectangle",     hasSize: false },
   { key: "circle",        icon: "fi-rr-circle",               label: "Ellipse",       hasSize: false },
   { key: "text",          icon: "fi-rr-text",                 label: "Text",          hasSize: false },
+  { key: "drawText",      icon: "fi-rr-sparkles",             label: "Draw to Text",  hasSize: false },
   { key: "eraser",        icon: "fi-rr-eraser",               label: "Eraser",        hasSize: true  },
 ];
 
@@ -109,6 +110,25 @@ const ANNOT_COLORS = [
   "#ffe066", "#fcc419", "#f59f00",
   "#ffa94d", "#fd7e14", "#e8590c",
 ];
+const ANNOT_COLOR_GROUPS = [
+  { label: "Neutrals", colors: ANNOT_COLORS.slice(0, 5) },
+  { label: "Warm", colors: ANNOT_COLORS.slice(5, 14) },
+  { label: "Cool", colors: ANNOT_COLORS.slice(14, 29) },
+  { label: "Green", colors: ANNOT_COLORS.slice(29, 38) },
+  { label: "Sun", colors: ANNOT_COLORS.slice(38) },
+];
+const DEFAULT_ANNOT_TOOL_COLORS = {
+  highlight: "#ffe066",
+  pen: "#212529",
+  underline: "#fa5252",
+  strikethrough: "#e03131",
+  line: "#4c6ef5",
+  arrow: "#339af0",
+  rect: "#20c997",
+  circle: "#fd7e14",
+  text: "#212529",
+  drawText: "#212529",
+};
 
 const ANNOT_HISTORY_META = {
   add:   { icon: "fi-rr-plus",       verb: "Added" },
@@ -151,6 +171,219 @@ const bestContrastColor = ({ r, g, b }) => {
 };
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+// Pinch-to-zoom (touch, and trackpad pinch which browsers deliver as ctrl+wheel)
+// is intentionally unbounded above MIN_ZOOM/MAX_ZOOM — this floor only exists so
+// the zoom value can never hit 0 or go negative, which would divide-by-zero the
+// viewport/scale math elsewhere.
+const PINCH_ZOOM_FLOOR = 0.02;
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+const roundZoom = (value) => Math.round(value * 100) / 100;
+const normalizeZoom = (value) => clamp(roundZoom(value), MIN_ZOOM, MAX_ZOOM);
+const normalizePinchZoom = (value) => Math.max(PINCH_ZOOM_FLOOR, roundZoom(value));
+const normalizeOcrText = (text) => (
+  (text || "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+);
+const MAX_RENDER_CANVAS_DIMENSION = 8192;
+const MAX_RENDER_CANVAS_PIXELS = 16777216;
+const DEFAULT_PEN_SETTINGS = {
+  stabilization: 45,
+  pressureAssist: 55,
+  taper: 72,
+  flow: 38,
+  border: true,
+  nibAngle: 35,
+  nibSpread: 68,
+};
+const DEFAULT_HIGHLIGHT_SETTINGS = {
+  softness: 72,
+  body: 58,
+};
+const PEN_TYPES = [
+  { key: "ball", label: "Ball pen" },
+  { key: "fountain", label: "Fountain pen" },
+];
+const PEN_THEMES = [
+  {
+    key: "artistic",
+    label: "Artistic",
+    penType: "fountain",
+    settings: {
+      stabilization: 32,
+      pressureAssist: 72,
+      taper: 88,
+      flow: 76,
+      border: true,
+      nibAngle: 48,
+      nibSpread: 84,
+    },
+  },
+  {
+    key: "professional",
+    label: "Professional",
+    penType: "ball",
+    settings: {
+      stabilization: 68,
+      pressureAssist: 42,
+      taper: 38,
+      flow: 24,
+      border: false,
+      nibAngle: 35,
+      nibSpread: 68,
+    },
+  },
+];
+const smoothStrokePoint = (points, nextPoint, stabilization) => {
+  if (!points.length) return nextPoint;
+  const previous = points[points.length - 1];
+  const normalized = Math.min(1, Math.max(0, stabilization / 100));
+  const blend = 0.12 + (normalized * normalized) * 0.84;
+  const smoothed = {
+    x: previous.x + (nextPoint.x - previous.x) * (1 - blend),
+    y: previous.y + (nextPoint.y - previous.y) * (1 - blend),
+    t: nextPoint.t,
+    pressure: previous.pressure + (nextPoint.pressure - previous.pressure) * (1 - blend * 0.55),
+  };
+  if (Math.hypot(smoothed.x - previous.x, smoothed.y - previous.y) < 0.05) return null;
+  return smoothed;
+};
+
+const distanceBetweenStrokePoints = (a, b) => Math.hypot((b.x ?? 0) - (a.x ?? 0), (b.y ?? 0) - (a.y ?? 0));
+
+const dedupeStrokePoints = (points, minDistance = 0.02) => {
+  if (!Array.isArray(points) || points.length < 2) return points || [];
+  const deduped = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    if (distanceBetweenStrokePoints(deduped[deduped.length - 1], points[i]) >= minDistance) deduped.push(points[i]);
+  }
+  return deduped;
+};
+
+const resampleStrokePoints = (points, spacing = 0.7) => {
+  if (!Array.isArray(points) || points.length < 2) return points || [];
+  const safeSpacing = Math.max(0.2, spacing);
+  const resampled = [points[0]];
+  let previous = points[0];
+  let remainder = 0;
+
+  for (let i = 1; i < points.length; i++) {
+    const current = points[i];
+    let segLen = distanceBetweenStrokePoints(previous, current);
+    if (segLen === 0) continue;
+
+    while (remainder + segLen >= safeSpacing) {
+      const step = (safeSpacing - remainder) / segLen;
+      const point = {
+        x: previous.x + (current.x - previous.x) * step,
+        y: previous.y + (current.y - previous.y) * step,
+        t: previous.t + ((current.t ?? previous.t ?? 0) - (previous.t ?? 0)) * step,
+        pressure: (previous.pressure ?? 0.5) + ((current.pressure ?? previous.pressure ?? 0.5) - (previous.pressure ?? 0.5)) * step,
+      };
+      resampled.push(point);
+      previous = point;
+      segLen = distanceBetweenStrokePoints(previous, current);
+      remainder = 0;
+      if (segLen === 0) break;
+    }
+
+    remainder += segLen;
+    previous = current;
+  }
+
+  const last = points[points.length - 1];
+  if (distanceBetweenStrokePoints(resampled[resampled.length - 1], last) > 0.01) resampled.push(last);
+  return resampled;
+};
+
+const smoothStrokePath = (points, smoothness = 0.45) => {
+  if (!Array.isArray(points) || points.length < 3) return points || [];
+  const tension = clamp(smoothness, 0, 1);
+  const segmentsPerSpan = tension > 0.72 ? 4 : tension > 0.42 ? 3 : 2;
+  const smoothed = [points[0]];
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[Math.min(points.length - 1, i + 2)];
+    for (let step = 1; step <= segmentsPerSpan; step++) {
+      const t = step / segmentsPerSpan;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const x = 0.5 * (
+        (2 * p1.x) +
+        (-p0.x + p2.x) * t +
+        (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 +
+        (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3
+      );
+      const y = 0.5 * (
+        (2 * p1.y) +
+        (-p0.y + p2.y) * t +
+        (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 +
+        (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3
+      );
+      smoothed.push({
+        x,
+        y,
+        t: (p1.t ?? 0) + ((p2.t ?? p1.t ?? 0) - (p1.t ?? 0)) * t,
+        pressure: clamp((p1.pressure ?? 0.5) + ((p2.pressure ?? p1.pressure ?? 0.5) - (p1.pressure ?? 0.5)) * t, 0.02, 1),
+      });
+    }
+  }
+
+  return dedupeStrokePoints(smoothed, 0.01);
+};
+
+const applySyntheticStrokePressure = (points, penType, pressureAssist = DEFAULT_PEN_SETTINGS.pressureAssist) => {
+  if (!Array.isArray(points) || points.length < 2) return points || [];
+  const normalizedAssist = clamp(pressureAssist / 100, 0, 1);
+  const hasMeaningfulPressure = points.some((point) => {
+    const pressure = point.pressure ?? 0.5;
+    return pressure < 0.44 || pressure > 0.56;
+  });
+  if (hasMeaningfulPressure) {
+    return points.map((point, index, array) => {
+      const edgeTaper = Math.sin((index / Math.max(1, array.length - 1)) * Math.PI);
+      const blendedPressure = (point.pressure ?? 0.5) * (1 - normalizedAssist * 0.35) + (0.5 + edgeTaper * 0.18) * (normalizedAssist * 0.35);
+      return {
+        ...point,
+        pressure: clamp(blendedPressure * (0.92 + edgeTaper * 0.08), 0.04, 1),
+      };
+    });
+  }
+
+  return points.map((point, index, array) => {
+    const prev = array[Math.max(0, index - 1)];
+    const next = array[Math.min(array.length - 1, index + 1)];
+    const dt = Math.max(1, Math.abs((next.t ?? point.t ?? 0) - (prev.t ?? point.t ?? 0)));
+    const velocity = distanceBetweenStrokePoints(prev, next) / dt;
+    const edgeTaper = Math.sin((index / Math.max(1, array.length - 1)) * Math.PI);
+    const body = (penType === "fountain" ? 0.7 : 0.66) + normalizedAssist * 0.16;
+    const velocityGain = (penType === "fountain" ? 0.34 : 0.22) + normalizedAssist * (penType === "fountain" ? 0.16 : 0.12);
+    return {
+      ...point,
+      pressure: clamp(body + edgeTaper * 0.18 - velocity * velocityGain, 0.08, 0.94),
+    };
+  });
+};
+
+const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType = "ball") => {
+  if (!Array.isArray(points) || points.length < 2) return points || [];
+  const stabilization = penSettings?.stabilization ?? DEFAULT_PEN_SETTINGS.stabilization;
+  const pressureAssist = penSettings?.pressureAssist ?? DEFAULT_PEN_SETTINGS.pressureAssist;
+  const normalized = clamp(stabilization / 100, 0, 1);
+  const deduped = dedupeStrokePoints(points, 0.015 + normalized * 0.05);
+  if (deduped.length < 2) return deduped;
+  const resampled = resampleStrokePoints(deduped, 0.9 - normalized * 0.45);
+  const smoothed = smoothStrokePath(resampled, 0.2 + normalized * 0.75);
+  return applySyntheticStrokePressure(smoothed, penType, pressureAssist);
+};
 
 // Compact draggable "knob" that replaces a native <input type="range"> for
 // annotation size — the knob's own diameter grows/shrinks live with the
@@ -275,6 +508,70 @@ const OpacityKnob = ({ value, onChange, color }) => {
     </div>
   );
 };
+
+const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%" }) => {
+  const trackRef = useRef(null);
+  const draggingRef = useRef(false);
+
+  const updateFromClientX = useCallback((clientX) => {
+    const rect = trackRef.current.getBoundingClientRect();
+    const usable = rect.width - KNOB_PAD_PX * 2;
+    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
+    frac = Math.min(1, Math.max(0, frac));
+    let val = min + frac * (max - min);
+    val = Math.round(val / step) * step;
+    val = Math.min(max, Math.max(min, val));
+    onChange(val);
+  }, [max, min, onChange, step]);
+
+  const onPointerDown = (e) => {
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    updateFromClientX(e.clientX);
+  };
+  const onPointerMove = (e) => {
+    if (!draggingRef.current) return;
+    updateFromClientX(e.clientX);
+  };
+  const onPointerUp = (e) => {
+    draggingRef.current = false;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
+  const frac = Math.min(1, Math.max(0, (value - min) / (max - min)));
+  const centerX = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
+
+  return (
+    <div className="annot_size_knob">
+      <div
+        className="annot_size_knob_track"
+        ref={trackRef}
+        style={{ width: KNOB_TRACK_W }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        title={`${value}${label}`}
+      >
+        <div className="annot_size_knob_fill" style={{ width: centerX }} />
+        <div
+          className="annot_size_knob_dot annot_size_knob_dot--percent"
+          style={{ width: 14, height: 14, left: centerX }}
+        />
+      </div>
+      <span className="annot_size_label">{value}{label}</span>
+    </div>
+  );
+};
+
+const LabeledPercentKnob = ({ title, subtitle, ...props }) => (
+  <div className="annot_control">
+    <div className="annot_control_head">
+      <span className="annot_control_title">{title}</span>
+      {subtitle ? <span className="annot_control_subtitle">{subtitle}</span> : null}
+    </div>
+    <PercentKnob {...props} />
+  </div>
+);
 
 // Draw a single annotation onto a 2d canvas context.
 // Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
@@ -479,6 +776,7 @@ const PDFPage = ({
   // you did and when, not just the current end result.
   const [annotHistory,     setAnnotHistory]     = useState([]);
   const [annotHistoryOpen, setAnnotHistoryOpen] = useState(false);
+  const [pageMinimap, setPageMinimap] = useState([]);
   const logAnnotHistory = useCallback((entry) => {
     setAnnotHistory((prev) => [...prev, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300));
   }, []);
@@ -489,16 +787,34 @@ const PDFPage = ({
 
   // ── Annotation state ──────────────────────────────────────────────────────
   const [annotTool,      setAnnotTool]      = useState(null);
-  const [annotColor,     setAnnotColor]     = useState("#ffff00");
+  const [annotToolColors, setAnnotToolColors] = useState(DEFAULT_ANNOT_TOOL_COLORS);
   const [annotSize,      setAnnotSize]      = useState(16);  // highlight lineWidth
   const [penSize,        setPenSize]        = useState(2);   // pen lineWidth
+  const [arrowSize,      setArrowSize]      = useState(3);   // arrow lineWidth
+  const [penStabilization, setPenStabilization] = useState(DEFAULT_PEN_SETTINGS.stabilization);
+  const [penPressureAssist, setPenPressureAssist] = useState(DEFAULT_PEN_SETTINGS.pressureAssist);
+  const [penTaper, setPenTaper] = useState(DEFAULT_PEN_SETTINGS.taper);
+  const [penFlow, setPenFlow] = useState(DEFAULT_PEN_SETTINGS.flow);
+  const [penBorder, setPenBorder] = useState(DEFAULT_PEN_SETTINGS.border);
+  const [penNibAngle, setPenNibAngle] = useState(DEFAULT_PEN_SETTINGS.nibAngle);
+  const [penNibSpread, setPenNibSpread] = useState(DEFAULT_PEN_SETTINGS.nibSpread);
+  const [penType,          setPenType]          = useState("ball");
   const [eraserSize,     setEraserSize]     = useState(18);  // eraser radius
   const [highlightMode,  setHighlightMode]  = useState("freehand"); // "freehand" | "line"
+  const [highlightAutoWidth, setHighlightAutoWidth] = useState(true);
+  const [highlightTaperEnds, setHighlightTaperEnds] = useState(true);
   const [annotOpacity,      setAnnotOpacity]      = useState(35);    // % — highlight fill opacity
+  const [drawTextBusy, setDrawTextBusy] = useState(false);
+  const [drawTextStatus, setDrawTextStatus] = useState("");
+  const [drawTextProgress, setDrawTextProgress] = useState(0);
   const [toolsMenuOpen,  setToolsMenuOpen]  = useState(false); // floating tools dropdown
   const [colorMenuOpen,  setColorMenuOpen]  = useState(false); // floating color dropdown
+  const [penMenuOpen,    setPenMenuOpen]    = useState(false); // floating pen controls dropdown
+  const [highlightMenuOpen, setHighlightMenuOpen] = useState(false); // floating highlight controls dropdown
   const toolsMenuRef = useRef(null);
   const colorMenuRef = useRef(null);
+  const penMenuRef = useRef(null);
+  const highlightMenuRef = useRef(null);
   // "Actions" toolbar dropdown (Markdown / Linguistic Analysis) + its page-range picker popover
   const [actionsMenuOpen,    setActionsMenuOpen]    = useState(false);
   const actionsMenuRef = useRef(null);
@@ -518,6 +834,63 @@ const PDFPage = ({
   const [autoContrast, setAutoContrast] = useState(false);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
+  const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
+    ? (annotToolColors[annotTool] || DEFAULT_ANNOT_TOOL_COLORS[annotTool])
+    : "#ffff00";
+  const setAnnotColor = useCallback((nextColor) => {
+    setAnnotToolColors((prev) => {
+      if (!annotTool || !DEFAULT_ANNOT_TOOL_COLORS[annotTool]) return prev;
+      return { ...prev, [annotTool]: nextColor };
+    });
+  }, [annotTool]);
+  const applyPenTheme = useCallback((theme) => {
+    if (!theme) return;
+    setPenType(theme.penType);
+    setPenStabilization(theme.settings.stabilization);
+    setPenPressureAssist(theme.settings.pressureAssist);
+    setPenTaper(theme.settings.taper);
+    setPenFlow(theme.settings.flow);
+    setPenBorder(theme.settings.border);
+    setPenNibAngle(theme.settings.nibAngle);
+    setPenNibSpread(theme.settings.nibSpread);
+  }, []);
+
+  const getOcrWorker = useCallback(async () => {
+    if (ocrWorkerRef.current) return ocrWorkerRef.current;
+    if (ocrWorkerPromiseRef.current) return ocrWorkerPromiseRef.current;
+
+    const workerPromise = (async () => {
+      const { createWorker, PSM } = await import("tesseract.js");
+      const worker = await createWorker("eng", 1, {
+        logger: (message) => {
+          if (drawTextJobRef.current === 0) return;
+          if (message.status) setDrawTextStatus(message.status);
+          if (typeof message.progress === "number") setDrawTextProgress(message.progress);
+        },
+      });
+      await worker.setParameters({
+        tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+        preserve_interword_spaces: "1",
+      });
+      ocrWorkerRef.current = worker;
+      return worker;
+    })();
+
+    ocrWorkerPromiseRef.current = workerPromise;
+    try {
+      return await workerPromise;
+    } finally {
+      ocrWorkerPromiseRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => () => {
+    drawTextJobRef.current = 0;
+    const worker = ocrWorkerRef.current;
+    ocrWorkerRef.current = null;
+    ocrWorkerPromiseRef.current = null;
+    worker?.terminate?.().catch?.(() => {});
+  }, []);
 
   // Autosave the annotation session in the background — debounced so a whole
   // stroke's worth of state updates only writes once, a beat after the user
@@ -539,18 +912,23 @@ const PDFPage = ({
   const [annotTextVal,   setAnnotTextVal]   = useState("");
   const annotCanvasRef  = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
+  const ocrWorkerRef = useRef(null);
+  const ocrWorkerPromiseRef = useRef(null);
+  const drawTextJobRef = useRef(0);
 
-  // Close the floating tools/color/actions dropdowns on an outside click
+  // Close the floating tools/color/pen/highlight/actions dropdowns on an outside click
   useEffect(() => {
-    if (!toolsMenuOpen && !colorMenuOpen && !actionsMenuOpen) return;
+    if (!toolsMenuOpen && !colorMenuOpen && !penMenuOpen && !highlightMenuOpen && !actionsMenuOpen) return;
     const onDocPointerDown = (e) => {
       if (toolsMenuOpen && toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) setToolsMenuOpen(false);
       if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
+      if (penMenuOpen && penMenuRef.current && !penMenuRef.current.contains(e.target)) setPenMenuOpen(false);
+      if (highlightMenuOpen && highlightMenuRef.current && !highlightMenuRef.current.contains(e.target)) setHighlightMenuOpen(false);
       if (actionsMenuOpen && actionsMenuRef.current && !actionsMenuRef.current.contains(e.target)) setActionsMenuOpen(false);
     };
     document.addEventListener("mousedown", onDocPointerDown);
     return () => document.removeEventListener("mousedown", onDocPointerDown);
-  }, [toolsMenuOpen, colorMenuOpen, actionsMenuOpen]);
+  }, [toolsMenuOpen, colorMenuOpen, penMenuOpen, highlightMenuOpen, actionsMenuOpen]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -558,6 +936,7 @@ const PDFPage = ({
   const renderTasksRef    = useRef([]);
   const pageViewportsRef  = useRef([]);
   const renderedScaleRef  = useRef([]); // scale each page's canvas was last rendered at — lets us skip already-current pages
+  const renderedCssSizeRef = useRef([]); // last displayed CSS size per page, separate from the HiDPI backing buffer size
   const pageNumRef        = useRef(1);
   pageNumRef.current      = pageNum;  // sync during render
 
@@ -573,6 +952,8 @@ const PDFPage = ({
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
   const fileInputRef  = useRef(null);
+  const zoomHoldTimerRef = useRef(null);
+  const zoomHoldIntervalRef = useRef(null);
   const selBarRef          = useRef(null);
   const footerAdjustTimerRef = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
@@ -651,25 +1032,51 @@ const PDFPage = ({
     if (!pdfDoc) return;
     const canvas = pageCanvasRefs.current[n - 1];
     if (!canvas) return;
-    const scale = fitScaleRef.current * zoom;
-    if (renderedScaleRef.current[n - 1] === scale) return;
+    const displayScale = fitScaleRef.current * zoom;
+    if (renderedScaleRef.current[n - 1] === displayScale) return;
     const page     = await pdfDoc.getPage(n);
     const c        = pageCanvasRefs.current[n - 1];
     if (!c) return;
-    const viewport = page.getViewport({ scale });
-    pageViewportsRef.current[n - 1] = viewport;
+    const displayViewport = page.getViewport({ scale: displayScale });
+    pageViewportsRef.current[n - 1] = displayViewport;
     renderTasksRef.current[n - 1]?.cancel();
-    c.width  = viewport.width;
-    c.height = viewport.height;
-    // Clear any temporary CSS pre-scale (see the zoom effect below) now that
-    // the canvas's actual raster size matches the current zoom again.
-    c.style.width  = "";
-    c.style.height = "";
-    const task = page.render({ canvasContext: c.getContext("2d"), viewport });
+    const deviceScale = window.devicePixelRatio || 1;
+    const renderScaleFactor = Math.min(
+      1,
+      MAX_RENDER_CANVAS_DIMENSION / Math.max(1, displayViewport.width * deviceScale),
+      MAX_RENDER_CANVAS_DIMENSION / Math.max(1, displayViewport.height * deviceScale),
+      Math.sqrt(MAX_RENDER_CANVAS_PIXELS / Math.max(1, displayViewport.width * displayViewport.height * deviceScale * deviceScale)),
+    );
+    const renderViewport = renderScaleFactor < 0.999
+      ? page.getViewport({ scale: displayScale * renderScaleFactor })
+      : displayViewport;
+    const dimLimitedScale = Math.min(
+      deviceScale,
+      MAX_RENDER_CANVAS_DIMENSION / Math.max(1, renderViewport.width),
+      MAX_RENDER_CANVAS_DIMENSION / Math.max(1, renderViewport.height),
+    );
+    const areaLimitedScale = Math.min(
+      deviceScale,
+      Math.sqrt(MAX_RENDER_CANVAS_PIXELS / Math.max(1, renderViewport.width * renderViewport.height)),
+    );
+    const outputScale = Math.max(1, Math.min(deviceScale, dimLimitedScale, areaLimitedScale));
+    c.width  = Math.floor(renderViewport.width * outputScale);
+    c.height = Math.floor(renderViewport.height * outputScale);
+    // Keep layout in CSS pixels while rendering the raster at device-pixel
+    // density, so the page reads sharper and less washed out on modern displays.
+    c.style.width  = `${displayViewport.width}px`;
+    c.style.height = `${displayViewport.height}px`;
+    renderedCssSizeRef.current[n - 1] = {
+      width: displayViewport.width,
+      height: displayViewport.height,
+    };
+    const ctx = c.getContext("2d");
+    ctx.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+    const task = page.render({ canvasContext: ctx, viewport: renderViewport });
     renderTasksRef.current[n - 1] = task;
-    renderedScaleRef.current[n - 1] = scale;
+    renderedScaleRef.current[n - 1] = displayScale;
     task.promise.catch(err => { if (err?.name !== "RenderingCancelledException") console.error(err); });
-    if (n === pageNumRef.current) setPageViewport(viewport);
+    if (n === pageNumRef.current) setPageViewport(displayViewport);
   }, [pdfDoc, zoom]);
 
   // Full reset + initial render whenever a new document (or page count) loads.
@@ -684,6 +1091,7 @@ const PDFPage = ({
     renderTasksRef.current.forEach(t => t?.cancel());
     renderTasksRef.current   = new Array(pageCount).fill(null);
     renderedScaleRef.current = new Array(pageCount).fill(null);
+    renderedCssSizeRef.current = new Array(pageCount).fill(null);
 
     // Embedded readers should preserve the PDF's original size instead of fitting to the container.
     pdfDoc.getPage(1).then(page1 => {
@@ -721,8 +1129,10 @@ const PDFPage = ({
       const prevScale = renderedScaleRef.current[i];
       if (!prevScale || prevScale === newScale) return;
       const ratio = newScale / prevScale;
-      canvas.style.width  = `${canvas.width  * ratio}px`;
-      canvas.style.height = `${canvas.height * ratio}px`;
+      const prevCssSize = renderedCssSizeRef.current[i];
+      if (!prevCssSize) return;
+      canvas.style.width  = `${prevCssSize.width * ratio}px`;
+      canvas.style.height = `${prevCssSize.height * ratio}px`;
     });
     renderPage(pageNumRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only zoom should trigger this; renderPage/pdfDoc/pageCount changing here would re-run the doc-load effect above instead
@@ -756,11 +1166,68 @@ const PDFPage = ({
       if (wrap && wrap.style.transform) {
         wrap.style.transform       = "";
         wrap.style.transformOrigin = "";
+        wrap.style.willChange      = "";
       }
       el.scrollLeft = Math.max(0, pending.left);
       el.scrollTop  = Math.max(0, pending.top);
     });
   }, [zoom]);
+
+  useEffect(() => {
+    if (!pdfDoc || !previewRef.current) {
+      setPageMinimap([]);
+      return;
+    }
+
+    const previewEl = previewRef.current;
+    let frame = 0;
+
+    const updateMinimap = () => {
+      frame = 0;
+      const previewRect = previewEl.getBoundingClientRect();
+      const visiblePages = pageContainerRefs.current
+        .map((pageEl, index) => {
+          if (!pageEl) return null;
+          const pageRect = pageEl.getBoundingClientRect();
+          if (pageRect.width <= 0 || pageRect.height <= 0) return null;
+          const visibleLeft = clamp(previewRect.left - pageRect.left, 0, pageRect.width);
+          const visibleTop = clamp(previewRect.top - pageRect.top, 0, pageRect.height);
+          const visibleRight = clamp(previewRect.right - pageRect.left, 0, pageRect.width);
+          const visibleBottom = clamp(previewRect.bottom - pageRect.top, 0, pageRect.height);
+          const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+          const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+          if (visibleWidth <= 0 || visibleHeight <= 0) return null;
+          return {
+            page: index + 1,
+            pageWidth: pageRect.width,
+            pageHeight: pageRect.height,
+            visibleLeft,
+            visibleTop,
+            visibleWidth,
+            visibleHeight,
+            previewSrc: pageCanvasRefs.current[index]?.toDataURL?.("image/jpeg", 0.72) || "",
+          };
+        })
+        .filter(Boolean);
+
+      setPageMinimap(visiblePages);
+    };
+
+    const requestMinimapUpdate = () => {
+      if (!frame) frame = requestAnimationFrame(updateMinimap);
+    };
+
+    requestMinimapUpdate();
+    previewEl.addEventListener("scroll", requestMinimapUpdate, { passive: true });
+    window.addEventListener("resize", requestMinimapUpdate);
+
+    return () => {
+      previewEl.removeEventListener("scroll", requestMinimapUpdate);
+      window.removeEventListener("resize", requestMinimapUpdate);
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [pdfDoc, pageNum, pageViewport, zoom, splitRatio]);
+
   // IntersectionObserver: update pageNum as user scrolls through pages, and
   // lazily (re)render any visible page left stale by a zoom/doc change.
   useEffect(() => {
@@ -807,15 +1274,130 @@ const PDFPage = ({
   // current page's canvas, so waiting for it keeps the two canvases in sync.
   useEffect(() => {
     const ac = annotCanvasRef.current;
-    const pc = canvasRef.current;
-    if (!ac || !pc) return;
-    ac.width  = pc.width;
-    ac.height = pc.height;
+    if (!ac || !pageViewport) return;
+    ac.width  = Math.max(1, Math.floor(pageViewport.width));
+    ac.height = Math.max(1, Math.floor(pageViewport.height));
+    ac.style.width = `${pageViewport.width}px`;
+    ac.style.height = `${pageViewport.height}px`;
     const scale = fitScaleRef.current * zoom;
     const ctx = ac.getContext("2d");
     ctx.clearRect(0, 0, ac.width, ac.height);
     for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
   }, [annotations, pageNum, pageViewport]);
+
+  const runDrawToTextRecognition = useCallback(async (selection) => {
+    const pageCanvas = canvasRef.current;
+    const annotCanvas = annotCanvasRef.current;
+    const viewport = pageViewportsRef.current[pageNum - 1] || pageViewport;
+    if (!pageCanvas || !annotCanvas || !viewport) return;
+
+    const scale = fitScaleRef.current * zoomRef.current;
+    const pageCssWidth = Math.max(1, viewport.width);
+    const pageCssHeight = Math.max(1, viewport.height);
+    const pageScaleX = pageCanvas.width / pageCssWidth;
+    const pageScaleY = pageCanvas.height / pageCssHeight;
+    const cropLeftCss = clamp(selection.x * scale, 0, pageCssWidth);
+    const cropTopCss = clamp(selection.y * scale, 0, pageCssHeight);
+    const cropWidthCss = clamp(selection.w * scale, 1, pageCssWidth - cropLeftCss);
+    const cropHeightCss = clamp(selection.h * scale, 1, pageCssHeight - cropTopCss);
+    if (cropWidthCss < 12 || cropHeightCss < 12) return;
+
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = Math.max(1, Math.round(cropWidthCss * pageScaleX));
+    cropCanvas.height = Math.max(1, Math.round(cropHeightCss * pageScaleY));
+    const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+    cropCtx.fillStyle = "#ffffff";
+    cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+    cropCtx.drawImage(
+      pageCanvas,
+      cropLeftCss * pageScaleX,
+      cropTopCss * pageScaleY,
+      cropWidthCss * pageScaleX,
+      cropHeightCss * pageScaleY,
+      0,
+      0,
+      cropCanvas.width,
+      cropCanvas.height
+    );
+    cropCtx.drawImage(
+      annotCanvas,
+      cropLeftCss,
+      cropTopCss,
+      cropWidthCss,
+      cropHeightCss,
+      0,
+      0,
+      cropCanvas.width,
+      cropCanvas.height
+    );
+
+    // A light grayscale/contrast pass helps handwriting and low-contrast pen
+    // strokes read more like intentional ink before OCR sees the crop.
+    const image = cropCtx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
+    const { data } = image;
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+      const boosted = gray < 185 ? gray * 0.68 : 255 - ((255 - gray) * 0.42);
+      data[i] = boosted;
+      data[i + 1] = boosted;
+      data[i + 2] = boosted;
+      data[i + 3] = 255;
+    }
+    cropCtx.putImageData(image, 0, 0);
+
+    const jobId = Date.now();
+    drawTextJobRef.current = jobId;
+    setDrawTextBusy(true);
+    setDrawTextProgress(0);
+    setDrawTextStatus("Preparing OCR…");
+
+    try {
+      const worker = await getOcrWorker();
+      const { data: { text } } = await worker.recognize(cropCanvas);
+      if (drawTextJobRef.current !== jobId) return;
+      const recognizedText = normalizeOcrText(text);
+      if (!recognizedText) {
+        setDrawTextStatus("No text detected");
+        setTimeout(() => {
+          if (drawTextJobRef.current === jobId) {
+            setDrawTextBusy(false);
+            setDrawTextStatus("");
+            setDrawTextProgress(0);
+            drawTextJobRef.current = 0;
+          }
+        }, 1200);
+        return;
+      }
+
+      const rect = annotCanvas.getBoundingClientRect();
+      const inputLeft = cropLeftCss + 8;
+      const inputTop = cropTopCss + 8;
+      setAnnotTextInput({
+        vx: rect.left + inputLeft,
+        vy: rect.top + inputTop,
+        cx: selection.x + (8 / scale),
+        cy: selection.y + (8 / scale),
+        width: Math.max(160, cropWidthCss - 16),
+      });
+      setAnnotTextVal(recognizedText);
+      setDrawTextBusy(false);
+      setDrawTextStatus("");
+      setDrawTextProgress(0);
+      drawTextJobRef.current = 0;
+    } catch (error) {
+      console.error(error);
+      if (drawTextJobRef.current !== jobId) return;
+      setDrawTextStatus("OCR failed");
+      setTimeout(() => {
+        if (drawTextJobRef.current === jobId) {
+          setDrawTextBusy(false);
+          setDrawTextStatus("");
+          setDrawTextProgress(0);
+          drawTextJobRef.current = 0;
+        }
+      }, 1600);
+    }
+  }, [getOcrWorker, pageNum, pageViewport]);
 
   // ── Annotation drawing events ──────────────────────────────────────────────
   useEffect(() => {
@@ -831,7 +1413,72 @@ const PDFPage = ({
       const sy    = ac.height / rect.height;
       const cx    = e.touches ? e.touches[0].clientX : e.clientX;
       const cy    = e.touches ? e.touches[0].clientY : e.clientY;
-      return { x: (cx - rect.left) * sx / scale, y: (cy - rect.top) * sy / scale, vx: cx, vy: cy };
+      const pressure = typeof e.pressure === "number"
+        ? e.pressure
+        : typeof e.touches?.[0]?.force === "number"
+          ? e.touches[0].force
+          : 0.5;
+      return {
+        x: (cx - rect.left) * sx / scale,
+        y: (cy - rect.top) * sy / scale,
+        vx: cx,
+        vy: cy,
+        t: typeof e.timeStamp === "number" ? e.timeStamp : performance.now(),
+        pressure: Math.min(1, Math.max(0, pressure || 0.5)),
+      };
+    };
+
+    const getTextAlignedHighlightPoint = (e, lockedY = null) => {
+      const basePoint = toCanvas(e);
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const target = document.elementFromPoint(clientX, clientY);
+      const layer = textLayerRef.current;
+      if (!target || !layer || !layer.contains(target)) {
+        return lockedY == null
+          ? { ...basePoint, lineWidth: null, textAligned: false }
+          : { ...basePoint, y: lockedY, lineWidth: null, textAligned: false };
+      }
+
+      const span = target.closest?.("[data-span-idx]");
+      if (!span) {
+        return lockedY == null
+          ? { ...basePoint, lineWidth: null, textAligned: false }
+          : { ...basePoint, y: lockedY, lineWidth: null, textAligned: false };
+      }
+
+      const canvasRect = ac.getBoundingClientRect();
+      const scale = getScale();
+      const sx = ac.width / canvasRect.width;
+      const sy = ac.height / canvasRect.height;
+      const spanRect = span.getBoundingClientRect();
+      const centerY = ((spanRect.top + spanRect.height / 2) - canvasRect.top) * sy / scale;
+      const textHeight = Math.max(8, (spanRect.height * sy / scale) * 0.82);
+      return {
+        ...basePoint,
+        y: lockedY ?? centerY,
+        lineWidth: textHeight,
+        textAligned: true,
+      };
+    };
+
+    const getTextAlignedHighlightRange = (e) => {
+      const alignedPoint = getTextAlignedHighlightPoint(e);
+      if (!alignedPoint.textAligned) return null;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      const target = document.elementFromPoint(clientX, clientY);
+      const span = target?.closest?.("[data-span-idx]");
+      if (!span) return null;
+      const canvasRect = ac.getBoundingClientRect();
+      const scale = getScale();
+      const sx = ac.width / canvasRect.width;
+      const spanRect = span.getBoundingClientRect();
+      return {
+        ...alignedPoint,
+        startX: ((spanRect.left - canvasRect.left) * sx) / scale,
+        endX: ((spanRect.right - canvasRect.left) * sx) / scale,
+      };
     };
 
     const redraw = (extra) => {
@@ -848,6 +1495,7 @@ const PDFPage = ({
         return;
       }
       if (fingerScrollOnly && e.touches && !isStylusTouch(e)) return; // hand mode: a finger only scrolls, never draws
+      if (drawTextBusy) return;
       if (annotTool === "text") {
         const p = toCanvas(e);
         setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y });
@@ -865,13 +1513,53 @@ const PDFPage = ({
         }
       }
       if (annotTool === "highlight") {
-        activeAnnotRef.current = { type: "highlight", color: strokeColor, lineWidth: annotSize / getScale(), mode: highlightMode, opacity: annotOpacity / 100, points: [{ x: p.x, y: p.y }] };
+        const alignedRange = highlightMode === "line" ? getTextAlignedHighlightRange(e) : null;
+        const firstPoint = highlightMode === "line"
+          ? (alignedRange || getTextAlignedHighlightPoint(e))
+          : p;
+        activeAnnotRef.current = {
+          type: "highlight",
+          color: strokeColor,
+          lineWidth: (firstPoint.lineWidth || annotSize / getScale()),
+          mode: highlightMode,
+          opacity: annotOpacity / 100,
+          highlightSettings: DEFAULT_HIGHLIGHT_SETTINGS,
+          taperEnds: highlightTaperEnds,
+          lineCenterY: highlightMode === "line" && firstPoint.textAligned ? firstPoint.y : null,
+          autoWidthLocked: Boolean(highlightMode === "line" && highlightAutoWidth && alignedRange),
+          points: highlightMode === "line" && highlightAutoWidth && alignedRange
+            ? [
+                { x: alignedRange.startX, y: firstPoint.y },
+                { x: alignedRange.endX, y: firstPoint.y },
+              ]
+            : [{ x: firstPoint.x, y: firstPoint.y }],
+        };
       } else if (["underline","strikethrough","rect","circle"].includes(annotTool)) {
         activeAnnotRef.current = { type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
+      } else if (annotTool === "drawText") {
+        activeAnnotRef.current = { type: "drawTextSelection", color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (["line","arrow"].includes(annotTool)) {
-        activeAnnotRef.current = { type: annotTool, color: strokeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+        activeAnnotRef.current = {
+          type: annotTool, color: strokeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y,
+          ...(annotTool === "arrow" ? { lineWidth: arrowSize / getScale() } : {}),
+        };
       } else if (annotTool === "pen") {
-        activeAnnotRef.current = { type: "pen", color: strokeColor, lineWidth: penSize / getScale(), points: [{ x: p.x, y: p.y }] };
+        activeAnnotRef.current = {
+          type: "pen",
+          color: strokeColor,
+          lineWidth: penSize / getScale(),
+          penType,
+          penSettings: {
+            stabilization: penStabilization,
+            pressureAssist: penPressureAssist,
+            taper: penTaper,
+            flow: penFlow,
+            border: penBorder,
+            nibAngle: penNibAngle,
+            nibSpread: penNibSpread,
+          },
+          points: [{ x: p.x, y: p.y, t: p.t, pressure: p.pressure }],
+        };
       } else if (annotTool === "eraser") {
         activeAnnotRef.current = { type: "eraser", erasedCount: 0 };
         const er = eraserSize / getScale();
@@ -899,12 +1587,31 @@ const PDFPage = ({
       const p = toCanvas(e);
       if (ann.type === "pen" || ann.type === "highlight") {
         if (ann.mode === "line") {
-          ann.points[1] = { x: p.x, y: p.y };
+          if (ann.type === "highlight" && ann.autoWidthLocked) {
+            redraw(ann);
+            return;
+          }
+          const linePoint = ann.type === "highlight"
+            ? getTextAlignedHighlightPoint(e, ann.lineCenterY)
+            : p;
+          if (ann.type === "highlight" && linePoint.textAligned && ann.lineCenterY == null) ann.lineCenterY = linePoint.y;
+          if (ann.type === "highlight" && linePoint.lineWidth) ann.lineWidth = Math.max(ann.lineWidth || 0, linePoint.lineWidth);
+          const lockedY = ann.type === "highlight" && ann.lineCenterY != null ? ann.lineCenterY : linePoint.y;
+          if (ann.type === "highlight" && ann.points[0]) ann.points[0].y = lockedY;
+          ann.points[1] = { x: linePoint.x, y: lockedY };
         } else {
-          ann.points.push({ x: p.x, y: p.y });
+          const nextPoint = ann.type === "pen"
+            ? smoothStrokePoint(
+                ann.points,
+                { x: p.x, y: p.y, t: p.t, pressure: p.pressure },
+                ann.penSettings?.stabilization ?? penStabilization
+              )
+            : { x: p.x, y: p.y };
+          if (!nextPoint) return;
+          ann.points.push(nextPoint);
         }
         redraw(ann);
-      } else if (["underline","strikethrough","rect","circle"].includes(ann.type)) {
+      } else if (["underline","strikethrough","rect","circle","drawTextSelection"].includes(ann.type)) {
         ann.x = Math.min(ann._sx, p.x); ann.y = Math.min(ann._sy, p.y);
         ann.w = Math.abs(p.x - ann._sx); ann.h = Math.abs(p.y - ann._sy);
         redraw(ann);
@@ -935,6 +1642,20 @@ const PDFPage = ({
         if (ann.erasedCount > 0) logAnnotHistory({ action: "erase", page: pageNum, count: ann.erasedCount });
         return;
       }
+      if (ann.type === "pen") {
+        ann.points = finalizePenStroke(
+          ann.points,
+          ann.penSettings ?? DEFAULT_PEN_SETTINGS,
+          ann.penType ?? penType
+        );
+      }
+      if (ann.type === "drawTextSelection") {
+        if (ann.w < 8 || ann.h < 8) return;
+        const { _sx, _sy, ...selection } = ann;
+        void runDrawToTextRecognition(selection);
+        redraw();
+        return;
+      }
       // ignore accidental tiny marks
       const tiny = ann.type === "pen"
         ? ann.points.length < 3
@@ -963,7 +1684,7 @@ const PDFPage = ({
       ac.removeEventListener("touchend",   onUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, eraserSize, highlightMode, pageNum, annotations, fingerScrollOnly, autoContrast, annotOpacity, logAnnotHistory]);
+  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, fingerScrollOnly, autoContrast, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition]);
 
   const commitAnnotText = useCallback(() => {
     if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
@@ -1018,7 +1739,7 @@ const PDFPage = ({
         state.timer = null;
       }
       if (!wrap) return;
-      const finalZoom = state.pendingZoom;
+      const finalZoom = normalizePinchZoom(state.pendingZoom);
       const ratio = finalZoom / state.baseZoom;
       scrollAfterZoomRef.current = {
         left: (state.startSL + state.midX) * ratio - state.midX,
@@ -1047,7 +1768,7 @@ const PDFPage = ({
       const wrapRect = wrap.getBoundingClientRect();
       state.originX = e.clientX - wrapRect.left;
       state.originY = e.clientY - wrapRect.top;
-      state.pendingZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, state.pendingZoom * delta));
+      state.pendingZoom = normalizePinchZoom(state.pendingZoom * delta);
 
       wrap.style.transformOrigin = `${state.originX}px ${state.originY}px`;
       wrap.style.transform = `scale(${state.pendingZoom / state.baseZoom})`;
@@ -1064,47 +1785,117 @@ const PDFPage = ({
       }
       el.removeEventListener("wheel", onWheel);
     };
-  }, [pdfDoc]);
+  }, [pdfDoc, handleAnnotUndo]);
+
+  const zoomToPoint = useCallback((clientX, clientY, nextZoom) => {
+    const el = previewRef.current;
+    const baseZoom  = zoomRef.current;
+    const rawTarget = typeof nextZoom === "function" ? nextZoom(baseZoom) : nextZoom;
+    const clamped   = normalizeZoom(rawTarget);
+    if (!el) { setZoom(clamped); return; }
+    const rect = el.getBoundingClientRect();
+    const ratio = clamped / baseZoom;
+    const midX  = clientX - rect.left;
+    const midY  = clientY - rect.top;
+    scrollAfterZoomRef.current = {
+      left: (el.scrollLeft + midX) * ratio - midX,
+      top:  (el.scrollTop  + midY) * ratio - midY,
+    };
+    setZoom(clamped);
+  }, []);
+
+  const zoomFromCenter = useCallback((nextZoom) => {
+    const el = previewRef.current;
+    if (!el) {
+      const baseZoom  = zoomRef.current;
+      const rawTarget = typeof nextZoom === "function" ? nextZoom(baseZoom) : nextZoom;
+      setZoom(normalizeZoom(rawTarget));
+      return;
+    }
+    zoomToPoint(
+      el.getBoundingClientRect().left + el.clientWidth / 2,
+      el.getBoundingClientRect().top + el.clientHeight / 2,
+      nextZoom
+    );
+  }, [zoomToPoint]);
+
+  const stopZoomHold = useCallback(() => {
+    if (zoomHoldTimerRef.current) {
+      clearTimeout(zoomHoldTimerRef.current);
+      zoomHoldTimerRef.current = null;
+    }
+    if (zoomHoldIntervalRef.current) {
+      clearInterval(zoomHoldIntervalRef.current);
+      zoomHoldIntervalRef.current = null;
+    }
+  }, []);
+
+  const startZoomHold = useCallback((step) => {
+    stopZoomHold();
+    zoomHoldTimerRef.current = setTimeout(() => {
+      zoomHoldTimerRef.current = null;
+      zoomHoldIntervalRef.current = setInterval(() => {
+        zoomFromCenter((z) => z + step);
+      }, 48);
+    }, 220);
+  }, [stopZoomHold, zoomFromCenter]);
+
+  useEffect(() => {
+    const stop = () => stopZoomHold();
+    window.addEventListener("mouseup", stop);
+    window.addEventListener("touchend", stop, { passive: true });
+    window.addEventListener("touchcancel", stop, { passive: true });
+    return () => {
+      window.removeEventListener("mouseup", stop);
+      window.removeEventListener("touchend", stop);
+      window.removeEventListener("touchcancel", stop);
+      stopZoomHold();
+    };
+  }, [stopZoomHold]);
 
   // ── Two-finger pinch zoom + single-finger pan + tap word selection ─────────
   useEffect(() => {
     const el = previewRef.current;
     if (!el || !pdfDoc) return;
 
-    const MOVE_THRESHOLD = 8; // px — below this, treat as tap not pan
+    const MOVE_THRESHOLD = 8;
+    const TWO_FINGER_UNDO_MOVE_THRESHOLD = 34;
+    const TWO_FINGER_UNDO_MAX_MS = 420;
+    const PINCH_COOLDOWN_MS = 350;
+    const MIN_PINCH_START_DIST = 28;
+    const PINCH_JITTER_PX = 3;
 
-    // Pinch state
+    let lastMidX = 0, lastMidY = 0;
+    let twoFingerUndoCandidate = null;
     let startDist = null;
+    let pinchPrimed = false;
     let startZoom = 1;
     let startMidX = 0, startMidY = 0, startSL = 0, startST = 0;
-    let lastMidX  = 0, lastMidY  = 0; // continuously-updated pinch midpoint (relative to el) — tracks finger drift during the gesture instead of staying pinned to the gesture-start point
-    // Fingers almost never lift simultaneously — after a pinch commits (first
-    // finger up), the second finger is often still down for a moment, and
-    // any movement/lift of THAT finger alone would otherwise be read as a
-    // brand new one-finger pan/tap using stale/uninitialized reference
-    // points. Ignore single-finger touch entirely for a short window right
-    // after a pinch ends.
-    const PINCH_COOLDOWN_MS = 350;
+    let lastPinchZoom = 1;
     let pinchCooldownUntil = 0;
+    let pinchTransformApplied = false;
 
-    // Single-finger state
+    const fireTwoFingerUndo = () => {
+      if (twoFingerUndoCandidate?.timer) clearTimeout(twoFingerUndoCandidate.timer);
+      twoFingerUndoCandidate = null;
+      handleAnnotUndo();
+      clearTimeout(lpTimer); lpTimer = null;
+      clearTimeout(lpRefineTimer); lpRefineTimer = null;
+      navigator.vibrate?.(20);
+    };
+
     let panX = 0, panY = 0, panSL = 0, panST = 0;
     let hasMoved = false;
     let touchInteractionActive = false;
 
-    // Long-press + drag selection state
     let lpTimer = null;
     let lpRefineTimer = null;
     let isLpSelecting = false;
     let lpStartSpanIdx = -1;
-    // Plain reader (Hyles hidden): a long-press locks onto exactly the one
-    // word it landed on — tiny jitter while lifting the finger can't grow
-    // it, but a deliberate drag past LP_EXPAND_THRESHOLD still extends it
-    // (same continued touch, no need to find a drag handle).
     let lpWordLocked = false;
     let lpLockX = 0, lpLockY = 0;
-    const LP_EXPAND_THRESHOLD = 14; // px of movement before a "settling" finger counts as an intentional drag
-    const LP_REFINE_DELAY = 320; // extra hold after the first long-press before collapsing to the exact touched word
+    const LP_EXPAND_THRESHOLD = 14;
+    const LP_REFINE_DELAY = 320;
 
     const touchDist = (t) => {
       const dx = t[0].clientX - t[1].clientX;
@@ -1112,8 +1903,36 @@ const PDFPage = ({
       return Math.sqrt(dx * dx + dy * dy);
     };
 
-    // Use elementFromPoint — the browser's own hit-test — to find which span the
-    // finger is over, then expand from the tapped character to word boundaries.
+    // Mirrors the ctrl+scroll zoom path: during the gesture we only push a
+    // cheap CSS transform on the canvas wrapper (no React re-render, no PDF.js
+    // re-rasterization) so the live pinch tracks the fingers at 60fps instead
+    // of jittering on every touchmove; the real (expensive) setZoom + redraw
+    // happens once, when the fingers lift.
+    const commitPinchZoom = () => {
+      if (!pinchPrimed || lastPinchZoom === startZoom) {
+        // Nothing actually changed — no re-render is coming to strip the
+        // preview transform, so clean it up here instead.
+        const wrap = canvasWrapRef.current;
+        if (wrap) {
+          wrap.style.transform       = "";
+          wrap.style.transformOrigin = "";
+          wrap.style.willChange      = "";
+        }
+        pinchTransformApplied = false;
+        return;
+      }
+      const ratio = lastPinchZoom / startZoom;
+      scrollAfterZoomRef.current = {
+        left: (startSL + startMidX) * ratio - lastMidX,
+        top: (startST + startMidY) * ratio - lastMidY,
+      };
+      setZoom(lastPinchZoom);
+      // The preview transform stays in place until the [zoom] effect swaps it
+      // for the real scroll position in the same frame the new raster paints
+      // — clearing it here would flash back to the pre-zoom size first.
+      pinchTransformApplied = false;
+    };
+
     const selectWordAt = (cx, cy) => {
       const target = document.elementFromPoint(cx, cy);
       const layer  = textLayerRef.current;
@@ -1135,8 +1954,6 @@ const PDFPage = ({
       while (e < text.length && /\S/.test(text[e]))     e++;
       if (s === e) return null;
 
-      // pdfjs sometimes splits one word across adjacent spans with no whitespace.
-      // Expand left/right across spans that share the same word boundary.
       const spans = spansRef.current;
       let loIdx = spanIdx, hiIdx = spanIdx;
       if (s === 0) {
@@ -1155,54 +1972,41 @@ const PDFPage = ({
       if (!word) return null;
       window.getSelection()?.removeAllRanges();
 
-      const bx = parseFloat(target.style.left  || "0") + (parseFloat(target.style.width  || "0") || target.offsetWidth  || 0) / 2;
-      const by = parseFloat(target.style.top   || "0") +  parseFloat(target.style.height || "0") + 8;
+      const bx = parseFloat(target.style.left || "0") + (parseFloat(target.style.width || "0") || target.offsetWidth || 0) / 2;
+      const by = parseFloat(target.style.top || "0") + parseFloat(target.style.height || "0") + 8;
       return { text: word, spanIdx: loIdx, endIdx: hiIdx, x: bx, y: by };
     };
 
-    // Extra pinch state
-    let pinchOriginX = 0, pinchOriginY = 0; // transform-origin in canvas-wrap space
-    let lastPinchZoom = 1;                   // final zoom reached during gesture
-    // Captured ONCE at gesture start and reused for the whole gesture — el's
-    // rect is stable regardless (transform is only applied to wrap, a
-    // descendant, so it never affects el's own layout box), but wrap's rect
-    // must NOT be re-read mid-gesture: once we start applying our own
-    // translate+scale to wrap each frame, getBoundingClientRect() on it
-    // would reflect THAT already-applied transform, corrupting the pivot
-    // math every subsequent frame (this was causing the flicker/jitter).
-    let gestureElRect = null, gestureWrapRect = null;
-
     const onTouchStart = (e) => {
-      // Handles are managed by their own React onTouchStart — don't start a pan
       if (e.target.closest?.(".sel_handle")) return;
 
       if (e.touches.length === 2) {
         clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
+        const elRect = el.getBoundingClientRect();
         startDist = touchDist(e.touches);
+        pinchPrimed = startDist >= MIN_PINCH_START_DIST;
         startZoom = zoomRef.current;
         lastPinchZoom = startZoom;
-        const elRect   = el.getBoundingClientRect();
-        const wrapRect = canvasWrapRef.current?.getBoundingClientRect() || elRect;
-        gestureElRect   = elRect;
-        gestureWrapRect = wrapRect;
-        startMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
-        startMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
-        lastMidX  = startMidX;
-        lastMidY  = startMidY;
-        startSL   = el.scrollLeft;
-        startST   = el.scrollTop;
-        // Origin point in canvas-wrap space, used as the fixed pivot for the
-        // translate+scale formula below — transform-origin itself stays at
-        // "0 0" the whole gesture (see onTouchMove) so it never needs to
-        // change mid-scale, which would itself cause a jump.
-        pinchOriginX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - wrapRect.left;
-        pinchOriginY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - wrapRect.top;
-        const wrap = canvasWrapRef.current;
-        if (wrap) wrap.style.transformOrigin = "0 0";
+        lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
+        lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
+        startMidX = lastMidX;
+        startMidY = lastMidY;
+        startSL = el.scrollLeft;
+        startST = el.scrollTop;
+        twoFingerUndoCandidate = {
+          startedAt: Date.now(),
+          startDist,
+          startMidX: lastMidX,
+          startMidY: lastMidY,
+          timer: setTimeout(() => {
+            if (!twoFingerUndoCandidate) return;
+            fireTwoFingerUndo();
+          }, 180),
+        };
       } else if (e.touches.length === 1) {
         touchInteractionActive = true;
-        if (Date.now() < pinchCooldownUntil) return; // ignore — likely the 2nd finger of a pinch that just ended, not a real new touch
-        if (fingerScrollOnlyRef.current && isStylusTouch(e)) return; // hand mode: the pencil never pans/selects, only draws
+        if (Date.now() < pinchCooldownUntil) return;
+        if (fingerScrollOnlyRef.current && isStylusTouch(e)) return;
         panX = e.touches[0].clientX;
         panY = e.touches[0].clientY;
         panSL = el.scrollLeft;
@@ -1221,11 +2025,10 @@ const PDFPage = ({
             const spanIdx = parseInt(target.dataset.spanIdx ?? "-1", 10);
             if (spanIdx < 0) return;
 
-            // If this span is inside the existing selection, grab the nearest handle
             const curSel = manualSelectionRef.current;
             if (curSel) {
-              const lo  = Math.min(curSel.startIdx, curSel.endIdx);
-              const hi  = Math.max(curSel.startIdx, curSel.endIdx);
+              const lo = Math.min(curSel.startIdx, curSel.endIdx);
+              const hi = Math.max(curSel.startIdx, curSel.endIdx);
               if (spanIdx >= lo && spanIdx <= hi) {
                 navigator.vibrate?.(30);
                 setDragHandle(spanIdx <= (lo + hi) / 2 ? "start" : "end");
@@ -1233,23 +2036,21 @@ const PDFPage = ({
               }
             }
 
-            // Normal long-press: start a new selection from this word, expanding
-            // across adjacent spans that pdfjs may have split the word into.
             const lpSpans = spansRef.current;
             let loIdx = spanIdx, hiIdx = spanIdx;
             while (loIdx > 0 && !/\s$/.test(lpSpans[loIdx - 1]?.el.textContent || " ")) loIdx--;
             while (hiIdx < lpSpans.length - 1 && !/^\s/.test(lpSpans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
             const fromNode = lpSpans[loIdx]?.el.firstChild;
             const toNode   = lpSpans[hiIdx]?.el.firstChild;
-	            if (fromNode && fromNode.nodeType === Node.TEXT_NODE &&
-	                toNode   && toNode.nodeType   === Node.TEXT_NODE) {
-	              const range = document.createRange();
-	              range.setStart(fromNode, 0);
-	              range.setEnd(toNode, toNode.textContent.length);
-	              window.getSelection()?.removeAllRanges();
-	              const text = getSpanRangeText(loIdx, hiIdx);
-	              if (!text) return;
-	              const vr = range.getBoundingClientRect();
+            if (fromNode && fromNode.nodeType === Node.TEXT_NODE &&
+                toNode   && toNode.nodeType   === Node.TEXT_NODE) {
+              const range = document.createRange();
+              range.setStart(fromNode, 0);
+              range.setEnd(toNode, toNode.textContent.length);
+              window.getSelection()?.removeAllRanges();
+              const text = getSpanRangeText(loIdx, hiIdx);
+              if (!text) return;
+              const vr = range.getBoundingClientRect();
               if (hideHyleControls || onSelectionActionRef.current) {
                 setManualSelection({ startIdx: loIdx, endIdx: hiIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
               } else {
@@ -1258,7 +2059,7 @@ const PDFPage = ({
                 setManualPopup({ x: vr.left + vr.width / 2, y: vr.bottom + 10 });
                 setManualSelection(null);
               }
-	              lpWordLocked = true;
+              lpWordLocked = true;
               lpStartSpanIdx = loIdx;
               lpLockX = ct.clientX;
               lpLockY = ct.clientY;
@@ -1284,7 +2085,6 @@ const PDFPage = ({
                 lpStartSpanIdx = exact.spanIdx;
               }, LP_REFINE_DELAY);
               navigator.vibrate?.(30);
-              return;
             }
           }, 400);
         }
@@ -1292,44 +2092,59 @@ const PDFPage = ({
     };
 
     const onTouchMove = (e) => {
-      if (e.touches.length === 2 && startDist !== null) {
+      if (e.touches.length === 2 && twoFingerUndoCandidate) {
         clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         e.preventDefault();
-        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, startZoom * touchDist(e.touches) / startDist));
-        lastPinchZoom = newZoom;
-        const factor = newZoom / startZoom;
-
-        // Track the CURRENT midpoint (fingers rarely stay perfectly still
-        // while pinching) so the content under them stays put even as they
-        // drift — using a fixed transform-origin ("0 0", set once at
-        // touchstart) plus an explicit translate computed from where the
-        // origin-point has moved to, instead of moving transform-origin
-        // itself mid-scale (which would jump, since re-anchoring an already
-        // -scaled element relocates it).
-        const curMidXWrap = (e.touches[0].clientX + e.touches[1].clientX) / 2 - gestureWrapRect.left;
-        const curMidYWrap = (e.touches[0].clientY + e.touches[1].clientY) / 2 - gestureWrapRect.top;
-        lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - gestureElRect.left;
-        lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - gestureElRect.top;
-
-        const tx = curMidXWrap - pinchOriginX * factor;
-        const ty = curMidYWrap - pinchOriginY * factor;
-
-        // CSS transform: instant visual scale (+ pan to follow drift), no React re-render
-        const wrap = canvasWrapRef.current;
-        if (wrap) {
-          wrap.style.transform = `translate(${tx}px, ${ty}px) scale(${factor})`;
+        const nextDist = touchDist(e.touches);
+        const elRect = el.getBoundingClientRect();
+        lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
+        lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
+        const movedFar =
+          Math.abs(nextDist - twoFingerUndoCandidate.startDist) > TWO_FINGER_UNDO_MOVE_THRESHOLD ||
+          Math.hypot(lastMidX - twoFingerUndoCandidate.startMidX, lastMidY - twoFingerUndoCandidate.startMidY) > TWO_FINGER_UNDO_MOVE_THRESHOLD;
+        if (movedFar) {
+          if (twoFingerUndoCandidate.timer) clearTimeout(twoFingerUndoCandidate.timer);
+          twoFingerUndoCandidate = null;
+        }
+        if (startDist !== null) {
+          if (!pinchPrimed) {
+            if (nextDist < MIN_PINCH_START_DIST) return;
+            startDist = nextDist;
+            startZoom = zoomRef.current;
+            startMidX = lastMidX;
+            startMidY = lastMidY;
+            startSL = el.scrollLeft;
+            startST = el.scrollTop;
+            lastPinchZoom = startZoom;
+            pinchPrimed = true;
+            return;
+          }
+          if (Math.abs(nextDist - startDist) < PINCH_JITTER_PX) return;
+          const rawRatio = Math.max(0.01, nextDist / startDist);
+          const newZoom = normalizePinchZoom(startZoom * rawRatio);
+          if (newZoom === lastPinchZoom) return;
+          lastPinchZoom = newZoom;
+          const wrap = canvasWrapRef.current;
+          if (wrap) {
+            const wrapRect = wrap.getBoundingClientRect();
+            const originX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - wrapRect.left;
+            const originY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - wrapRect.top;
+            wrap.style.willChange      = "transform";
+            wrap.style.transformOrigin = `${originX}px ${originY}px`;
+            wrap.style.transform       = `scale(${newZoom / startZoom})`;
+            pinchTransformApplied = true;
+          }
         }
         return;
       }
       if (e.touches.length !== 1) return;
-      if (Date.now() < pinchCooldownUntil) return; // ignore — likely the 2nd finger of a pinch that just ended, not a real new touch
-      if (fingerScrollOnlyRef.current && isStylusTouch(e)) return; // hand mode: the pencil never pans/selects, only draws
+      if (Date.now() < pinchCooldownUntil) return;
+      if (fingerScrollOnlyRef.current && isStylusTouch(e)) return;
 
-      // Drag handle — handled inline so it works on the very first touchmove
       if (dragHandleRef.current) {
         clearTimeout(lpRefineTimer); lpRefineTimer = null;
         e.preventDefault();
-        const ct     = e.touches[0];
+        const ct = e.touches[0];
         const target = document.elementFromPoint(ct.clientX, ct.clientY);
         const layer  = textLayerRef.current;
         if (!target || !layer || !layer.contains(target)) return;
@@ -1341,17 +2156,13 @@ const PDFPage = ({
           if (which === "start") {
             const newStart = Math.min(idx, sel.endIdx);
             return { ...sel, startIdx: newStart, text: getSpanRangeText(newStart, sel.endIdx) };
-          } else {
-            const newEnd = Math.max(idx, sel.startIdx);
-            return { ...sel, endIdx: newEnd, text: getSpanRangeText(sel.startIdx, newEnd) };
           }
+          const newEnd = Math.max(idx, sel.startIdx);
+          return { ...sel, endIdx: newEnd, text: getSpanRangeText(sel.startIdx, newEnd) };
         });
         return;
       }
 
-      // Plain reader: the word is locked in, but a deliberate drag (past a
-      // small deadzone) still extends it — only jitter under the threshold
-      // is ignored, so lifting the finger cleanly can't silently grow it.
       if (lpWordLocked) {
         e.preventDefault();
         const dx = e.touches[0].clientX - lpLockX;
@@ -1360,10 +2171,8 @@ const PDFPage = ({
         clearTimeout(lpRefineTimer); lpRefineTimer = null;
         lpWordLocked = false;
         isLpSelecting = true;
-        // fall through to the extend logic below using this same event
       }
 
-      // After long-press fires, dragging extends the text selection
       if (isLpSelecting) {
         e.preventDefault();
         const ct  = e.touches[0];
@@ -1376,14 +2185,14 @@ const PDFPage = ({
             const toIdx   = Math.max(lpStartSpanIdx, spanIdx);
             const fromEl  = spansRef.current[fromIdx]?.el;
             const toEl    = spansRef.current[toIdx]?.el;
-	            if (fromEl?.firstChild && toEl?.firstChild) {
-	              const range = document.createRange();
-	              range.setStart(fromEl.firstChild, 0);
-	              range.setEnd(toEl.firstChild, toEl.firstChild.textContent.length);
-	              window.getSelection()?.removeAllRanges();
-	              const text = getSpanRangeText(fromIdx, toIdx);
-	              const vr = range.getBoundingClientRect();
-	              if (text) {
+            if (fromEl?.firstChild && toEl?.firstChild) {
+              const range = document.createRange();
+              range.setStart(fromEl.firstChild, 0);
+              range.setEnd(toEl.firstChild, toEl.firstChild.textContent.length);
+              window.getSelection()?.removeAllRanges();
+              const text = getSpanRangeText(fromIdx, toIdx);
+              const vr = range.getBoundingClientRect();
+              if (text) {
                 if (hideHyleControls || onSelectionActionRef.current) {
                   setManualSelection({ startIdx: fromIdx, endIdx: toIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
                 } else {
@@ -1393,7 +2202,7 @@ const PDFPage = ({
                   setManualSelection(null);
                 }
               }
-	            }
+            }
           }
         }
         return;
@@ -1402,7 +2211,6 @@ const PDFPage = ({
       const dx = e.touches[0].clientX - panX;
       const dy = e.touches[0].clientY - panY;
       const moved = Math.sqrt(dx * dx + dy * dy);
-
       if (!hasMoved && moved < MOVE_THRESHOLD) return;
 
       clearTimeout(lpTimer); lpTimer = null;
@@ -1420,44 +2228,36 @@ const PDFPage = ({
         return;
       }
 
-      if (e.touches.length < 2 && startDist !== null) {
-        startDist = null;
-        pinchCooldownUntil = Date.now() + PINCH_COOLDOWN_MS;
-        const wrap = canvasWrapRef.current;
-        if (wrap && wrap.style.transform) {
-          // Keep the CSS transform alive — useEffect([zoom]) will strip it atomically
-          // with the scroll correction after the canvas re-renders, preventing any snap.
-          const finalZoom = lastPinchZoom;
-          const ratio     = finalZoom / startZoom;
-          // Anchor to lastMidX/Y (where the fingers ended up), not
-          // startMidX/Y (where they started) — otherwise any drift during
-          // the gesture would be reflected in the live preview but then
-          // snapped away the instant it commits to a real scroll position.
-          scrollAfterZoomRef.current = {
-            left: (startSL + startMidX) * ratio - lastMidX,
-            top:  (startST + startMidY) * ratio - lastMidY,
-          };
-          setZoom(finalZoom);
+      if (e.touches.length < 2 && twoFingerUndoCandidate) {
+        if (Date.now() - twoFingerUndoCandidate.startedAt <= TWO_FINGER_UNDO_MAX_MS) {
+          fireTwoFingerUndo();
+          return;
         }
+        if (twoFingerUndoCandidate.timer) clearTimeout(twoFingerUndoCandidate.timer);
+        twoFingerUndoCandidate = null;
       }
       clearTimeout(lpTimer); lpTimer = null;
       clearTimeout(lpRefineTimer); lpRefineTimer = null;
 
-      // Word was already committed to manualSelection when the long-press
-      // fired — nothing left to do but consume this touchend.
+      if (e.touches.length < 2 && startDist !== null) {
+        commitPinchZoom();
+        startDist = null;
+        pinchCooldownUntil = Date.now() + PINCH_COOLDOWN_MS;
+        pinchPrimed = false;
+      }
+
       if (lpWordLocked) { lpWordLocked = false; window.getSelection()?.removeAllRanges(); return; }
 
       if (isLpSelecting) {
         isLpSelecting = false;
         window.getSelection()?.removeAllRanges();
-        return;
       }
-
+      if (e.touches.length === 0) touchInteractionActive = false;
     };
 
     const onContextMenu = (e) => e.preventDefault();
     const onSelectStart = (e) => {
-      if (touchInteractionActive) e.preventDefault();
+      if (touchInteractionActive || annotTool) e.preventDefault();
     };
 
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
@@ -1468,8 +2268,17 @@ const PDFPage = ({
     el.addEventListener("selectstart", onSelectStart);
 
     return () => {
+      if (twoFingerUndoCandidate?.timer) clearTimeout(twoFingerUndoCandidate.timer);
       clearTimeout(lpTimer);
       clearTimeout(lpRefineTimer);
+      if (pinchTransformApplied) {
+        const wrap = canvasWrapRef.current;
+        if (wrap) {
+          wrap.style.transform       = "";
+          wrap.style.transformOrigin = "";
+          wrap.style.willChange      = "";
+        }
+      }
       el.removeEventListener("touchstart",  onTouchStart);
       el.removeEventListener("touchmove",   onTouchMove);
       el.removeEventListener("touchend",    onTouchEnd);
@@ -1771,7 +2580,7 @@ const PDFPage = ({
     setPageNum(1); setPageViewport(null); setZoom(1);
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
-    pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = [];
+    pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
     try {
       const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       setPdfDoc(doc);
@@ -2665,34 +3474,10 @@ const PDFPage = ({
   const handleDragLeave   = () => setDragOver(false);
   const handleInputChange = (e) => loadFile(e.target.files[0]);
 
-  // Zoom buttons (+/-/reset) previously just called setZoom directly, which
-  // re-renders the canvas at a new size and leaves scrollLeft/scrollTop
-  // unchanged in raw pixels — since the content underneath scaled, that
-  // silently shifts what's actually visible (looks like the page "jumps"/
-  // re-centers). Anchor on the viewport's center instead, reusing the same
-  // scrollAfterZoomRef mechanism the ctrl+wheel/pinch zoom already uses to
-  // keep the point under the cursor fixed — here the "point" is just the
-  // middle of the visible area, so the page stays in place after zooming.
-  const zoomFromCenter = (nextZoom) => {
-    const el = previewRef.current;
-    const baseZoom  = zoomRef.current;
-    const rawTarget = typeof nextZoom === "function" ? nextZoom(baseZoom) : nextZoom;
-    const clamped   = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, rawTarget));
-    if (!el) { setZoom(clamped); return; }
-    const ratio = clamped / baseZoom;
-    const midX  = el.clientWidth  / 2;
-    const midY  = el.clientHeight / 2;
-    scrollAfterZoomRef.current = {
-      left: (el.scrollLeft + midX) * ratio - midX,
-      top:  (el.scrollTop  + midY) * ratio - midY,
-    };
-    setZoom(clamped);
-  };
-
   const handleClose = () => {
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
-    pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = [];
+    pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
     setPdfDoc(null); setFilename(""); setPageNum(1); setPageCount(0);
     setPdfType(null); setHyleData(null); setHylePage(null);
     setExtractError(""); setSavedId(null); setActiveHistoryId(null);
@@ -2749,11 +3534,33 @@ const PDFPage = ({
             </span>
           )}
           <div id="pdf_zoom_controls">
-            <button onClick={() => zoomFromCenter((z) => z / 1.25)} title="Zoom out">−</button>
+            <button
+              onClick={() => zoomFromCenter((z) => z - 0.01)}
+              onMouseDown={() => startZoomHold(-0.01)}
+              onMouseUp={stopZoomHold}
+              onMouseLeave={stopZoomHold}
+              onTouchStart={(e) => { e.preventDefault(); startZoomHold(-0.01); }}
+              onTouchEnd={stopZoomHold}
+              onTouchCancel={stopZoomHold}
+              title="Zoom out 1%"
+            >
+              −
+            </button>
             <button id="pdf_zoom_label" onClick={() => zoomFromCenter(1)} title="Reset zoom to original size">
               {Math.round(zoom * 100)}%
             </button>
-            <button onClick={() => zoomFromCenter((z) => z * 1.25)} title="Zoom in">+</button>
+            <button
+              onClick={() => zoomFromCenter((z) => z + 0.01)}
+              onMouseDown={() => startZoomHold(0.01)}
+              onMouseUp={stopZoomHold}
+              onMouseLeave={stopZoomHold}
+              onTouchStart={(e) => { e.preventDefault(); startZoomHold(0.01); }}
+              onTouchEnd={stopZoomHold}
+              onTouchCancel={stopZoomHold}
+              title="Zoom in 1%"
+            >
+              +
+            </button>
           </div>
           {currentSourceIdRef.current && (
             <div className="annot_dd_wrap" ref={actionsMenuRef}>
@@ -2878,11 +3685,12 @@ const PDFPage = ({
           #highlight_panel entirely — one row instead of two. */}
       {pdfDoc && !selectionOnly && (() => {
         const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
-        const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser";
+        const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser" || annotTool === "arrow";
         const sizeProps =
-          annotTool === "pen"     ? { min: 1, max: 20, step: 0.5, value: penSize,    onChange: setPenSize } :
-          annotTool === "eraser"  ? { min: 6, max: 48, step: 2,   value: eraserSize, onChange: setEraserSize } :
-          annotTool === "highlight" ? { min: 4, max: 64, step: 2, value: annotSize,  onChange: setAnnotSize } :
+          annotTool === "pen"     ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
+          annotTool === "eraser"  ? { min: 6, max: 72, step: 2,   value: eraserSize, onChange: setEraserSize } :
+          annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
+          annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
           null;
         return (
           <div id="pdf_annot_toolbar">
@@ -2890,7 +3698,7 @@ const PDFPage = ({
               <button
                 type="button"
                 className={`annot_trigger${annotTool ? " annot_trigger--active" : ""}`}
-                onClick={() => { setToolsMenuOpen((o) => !o); setColorMenuOpen(false); }}
+                onClick={() => { setToolsMenuOpen((o) => !o); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
               >
                 <i className={`fi ${activeToolMeta?.icon || "fi-rr-pencil"}`} />
                 <span className="annot_trigger_label">{activeToolMeta?.label || "Tools"}</span>
@@ -2918,23 +3726,40 @@ const PDFPage = ({
                 <button
                   type="button"
                   className="annot_trigger annot_trigger--color"
-                  onClick={() => { setColorMenuOpen((o) => !o); setToolsMenuOpen(false); }}
+                  onClick={() => { setColorMenuOpen((o) => !o); setToolsMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
                   title="Color"
                 >
-                  <span className="annot_swatch" style={{ background: annotColor }} />
+                  <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
+                  <span className="annot_trigger_label">Ink</span>
                   <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
                 </button>
                 {colorMenuOpen && (
                   <div className="annot_dd annot_dd--colors">
-                    {ANNOT_COLORS.map((c) => (
-                      <button
-                        key={c}
-                        type="button"
-                        className={`annot_swatch_btn${annotColor === c ? " annot_swatch_btn--active" : ""}`}
-                        style={{ background: c }}
-                        title={c}
-                        onClick={() => { setAnnotColor(c); setColorMenuOpen(false); }}
-                      />
+                    <div className="annot_color_preview">
+                      <div className="annot_color_preview_chip" style={{ background: annotColor }} />
+                      <div className="annot_color_preview_text">
+                        <span className="annot_color_preview_label">Current ink</span>
+                        <span className="annot_color_preview_hex">{annotColor.toUpperCase()}</span>
+                      </div>
+                    </div>
+                    {ANNOT_COLOR_GROUPS.map(({ label, colors }) => (
+                      <div key={label} className="annot_color_group">
+                        <div className="annot_color_group_label">{label}</div>
+                        <div className="annot_color_group_grid">
+                          {colors.map((c) => (
+                            <button
+                              key={c}
+                              type="button"
+                              className={`annot_swatch_btn${annotColor === c ? " annot_swatch_btn--active" : ""}`}
+                              style={{ background: c }}
+                              title={c}
+                              onClick={() => { setAnnotColor(c); setColorMenuOpen(false); }}
+                            >
+                              {annotColor === c && <span className="annot_swatch_btn_inner" />}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     ))}
                   </div>
                 )}
@@ -2951,23 +3776,207 @@ const PDFPage = ({
               />
             )}
 
-            {annotTool === "highlight" && (
-              <div className="annot_mode_toggle">
+            {annotTool === "pen" && (
+              <div className="annot_dd_wrap" ref={penMenuRef}>
                 <button
                   type="button"
-                  className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
-                  onClick={() => setHighlightMode("freehand")}
-                >Free</button>
-                <button
-                  type="button"
-                  className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
-                  onClick={() => setHighlightMode("line")}
-                >Line</button>
+                  className={`annot_trigger${penMenuOpen ? " annot_trigger--active" : ""}`}
+                  onClick={() => { setPenMenuOpen((o) => !o); setToolsMenuOpen(false); setColorMenuOpen(false); setHighlightMenuOpen(false); }}
+                  title="Pen settings"
+                >
+                  <i className="fi fi-rr-settings-sliders" />
+                  <span className="annot_trigger_label">Stroke shaping</span>
+                  <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+                </button>
+                {penMenuOpen && (
+                  <div className="annot_dd annot_dd--pen">
+                    <div className="annot_pen_panel">
+                      <div className="annot_pen_group">
+                        <div className="annot_pen_group_title">Themes</div>
+                        <div className="annot_mode_toggle annot_mode_toggle--pen">
+                          {PEN_THEMES.map((theme) => (
+                            <button
+                              key={theme.key}
+                              type="button"
+                              className="annot_mode_btn"
+                              onClick={() => applyPenTheme(theme)}
+                            >
+                              {theme.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="annot_pen_group">
+                        <div className="annot_pen_group_title">Pen type</div>
+                        <div className="annot_mode_toggle annot_mode_toggle--pen">
+                          {PEN_TYPES.map(({ key, label }) => (
+                            <button
+                              key={key}
+                              type="button"
+                              className={`annot_mode_btn${penType === key ? " annot_mode_btn--active" : ""}`}
+                              onClick={() => setPenType(key)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="annot_pen_group annot_pen_group--full">
+                        <div className="annot_pen_group_title">Stroke shaping</div>
+                        <div className="annot_mode_toggle annot_mode_toggle--pen">
+                          <button
+                            type="button"
+                            className={`annot_mode_btn${penBorder ? " annot_mode_btn--active" : ""}`}
+                            onClick={() => setPenBorder((value) => !value)}
+                          >
+                            Stroke border
+                          </button>
+                        </div>
+                        <div className="annot_pen_controls annot_pen_controls--column">
+                          <LabeledPercentKnob
+                            title="Smoothing"
+                            subtitle="Reduce hand jitter"
+                            value={penStabilization}
+                            onChange={setPenStabilization}
+                            label="%"
+                          />
+                          <LabeledPercentKnob
+                            title="Pressure assist"
+                            subtitle="Shape width without stylus pressure"
+                            value={penPressureAssist}
+                            onChange={setPenPressureAssist}
+                            label="%"
+                          />
+                          <LabeledPercentKnob
+                            title="Tip taper"
+                            subtitle="Sharper start and end"
+                            value={penTaper}
+                            onChange={setPenTaper}
+                            label="%"
+                          />
+                          <LabeledPercentKnob
+                            title="Ink flow"
+                            subtitle="Extra body and softness"
+                            value={penFlow}
+                            onChange={setPenFlow}
+                            label="%"
+                          />
+                        </div>
+                      </div>
+
+                      {penType === "fountain" && (
+                        <div className="annot_pen_group">
+                          <div className="annot_pen_group_title">Fountain nib</div>
+                          <div className="annot_pen_controls">
+                            <LabeledPercentKnob
+                              title="Nib angle"
+                              subtitle="Direction of the broad edge"
+                              value={penNibAngle}
+                              onChange={setPenNibAngle}
+                              min={0}
+                              max={180}
+                              step={5}
+                              label="°"
+                            />
+                            <LabeledPercentKnob
+                              title="Nib spread"
+                              subtitle="Broad-stroke contrast"
+                              value={penNibSpread}
+                              onChange={setPenNibSpread}
+                              label="%"
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
             {annotTool === "highlight" && (
-              <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
+              <div className="annot_dd_wrap" ref={highlightMenuRef}>
+                <button
+                  type="button"
+                  className={`annot_trigger${highlightMenuOpen ? " annot_trigger--active" : ""}`}
+                  onClick={() => { setHighlightMenuOpen((o) => !o); setToolsMenuOpen(false); setColorMenuOpen(false); setPenMenuOpen(false); }}
+                  title="Highlight settings"
+                >
+                  <i className="fi fi-rr-marker" />
+                  <span className="annot_trigger_label">Highlight</span>
+                  <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+                </button>
+                {highlightMenuOpen && (
+                  <div className="annot_dd annot_dd--highlight">
+                    <div className="annot_pen_panel annot_pen_panel--highlight">
+                      <div className="annot_pen_group">
+                        <div className="annot_pen_group_title">Shape</div>
+                        <div className="annot_mode_toggle annot_mode_toggle--pen">
+                          <button
+                            type="button"
+                            className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
+                            onClick={() => setHighlightMode("freehand")}
+                          >Freehand</button>
+                          <button
+                            type="button"
+                            className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
+                            onClick={() => setHighlightMode("line")}
+                          >Straight line</button>
+                        </div>
+                        {highlightMode === "line" && (
+                          <div className="annot_mode_toggle annot_mode_toggle--pen">
+                            <button
+                              type="button"
+                              className={`annot_mode_btn annot_mode_btn--toggle${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
+                              onClick={() => setHighlightAutoWidth((value) => !value)}
+                              title="Auto width: click text to match that text span's width automatically"
+                            >
+                              Auto width
+                            </button>
+                            <button
+                              type="button"
+                              className={`annot_mode_btn annot_mode_btn--toggle${highlightTaperEnds ? " annot_mode_btn--active" : ""}`}
+                              onClick={() => setHighlightTaperEnds((value) => !value)}
+                              title="Taper ends: rounded marker caps; off uses blunt ends"
+                            >
+                              {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="annot_pen_group">
+                        <div className="annot_pen_group_title">Coverage</div>
+                        <div className="annot_pen_controls">
+                          <div className="annot_control">
+                            <div className="annot_control_head">
+                              <span className="annot_control_title">Width</span>
+                              <span className="annot_control_subtitle">How wide the marker lays down ink</span>
+                            </div>
+                            <SizeKnob
+                              min={4}
+                              max={64}
+                              step={2}
+                              value={annotSize}
+                              onChange={setAnnotSize}
+                              color={annotColor}
+                            />
+                          </div>
+                          <div className="annot_control">
+                            <div className="annot_control_head">
+                              <span className="annot_control_title">Opacity</span>
+                              <span className="annot_control_subtitle">Transparency of the highlight layer</span>
+                            </div>
+                            <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
 
             {annotTool && annotTool !== "eraser" && (
@@ -3168,29 +4177,30 @@ const PDFPage = ({
         {/* Left — PDF viewer or upload zone */}
         <div
           id="pdf_preview"
-          ref={previewRef}
           style={{
             width: splitRatio === 0
               ? "0"
               : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0)}px)`,
           }}
-          className={splitRatio === 0 ? "pdf_preview--closed" : ""}
+          className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${annotTool ? " pdf_preview--tool-active" : ""}`}
         >
+          <div id="pdf_preview_scroll" ref={previewRef}>
           {pdfDoc ? (
-            <div id="pdf_canvas_wrap" ref={canvasWrapRef}>
-              {Array.from({ length: pageCount }, (_, i) => i + 1).map(n => (
-                <div
-                  key={n}
-                  className="pdf_page_container"
-                  ref={el => { pageContainerRefs.current[n - 1] = el; }}
-                  data-page={n}
-                >
-                  <canvas
-                    className="pdf_page_canvas"
-                    ref={el => { pageCanvasRefs.current[n - 1] = el; }}
-                  />
-                  {pageNum === n && (
-                    <>
+            <>
+              <div id="pdf_canvas_wrap" ref={canvasWrapRef}>
+                {Array.from({ length: pageCount }, (_, i) => i + 1).map(n => (
+                  <div
+                    key={n}
+                    className="pdf_page_container"
+                    ref={el => { pageContainerRefs.current[n - 1] = el; }}
+                    data-page={n}
+                  >
+                    <canvas
+                      className="pdf_page_canvas"
+                      ref={el => { pageCanvasRefs.current[n - 1] = el; }}
+                    />
+                    {pageNum === n && (
+                      <>
                       <canvas
                         id="pdf_annot_canvas"
                         ref={annotCanvasRef}
@@ -3201,11 +4211,27 @@ const PDFPage = ({
                           id="annot_text_input"
                           autoFocus
                           value={annotTextVal}
+                          spellCheck
+                          autoCorrect="on"
+                          autoCapitalize="sentences"
                           onChange={(e) => setAnnotTextVal(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
                           onBlur={commitAnnotText}
-                          style={{ left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left, top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top }}
+                          style={{
+                            left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left,
+                            top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top,
+                            width: annotTextInput.width || undefined,
+                          }}
                         />
+                      )}
+                      {drawTextBusy && (
+                        <div id="pdf_draw_text_status">
+                          <span className="pdf_draw_text_status_label">Draw to Text</span>
+                          <span className="pdf_draw_text_status_body">
+                            {drawTextStatus || "Reading selection…"}
+                            {typeof drawTextProgress === "number" ? ` ${Math.round(drawTextProgress * 100)}%` : ""}
+                          </span>
+                        </div>
                       )}
                       {manualSelection && !manualPopup && onSelectionAction && selHandles && (
                         <>
@@ -3248,11 +4274,12 @@ const PDFPage = ({
                           onMouseUp={handleTextSelection}
                         />
                       )}
-                    </>
-                  )}
-                </div>
-              ))}
-            </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
           ) : embedded ? (
             <div id="pdf_source_select_zone">
               {loading ? <p>Loading…</p> : loadError ? (
@@ -3321,6 +4348,42 @@ const PDFPage = ({
             </div>
           )}
           <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleInputChange} />
+          </div>
+          {pdfDoc && pageMinimap.length > 0 && (
+            <div id="pdf_page_minimap" aria-hidden="true">
+              {pageMinimap.map((mini) => {
+                const maxWidth = 92;
+                const maxHeight = 124;
+                const scale = Math.min(maxWidth / mini.pageWidth, maxHeight / mini.pageHeight);
+                const miniWidth = Math.max(36, mini.pageWidth * scale);
+                const miniHeight = Math.max(48, mini.pageHeight * scale);
+                return (
+                  <div key={mini.page} className="pdf_page_minimap_card">
+                    <div className="pdf_page_minimap_label">p.{mini.page}</div>
+                    <div className="pdf_page_minimap_sheet" style={{ width: miniWidth, height: miniHeight }}>
+                      {mini.previewSrc && (
+                        <img
+                          className="pdf_page_minimap_image"
+                          src={mini.previewSrc}
+                          alt=""
+                          draggable="false"
+                        />
+                      )}
+                      <div
+                        className="pdf_page_minimap_viewport"
+                        style={{
+                          left: mini.visibleLeft * scale,
+                          top: mini.visibleTop * scale,
+                          width: Math.max(10, mini.visibleWidth * scale),
+                          height: Math.max(10, mini.visibleHeight * scale),
+                        }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Resize handle */}

@@ -29,22 +29,45 @@ const AVATARS = {
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-export default function TalkingHead({ audioElement, active, agentState, avatar = "female" }) {
+// Position/rotation/zoom for the avatar+chair stage — user-adjustable from
+// Settings ("Avatar Position", see PatientSettingsPage.jsx) rather than a
+// hardcoded framing. These values were the previous hardcoded defaults
+// (tuned by dragging the old in-call debug panel), now just the fallback
+// for patients who've never touched the setting.
+export const AVATAR_TRANSFORM_STORAGE_KEY = "mctosh_avatar_transform";
+export const DEFAULT_AVATAR_TRANSFORM = { moveX: -0.37, moveY: -0.507, rotateX: -0.176, rotateY: 0.904, zoom: 0.88 };
+
+export const readStoredAvatarTransform = () => {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(AVATAR_TRANSFORM_STORAGE_KEY);
+    if (!raw) return null;
+    const { moveX, moveY, rotateX, rotateY, zoom } = JSON.parse(raw);
+    const values = [moveX, moveY, rotateX, rotateY, zoom];
+    if (values.some((n) => typeof n !== "number" || Number.isNaN(n))) return null;
+    return { moveX, moveY, rotateX, rotateY, zoom };
+  } catch {
+    return null;
+  }
+};
+
+// `transform`, when provided, makes this a CONTROLLED preview (used by the
+// Settings page's live avatar-position preview): drag/pinch/wheel
+// repositioning is disabled and the stage instead exactly follows the
+// prop, so the Settings sliders are the only thing driving it. Omitted
+// entirely on the actual call page, where the stage stays freely
+// draggable, seeded from whatever's saved in Settings (or the built-in
+// default if nothing's been saved yet).
+export default function TalkingHead({ audioElement, active, agentState, avatar = "female", transform }) {
   const mountRef = useRef(null);
   const audioLevelRef = useRef(0);
   const activeRef = useRef(active);
   const agentStateRef = useRef(agentState);
   const rotateRef = useRef({ x: 0, y: 0 });
   const moveRef = useRef({ x: 0, y: 0 });
+  const stageScaleRef = useRef(1);
   const zoomRef = useRef(1);
   const [loadState, setLoadState] = useState("loading");
-  // Mirrors moveRef/rotateRef/zoomRef into React state on a timer (not
-  // every frame — these are dragged, not continuously animated, so a
-  // fast poll is plenty and avoids re-rendering the panel 60x/sec) purely
-  // so the debug panel below can display and copy them. Lets whoever's
-  // tuning the default framing drag/rotate/zoom live, then hand the exact
-  // numbers back instead of me guessing them off a screenshot.
-  const [liveTransform, setLiveTransform] = useState({ moveX: 0, moveY: 0, rotateX: 0, rotateY: 0, zoom: 1 });
 
   useEffect(() => {
     activeRef.current = active;
@@ -54,26 +77,17 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
     agentStateRef.current = agentState;
   }, [agentState]);
 
+  // Live sync for the controlled (Settings-preview) case — deliberately
+  // separate from the mount effect below rather than folding `transform`
+  // into that effect's own deps: this only updates the refs animate()
+  // already reads every frame, so a slider tick doesn't reload the whole
+  // 3D model the way adding `transform` to the mount effect's deps would.
   useEffect(() => {
-    const id = setInterval(() => {
-      setLiveTransform({
-        moveX: moveRef.current.x,
-        moveY: moveRef.current.y,
-        rotateX: rotateRef.current.x,
-        rotateY: rotateRef.current.y,
-        zoom: zoomRef.current,
-      });
-    }, 150);
-    return () => clearInterval(id);
-  }, []);
-
-  const copyLiveTransform = () => {
-    const { moveX, moveY, rotateX, rotateY, zoom } = liveTransform;
-    const text = `moveRef.current = { x: ${moveX.toFixed(3)}, y: ${moveY.toFixed(3)} };\n`
-      + `rotateRef.current = { x: ${rotateX.toFixed(3)}, y: ${rotateY.toFixed(3)} };\n`
-      + `zoomRef.current = ${zoom.toFixed(3)};`;
-    navigator.clipboard?.writeText(text).catch(() => {});
-  };
+    if (!transform) return;
+    moveRef.current = { x: transform.moveX, y: transform.moveY };
+    rotateRef.current = { x: transform.rotateX, y: transform.rotateY };
+    zoomRef.current = transform.zoom;
+  }, [transform]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -83,16 +97,17 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
     setLoadState("loading");
 
     // These persist across avatar switches (refs, not state tied to this
-    // effect) — without resetting them on every scene build, a fresh
-    // scene would inherit whatever move/rotate/zoom offset was left over
-    // from dragging the PREVIOUS avatar around. Reset to the framing
-    // captured via the live debug panel's Copy button (see
-    // copyLiveTransform above) — actual dragged values, not a guess off a
-    // screenshot like the previous attempt that pushed the head out of
-    // frame.
-    moveRef.current = { x: -0.37, y: -0.507 };
-    rotateRef.current = { x: -0.176, y: 0.904 };
-    zoomRef.current = 0.88;
+    // effect) — without resetting them on every scene build, a fresh scene
+    // would inherit whatever move/rotate/zoom offset was left over from
+    // dragging the PREVIOUS avatar around. Seeded from the `transform` prop
+    // (Settings preview) if controlled, else whatever the patient saved in
+    // Settings, else the built-in default — read once here as this mount's
+    // starting framing; live prop updates after this point go through the
+    // separate sync effect above, not here.
+    const initialTransform = transform || readStoredAvatarTransform() || DEFAULT_AVATAR_TRANSFORM;
+    moveRef.current = { x: initialTransform.moveX, y: initialTransform.moveY };
+    rotateRef.current = { x: initialTransform.rotateX, y: initialTransform.rotateY };
+    zoomRef.current = initialTransform.zoom;
 
     const scene = new THREE.Scene();
     scene.background = null;
@@ -225,21 +240,73 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
     let lastPointer = null;
     const touchPoints = new Map();
     let pinchStartDistance = null;
-    let pinchStartZoom = 1;
-    let lastCentroid = null;
+    let pinchStartScale = 1;
+    let activeDragGroup = null;
+    let activePinchGroup = null;
+    let lastPinchCentroid = null;
+    const raycaster = new THREE.Raycaster();
+    const pointerNdc = new THREE.Vector2();
 
     const setPointerCursor = (dragging) => {
       mount.style.cursor = dragging ? "grabbing" : "grab";
     };
     setPointerCursor(false);
 
+    const resolveDragGroup = (object) => {
+      let current = object;
+      while (current) {
+        if (current === stageGroup) return current;
+        current = current.parent;
+      }
+      return null;
+    };
+
+    const pickDragGroup = (event) => {
+      const rect = mount.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      pointerNdc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointerNdc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointerNdc, camera);
+      const hits = raycaster.intersectObjects([stageGroup], true);
+      return resolveDragGroup(hits[0]?.object || null);
+    };
+
+    const readGroupScale = (group) => {
+      if (group === stageGroup) return stageScaleRef.current;
+      return 1;
+    };
+
+    const writeGroupScale = (group, value) => {
+      const next = clamp(value, 0.55, 2.2);
+      if (group === stageGroup) stageScaleRef.current = next;
+    };
+
+    const applyGroupRotationFromDelta = (group, dx, dy) => {
+      if (group === stageGroup) {
+        rotateRef.current.y += dx * 0.008;
+        rotateRef.current.x = clamp(rotateRef.current.x - dy * 0.006, -0.5, 0.5);
+      }
+    };
+
     const onPointerDown = (event) => {
-      touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      const pointerGroup = pickDragGroup(event);
+      touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY, group: pointerGroup });
       if (touchPoints.size === 2) {
         const [a, b] = [...touchPoints.values()];
         pinchStartDistance = Math.hypot(a.x - b.x, a.y - b.y);
-        pinchStartZoom = zoomRef.current;
-        lastCentroid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        activePinchGroup = a.group && a.group === b.group ? a.group : null;
+        pinchStartScale = readGroupScale(activePinchGroup);
+        lastPinchCentroid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        isDragging = false;
+        lastPointer = null;
+        activeDragGroup = null;
+      }
+      activeDragGroup = touchPoints.size === 1 ? pointerGroup : null;
+      if (touchPoints.size === 1 && !activeDragGroup) {
+        isDragging = false;
+        lastPointer = null;
+        setPointerCursor(false);
+        return;
       }
       isDragging = true;
       lastPointer = { x: event.clientX, y: event.clientY };
@@ -249,48 +316,49 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
 
     const onPointerMove = (event) => {
       if (touchPoints.has(event.pointerId)) {
-        touchPoints.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        const prev = touchPoints.get(event.pointerId);
+        touchPoints.set(event.pointerId, { ...prev, x: event.clientX, y: event.clientY });
       }
       if (touchPoints.size === 2) {
         const [a, b] = [...touchPoints.values()];
-        // Pinch distance → zoom.
         const nextDistance = Math.hypot(a.x - b.x, a.y - b.y);
-        if (pinchStartDistance) {
+        if (pinchStartDistance && activePinchGroup) {
           const scale = nextDistance / pinchStartDistance;
-          zoomRef.current = clamp(pinchStartZoom / scale, 0.72, 1.7);
+          writeGroupScale(activePinchGroup, pinchStartScale * scale);
         }
-        // Two-finger centroid movement → 3D rotate the whole stage. Yaw is
-        // unclamped (full turntable spin); pitch is clamped so it can't
-        // flip the stage upside down.
         const centroid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        if (lastCentroid) {
-          rotateRef.current.y += (centroid.x - lastCentroid.x) * 0.008;
-          rotateRef.current.x = clamp(rotateRef.current.x - (centroid.y - lastCentroid.y) * 0.006, -0.5, 0.5);
+        if (activePinchGroup && lastPinchCentroid) {
+          applyGroupRotationFromDelta(
+            activePinchGroup,
+            centroid.x - lastPinchCentroid.x,
+            centroid.y - lastPinchCentroid.y
+          );
         }
-        lastCentroid = centroid;
+        lastPinchCentroid = centroid;
         return;
       }
-      lastCentroid = null;
       if (!isDragging || !lastPointer) return;
       const dx = event.clientX - lastPointer.x;
       const dy = event.clientY - lastPointer.y;
       lastPointer = { x: event.clientX, y: event.clientY };
-      // Single-pointer drag (mouse or one finger) → move the whole stage.
-      // Clamp widened (±0.8/±0.6 → ±3) — the old range was tuned for a
-      // subtle nudge on a tight head-shot crop, not for freely
-      // repositioning a full avatar+chair scene across the canvas.
-      moveRef.current.x = clamp(moveRef.current.x + dx * 0.0025, -3, 3);
-      moveRef.current.y = clamp(moveRef.current.y - dy * 0.003, -3, 3);
+      // Single-pointer drag (mouse or one finger) moves only the object
+      // group that was actually clicked on pointer-down.
+      if (activeDragGroup === stageGroup) {
+        moveRef.current.x = clamp(moveRef.current.x + dx * 0.0025, -3, 3);
+        moveRef.current.y = clamp(moveRef.current.y - dy * 0.003, -3, 3);
+      }
     };
 
     const endPointerDrag = (event) => {
       touchPoints.delete(event.pointerId);
       if (touchPoints.size < 2) {
         pinchStartDistance = null;
-        lastCentroid = null;
+        activePinchGroup = null;
+        lastPinchCentroid = null;
       }
       isDragging = false;
       lastPointer = null;
+      activeDragGroup = null;
       setPointerCursor(false);
       if (event) mount.releasePointerCapture?.(event.pointerId);
     };
@@ -300,12 +368,17 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
       zoomRef.current = clamp(zoomRef.current + event.deltaY * 0.0015, 0.72, 1.7);
     };
 
-    mount.addEventListener("pointerdown", onPointerDown);
-    mount.addEventListener("pointermove", onPointerMove);
-    mount.addEventListener("pointerup", endPointerDrag);
-    mount.addEventListener("pointerleave", endPointerDrag);
-    mount.addEventListener("pointercancel", endPointerDrag);
-    mount.addEventListener("wheel", onWheel, { passive: false });
+    // Controlled (Settings preview) instances are slider-driven only —
+    // attaching these too would let a stray drag fight the next slider
+    // tick's sync effect for control of the same refs.
+    if (!transform) {
+      mount.addEventListener("pointerdown", onPointerDown);
+      mount.addEventListener("pointermove", onPointerMove);
+      mount.addEventListener("pointerup", endPointerDrag);
+      mount.addEventListener("pointerleave", endPointerDrag);
+      mount.addEventListener("pointercancel", endPointerDrag);
+      mount.addEventListener("wheel", onWheel, { passive: false });
+    }
 
     const connectAudio = async () => {
       const media = audioElement?.current;
@@ -560,6 +633,21 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
       );
     };
 
+    const refitCameraForStage = (...objects) => {
+      const validObjects = objects.filter(Boolean);
+      if (!validObjects.length) return;
+      const savedPos = stageGroup.position.clone();
+      const savedRot = stageGroup.rotation.clone();
+      stageGroup.position.set(0, 0, 0);
+      stageGroup.rotation.set(0, 0, 0);
+      stageGroup.updateMatrixWorld(true);
+      const combined = validObjects.reduce((bounds, obj) => bounds.union(new THREE.Box3().setFromObject(obj)), new THREE.Box3());
+      fitCameraToBounds(combined, 0.72, 0.75);
+      stageGroup.position.copy(savedPos);
+      stageGroup.rotation.copy(savedRot);
+      stageGroup.updateMatrixWorld(true);
+    };
+
     // ── Chair — purely set dressing, so failures are silent (no chair is
     // fine; it's not the point of the call). Scaled/positioned using the
     // character's own measurements (characterStandingHeight, chairSeatY,
@@ -573,7 +661,7 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
       const url = urls[index];
       if (!url) return;
       chairLoader.load(
-        url,
+      url,
         (gltf) => {
           const chair = gltf.scene;
           chair.traverse((obj) => {
@@ -618,41 +706,7 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
           const estimatedSeatY = scaledBounds.min.y + scaledBounds.getSize(new THREE.Vector3()).y * SEAT_HEIGHT_FRACTION;
           chair.position.y += chairSeatY - estimatedSeatY;
           stageGroup.add(chair);
-
-          // Refit the camera to BOTH objects together — the character-only
-          // fit at load time didn't know about the chair, which extends
-          // further down (legs reaching the floor below the character's
-          // feet) and would otherwise get cropped out of the bottom of
-          // frame. 0.92 was cutting it too tight and cropping the head off
-          // the top — loosened to 0.72 for real headroom margin instead of
-          // filling the frame edge-to-edge.
-          //
-          // modelRoot/chair are already parented under stageGroup by this
-          // point, so their world bounds include whatever pan/rotate
-          // offset (moveRef/rotateRef) is currently set — computing the
-          // fit straight off that would bake the offset into the camera's
-          // OWN target, which re-centers on it and silently cancels the
-          // pan out (this was why every dragged value looked "centered").
-          // Zero the group's transform just for this measurement so the
-          // fit reflects the neutral composition, forcing the matrix
-          // update explicitly (Box3 reads matrixWorld, which doesn't
-          // update itself just from setting .position/.rotation) — then
-          // restore the pan/rotate immediately after, rather than
-          // assuming the next animate() frame would catch it in time.
-          // That assumption was wrong: it visibly snapped to the panned
-          // position for a frame, then sat at (0,0,0) — meaning something
-          // in between was reading the zeroed transform as final, not
-          // transient.
-          const savedPos = stageGroup.position.clone();
-          const savedRot = stageGroup.rotation.clone();
-          stageGroup.position.set(0, 0, 0);
-          stageGroup.rotation.set(0, 0, 0);
-          stageGroup.updateMatrixWorld(true);
-          const combined = new THREE.Box3().setFromObject(modelRoot).union(new THREE.Box3().setFromObject(chair));
-          fitCameraToBounds(combined, 0.72, 0.75);
-          stageGroup.position.copy(savedPos);
-          stageGroup.rotation.copy(savedRot);
-          stageGroup.updateMatrixWorld(true);
+          refitCameraForStage(modelRoot, chair);
         },
         undefined,
         () => loadChair(urls, index + 1)
@@ -681,6 +735,7 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
       stageGroup.position.y = moveRef.current.y;
       stageGroup.rotation.y = rotateRef.current.y;
       stageGroup.rotation.x = rotateRef.current.x;
+      stageGroup.scale.setScalar(stageScaleRef.current);
 
       if (modelRoot) {
         modelRoot.rotation.y = Math.sin(t * 0.32) * 0.04 + thinkingBoost * 0.015;
@@ -895,17 +950,6 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
       )}
       <div className="pa_head_glow pa_head_glow--one" />
       <div className="pa_head_glow pa_head_glow--two" />
-
-      {/* Tuning aid — drag/rotate/zoom the stage to find a framing, then
-          copy the exact numbers out instead of eyeballing it from a
-          screenshot. Not meant to ship long-term; remove once the default
-          framing is settled. */}
-      <div className="pa_head_debug_panel">
-        <div>move: {liveTransform.moveX.toFixed(3)}, {liveTransform.moveY.toFixed(3)}</div>
-        <div>rotate: {liveTransform.rotateX.toFixed(3)}, {liveTransform.rotateY.toFixed(3)}</div>
-        <div>zoom: {liveTransform.zoom.toFixed(3)}</div>
-        <button type="button" onClick={copyLiveTransform}>Copy</button>
-      </div>
     </div>
   );
 }

@@ -247,7 +247,66 @@ const EMPTY_CLINICAL = {
   chiefComplaint: "", historyOfPresentIllness: "", pastMedicalHistory: "",
   familyHistory: "", socialHistory: "", bloodType: "", allergies: "",
   chronicConditions: "", currentMedications: "",
+  symptomBodyMap: null,
   vitalSigns: { height: "", weight: "", bloodPressure: "", heartRate: "", temperature: "", oxygenSaturation: "" },
+};
+
+// Mirrors front/src/PatientApp/VoiceExamPage.jsx's EXAM_TASKS labels — kept
+// as a separate small map here rather than importing that file, since this
+// is a clinician-side page and that one is patient-side (different auth
+// context, no reason to couple their bundles together for five labels).
+const VOICE_EXAM_LABELS = {
+  sustained_vowel: "Sustained Vowel",
+  counting: "Counting 1–20",
+  reading_passage: "Reading Passage",
+  symptom_description: "Symptom Description",
+  deep_breath_count: "Deep Breath + Count",
+  // Captured directly from a real MCTOSHS intake call (see
+  // back/agent/voiceCallAnalysis.js), not a standalone standardized task —
+  // the primary source now, per the app's own patient-facing "Voice Check"
+  // page being explicitly secondary/supplementary to this.
+  continuous_call: "Intake Call",
+};
+
+// Only the deltas worth surfacing to a clinician at a glance — raw feature
+// dumps (e.g. durationSeconds, examType echoed back) are in `features`
+// directly if ever needed, but "Longitudinal Change" per the Voice
+// Clinical MOA UI spec means the clinically legible subset, not everything.
+const VOICE_DELTA_LABELS = {
+  f0MeanHz: "Average pitch",
+  jitterLocalPercent: "Jitter",
+  shimmerLocalPercent: "Shimmer",
+  hnrMeanDb: "Harmonic-to-noise ratio",
+  intensityMeanDb: "Loudness",
+  pauseRatio: "Pause ratio",
+  speechRateWpm: "Speech rate",
+  articulationRateWpm: "Articulation rate",
+};
+
+const renderSymptomBodyMapSummary = (symptomBodyMap) => {
+  if (!symptomBodyMap?.annotations?.length) return null;
+  return (
+    <>
+      <p className="pi_form_section_title">Symptom Body Map</p>
+      {symptomBodyMap.symptomLabel && (
+        <p className="pi_call_summary"><strong>Symptom:</strong> {symptomBodyMap.symptomLabel}</p>
+      )}
+      {symptomBodyMap.prompt && (
+        <p className="pi_call_summary"><strong>Prompt:</strong> {symptomBodyMap.prompt}</p>
+      )}
+      <div className="pi_instance_grid">
+        {symptomBodyMap.annotations.map((annotation, index) => (
+          <div key={`${annotation.meshName || "region"}-${index}`} className="pi_instance_row">
+            <span className="pi_instance_label">{annotation.regionLabel || annotation.meshName || `Marker ${index + 1}`}</span>
+            <span className="pi_instance_value">
+              {annotation.distribution || "Unspecified"} · intensity {annotation.intensity ?? "?"}/10
+              {annotation.notes ? ` · ${annotation.notes}` : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+    </>
+  );
 };
 
 const PhoneCodeSelect = ({ value, onChange }) => {
@@ -349,6 +408,8 @@ const PatientInstantiationPage = () => {
   const [status,         setStatus]         = useState("");
   const [isNew,          setIsNew]          = useState(false);
   const [receivedMorphe, setReceivedMorphe] = useState(null);
+  const [voiceExams,     setVoiceExams]     = useState([]);
+  const [selectedVoiceExam, setSelectedVoiceExam] = useState(null);
 
   // Patients Call Log — read-only. Each call is linked to the patient's own
   // Patient instance (populated as call.patientId; see
@@ -473,6 +534,17 @@ const PatientInstantiationPage = () => {
     } catch { setReceivedMorphe(null); }
   }, [userId]);
 
+  const loadVoiceExamsForPatient = useCallback(async (patientDbId) => {
+    if (!patientDbId) { setVoiceExams([]); setSelectedVoiceExam(null); return; }
+    try {
+      const res = await fetch(apiUrl(`/api/voice-exams/${patientDbId}`), { headers: authHeader() });
+      if (!res.ok) return;
+      const { exams } = await res.json();
+      setVoiceExams(exams || []);
+      setSelectedVoiceExam(exams?.[0] || null);
+    } catch { setVoiceExams([]); setSelectedVoiceExam(null); }
+  }, []);
+
   const openPatient = (p) => {
     setSelected(p);
     setIsNew(false);
@@ -484,6 +556,7 @@ const PatientInstantiationPage = () => {
     });
     setTab("personal");
     loadMorpheForPatient(p._id);
+    loadVoiceExamsForPatient(p._id);
   };
 
   const startNew = () => {
@@ -493,6 +566,8 @@ const PatientInstantiationPage = () => {
     setClinical(EMPTY_CLINICAL);
     setTab("personal");
     setReceivedMorphe(null);
+    setVoiceExams([]);
+    setSelectedVoiceExam(null);
   };
 
   const handleSave = async () => {
@@ -744,6 +819,18 @@ const PatientInstantiationPage = () => {
                 </button>
               </div>
 
+              {/* The actual call audio, both voices mixed onto one timeline
+                  exactly as they were said — written automatically once the
+                  call ends (see agent/voiceCallAnalysis.js's buildMixedWav).
+                  May be missing for older calls made before this existed, or
+                  if the call was too short/silent to produce anything. */}
+              {selectedCall.recordingUrl && (
+                <>
+                  <h3 className="pi_call_section_title">Call recording</h3>
+                  <audio controls src={selectedCall.recordingUrl} className="pi_call_recording_player" />
+                </>
+              )}
+
               {/* The patient's own instance, collected turn-by-turn during
                   this (and any other) call of theirs — see
                   agent/patientCallAgent.js's recordField tool. Read-only
@@ -781,6 +868,7 @@ const PatientInstantiationPage = () => {
                         </div>
                       ))}
                     </div>
+                    {renderSymptomBodyMapSummary(clinical.symptomBodyMap)}
                   </>
                 );
               })()}
@@ -846,6 +934,7 @@ const PatientInstantiationPage = () => {
                     </div>
                   ))}
                 </div>
+                {renderSymptomBodyMapSummary(clinical.symptomBodyMap)}
               </div>
             );
           })()}
@@ -887,6 +976,11 @@ const PatientInstantiationPage = () => {
                 {!isNew && (
                   <button className={`pi_tab${tab === "morphe" ? " pi_tab--active" : ""}`} onClick={() => setTab("morphe")}>
                     <i className="fi fi-rr-blueprint" /> Morphe
+                  </button>
+                )}
+                {!isNew && (
+                  <button className={`pi_tab${tab === "voice" ? " pi_tab--active" : ""}`} onClick={() => setTab("voice")}>
+                    <i className="fi fi-rr-waveform-path" /> Voice
                   </button>
                 )}
               </div>
@@ -1003,6 +1097,7 @@ const PatientInstantiationPage = () => {
                   <Field label="Allergies"            value={clinical.allergies}           onChange={v => setClinical(c => ({ ...c, allergies: v }))} textarea />
                   <Field label="Chronic Conditions"   value={clinical.chronicConditions}   onChange={v => setClinical(c => ({ ...c, chronicConditions: v }))} textarea />
                   <Field label="Current Medications"  value={clinical.currentMedications}  onChange={v => setClinical(c => ({ ...c, currentMedications: v }))} textarea />
+                  {renderSymptomBodyMapSummary(clinical.symptomBodyMap)}
 
                   <p className="pi_form_section_title">Vital Signs</p>
                   <div className="pi_form_grid">
@@ -1061,6 +1156,119 @@ const PatientInstantiationPage = () => {
                       <p id="pi_morphe_hint">
                         Go to <strong>MCTOSHS Objects Modelling</strong> to build a Morphe and designate it to this representative object.
                       </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Voice tab — Voice Clinical MOA lab-report view (Module "User
+                  Interface" in the spec: quality/findings/interpretation,
+                  never raw AI output). Recording happens on the patient
+                  side (VoiceExamPage.jsx); this is read-only. */}
+              {tab === "voice" && !isNew && (
+                <div className="pi_form">
+                  {voiceExams.length === 0 ? (
+                    <div id="pi_morphe_empty">
+                      <i className="fi fi-rr-waveform-path" style={{ fontSize: "2rem", opacity: 0.3 }} />
+                      <p>No voice exams recorded yet.</p>
+                      <p id="pi_morphe_hint">
+                        The patient can record a standardized Voice Check from their own MCTOSHS app.
+                      </p>
+                    </div>
+                  ) : (
+                    <div id="pi_voice_layout">
+                      <div id="pi_voice_list">
+                        {voiceExams.map((exam) => (
+                          <button
+                            key={exam._id}
+                            className={`pi_voice_list_item${selectedVoiceExam?._id === exam._id ? " pi_voice_list_item--active" : ""}`}
+                            onClick={() => setSelectedVoiceExam(exam)}
+                          >
+                            <span className={`pi_voice_quality_dot pi_voice_quality_dot--${exam.quality.label.toLowerCase()}`} />
+                            <span className="pi_voice_list_type">{VOICE_EXAM_LABELS[exam.examType] || exam.examType}</span>
+                            <span className="pi_voice_list_date">{new Date(exam.recordedAt).toLocaleDateString()}</span>
+                          </button>
+                        ))}
+                      </div>
+
+                      {selectedVoiceExam && (
+                        <div id="pi_voice_report">
+                          <div id="pi_voice_report_head">
+                            <div>
+                              <span id="pi_voice_report_type">{VOICE_EXAM_LABELS[selectedVoiceExam.examType] || selectedVoiceExam.examType}</span>
+                              <span id="pi_voice_report_date">{new Date(selectedVoiceExam.recordedAt).toLocaleString()}</span>
+                            </div>
+                            <span className={`pi_voice_quality_badge pi_voice_quality_badge--${selectedVoiceExam.quality.label.toLowerCase()}`}>
+                              Recording Quality: {selectedVoiceExam.quality.label}
+                            </span>
+                          </div>
+
+                          {selectedVoiceExam.quality.issues?.length > 0 && (
+                            <p className="pi_voice_quality_issues">
+                              Quality issues: {selectedVoiceExam.quality.issues.join(", ").replace(/_/g, " ")}
+                            </p>
+                          )}
+
+                          {selectedVoiceExam.interpretation ? (
+                            <>
+                              <div id="pi_voice_findings">
+                                {selectedVoiceExam.interpretation.findings.map((f, i) => (
+                                  <div key={i} className="pi_voice_finding_card">
+                                    <div className="pi_voice_finding_head">
+                                      <span className="pi_voice_finding_label">{f.label}</span>
+                                      <span className="pi_voice_finding_value">{f.value}</span>
+                                      <span className={`pi_voice_confidence pi_voice_confidence--${f.confidence.toLowerCase()}`}>
+                                        {f.confidence} confidence
+                                      </span>
+                                    </div>
+                                    {f.reasoning?.length > 0 && (
+                                      <ul className="pi_voice_reasoning">
+                                        {f.reasoning.map((r, j) => <li key={j}>{r}</li>)}
+                                      </ul>
+                                    )}
+                                    {f.confounders?.length > 0 && (
+                                      <p className="pi_voice_confounders">
+                                        Possible confounders: {f.confounders.join(", ")}
+                                      </p>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="pi_voice_summary_block">
+                                <span className="pi_voice_summary_label">Clinical Interpretation</span>
+                                <p>{selectedVoiceExam.interpretation.summary}</p>
+                              </div>
+
+                              {selectedVoiceExam.baselineComparison?.deltas && (
+                                <div className="pi_voice_summary_block">
+                                  <span className="pi_voice_summary_label">Longitudinal Change</span>
+                                  <div id="pi_voice_deltas">
+                                    {Object.entries(VOICE_DELTA_LABELS)
+                                      .filter(([key]) => typeof selectedVoiceExam.baselineComparison.deltas[key] === "number")
+                                      .map(([key, label]) => {
+                                        const delta = selectedVoiceExam.baselineComparison.deltas[key];
+                                        return (
+                                          <div key={key} className="pi_voice_delta_row">
+                                            <span>{label}</span>
+                                            <span className={delta >= 0 ? "pi_voice_delta_up" : "pi_voice_delta_down"}>
+                                              {delta >= 0 ? "+" : ""}{delta}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <p id="pi_voice_uninterpretable_note">
+                              This recording could not be interpreted (quality: {selectedVoiceExam.quality.label}) —
+                              ask the patient to try again somewhere quiet, with the microphone closer.
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -4,6 +4,7 @@ import { Room, RoomEvent } from "livekit-client";
 import { apiUrl } from "../config/api";
 import { readStoredPatientSession } from "../utils/patientSessionCleanup";
 import TalkingHead from "./TalkingHead";
+import SymptomBodyMapPanel from "./SymptomBodyMapPanel";
 import "./patientApp.css";
 
 const authHeaders = (json = true) => {
@@ -47,13 +48,33 @@ const PatientCallPage = () => {
   // separate channel. Available whenever connected, whether or not the
   // patient is also speaking.
   const [messages,   setMessages]   = useState([]);
+  // A turn's text used to only appear once fully finalized (see the
+  // "lk.chat" handler below, which only fires from ConversationItemAdded —
+  // i.e. after the WHOLE turn is already committed). The framework actually
+  // streams both sides live, word-by-word as they're spoken, on the
+  // standard "lk.transcription" topic by default (RoomOutputOptions.
+  // transcriptionEnabled/syncTranscription default to true — confirmed by
+  // reading @livekit/agents' RoomIO source; no backend change needed) — this
+  // was simply never listened to. liveCaption mirrors that in-progress text
+  // as a transient bubble; it's cleared once the segment finalizes, at
+  // which point the same content shows up permanently via "lk.chat" as
+  // usual. Note the patient's OWN side won't visibly stream word-by-word
+  // like the assistant's does, since STT here runs in non-realtime/REST
+  // mode (one result per completed turn, no interim hypotheses) — but it
+  // still now arrives over this same low-latency live channel rather than
+  // waiting on the extra DB round trip the "lk.chat" mirror involves.
+  const [liveCaption, setLiveCaption] = useState(null);
   const [chatInput,  setChatInput]  = useState("");
   const [avatar, setAvatar] = useState("female");
+  const [symptomBodyMapRequest, setSymptomBodyMapRequest] = useState(null);
+  const [patientGender, setPatientGender] = useState(session?.gender || "");
   // Required on every call start (see PatientCallAPI.js's /start) — the
   // same stable "mctosh#N" id shown at signup and returned on every login
-  // (readStoredPatientSession, below), not a one-time secret, so it's
-  // safe to pre-fill from the session as a convenience.
-  const [patientCode, setPatientCode] = useState(session?.patientId || "");
+  // (readStoredPatientSession, below). No longer a visible/editable field
+  // (see the removed input above the Start call button) since it's always
+  // exactly this logged-in patient's own id — there was never a real case
+  // for typing a different one in here.
+  const patientCode = session?.patientId || "";
   // Conversation language toggle — sent to the backend at call start (see
   // startCall below) and locked in for that call via dispatch metadata
   // (back/agent/patientCallAgent.js). Only the live conversation switches;
@@ -69,7 +90,7 @@ const PatientCallPage = () => {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [messages]);
+  }, [messages, liveCaption]);
 
   useEffect(() => () => {
     // Leave the call cleanly if the patient navigates away mid-call.
@@ -90,13 +111,15 @@ const PatientCallPage = () => {
 
   const startCall = async () => {
     if (!patientCode.trim()) {
-      setError("Enter your patient ID to start a call.");
+      setError("Your patient ID could not be found — please log out and back in.");
       return;
     }
     setError("");
     setStatus("connecting");
     setMessages([]);
+    setLiveCaption(null);
     setAgentState("initializing");
+    setSymptomBodyMapRequest(null);
     try {
       const res = await fetch(apiUrl("/api/patient-calls/start"), {
         method: "POST", headers: authHeaders(true), body: JSON.stringify({ avatar, patientId: patientCode.trim(), language }),
@@ -107,6 +130,7 @@ const PatientCallPage = () => {
         setStatus("idle");
         return;
       }
+      setPatientGender(data?.patientGender || session?.gender || "");
 
       const room = new Room();
       roomRef.current = room;
@@ -158,6 +182,10 @@ const PatientCallPage = () => {
         let interrupted = false;
         try {
           const parsed = JSON.parse(raw);
+          if (parsed?.type === "symptom_body_map_request") {
+            setSymptomBodyMapRequest(parsed);
+            return;
+          }
           if (parsed?.text) {
             role = parsed.role === "user" ? "user" : "assistant";
             text = parsed.text;
@@ -170,6 +198,45 @@ const PatientCallPage = () => {
         // their own) — otherwise it reads as MCTOSHS's complete, deliberate
         // reply instead of a sentence the patient cut off mid-way.
         setMessages((prev) => [...prev, { from: role === "user" ? "patient" : "agent", text, interrupted }]);
+      });
+
+      // Live, in-progress captioning — see liveCaption's own declaration
+      // above for why this is a separate topic/handler from "lk.chat"
+      // rather than a replacement for it. `identity` tells us whose speech
+      // this segment is: the framework publishes the patient's own
+      // transcript under the PATIENT's identity (i.e. this browser's own
+      // localParticipant.identity) and the assistant's under the agent
+      // participant's identity, even though both are technically sent by
+      // the agent process (the only participant with room-write access) —
+      // same distinguishing logic as the "role" field in the "lk.chat"
+      // JSON payload above, just keyed off identity instead since this
+      // topic carries plain text, not JSON.
+      room.registerTextStreamHandler("lk.transcription", async (reader, { identity }) => {
+        const from = identity === room.localParticipant.identity ? "patient" : "agent";
+        try {
+          for await (const text of reader) {
+            setLiveCaption({ from, text });
+          }
+        } catch {
+          // Stream aborted/errored mid-segment (e.g. an interruption cut it
+          // short) — drop the in-progress caption rather than leave a
+          // stale one on screen.
+          setLiveCaption(null);
+          return;
+        }
+        // The agent's captions are one long-lived stream per turn (the SDK
+        // publishes them as a delta stream) — this loop only exits once
+        // that stream actually closes, i.e. the turn is genuinely done, so
+        // it's always safe to clear here. The patient's own captions are
+        // the opposite: EVERY update (interim or final) is its own
+        // short-lived stream, so this loop exits after each one — only the
+        // "lk.transcription_final" attribute (set only on the true last
+        // one) tells them apart. Clearing unconditionally here would wipe
+        // the caption between every interim update instead of leaving it
+        // up until the real final one.
+        if (from === "agent" || reader.info?.attributes?.["lk.transcription_final"] === "true") {
+          setLiveCaption(null);
+        }
       });
 
       await room.connect(data.url, data.token);
@@ -246,6 +313,7 @@ const PatientCallPage = () => {
     roomRef.current = null;
     setStatus("ended");
     setAgentState("");
+    setSymptomBodyMapRequest(null);
   };
 
   const toggleMute = async () => {
@@ -254,6 +322,18 @@ const PatientCallPage = () => {
     const nextMuted = !muted;
     await room.localParticipant.setMicrophoneEnabled(!nextMuted);
     setMuted(nextMuted);
+  };
+
+  const handleSavedSymptomBodyMap = async (_payload, summaryText) => {
+    setMessages((prev) => [...prev, { from: "patient", text: summaryText }]);
+    setSymptomBodyMapRequest(null);
+    const room = roomRef.current;
+    if (!room) return;
+    try {
+      await room.localParticipant.sendText(summaryText, { topic: "lk.chat" });
+    } catch {
+      setError("Body map saved, but its summary could not be sent to the assistant.");
+    }
   };
 
   return (
@@ -268,7 +348,9 @@ const PatientCallPage = () => {
                 <span className="pa_stage_eyebrow">Patient-side MCTOSHS AI</span>
                 {session?.patientId && <span className="pa_patient_badge">{session.patientId}</span>}
               </div>
-              <button className="pa_logout_link" onClick={() => navigate("/patient/settings")}>Settings</button>
+              <div className="pa_stage_topbar_right">
+                <button className="pa_logout_link" onClick={() => navigate("/patient/settings")}>Settings</button>
+              </div>
             </div>
             <h1 className="pa_stage_title">
               A living interface for the call.
@@ -312,6 +394,14 @@ const PatientCallPage = () => {
             agentState={agentState}
             avatar={avatar}
           />
+          {status === "in-call" && patientGender === "Female" && symptomBodyMapRequest && (
+            <SymptomBodyMapPanel
+              request={symptomBodyMapRequest}
+              language={language}
+              onClose={() => setSymptomBodyMapRequest(null)}
+              onSaved={handleSavedSymptomBodyMap}
+            />
+          )}
         </section>
 
         <section className="pa_call_panel">
@@ -349,6 +439,12 @@ const PatientCallPage = () => {
                   {m.interrupted && <span className="pa_chat_interrupted_tag">cut off — you interrupted</span>}
                 </div>
               ))}
+              {liveCaption?.text && (
+                <div className={`pa_chat_bubble pa_chat_bubble--${liveCaption.from} pa_chat_bubble--live`}>
+                  {liveCaption.text}
+                  <span className="pa_chat_live_dot" />
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
             <form className="pa_chat_form" onSubmit={sendMessage}>
@@ -366,16 +462,6 @@ const PatientCallPage = () => {
           </div>
 
           <div className="pa_call_actions pa_call_actions--footer">
-            {(status === "idle" || status === "ended") && (
-              <input
-                type="text"
-                className="pa_patient_code_input"
-                placeholder="Your patient ID"
-                value={patientCode}
-                onChange={e => setPatientCode(e.target.value)}
-                autoComplete="off"
-              />
-            )}
             {status === "idle" && (
               <button className="pa_call_btn pa_call_btn--start" onClick={startCall}>Start call</button>
             )}

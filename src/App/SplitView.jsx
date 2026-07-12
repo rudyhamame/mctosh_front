@@ -9,6 +9,8 @@ const MIN_PANE_RATIO = 0.15; // neither pane can be dragged smaller than 15% of 
 // them *from inside* the opened pane, same as any normal page).
 const SPLIT_VIEW_PAGES = [
   { path: "/home",                   icon: "fi-rr-home",               label: "Home" },
+  { path: "/hylomorphism/youtube_source", icon: "fi-rr-play-alt",      label: "YouTube Source" },
+  { path: "/hylomorphism/pdf_source",     icon: "fi-rr-file-pdf",      label: "PDF Source" },
   { path: "/sources",                icon: "fi-rr-books",               label: "Clinical Representation Reservoir" },
   { path: "/traces-collector",       icon: "fi-rr-signal-alt",          label: "MCTOSHS Traces Collector" },
   { path: "/clinical-schemata",      icon: "fi-rr-network",             label: "Clinical Representative Schemata & Instances" },
@@ -22,9 +24,16 @@ const SPLIT_VIEW_PAGES = [
   { path: "/draft",                  icon: "fi-rr-notebook",            label: "MCTOSHS Draft" },
   { path: "/ai",                     icon: "fi-rr-comment-alt",         label: "AI Chat" },
   { path: "/social-media-control",   icon: "fi-rr-megaphone",           label: "MCTOSHS Social Media Control" },
+  { path: "/instagram-home-preview", icon: "fi-rr-mobile-notch",        label: "Instagram Home Preview" },
+  { path: "/social-media-designer",  icon: "fi-rr-palette",             label: "Social Media Designer" },
   { path: "/youtube",                icon: "fi-rr-video-camera-alt",    label: "YouTube" },
+  { path: "/human-atlas",            icon: "fi-rr-body",                label: "Human Atlas" },
   { path: "/phenomena",              icon: "fi-rr-list-check",          label: "Phenomena" },
   { path: "/settings",               icon: "fi-rr-settings",            label: "Settings" },
+  { path: "/patient/login",          icon: "fi-rr-sign-in-alt",         label: "Patient Login" },
+  { path: "/patient/signup",         icon: "fi-rr-user-add",            label: "Patient Signup" },
+  { path: "/patient/call",           icon: "fi-rr-phone-call",          label: "Patient Call" },
+  { path: "/patient/settings",       icon: "fi-rr-user-gear",           label: "Patient Settings" },
   { path: "/portfolio",              icon: "fi-rr-user",                label: "Portfolio" },
   { path: "/about",                  icon: "fi-rr-info",                label: "About" },
 ];
