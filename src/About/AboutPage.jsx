@@ -6,7 +6,7 @@ import "./aboutPage.css";
 
 const SECTIONS_EN = [
   { id: "about-objectives",   label: "Objectives" },
-  { id: "about-what",         label: "What is MCTOSHS?" },
+  { id: "about-what",         label: "What is AMCTOSHS?" },
   { id: "about-pivotal",      label: "A pivotal clarification" },
   { id: "about-modes",        label: "Two modes of access" },
   { id: "about-uni-patient",  label: "University vs Real Patient" },
@@ -24,7 +24,7 @@ const SECTIONS_EN = [
 
 const SECTIONS_AR = [
   { id: "about-objectives",   label: "الأهداف" },
-  { id: "about-what",         label: "ما هو MCTOSHS؟" },
+  { id: "about-what",         label: "ما هو AMCTOSHS؟" },
   { id: "about-pivotal",      label: "توضيح محوري" },
   { id: "about-modes",        label: "وسيلتا الوصول" },
   { id: "about-uni-patient",  label: "المريض الجامعي مقابل الحقيقي" },
@@ -134,7 +134,7 @@ const AboutPage = () => {
     <div id="about_page">
       <div id="about_header">
         <button id="about_back_btn" onClick={() => history.goBack()}>←</button>
-        <span id="about_header_title">About MCTOSHS</span>
+        <span id="about_header_title">About AMCTOSHS</span>
         <button id="about_copy_btn" onClick={handleCopy} title="Copy all text">
           {copied ? "Copied ✓" : "Copy"}
         </button>
@@ -208,9 +208,9 @@ const AboutPage = () => {
             </section>
 
             <section id="about-what" className="about_section">
-              <h2 className="about_section_title">What is MCTOSHS?</h2>
+              <h2 className="about_section_title">What is AMCTOSHS?</h2>
               <p className="about_section_body">
-                MCTOSHS is a project for medical students. It uncovers how they should think about
+                AMCTOSHS is a project for medical students. It uncovers how they should think about
                 the patient as represented in university documents, lectures, textbooks, and clinical
                 teaching materials.
               </p>
@@ -235,7 +235,7 @@ const AboutPage = () => {
                 &ldquo;Chest pain radiating to the left arm, ST-segment elevation, and elevated
                 troponin suggest myocardial infarction.&rdquo;
               </blockquote>
-              <p className="about_section_body">MCTOSHS teaches the student to separate this statement:</p>
+              <p className="about_section_body">AMCTOSHS teaches the student to separate this statement:</p>
               <ul className="about_objectives_list about_objectives_list--compact about_objectives_list--grid2" style={{ marginTop: "0.6rem" }}>
                 <li><span className="about_obj_label">Chest pain</span> <span className="about_obj_desc">— a lived phenomenon experienced by the patient</span></li>
                 <li><span className="about_obj_label">ST-segment elevation</span> <span className="about_obj_desc">— an interpreted ECG trace</span></li>
@@ -254,7 +254,7 @@ const AboutPage = () => {
               <p className="about_section_body">
                 The medical student&apos;s available world is the <strong>Clinical Representation</strong>
                 — lectures, textbooks, charts, case reports, diagnostic labels, and images. This is
-                what the student has before they enter clinical practice. MCTOSHS works with this
+                what the student has before they enter clinical practice. AMCTOSHS works with this
                 representation as its starting material.
               </p>
               <p className="about_section_body" style={{ marginTop: "0.75rem" }}>
@@ -352,7 +352,7 @@ const AboutPage = () => {
                 </div>
               </div>
 
-              <p className="about_section_body" style={{ marginTop: "1.2rem" }}>A precise MCTOSHS formulation:</p>
+              <p className="about_section_body" style={{ marginTop: "1.2rem" }}>A precise AMCTOSHS formulation:</p>
               <blockquote className="about_what_quote">
                 The university patient is a semantic and pedagogical representation of selected
                 traces, concepts, and clinical relations. The real patient is the ontic living
@@ -374,7 +374,7 @@ const AboutPage = () => {
               </div>
 
               <p className="about_section_body about_section_body--warning" style={{ marginTop: "1.2rem" }}>
-                So MCTOSHS exists to prevent this error: treating the university patient as though
+                So AMCTOSHS exists to prevent this error: treating the university patient as though
                 they were the real patient.
               </p>
               <p className="about_section_body" style={{ marginTop: "0.75rem" }}>
@@ -557,7 +557,7 @@ const AboutPage = () => {
             <section id="about-epistemology" className="about_section">
               <h2 className="about_section_title">Clinical Epistemology</h2>
               <p className="about_section_body">
-                Clinical epistemology in MCTOSHS concerns how knowledge is acquired at each stage
+                Clinical epistemology in AMCTOSHS concerns how knowledge is acquired at each stage
                 of the Clinical Presentation — and how Clinical Representation adds a further
                 layer of epistemic distance.
               </p>
@@ -749,7 +749,7 @@ const AboutPage = () => {
               <p className="about_section_body">
                 A <strong>means of access</strong> is whatever channel connects an observer to the
                 traces of clinical reality — not to clinical reality itself, which no observer can
-                reach directly. In MCTOSHS the concept operates on three levels simultaneously —
+                reach directly. In AMCTOSHS the concept operates on three levels simultaneously —
                 epistemological, phenomenological, and structural — and understanding all three is
                 necessary to understand what the system is doing and why.
               </p>
@@ -900,7 +900,7 @@ const AboutPage = () => {
                     </tr>
                   </tbody>
                 </table>
-                <p className="about_ball_rule">MCTOSHS rule: Stable trace does not prove stable patient reality.</p>
+                <p className="about_ball_rule">AMCTOSHS rule: Stable trace does not prove stable patient reality.</p>
               </div>
 
               {/* ── Case 2 ── */}
@@ -953,7 +953,7 @@ const AboutPage = () => {
                     </tr>
                   </tbody>
                 </table>
-                <p className="about_ball_rule">MCTOSHS rule: Changed trace does not prove changed patient physis.</p>
+                <p className="about_ball_rule">AMCTOSHS rule: Changed trace does not prove changed patient physis.</p>
               </div>
 
               {/* ── Comparison table ── */}
@@ -975,7 +975,7 @@ const AboutPage = () => {
                 </tbody>
               </table>
 
-              {/* ── MCTOSHS Principle ── */}
+              {/* ── AMCTOSHS Principle ── */}
               <div className="about_ball_principle">
                 <div>Entity identity<br/>&nbsp;&nbsp;= continuity of the whole being through time</div>
                 <div style={{ marginTop: "0.55rem" }}>Physis at t&#8320;<br/>&nbsp;&nbsp;= one actual physical state of that entity</div>
@@ -994,7 +994,7 @@ const AboutPage = () => {
               <h2 className="about_section_title">How it works</h2>
               <p className="about_section_body">
                 Upload a PDF in the Hyles page. The system extracts hyles and classifies
-                them into five cards — Objects, Traces, Phenomena, Concepts, and Models —
+                them into five cards — Entities, Traces, Phenomena, Concepts, and Models —
                 each further organised by biological scale (Molecule → Cell → Tissue → Organ → Organ System → Human).
               </p>
             </section>
@@ -1002,7 +1002,7 @@ const AboutPage = () => {
             <section id="about-cards" className="about_section">
               <h2 className="about_section_title">Cards</h2>
               <ul className="about_cards_list">
-                <li><span className="about_card_dot" style={{ background: "#4fc3f7" }} />Objects — physical entities extracted from text</li>
+                <li><span className="about_card_dot" style={{ background: "#4fc3f7" }} />Entities — physical entities extracted from text</li>
                 <li><span className="about_card_dot" style={{ background: "#81c784" }} />Traces — signals, markers, and observable outputs</li>
                 <li><span className="about_card_dot" style={{ background: "#f06292" }} />Phenomena — sensory and experiential observations</li>
                 <li><span className="about_card_dot" style={{ background: "#ffb74d" }} />Concepts — abstract and theoretical constructs</li>
@@ -1086,7 +1086,7 @@ const AboutPage = () => {
             <section id="about-conclusion" className="about_section about_conclusion">
               <h2 className="about_section_title">Conclusion</h2>
               <p className="about_what_tagline">
-                MCTOSHS is a <strong>patient-centered</strong> route from representation to reality:
+                AMCTOSHS is a <strong>patient-centered</strong> route from representation to reality:
                 from language to patient.
               </p>
               <p className="about_section_body">
@@ -1095,7 +1095,7 @@ const AboutPage = () => {
                 teaches the student not to mistake these representations for the patient.
               </p>
               <p className="about_section_body">
-                Through structured analysis, MCTOSHS moves the student from medical language toward
+                Through structured analysis, AMCTOSHS moves the student from medical language toward
                 the reality it tries to represent: the patient&apos;s physis, psyche, traces, lived
                 phenomena, and pathological processes.
               </p>

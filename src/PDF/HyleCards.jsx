@@ -4,7 +4,7 @@ import "./hyleCards.css";
 const currentStatus = (item) => item.status?.value || "pending";
 
 const CARDS = [
-  { key: "objects",   label: "Objects" },
+  { key: "entities",  label: "Entities" },
   { key: "traces",    label: "Traces" },
   { key: "phenomena", label: "Phenomena" },
   { key: "concept",   label: "Concept" },
@@ -72,7 +72,7 @@ const HyleRow = ({ item, cardKey, modeKey, index, onStatus, onMove, onDelete }) 
   );
 };
 
-const HyleCards = ({ data, streaming, onStatus, onMove, onDelete, activeCard = "objects", fontSize = 1 }) => {
+const HyleCards = ({ data, streaming, onStatus, onMove, onDelete, activeCard = "entities", fontSize = 1 }) => {
   const card = CARDS.find((c) => c.key === activeCard) || CARDS[0];
 
   const rows = MODES.flatMap(({ key: modeKey }) =>

@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
-import AIProviderSelect from "../App/AIProviderSelect";
 import { useAIProvider } from "../hooks/useAIProvider";
 import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
@@ -20,14 +19,14 @@ const PDF_TYPE_LABEL = {
   "scanned":    "Scanned",
 };
 
-const PDF_TYPE_ICON = {
+export const PDF_TYPE_ICON = {
   "text-based": "fi-rr-check-circle",
   "mixed":      "fi-rr-triangle-warning",
   "scanned":    "fi-rr-image",
 };
 
 const CARDS = [
-  { key: "objects",   label: "Objects" },
+  { key: "entities",  label: "Entities" },
   { key: "traces",    label: "Traces" },
   { key: "phenomena", label: "Phenomena" },
   { key: "concept",   label: "Concept" },
@@ -78,6 +77,8 @@ const HYLE_TYPE_LABELS = {
 };
 
 const ANNOT_TOOLS = [
+  { key: "navigator",     icon: "fi-rr-arrows-alt",           label: "Navigator",     hasSize: false },
+  { key: "select",        icon: "fi-rr-cursor-text",          label: "Select Text",   hasSize: false },
   { key: "highlight",     icon: "fi-rr-highlighter",          label: "Highlight",     hasSize: true  },
   { key: "underline",     icon: "fi-rr-underline",            label: "Underline",     hasSize: false },
   { key: "strikethrough", icon: "fi-rr-strikethrough",        label: "Strikethrough", hasSize: false },
@@ -138,37 +139,6 @@ const ANNOT_HISTORY_META = {
   clear: { icon: "fi-rr-trash",      verb: "Cleared" },
 };
 
-// Safari reports Apple-Pencil touches with Touch.touchType === "stylus" (vs.
-// "direct" for a finger) — the only reliable signal we have to tell hand
-// from pencil on a TouchEvent.
-const isStylusTouch = (e) => Boolean(e.touches && e.touches[0] && e.touches[0].touchType === "stylus");
-
-// Averages the pixels of the rendered PDF page canvas in a small square
-// around (cx, cy) (canvas-pixel space) so "auto contrast" reacts to the
-// actual local background rather than a single noisy pixel (e.g. one letter
-// stroke in otherwise-white space).
-const sampleAreaColor = (canvas, cx, cy, radius = 14) => {
-  const x = Math.max(0, Math.round(cx - radius));
-  const y = Math.max(0, Math.round(cy - radius));
-  const w = Math.min(canvas.width  - x, radius * 2);
-  const h = Math.min(canvas.height - y, radius * 2);
-  if (w <= 0 || h <= 0) return { r: 255, g: 255, b: 255 };
-  const { data } = canvas.getContext("2d").getImageData(x, y, w, h);
-  let r = 0, g = 0, b = 0, n = 0;
-  for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2]; n++; }
-  return { r: r / n, g: g / n, b: b / n };
-};
-
-// WCAG relative luminance → picks whichever of pure black/white gives the
-// higher contrast ratio against the sampled background (the theoretical
-// best a single ink color can do).
-const bestContrastColor = ({ r, g, b }) => {
-  const toLinear = (c) => { const cs = c / 255; return cs <= 0.03928 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4); };
-  const luminance = 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
-  const contrastWithWhite = 1.05 / (luminance + 0.05);
-  const contrastWithBlack = (luminance + 0.05) / 0.05;
-  return contrastWithBlack > contrastWithWhite ? "#000000" : "#ffffff";
-};
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
 // Pinch-to-zoom (touch, and trackpad pinch which browsers deliver as ctrl+wheel)
@@ -180,6 +150,143 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const roundZoom = (value) => Math.round(value * 100) / 100;
 const normalizeZoom = (value) => clamp(roundZoom(value), MIN_ZOOM, MAX_ZOOM);
 const normalizePinchZoom = (value) => Math.max(PINCH_ZOOM_FLOOR, roundZoom(value));
+// Held +/- zoom buttons: tick rate, and how fast/how far the per-tick step
+// accelerates the longer the button stays down (see startZoomHold).
+const ZOOM_HOLD_TICK_MS = 48;
+const ZOOM_HOLD_RAMP_MS = 1800;
+const ZOOM_HOLD_MAX_MULTIPLIER = 8;
+
+// ── Momentum ("billiard ball") panning ──────────────────────────────────────
+// After a drag/pan is released fast enough, the scroll container keeps
+// coasting in the same direction and decelerates smoothly to a stop, instead
+// of snapping dead the instant the finger/mouse lifts.
+const MOMENTUM_MAX_VELOCITY = 3;     // px/ms — caps an extreme flick
+const MOMENTUM_MIN_VELOCITY = 0.015; // px/ms — below this we call it stopped
+const MOMENTUM_FLICK_MIN    = 0.08;  // px/ms — release speed under this doesn't coast at all
+const MOMENTUM_FRICTION     = 0.98;  // velocity retained per ~16ms frame — higher = longer, gentler glide
+
+// Rather than blending every single move sample into a running average (which
+// lags behind quick direction changes and is thrown off by one slow sample
+// right before release), keep a short rolling window of recent {x, y, t}
+// samples and measure velocity across that whole window at release time —
+// the same trick native pan-gesture recognizers use.
+const VELOCITY_WINDOW_MS = 80;
+const createVelocityTracker = () => {
+  let samples = [];
+  return {
+    reset() { samples = []; },
+    push(x, y, t) {
+      samples.push({ x, y, t });
+      const cutoff = t - VELOCITY_WINDOW_MS;
+      while (samples.length > 1 && samples[0].t < cutoff) samples.shift();
+    },
+    velocity() {
+      if (samples.length < 2) return { vx: 0, vy: 0 };
+      const first = samples[0];
+      const last = samples[samples.length - 1];
+      const dt = last.t - first.t;
+      if (dt <= 0) return { vx: 0, vy: 0 };
+      return { vx: (last.x - first.x) / dt, vy: (last.y - first.y) / dt };
+    },
+  };
+};
+
+const stopMomentumScroll = (frameRef) => {
+  if (frameRef.current) {
+    cancelAnimationFrame(frameRef.current);
+    frameRef.current = 0;
+  }
+};
+
+const stopLivePan = (stateRef) => {
+  if (stateRef.current.frame) {
+    cancelAnimationFrame(stateRef.current.frame);
+    stateRef.current.frame = 0;
+  }
+};
+
+const syncLivePan = (el, stateRef) => {
+  const state = stateRef.current;
+  const maxL = Math.max(0, el.scrollWidth - el.clientWidth);
+  const maxT = Math.max(0, el.scrollHeight - el.clientHeight);
+  state.currentL = clamp(state.targetL, 0, maxL);
+  state.currentT = clamp(state.targetT, 0, maxT);
+  el.scrollLeft = state.currentL;
+  el.scrollTop = state.currentT;
+};
+
+const runLivePan = (el, stateRef) => {
+  stopLivePan(stateRef);
+  const state = stateRef.current;
+  state.lastT = performance.now();
+  const step = (t) => {
+    const dt = Math.min(34, Math.max(8, t - state.lastT || 16));
+    state.lastT = t;
+    const maxL = Math.max(0, el.scrollWidth - el.clientWidth);
+    const maxT = Math.max(0, el.scrollHeight - el.clientHeight);
+    state.targetL = clamp(state.targetL, 0, maxL);
+    state.targetT = clamp(state.targetT, 0, maxT);
+
+    // Follow the pointer aggressively enough to feel direct, but with a
+    // frame-smoothed glide between input events so panning does not advance
+    // in visibly stepped chunks on lower-rate touch streams.
+    const ease = 1 - Math.pow(0.12, dt / 16);
+    state.currentL += (state.targetL - state.currentL) * ease;
+    state.currentT += (state.targetT - state.currentT) * ease;
+
+    if (Math.abs(state.targetL - state.currentL) < 0.18) state.currentL = state.targetL;
+    if (Math.abs(state.targetT - state.currentT) < 0.18) state.currentT = state.targetT;
+
+    el.scrollLeft = state.currentL;
+    el.scrollTop = state.currentT;
+
+    if (state.active || Math.abs(state.targetL - state.currentL) > 0.18 || Math.abs(state.targetT - state.currentT) > 0.18) {
+      stateRef.current.frame = requestAnimationFrame(step);
+    } else {
+      stateRef.current.frame = 0;
+    }
+  };
+  stateRef.current.frame = requestAnimationFrame(step);
+};
+
+const runMomentumScroll = (el, vx, vy, frameRef) => {
+  stopMomentumScroll(frameRef);
+  let velX = clamp(vx, -MOMENTUM_MAX_VELOCITY, MOMENTUM_MAX_VELOCITY);
+  let velY = clamp(vy, -MOMENTUM_MAX_VELOCITY, MOMENTUM_MAX_VELOCITY);
+  // Track position as floats, independent of el.scrollLeft/Top (which the
+  // browser rounds to whole pixels). Reading the rounded value back as next
+  // frame's basis would drop any sub-pixel motion — most of the tail of a
+  // decelerating coast is sub-pixel-per-frame — producing a visibly stepped
+  // crawl instead of a smooth glide.
+  let posL = el.scrollLeft;
+  let posT = el.scrollTop;
+  let lastT = performance.now();
+  const step = (t) => {
+    const dt = Math.min(48, t - lastT); // guard against a big gap (e.g. tab switch)
+    lastT = t;
+    const decay = Math.pow(MOMENTUM_FRICTION, dt / 16);
+    velX *= decay;
+    velY *= decay;
+    if (Math.hypot(velX, velY) < MOMENTUM_MIN_VELOCITY) { frameRef.current = 0; return; }
+    posL -= velX * dt;
+    posT -= velY * dt;
+    // Clamp against the real scrollable range instead of comparing rounded
+    // scrollLeft/Top before/after — that comparison is also (wrongly) true
+    // whenever a sub-pixel delta rounds to the same integer, which would kill
+    // velocity on a whim rather than only at an actual edge.
+    const maxL = el.scrollWidth  - el.clientWidth;
+    const maxT = el.scrollHeight - el.clientHeight;
+    const clampedL = clamp(posL, 0, maxL);
+    const clampedT = clamp(posT, 0, maxT);
+    if (clampedL !== posL) { posL = clampedL; velX = 0; }
+    if (clampedT !== posT) { posT = clampedT; velY = 0; }
+    el.scrollLeft = posL;
+    el.scrollTop  = posT;
+    if (velX === 0 && velY === 0) { frameRef.current = 0; return; }
+    frameRef.current = requestAnimationFrame(step);
+  };
+  frameRef.current = requestAnimationFrame(step);
+};
 const normalizeOcrText = (text) => (
   (text || "")
     .replace(/\r/g, "")
@@ -192,6 +299,18 @@ const normalizeOcrText = (text) => (
 );
 const MAX_RENDER_CANVAS_DIMENSION = 8192;
 const MAX_RENDER_CANVAS_PIXELS = 16777216;
+const getSafeCanvasOutputScale = (width, height, deviceScale = window.devicePixelRatio || 1) => {
+  const dimLimitedScale = Math.min(
+    deviceScale,
+    MAX_RENDER_CANVAS_DIMENSION / Math.max(1, width),
+    MAX_RENDER_CANVAS_DIMENSION / Math.max(1, height),
+  );
+  const areaLimitedScale = Math.min(
+    deviceScale,
+    Math.sqrt(MAX_RENDER_CANVAS_PIXELS / Math.max(1, width * height)),
+  );
+  return Math.max(0.1, Math.min(deviceScale, dimLimitedScale, areaLimitedScale));
+};
 const DEFAULT_PEN_SETTINGS = {
   stabilization: 45,
   pressureAssist: 55,
@@ -239,7 +358,7 @@ const PEN_THEMES = [
     },
   },
 ];
-const smoothStrokePoint = (points, nextPoint, stabilization) => {
+const smoothStrokePoint = (points, nextPoint, stabilization, scale = 1) => {
   if (!points.length) return nextPoint;
   const previous = points[points.length - 1];
   const normalized = Math.min(1, Math.max(0, stabilization / 100));
@@ -250,7 +369,8 @@ const smoothStrokePoint = (points, nextPoint, stabilization) => {
     t: nextPoint.t,
     pressure: previous.pressure + (nextPoint.pressure - previous.pressure) * (1 - blend * 0.55),
   };
-  if (Math.hypot(smoothed.x - previous.x, smoothed.y - previous.y) < 0.05) return null;
+  const minDocMovement = Math.max(0.003, 0.7 / Math.max(1, scale));
+  if (Math.hypot(smoothed.x - previous.x, smoothed.y - previous.y) < minDocMovement) return null;
   return smoothed;
 };
 
@@ -301,7 +421,7 @@ const resampleStrokePoints = (points, spacing = 0.7) => {
   return resampled;
 };
 
-const smoothStrokePath = (points, smoothness = 0.45) => {
+const smoothStrokePath = (points, smoothness = 0.45, scale = 1) => {
   if (!Array.isArray(points) || points.length < 3) return points || [];
   const tension = clamp(smoothness, 0, 1);
   const segmentsPerSpan = tension > 0.72 ? 4 : tension > 0.42 ? 3 : 2;
@@ -337,10 +457,10 @@ const smoothStrokePath = (points, smoothness = 0.45) => {
     }
   }
 
-  return dedupeStrokePoints(smoothed, 0.01);
+  return dedupeStrokePoints(smoothed, Math.max(0.002, 0.24 / Math.max(1, scale)));
 };
 
-const applySyntheticStrokePressure = (points, penType, pressureAssist = DEFAULT_PEN_SETTINGS.pressureAssist) => {
+const applySyntheticStrokePressure = (points, penType, pressureAssist = DEFAULT_PEN_SETTINGS.pressureAssist, scale = 1) => {
   if (!Array.isArray(points) || points.length < 2) return points || [];
   const normalizedAssist = clamp(pressureAssist / 100, 0, 1);
   const hasMeaningfulPressure = points.some((point) => {
@@ -362,7 +482,7 @@ const applySyntheticStrokePressure = (points, penType, pressureAssist = DEFAULT_
     const prev = array[Math.max(0, index - 1)];
     const next = array[Math.min(array.length - 1, index + 1)];
     const dt = Math.max(1, Math.abs((next.t ?? point.t ?? 0) - (prev.t ?? point.t ?? 0)));
-    const velocity = distanceBetweenStrokePoints(prev, next) / dt;
+    const velocity = (distanceBetweenStrokePoints(prev, next) * Math.max(1, scale)) / dt;
     const edgeTaper = Math.sin((index / Math.max(1, array.length - 1)) * Math.PI);
     const body = (penType === "fountain" ? 0.7 : 0.66) + normalizedAssist * 0.16;
     const velocityGain = (penType === "fountain" ? 0.34 : 0.22) + normalizedAssist * (penType === "fountain" ? 0.16 : 0.12);
@@ -373,16 +493,17 @@ const applySyntheticStrokePressure = (points, penType, pressureAssist = DEFAULT_
   });
 };
 
-const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType = "ball") => {
+const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType = "ball", scale = 1) => {
   if (!Array.isArray(points) || points.length < 2) return points || [];
   const stabilization = penSettings?.stabilization ?? DEFAULT_PEN_SETTINGS.stabilization;
   const pressureAssist = penSettings?.pressureAssist ?? DEFAULT_PEN_SETTINGS.pressureAssist;
   const normalized = clamp(stabilization / 100, 0, 1);
-  const deduped = dedupeStrokePoints(points, 0.015 + normalized * 0.05);
+  const scaleFactor = Math.max(1, scale);
+  const deduped = dedupeStrokePoints(points, Math.max(0.002, (0.015 + normalized * 0.05) / scaleFactor));
   if (deduped.length < 2) return deduped;
-  const resampled = resampleStrokePoints(deduped, 0.9 - normalized * 0.45);
-  const smoothed = smoothStrokePath(resampled, 0.2 + normalized * 0.75);
-  return applySyntheticStrokePressure(smoothed, penType, pressureAssist);
+  const resampled = resampleStrokePoints(deduped, Math.max(0.08, (0.9 - normalized * 0.45) / scaleFactor));
+  const smoothed = smoothStrokePath(resampled, 0.2 + normalized * 0.75, scaleFactor);
+  return applySyntheticStrokePressure(smoothed, penType, pressureAssist, scaleFactor);
 };
 
 // Compact draggable "knob" that replaces a native <input type="range"> for
@@ -580,7 +701,7 @@ const ALL_MODES = ["sub-molecule","molecule","sub-cell","cell","sub-tissue","tis
 const modeObj   = () => Object.fromEntries(ALL_MODES.map((m) => [m, []]));
 
 const EMPTY_HYLES = () => ({
-  objects:   modeObj(),
+  entities:  modeObj(),
   traces:    modeObj(),
   phenomena: modeObj(),
   concept:   modeObj(),
@@ -599,11 +720,17 @@ const authFetch = (url, options = {}) => {
 const initStatus   = () => ({ value: "pending", at: new Date().toISOString() });
 const currentStatus = (item) => item.status?.value || "pending";
 
+// "objects" was the card name before the Entities rename — extractions saved
+// before that rename still have nouns tagged "objects" in the database, so
+// reads alias it to "entities" here rather than losing that historical data.
+const normalizeCard = (card) => (card === "objects" ? "entities" : card);
+
 const inflateExtraction = (extraction) => {
   const data = EMPTY_HYLES();
   for (const { id, num, noun, card, mode, reason, status } of extraction.nouns || []) {
-    if (data[card]?.[mode]) {
-      data[card][mode].push({ id, num, noun, reason: reason || "", status: status?.value ? status : initStatus() });
+    const normalizedCard = normalizeCard(card);
+    if (data[normalizedCard]?.[mode]) {
+      data[normalizedCard][mode].push({ id, num, noun, reason: reason || "", status: status?.value ? status : initStatus() });
     }
   }
   data._total = extraction.totalNouns || 0;
@@ -612,7 +739,7 @@ const inflateExtraction = (extraction) => {
 
 const deflateNounData = (hyleData) => {
   const nouns = [];
-  for (const card of ["objects", "traces", "phenomena", "concept", "models"]) {
+  for (const card of ["entities", "traces", "phenomena", "concept", "models"]) {
     for (const mode of ALL_MODES) {
       for (const item of hyleData[card]?.[mode] || []) {
         nouns.push({ id: item.id, num: item.num, noun: item.noun, card, mode, reason: item.reason, status: item.status });
@@ -632,12 +759,15 @@ const PDFPage = ({
   onSelectionAction = null,        // async (selectedText) => void — replaces the ✓ "add to Hyles" button in the selection bar
   selectionActionLabel = "Add",
   hideHyleControls = false,        // hide just the "Hyles" toggle + extraction panel (plain reading/annotation use, e.g. /pdf-reader)
+  onPdfTypeChange = null,          // (type) => void — lets an embedding parent (e.g. a tab strip) mirror text-based/mixed/scanned without owning the PDF.js parse itself
+  initialPage = null,              // jump to this page once the source finishes loading (e.g. a deep link from Medical Exams) — ignored for embeddedFile/local-file loads
 }) => {
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
   const [pageNum, setPageNum]       = useState(1);
   const [pageCount, setPageCount]   = useState(0);
   const [pdfType, setPdfType]       = useState(null);
+  useEffect(() => { onPdfTypeChange?.(pdfType); }, [pdfType]); // eslint-disable-line react-hooks/exhaustive-deps -- onPdfTypeChange is a stable-enough callback prop, not a reactive dep
   const [loading, setLoading]       = useState(false);
   const [loadError, setLoadError]   = useState("");
   const [dragOver, setDragOver]     = useState(false);
@@ -659,17 +789,30 @@ const PDFPage = ({
   const [extractError, setExtractError] = useState("");
   const { provider, setProvider }     = useAIProvider();
   const [showSysModal, setShowSysModal] = useState(false);
-  const [readerTextSelectEnabled, setReaderTextSelectEnabled] = useState(false);
+
+  // "navigator" is a tool like any other in ANNOT_TOOLS/the Tools dropdown —
+  // panning and drawing are mutually exclusive, so exactly one tool is always
+  // selected, defaulting to Navigator instead of a separate on/off toggle.
+  // Declared here (ahead of most other state) because textSelectable below
+  // reads it immediately.
+  const [annotTool,      setAnnotTool]      = useState("navigator");
+  // Only "navigator" leaves panning enabled — every other tool, including
+  // Select Text, takes over the pointer, so navigation turns off for it too.
+  const navigationBlocked = Boolean(annotTool) && annotTool !== "navigator";
+  // Of those, only real drawing tools actually use the annotation canvas —
+  // Select Text has its own dblclick-based interaction, not canvas drawing.
+  const toolActive = navigationBlocked && annotTool !== "select"; // true only when a real drawing tool is selected
+  const annotToolRef = useRef(null); // mirrors navigationBlocked ? annotTool : null — read inside the pan-gesture effect, whose deps are just [pdfDoc], so annotTool itself would be stale there
 
   // AI vs Manual toggle
   const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
   // Click/tap-and-hold word selection is part of manual Hyle extraction, but
-  // the plain /pdf-reader restores its own local toggle so reading mode can
-  // opt into selection without reopening the full Hyles controls.
+  // the plain /pdf-reader picks it from the Tools list ("Select Text") so
+  // reading mode can opt into selection without reopening the full Hyles controls.
   const textSelectable = selectionOnly
     ? true
     : hideHyleControls
-      ? readerTextSelectEnabled
+      ? annotTool === "select"
       : extractMode === "manual";
   const [extractionType, setExtractionType] = useState(null); // selected hyle type key
   const [typeTreeOpen,   setTypeTreeOpen]   = useState(false);
@@ -679,12 +822,17 @@ const PDFPage = ({
   const [manualHyle,      setManualHyle]      = useState("");
   const [manualCard,      setManualCard]      = useState(() => {
     const p = window.location.pathname.split("/").pop();
-    return CARDS.find((c) => c.key === p)?.key || "objects";
+    return CARDS.find((c) => c.key === p)?.key || "entities";
   });
   const [manualMode,      setManualMode]      = useState("organ");
-  // Selection bar (shown before popup — lets user expand range word-by-word)
+  // Selection bar — shown before popup; always exactly the double-clicked/
+  // double-tapped word, never an expandable range.
   const [manualSelection, setManualSelection] = useState(null); // { startIdx, endIdx, text, x, y }
-  const [dragHandle,      setDragHandle]      = useState(null); // "start" | "end"
+  // Thin selection-bar action state (Translate to / Definition / Linguistic
+  // Structure Check) — hideHyleControls reading context only.
+  const [selectionToolBusy,   setSelectionToolBusy]   = useState(null); // which action key is in flight, or null
+  const [selectionToolResult, setSelectionToolResult] = useState(null); // { label, text }
+  const [selectionToolError,  setSelectionToolError]  = useState("");
 
   const [history, setHistory]               = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -754,7 +902,56 @@ const PDFPage = ({
   // counter buttons and by the panel's own page navigation, so the reader
   // always shows the page currently displayed in the panel.
   const scrollReaderToPage = useCallback((page) => {
-    pageContainerRefs.current[page - 1]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setPageNum(page);
+  }, []);
+
+  const panFromMinimapPoint = useCallback((mini, clientX, clientY) => {
+    const previewEl = previewRef.current;
+    const pageEl = pageContainerRefs.current[mini.page - 1];
+    const dragState = minimapDragRef.current;
+    const rect = dragState.rect;
+    if (!previewEl || !pageEl || !rect || rect.width <= 0 || rect.height <= 0) return;
+
+    const relX = clamp((clientX - rect.left) / rect.width, 0, 1);
+    const relY = clamp((clientY - rect.top) / rect.height, 0, 1);
+    const pageX = relX * mini.pageWidth;
+    const pageY = relY * mini.pageHeight;
+    const targetLeft = pageEl.offsetLeft + pageX - mini.visibleWidth / 2;
+    const targetTop = pageEl.offsetTop + pageY - mini.visibleHeight / 2;
+    const maxLeft = Math.max(0, previewEl.scrollWidth - previewEl.clientWidth);
+    const maxTop = Math.max(0, previewEl.scrollHeight - previewEl.clientHeight);
+    previewEl.scrollLeft = clamp(targetLeft, 0, maxLeft);
+    previewEl.scrollTop = clamp(targetTop, 0, maxTop);
+  }, []);
+
+  const startMinimapDrag = useCallback((mini, event) => {
+    const sheet = event.currentTarget;
+    const pointerId = "pointerId" in event ? event.pointerId : null;
+    minimapDragRef.current = {
+      active: true,
+      pointerId,
+      page: mini.page,
+      rect: sheet.getBoundingClientRect(),
+    };
+    if (pointerId != null) sheet.setPointerCapture?.(pointerId);
+    event.preventDefault();
+    panFromMinimapPoint(mini, event.clientX, event.clientY);
+  }, [panFromMinimapPoint]);
+
+  const moveMinimapDrag = useCallback((mini, event) => {
+    const dragState = minimapDragRef.current;
+    if (!dragState.active || dragState.page !== mini.page) return;
+    if (dragState.pointerId != null && "pointerId" in event && dragState.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    panFromMinimapPoint(mini, event.clientX, event.clientY);
+  }, [panFromMinimapPoint]);
+
+  const endMinimapDrag = useCallback((mini, event) => {
+    const dragState = minimapDragRef.current;
+    if (!dragState.active || dragState.page !== mini.page) return;
+    if (dragState.pointerId != null && "pointerId" in event && dragState.pointerId !== event.pointerId) return;
+    if ("pointerId" in event && event.pointerId != null) event.currentTarget.releasePointerCapture?.(event.pointerId);
+    minimapDragRef.current = { active: false, pointerId: null, page: null, rect: null };
   }, []);
 
   const showMarkdownPageInPdf = useCallback((mode) => {
@@ -777,6 +974,7 @@ const PDFPage = ({
   const [annotHistory,     setAnnotHistory]     = useState([]);
   const [annotHistoryOpen, setAnnotHistoryOpen] = useState(false);
   const [pageMinimap, setPageMinimap] = useState([]);
+  const minimapDragRef = useRef({ active: false, pointerId: null, page: null, rect: null });
   const logAnnotHistory = useCallback((entry) => {
     setAnnotHistory((prev) => [...prev, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300));
   }, []);
@@ -786,7 +984,9 @@ const PDFPage = ({
   const [selectionActionError, setSelectionActionError] = useState("");
 
   // ── Annotation state ──────────────────────────────────────────────────────
-  const [annotTool,      setAnnotTool]      = useState(null);
+  // "navigator" is a tool like any other in ANNOT_TOOLS/the Tools dropdown —
+  // panning and drawing are mutually exclusive, so exactly one tool is always
+  // selected, defaulting to Navigator instead of a separate on/off toggle.
   const [annotToolColors, setAnnotToolColors] = useState(DEFAULT_ANNOT_TOOL_COLORS);
   const [annotSize,      setAnnotSize]      = useState(16);  // highlight lineWidth
   const [penSize,        setPenSize]        = useState(2);   // pen lineWidth
@@ -815,23 +1015,12 @@ const PDFPage = ({
   const colorMenuRef = useRef(null);
   const penMenuRef = useRef(null);
   const highlightMenuRef = useRef(null);
-  // "Actions" toolbar dropdown (Markdown / Linguistic Analysis) + its page-range picker popover
-  const [actionsMenuOpen,    setActionsMenuOpen]    = useState(false);
+  // Linguistic Analysis's page-range picker popover
   const actionsMenuRef = useRef(null);
   const [rangePickerAction, setRangePickerAction]   = useState(null); // null | "markdown" | "linguistic"
   const [rangeFrom,          setRangeFrom]          = useState(1);
   const [rangeTo,            setRangeTo]            = useState(1);
   const [rangeAll,           setRangeAll]           = useState(false);
-  // "Hand" mode: when on, a finger touch only pans/scrolls the page and
-  // never draws — only the pencil (stylus, per Safari's Touch.touchType)
-  // draws. Lets you rest your hand on the screen while sketching with an
-  // Apple Pencil without fighting the page underneath.
-  const [fingerScrollOnly, setFingerScrollOnly] = useState(false);
-  const fingerScrollOnlyRef = useRef(false);
-  useEffect(() => { fingerScrollOnlyRef.current = fingerScrollOnly; }, [fingerScrollOnly]);
-  // Auto-contrast: pick the ink color (black/white) with the best contrast
-  // against the page background right under where each stroke starts.
-  const [autoContrast, setAutoContrast] = useState(false);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
   const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
@@ -916,19 +1105,18 @@ const PDFPage = ({
   const ocrWorkerPromiseRef = useRef(null);
   const drawTextJobRef = useRef(0);
 
-  // Close the floating tools/color/pen/highlight/actions dropdowns on an outside click
+  // Close the floating tools/color/pen/highlight dropdowns on an outside click
   useEffect(() => {
-    if (!toolsMenuOpen && !colorMenuOpen && !penMenuOpen && !highlightMenuOpen && !actionsMenuOpen) return;
+    if (!toolsMenuOpen && !colorMenuOpen && !penMenuOpen && !highlightMenuOpen) return;
     const onDocPointerDown = (e) => {
       if (toolsMenuOpen && toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) setToolsMenuOpen(false);
       if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
       if (penMenuOpen && penMenuRef.current && !penMenuRef.current.contains(e.target)) setPenMenuOpen(false);
       if (highlightMenuOpen && highlightMenuRef.current && !highlightMenuRef.current.contains(e.target)) setHighlightMenuOpen(false);
-      if (actionsMenuOpen && actionsMenuRef.current && !actionsMenuRef.current.contains(e.target)) setActionsMenuOpen(false);
     };
     document.addEventListener("mousedown", onDocPointerDown);
     return () => document.removeEventListener("mousedown", onDocPointerDown);
-  }, [toolsMenuOpen, colorMenuOpen, penMenuOpen, highlightMenuOpen, actionsMenuOpen]);
+  }, [toolsMenuOpen, colorMenuOpen, penMenuOpen, highlightMenuOpen]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -951,15 +1139,22 @@ const PDFPage = ({
   useLongPressSelect(mdTextRef);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
+  const momentumFrameRef = useRef(0); // shared by touch-pan and mouse-drag-pan momentum coasting
+  const livePanRef = useRef({
+    frame: 0,
+    active: false,
+    currentL: 0,
+    currentT: 0,
+    targetL: 0,
+    targetT: 0,
+    lastT: 0,
+  });
   const fileInputRef  = useRef(null);
   const zoomHoldTimerRef = useRef(null);
   const zoomHoldIntervalRef = useRef(null);
   const selBarRef          = useRef(null);
-  const footerAdjustTimerRef = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
-  const mouseDownPosRef    = useRef(null); // {x,y} at last mousedown — used to detect drag vs click
-  const suppressTextSelectionRef = useRef(false);
   const lastLoadedSourceKeyRef = useRef("");
   const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
   const lastLoadedFileRef = useRef(null);
@@ -976,15 +1171,36 @@ const PDFPage = ({
     timer: null,
   });
 
+  const captureZoomAnchor = useCallback((clientX, clientY) => {
+    const previewEl = previewRef.current;
+    const pageEl = pageContainerRefs.current[pageNumRef.current - 1];
+    if (!previewEl || !pageEl) return null;
+    const previewRect = previewEl.getBoundingClientRect();
+    const pageLeft = pageEl.offsetLeft;
+    const pageTop = pageEl.offsetTop;
+    const pageWidth = Math.max(1, pageEl.offsetWidth);
+    const pageHeight = Math.max(1, pageEl.offsetHeight);
+    const viewportX = clientX - previewRect.left;
+    const viewportY = clientY - previewRect.top;
+    return {
+      kind: "page-anchor",
+      page: pageNumRef.current,
+      viewportX,
+      viewportY,
+      ratioX: clamp((previewEl.scrollLeft + viewportX - pageLeft) / pageWidth, 0, 1),
+      ratioY: clamp((previewEl.scrollTop + viewportY - pageTop) / pageHeight, 0, 1),
+    };
+  }, []);
+
   const navigate = useNavigate();
   const location = useLocation();
   const { card: urlCard } = useParams();
-  const embedded = Boolean(embeddedSourceId) || Boolean(embeddedFile); // true when mounted inside another page (e.g. Traces Collector) rather than routed directly
+  const embedded = Boolean(embeddedSourceId) || Boolean(embeddedFile); // true when mounted inside another page (e.g. Units Extraction) rather than routed directly
   const isNounsPage = !urlCard; // true when mounted at /hyles (no card in URL)
-  const [localCard, setLocalCard] = useState("objects");
+  const [localCard, setLocalCard] = useState("entities");
   const activeCard = isNounsPage
     ? localCard
-    : (CARDS.find((c) => c.key === urlCard)?.key || "objects");
+    : (CARDS.find((c) => c.key === urlCard)?.key || "entities");
   const canExtract = Boolean(pdfDoc) && pdfType !== "scanned";
 
   // ── Sources list (for /hyles drop-zone replacement) ─────────────────────
@@ -1050,16 +1266,7 @@ const PDFPage = ({
     const renderViewport = renderScaleFactor < 0.999
       ? page.getViewport({ scale: displayScale * renderScaleFactor })
       : displayViewport;
-    const dimLimitedScale = Math.min(
-      deviceScale,
-      MAX_RENDER_CANVAS_DIMENSION / Math.max(1, renderViewport.width),
-      MAX_RENDER_CANVAS_DIMENSION / Math.max(1, renderViewport.height),
-    );
-    const areaLimitedScale = Math.min(
-      deviceScale,
-      Math.sqrt(MAX_RENDER_CANVAS_PIXELS / Math.max(1, renderViewport.width * renderViewport.height)),
-    );
-    const outputScale = Math.max(1, Math.min(deviceScale, dimLimitedScale, areaLimitedScale));
+    const outputScale = Math.max(1, getSafeCanvasOutputScale(renderViewport.width, renderViewport.height, deviceScale));
     c.width  = Math.floor(renderViewport.width * outputScale);
     c.height = Math.floor(renderViewport.height * outputScale);
     // Keep layout in CSS pixels while rendering the raster at device-pixel
@@ -1146,6 +1353,7 @@ const PDFPage = ({
 
   // Keep refs in sync so event handlers always read the latest values
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+  useEffect(() => { annotToolRef.current = navigationBlocked ? annotTool : null; }, [annotTool, navigationBlocked]);
 
   useEffect(() => () => {
     const state = wheelZoomStateRef.current;
@@ -1167,6 +1375,18 @@ const PDFPage = ({
         wrap.style.transform       = "";
         wrap.style.transformOrigin = "";
         wrap.style.willChange      = "";
+      }
+      if (pending.kind === "page-anchor") {
+        const pageEl = pageContainerRefs.current[pending.page - 1];
+        if (pageEl) {
+          const targetLeft = pageEl.offsetLeft + pageEl.offsetWidth * pending.ratioX - pending.viewportX;
+          const targetTop = pageEl.offsetTop + pageEl.offsetHeight * pending.ratioY - pending.viewportY;
+          const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
+          const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
+          el.scrollLeft = clamp(targetLeft, 0, maxLeft);
+          el.scrollTop = clamp(targetTop, 0, maxTop);
+          return;
+        }
       }
       el.scrollLeft = Math.max(0, pending.left);
       el.scrollTop  = Math.max(0, pending.top);
@@ -1228,29 +1448,27 @@ const PDFPage = ({
     };
   }, [pdfDoc, pageNum, pageViewport, zoom, splitRatio]);
 
-  // IntersectionObserver: update pageNum as user scrolls through pages, and
-  // lazily (re)render any visible page left stale by a zoom/doc change.
+  // Single-page view: only pageNum is ever mounted, so (re)render it
+  // directly on every page switch instead of watching scroll position.
+  // renderedScaleRef is a "last scale this page was rasterized at" cache —
+  // it exists to skip redundant re-renders of a page that's still mounted
+  // (e.g. after a zoom-settle tick), but a page you're navigating BACK to
+  // got a brand new, blank canvas when it unmounted, while its old cache
+  // entry survived untouched. Without clearing it here, renderPage saw a
+  // "same scale as last time" match and skipped rendering into that fresh
+  // canvas entirely — the page you paged back to just stayed empty.
   useEffect(() => {
-    if (!pdfDoc || !previewRef.current || pageCount === 0) return;
-    const root = previewRef.current;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        let topmost = null;
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const n = parseInt(entry.target.dataset.page, 10);
-          if (topmost === null || n < topmost) topmost = n;
-          renderPage(n);
-        }
-        if (topmost !== null) setPageNum(topmost);
-      },
-      { root, rootMargin: "200px 0px", threshold: 0.15 }
-    );
-    pageContainerRefs.current.forEach((el, i) => {
-      if (el) { el.dataset.page = String(i + 1); observer.observe(el); }
-    });
-    return () => observer.disconnect();
-  }, [pdfDoc, pageCount, renderPage]);
+    if (!pdfDoc || pageCount === 0) return;
+    renderedScaleRef.current[pageNum - 1] = null;
+    renderPage(pageNum);
+  }, [pdfDoc, pageCount, pageNum, renderPage]);
+
+  // Jumping to a new page always lands at its top-left, not wherever the
+  // previous page happened to be scrolled/panned to.
+  useEffect(() => {
+    const el = previewRef.current;
+    if (el) { el.scrollLeft = 0; el.scrollTop = 0; }
+  }, [pageNum]);
 
   useEffect(() => { extractModeRef.current = extractMode; }, [extractMode]);
   useEffect(() => { if (!textSelectable) { setManualPopup(null); setManualSelection(null); } }, [textSelectable]);
@@ -1258,10 +1476,7 @@ const PDFPage = ({
   const textSelectableRef = useRef(false);
   useEffect(() => { textSelectableRef.current = textSelectable; }, [textSelectable]);
 
-  const manualSelectionRef = useRef(null);
-  const dragHandleRef      = useRef(null); // sync mirror of dragHandle state
   const onSelectionActionRef = useRef(onSelectionAction);
-  useEffect(() => { manualSelectionRef.current = manualSelection; }, [manualSelection]);
   useEffect(() => { onSelectionActionRef.current = onSelectionAction; }, [onSelectionAction]);
 
   // ── Render annotation canvas ───────────────────────────────────────────────
@@ -1319,12 +1534,14 @@ const PDFPage = ({
       cropCanvas.width,
       cropCanvas.height
     );
+    const annotScaleX = annotCanvas.width / Math.max(1, pageCssWidth);
+    const annotScaleY = annotCanvas.height / Math.max(1, pageCssHeight);
     cropCtx.drawImage(
       annotCanvas,
-      cropLeftCss,
-      cropTopCss,
-      cropWidthCss,
-      cropHeightCss,
+      cropLeftCss * annotScaleX,
+      cropTopCss * annotScaleY,
+      cropWidthCss * annotScaleX,
+      cropHeightCss * annotScaleY,
       0,
       0,
       cropCanvas.width,
@@ -1402,7 +1619,7 @@ const PDFPage = ({
   // ── Annotation drawing events ──────────────────────────────────────────────
   useEffect(() => {
     const ac = annotCanvasRef.current;
-    if (!ac || !annotTool) return;
+    if (!ac || !toolActive) return;
 
     // Returns coordinates in PDF-point space (canvas pixels ÷ scale)
     const getScale = () => fitScaleRef.current * zoomRef.current;
@@ -1494,7 +1711,6 @@ const PDFPage = ({
         activeAnnotRef.current = null; // cancel any in-progress stroke
         return;
       }
-      if (fingerScrollOnly && e.touches && !isStylusTouch(e)) return; // hand mode: a finger only scrolls, never draws
       if (drawTextBusy) return;
       if (annotTool === "text") {
         const p = toCanvas(e);
@@ -1503,15 +1719,7 @@ const PDFPage = ({
         return;
       }
       const p = toCanvas(e);
-      let strokeColor = annotColor;
-      if (autoContrast && annotTool !== "eraser") {
-        const pageCanvas = canvasRef.current;
-        if (pageCanvas) {
-          const scale = getScale();
-          strokeColor = bestContrastColor(sampleAreaColor(pageCanvas, p.x * scale, p.y * scale));
-          setAnnotColor(strokeColor);
-        }
-      }
+      const strokeColor = annotColor;
       if (annotTool === "highlight") {
         const alignedRange = highlightMode === "line" ? getTextAlignedHighlightRange(e) : null;
         const firstPoint = highlightMode === "line"
@@ -1604,7 +1812,8 @@ const PDFPage = ({
             ? smoothStrokePoint(
                 ann.points,
                 { x: p.x, y: p.y, t: p.t, pressure: p.pressure },
-                ann.penSettings?.stabilization ?? penStabilization
+                ann.penSettings?.stabilization ?? penStabilization,
+                getScale()
               )
             : { x: p.x, y: p.y };
           if (!nextPoint) return;
@@ -1646,7 +1855,8 @@ const PDFPage = ({
         ann.points = finalizePenStroke(
           ann.points,
           ann.penSettings ?? DEFAULT_PEN_SETTINGS,
-          ann.penType ?? penType
+          ann.penType ?? penType,
+          fitScaleRef.current * zoomRef.current
         );
       }
       if (ann.type === "drawTextSelection") {
@@ -1656,12 +1866,13 @@ const PDFPage = ({
         redraw();
         return;
       }
+      const tinyDocThreshold = 3 / Math.max(1, fitScaleRef.current * zoomRef.current);
       // ignore accidental tiny marks
       const tiny = ann.type === "pen"
         ? ann.points.length < 3
         : ["line","arrow"].includes(ann.type)
-          ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < 3
-          : ann.w < 3 && ann.h < 3;
+          ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < tinyDocThreshold
+          : ann.w < tinyDocThreshold && ann.h < tinyDocThreshold;
       if (tiny) return;
       const { _sx, _sy, ...clean } = ann;
       setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), { ...clean, id: Date.now() }] }));
@@ -1684,7 +1895,7 @@ const PDFPage = ({
       ac.removeEventListener("touchend",   onUp);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, fingerScrollOnly, autoContrast, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition]);
+  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition]);
 
   const commitAnnotText = useCallback(() => {
     if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
@@ -1727,27 +1938,52 @@ const PDFPage = ({
     if (count > 0) logAnnotHistory({ action: "clear", page: pageNum, count });
   }, [pageNum, annotations, logAnnotHistory]);
 
+  // Debounced commit shared by ctrl+scroll zoom (below) and the +/- zoom
+  // buttons (see zoomFromCenter, further down): both only push a cheap CSS
+  // transform on canvasWrap while the gesture is in progress, and call the
+  // real, expensive setZoom + re-render just once here, after ticks stop
+  // for a beat — re-rasterizing the canvas on every single tick (what the
+  // +/- buttons used to do directly) is what caused the visible flicker.
+  const commitLiveZoom = useCallback(() => {
+    const state = wheelZoomStateRef.current;
+    const wrap = canvasWrapRef.current;
+    const el = previewRef.current;
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    if (!wrap || !el) return;
+    const finalZoom = normalizePinchZoom(state.pendingZoom);
+    if (finalZoom === zoomRef.current) {
+      // The gesture ended back at the zoom we're already at — setZoom would
+      // bail out on an identical value, so the [zoom]-dependent effect that
+      // normally strips this transform would never fire, leaving
+      // canvasWrap stuck with an empty-but-present transform/will-change
+      // forever. That silently breaks mix-blend-mode on the annotation
+      // canvas (a descendant), even though the page itself looks unchanged.
+      // The canvas is already the right size here, so clearing immediately
+      // is a visual no-op, not a flash back to a stale size.
+      wrap.style.transform       = "";
+      wrap.style.transformOrigin = "";
+      wrap.style.willChange      = "";
+      return;
+    }
+    scrollAfterZoomRef.current = captureZoomAnchor(
+      el.getBoundingClientRect().left + state.midX,
+      el.getBoundingClientRect().top + state.midY
+    ) || {
+      left: (state.startSL + state.midX) * (finalZoom / state.baseZoom) - state.midX,
+      top: (state.startST + state.midY) * (finalZoom / state.baseZoom) - state.midY,
+    };
+    setZoom(finalZoom);
+  }, [captureZoomAnchor]);
+
   // ── Ctrl+Scroll to zoom ────────────────────────────────────────────────────
   useEffect(() => {
     const el = previewRef.current;
     if (!el || !pdfDoc) return;
-    const commitWheelZoom = () => {
-      const state = wheelZoomStateRef.current;
-      const wrap = canvasWrapRef.current;
-      if (state.timer) {
-        clearTimeout(state.timer);
-        state.timer = null;
-      }
-      if (!wrap) return;
-      const finalZoom = normalizePinchZoom(state.pendingZoom);
-      const ratio = finalZoom / state.baseZoom;
-      scrollAfterZoomRef.current = {
-        left: (state.startSL + state.midX) * ratio - state.midX,
-        top: (state.startST + state.midY) * ratio - state.midY,
-      };
-      setZoom(finalZoom);
-    };
     const onWheel = (e) => {
+      stopMomentumScroll(momentumFrameRef); // any wheel input (zoom or a plain scroll) catches a coasting pan
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const rect = el.getBoundingClientRect();
@@ -1763,18 +1999,26 @@ const PDFPage = ({
         state.startST = el.scrollTop;
       }
 
-      state.midX = e.clientX - rect.left;
+      state.midX = e.clientX - rect.left; // el (scroll container) is never itself transformed, safe to re-read every tick
       state.midY = e.clientY - rect.top;
-      const wrapRect = wrap.getBoundingClientRect();
-      state.originX = e.clientX - wrapRect.left;
-      state.originY = e.clientY - wrapRect.top;
       state.pendingZoom = normalizePinchZoom(state.pendingZoom * delta);
 
-      wrap.style.transformOrigin = `${state.originX}px ${state.originY}px`;
+      // Content-space origin (scroll position + viewport-relative point),
+      // not wrap.getBoundingClientRect() — that reflects the transform
+      // applied on the PREVIOUS tick once the gesture is underway, which
+      // compounds a drift into the origin every tick and made held/repeated
+      // zooms slide sideways instead of staying anchored (same fix already
+      // applied to the two-finger pinch handler below).
+      const originX = state.startSL + state.midX;
+      const originY = state.startST + state.midY;
+      state.originX = originX;
+      state.originY = originY;
+
+      wrap.style.transformOrigin = `${originX}px ${originY}px`;
       wrap.style.transform = `scale(${state.pendingZoom / state.baseZoom})`;
 
       if (state.timer) clearTimeout(state.timer);
-      state.timer = setTimeout(commitWheelZoom, 70);
+      state.timer = setTimeout(commitLiveZoom, 70);
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -1785,39 +2029,53 @@ const PDFPage = ({
       }
       el.removeEventListener("wheel", onWheel);
     };
-  }, [pdfDoc, handleAnnotUndo]);
-
-  const zoomToPoint = useCallback((clientX, clientY, nextZoom) => {
-    const el = previewRef.current;
-    const baseZoom  = zoomRef.current;
-    const rawTarget = typeof nextZoom === "function" ? nextZoom(baseZoom) : nextZoom;
-    const clamped   = normalizeZoom(rawTarget);
-    if (!el) { setZoom(clamped); return; }
-    const rect = el.getBoundingClientRect();
-    const ratio = clamped / baseZoom;
-    const midX  = clientX - rect.left;
-    const midY  = clientY - rect.top;
-    scrollAfterZoomRef.current = {
-      left: (el.scrollLeft + midX) * ratio - midX,
-      top:  (el.scrollTop  + midY) * ratio - midY,
-    };
-    setZoom(clamped);
-  }, []);
+  }, [pdfDoc, handleAnnotUndo, captureZoomAnchor, commitLiveZoom]);
 
   const zoomFromCenter = useCallback((nextZoom) => {
     const el = previewRef.current;
-    if (!el) {
+    const wrap = canvasWrapRef.current;
+    if (!el || !wrap) {
       const baseZoom  = zoomRef.current;
       const rawTarget = typeof nextZoom === "function" ? nextZoom(baseZoom) : nextZoom;
       setZoom(normalizeZoom(rawTarget));
       return;
     }
-    zoomToPoint(
-      el.getBoundingClientRect().left + el.clientWidth / 2,
-      el.getBoundingClientRect().top + el.clientHeight / 2,
-      nextZoom
-    );
-  }, [zoomToPoint]);
+    const state = wheelZoomStateRef.current;
+    if (!state.timer) {
+      state.baseZoom    = zoomRef.current;
+      state.pendingZoom = zoomRef.current;
+      state.startSL     = el.scrollLeft;
+      state.startST     = el.scrollTop;
+    }
+    // normalizeZoom (not normalizePinchZoom) so held/repeated clicks stay
+    // clamped to [MIN_ZOOM, MAX_ZOOM] — the looser pinch bound is only for
+    // an actual pinch gesture, which is allowed to briefly overshoot.
+    const rawTarget = typeof nextZoom === "function" ? nextZoom(state.pendingZoom) : nextZoom;
+    state.pendingZoom = normalizeZoom(rawTarget);
+
+    // Viewport center, in viewport-relative coordinates — el (the scroll
+    // container) is never itself transformed, so this is safe to re-read
+    // every tick.
+    state.midX = el.clientWidth / 2;
+    state.midY = el.clientHeight / 2;
+
+    // Content-space origin (scroll position + viewport-relative point), not
+    // wrap.getBoundingClientRect() — that reflects the transform applied on
+    // the PREVIOUS tick once the gesture is underway, which compounds a
+    // drift into the origin on every tick and is what made a held zoom
+    // slide the page sideways instead of staying centered.
+    const originX = state.startSL + state.midX;
+    const originY = state.startST + state.midY;
+    state.originX = originX;
+    state.originY = originY;
+
+    wrap.style.willChange      = "transform";
+    wrap.style.transformOrigin = `${originX}px ${originY}px`;
+    wrap.style.transform       = `scale(${state.pendingZoom / state.baseZoom})`;
+
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = setTimeout(commitLiveZoom, 90);
+  }, [commitLiveZoom]);
 
   const stopZoomHold = useCallback(() => {
     if (zoomHoldTimerRef.current) {
@@ -1834,9 +2092,17 @@ const PDFPage = ({
     stopZoomHold();
     zoomHoldTimerRef.current = setTimeout(() => {
       zoomHoldTimerRef.current = null;
+      const holdStart = performance.now();
       zoomHoldIntervalRef.current = setInterval(() => {
-        zoomFromCenter((z) => z + step);
-      }, 48);
+        // Accelerates the longer the button stays held — quadratic ease-in
+        // so a quick tap-and-hold still feels like the old fixed 1%/tick,
+        // but a sustained hold ramps up to ZOOM_HOLD_MAX_MULTIPLIER× for
+        // covering a big zoom range without a dozen individual presses.
+        const heldMs = performance.now() - holdStart;
+        const rampT = Math.min(1, heldMs / ZOOM_HOLD_RAMP_MS);
+        const multiplier = 1 + (ZOOM_HOLD_MAX_MULTIPLIER - 1) * rampT * rampT;
+        zoomFromCenter((z) => z + step * multiplier);
+      }, ZOOM_HOLD_TICK_MS);
     }, 220);
   }, [stopZoomHold, zoomFromCenter]);
 
@@ -1864,6 +2130,11 @@ const PDFPage = ({
     const PINCH_COOLDOWN_MS = 350;
     const MIN_PINCH_START_DIST = 28;
     const PINCH_JITTER_PX = 3;
+    // A raw 1:1 mapping of finger-distance ratio to zoom ratio needs a huge,
+    // uncomfortable finger spread to cover a wide zoom range in one gesture.
+    // Amplifying it in log-space (same trick apps like GoodNotes use) lets a
+    // normal, comfortable pinch motion sweep a much bigger zoom range.
+    const PINCH_GAIN = 1.7;
 
     let lastMidX = 0, lastMidY = 0;
     let twoFingerUndoCandidate = null;
@@ -1879,23 +2150,20 @@ const PDFPage = ({
       if (twoFingerUndoCandidate?.timer) clearTimeout(twoFingerUndoCandidate.timer);
       twoFingerUndoCandidate = null;
       handleAnnotUndo();
-      clearTimeout(lpTimer); lpTimer = null;
-      clearTimeout(lpRefineTimer); lpRefineTimer = null;
       navigator.vibrate?.(20);
     };
 
     let panX = 0, panY = 0, panSL = 0, panST = 0;
+    const panVelocityTracker = createVelocityTracker();
     let hasMoved = false;
     let touchInteractionActive = false;
 
-    let lpTimer = null;
-    let lpRefineTimer = null;
-    let isLpSelecting = false;
-    let lpStartSpanIdx = -1;
-    let lpWordLocked = false;
-    let lpLockX = 0, lpLockY = 0;
-    const LP_EXPAND_THRESHOLD = 14;
-    const LP_REFINE_DELAY = 320;
+    // Selection is double-click/double-tap only — a single word, no drag or
+    // long-press range expansion. Just need last-tap bookkeeping to detect
+    // the second tap of a double-tap on touch (dblclick handles mouse).
+    let lastTapTime = 0, lastTapX = 0, lastTapY = 0;
+    const DOUBLE_TAP_MS = 350;
+    const DOUBLE_TAP_DIST = 30;
 
     const touchDist = (t) => {
       const dx = t[0].clientX - t[1].clientX;
@@ -1921,10 +2189,12 @@ const PDFPage = ({
         pinchTransformApplied = false;
         return;
       }
-      const ratio = lastPinchZoom / startZoom;
-      scrollAfterZoomRef.current = {
-        left: (startSL + startMidX) * ratio - lastMidX,
-        top: (startST + startMidY) * ratio - lastMidY,
+      scrollAfterZoomRef.current = captureZoomAnchor(
+        el.getBoundingClientRect().left + lastMidX,
+        el.getBoundingClientRect().top + lastMidY
+      ) || {
+        left: (startSL + startMidX) * (lastPinchZoom / startZoom) - lastMidX,
+        top: (startST + startMidY) * (lastPinchZoom / startZoom) - lastMidY,
       };
       setZoom(lastPinchZoom);
       // The preview transform stays in place until the [zoom] effect swaps it
@@ -1955,12 +2225,22 @@ const PDFPage = ({
       if (s === e) return null;
 
       const spans = spansRef.current;
+      // PDF.js text items rarely carry a trailing/leading space at a line
+      // break, so the whitespace check alone can't tell "end of line" from
+      // "just a normal word gap" — it was merging the last word of one line
+      // with the first word of the next into a single selection. Adjacent
+      // spans only get merged if they're also vertically on the same line.
+      const sameLine = (a, b) => {
+        if (!a || !b) return false;
+        const h = Math.max(a.height || 0, b.height || 0, 1);
+        return Math.abs((a.top ?? 0) - (b.top ?? 0)) < h * 0.5;
+      };
       let loIdx = spanIdx, hiIdx = spanIdx;
       if (s === 0) {
-        while (loIdx > 0 && !/\s$/.test(spans[loIdx - 1]?.el.textContent || " ")) loIdx--;
+        while (loIdx > 0 && sameLine(spans[loIdx], spans[loIdx - 1]) && !/\s$/.test(spans[loIdx - 1]?.el.textContent || " ")) loIdx--;
       }
       if (e === text.length) {
-        while (hiIdx < spans.length - 1 && !/^\s/.test(spans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
+        while (hiIdx < spans.length - 1 && sameLine(spans[hiIdx], spans[hiIdx + 1]) && !/^\s/.test(spans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
       }
 
       const parts = [
@@ -1977,11 +2257,28 @@ const PDFPage = ({
       return { text: word, spanIdx: loIdx, endIdx: hiIdx, x: bx, y: by };
     };
 
+    // Double-click (mouse) / double-tap (touch) entry point — always exactly
+    // the single word under the point, never a range.
+    const selectWordAtPoint = (cx, cy) => {
+      const exact = selectWordAt(cx, cy);
+      if (!exact) return;
+      if (hideHyleControls || onSelectionActionRef.current) {
+        setManualSelection({ startIdx: exact.spanIdx, endIdx: exact.endIdx, text: exact.text, x: exact.x, y: exact.y });
+      } else {
+        const noun = exact.text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
+        setManualHyle(noun);
+        setManualPopup({ x: exact.x, y: exact.y + 2 });
+        setManualSelection(null);
+      }
+      navigator.vibrate?.(30);
+    };
+
     const onTouchStart = (e) => {
-      if (e.target.closest?.(".sel_handle")) return;
+      livePanRef.current.active = false;
+      stopLivePan(livePanRef);
+      stopMomentumScroll(momentumFrameRef); // grabbing the page always catches it mid-coast
 
       if (e.touches.length === 2) {
-        clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         const elRect = el.getBoundingClientRect();
         startDist = touchDist(e.touches);
         pinchPrimed = startDist >= MIN_PINCH_START_DIST;
@@ -2004,229 +2301,101 @@ const PDFPage = ({
           }, 180),
         };
       } else if (e.touches.length === 1) {
+        if (annotToolRef.current) return; // an annotation tool is active — this touch is the start of a stroke, not a pan
         touchInteractionActive = true;
         if (Date.now() < pinchCooldownUntil) return;
-        if (fingerScrollOnlyRef.current && isStylusTouch(e)) return;
         panX = e.touches[0].clientX;
         panY = e.touches[0].clientY;
         panSL = el.scrollLeft;
         panST = el.scrollTop;
+        panVelocityTracker.reset();
+        panVelocityTracker.push(panX, panY, performance.now());
+        livePanRef.current.currentL = panSL;
+        livePanRef.current.currentT = panST;
+        livePanRef.current.targetL = panSL;
+        livePanRef.current.targetT = panST;
+        livePanRef.current.active = true;
         hasMoved = false;
-        isLpSelecting = false;
-        lpWordLocked = false;
-
-        if (textSelectableRef.current) {
-          const ct = e.touches[0];
-          lpTimer = setTimeout(() => {
-            lpTimer = null;
-            const target = document.elementFromPoint(ct.clientX, ct.clientY);
-            const layer  = textLayerRef.current;
-            if (!target || !layer || !layer.contains(target)) return;
-            const spanIdx = parseInt(target.dataset.spanIdx ?? "-1", 10);
-            if (spanIdx < 0) return;
-
-            const curSel = manualSelectionRef.current;
-            if (curSel) {
-              const lo = Math.min(curSel.startIdx, curSel.endIdx);
-              const hi = Math.max(curSel.startIdx, curSel.endIdx);
-              if (spanIdx >= lo && spanIdx <= hi) {
-                navigator.vibrate?.(30);
-                setDragHandle(spanIdx <= (lo + hi) / 2 ? "start" : "end");
-                return;
-              }
-            }
-
-            const lpSpans = spansRef.current;
-            let loIdx = spanIdx, hiIdx = spanIdx;
-            while (loIdx > 0 && !/\s$/.test(lpSpans[loIdx - 1]?.el.textContent || " ")) loIdx--;
-            while (hiIdx < lpSpans.length - 1 && !/^\s/.test(lpSpans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
-            const fromNode = lpSpans[loIdx]?.el.firstChild;
-            const toNode   = lpSpans[hiIdx]?.el.firstChild;
-            if (fromNode && fromNode.nodeType === Node.TEXT_NODE &&
-                toNode   && toNode.nodeType   === Node.TEXT_NODE) {
-              const range = document.createRange();
-              range.setStart(fromNode, 0);
-              range.setEnd(toNode, toNode.textContent.length);
-              window.getSelection()?.removeAllRanges();
-              const text = getSpanRangeText(loIdx, hiIdx);
-              if (!text) return;
-              const vr = range.getBoundingClientRect();
-              if (hideHyleControls || onSelectionActionRef.current) {
-                setManualSelection({ startIdx: loIdx, endIdx: hiIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
-              } else {
-                const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
-                setManualHyle(noun);
-                setManualPopup({ x: vr.left + vr.width / 2, y: vr.bottom + 10 });
-                setManualSelection(null);
-              }
-              lpWordLocked = true;
-              lpStartSpanIdx = loIdx;
-              lpLockX = ct.clientX;
-              lpLockY = ct.clientY;
-              clearTimeout(lpRefineTimer);
-              lpRefineTimer = setTimeout(() => {
-                if (!lpWordLocked) return;
-                const exact = selectWordAt(ct.clientX, ct.clientY);
-                if (!exact) return;
-                if (hideHyleControls || onSelectionActionRef.current) {
-                  setManualSelection({
-                    startIdx: exact.spanIdx,
-                    endIdx: exact.endIdx,
-                    text: exact.text,
-                    x: exact.x,
-                    y: exact.y,
-                  });
-                } else {
-                  const noun = exact.text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
-                  setManualHyle(noun);
-                  setManualPopup({ x: exact.x, y: exact.y + 2 });
-                  setManualSelection(null);
-                }
-                lpStartSpanIdx = exact.spanIdx;
-              }, LP_REFINE_DELAY);
-              navigator.vibrate?.(30);
-            }
-          }, 400);
-        }
       }
     };
 
     const onTouchMove = (e) => {
-      if (e.touches.length === 2 && twoFingerUndoCandidate) {
+      // NOTE: this branch used to be gated on `twoFingerUndoCandidate` being
+      // truthy, but that candidate gets nulled out (below) the moment the
+      // gesture moves past the two-finger-undo threshold — which any real
+      // pinch does almost immediately. That froze pinch-zoom a few frames
+      // into every gesture. The gate now tracks the pinch itself
+      // (`startDist !== null`, set in onTouchStart) so zoom keeps updating
+      // for the whole gesture; the undo-candidate check still runs inside,
+      // independently, purely to decide whether to fire the undo gesture.
+      if (e.touches.length === 2 && startDist !== null) {
         clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         e.preventDefault();
         const nextDist = touchDist(e.touches);
         const elRect = el.getBoundingClientRect();
         lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
         lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
-        const movedFar =
-          Math.abs(nextDist - twoFingerUndoCandidate.startDist) > TWO_FINGER_UNDO_MOVE_THRESHOLD ||
-          Math.hypot(lastMidX - twoFingerUndoCandidate.startMidX, lastMidY - twoFingerUndoCandidate.startMidY) > TWO_FINGER_UNDO_MOVE_THRESHOLD;
-        if (movedFar) {
-          if (twoFingerUndoCandidate.timer) clearTimeout(twoFingerUndoCandidate.timer);
-          twoFingerUndoCandidate = null;
+        if (twoFingerUndoCandidate) {
+          const movedFar =
+            Math.abs(nextDist - twoFingerUndoCandidate.startDist) > TWO_FINGER_UNDO_MOVE_THRESHOLD ||
+            Math.hypot(lastMidX - twoFingerUndoCandidate.startMidX, lastMidY - twoFingerUndoCandidate.startMidY) > TWO_FINGER_UNDO_MOVE_THRESHOLD;
+          if (movedFar) {
+            if (twoFingerUndoCandidate.timer) clearTimeout(twoFingerUndoCandidate.timer);
+            twoFingerUndoCandidate = null;
+          }
         }
-        if (startDist !== null) {
-          if (!pinchPrimed) {
-            if (nextDist < MIN_PINCH_START_DIST) return;
-            startDist = nextDist;
-            startZoom = zoomRef.current;
-            startMidX = lastMidX;
-            startMidY = lastMidY;
-            startSL = el.scrollLeft;
-            startST = el.scrollTop;
-            lastPinchZoom = startZoom;
-            pinchPrimed = true;
-            return;
-          }
-          if (Math.abs(nextDist - startDist) < PINCH_JITTER_PX) return;
-          const rawRatio = Math.max(0.01, nextDist / startDist);
-          const newZoom = normalizePinchZoom(startZoom * rawRatio);
-          if (newZoom === lastPinchZoom) return;
-          lastPinchZoom = newZoom;
-          const wrap = canvasWrapRef.current;
-          if (wrap) {
-            const wrapRect = wrap.getBoundingClientRect();
-            const originX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - wrapRect.left;
-            const originY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - wrapRect.top;
-            wrap.style.willChange      = "transform";
-            wrap.style.transformOrigin = `${originX}px ${originY}px`;
-            wrap.style.transform       = `scale(${newZoom / startZoom})`;
-            pinchTransformApplied = true;
-          }
+        if (!pinchPrimed) {
+          if (nextDist < MIN_PINCH_START_DIST) return;
+          startDist = nextDist;
+          startZoom = zoomRef.current;
+          startMidX = lastMidX;
+          startMidY = lastMidY;
+          startSL = el.scrollLeft;
+          startST = el.scrollTop;
+          lastPinchZoom = startZoom;
+          pinchPrimed = true;
+          return;
+        }
+        if (Math.abs(nextDist - startDist) < PINCH_JITTER_PX) return;
+        const rawRatio = Math.max(0.01, nextDist / startDist);
+        const newZoom = normalizePinchZoom(startZoom * Math.pow(rawRatio, PINCH_GAIN));
+        if (newZoom === lastPinchZoom) return;
+        lastPinchZoom = newZoom;
+        const wrap = canvasWrapRef.current;
+        if (wrap) {
+          // Keep the live pinch origin in stable wrapper-content coordinates,
+          // not in the wrapper's already-transformed screen box. Re-reading
+          // getBoundingClientRect() from the transformed wrapper on each move
+          // feeds the previous scale back into the next origin calculation and
+          // makes the page drift sideways while pinching.
+          const originX = startSL + lastMidX;
+          const originY = startST + lastMidY;
+          wrap.style.willChange      = "transform";
+          wrap.style.transformOrigin = `${originX}px ${originY}px`;
+          wrap.style.transform       = `scale(${newZoom / startZoom})`;
+          pinchTransformApplied = true;
         }
         return;
       }
       if (e.touches.length !== 1) return;
       if (Date.now() < pinchCooldownUntil) return;
-      if (fingerScrollOnlyRef.current && isStylusTouch(e)) return;
-
-      if (dragHandleRef.current) {
-        clearTimeout(lpRefineTimer); lpRefineTimer = null;
-        e.preventDefault();
-        const ct = e.touches[0];
-        const target = document.elementFromPoint(ct.clientX, ct.clientY);
-        const layer  = textLayerRef.current;
-        if (!target || !layer || !layer.contains(target)) return;
-        const idx = parseInt(target.dataset.spanIdx ?? "-1", 10);
-        if (idx < 0) return;
-        const which = dragHandleRef.current;
-        setManualSelection((sel) => {
-          if (!sel) return sel;
-          if (which === "start") {
-            const newStart = Math.min(idx, sel.endIdx);
-            return { ...sel, startIdx: newStart, text: getSpanRangeText(newStart, sel.endIdx) };
-          }
-          const newEnd = Math.max(idx, sel.startIdx);
-          return { ...sel, endIdx: newEnd, text: getSpanRangeText(sel.startIdx, newEnd) };
-        });
-        return;
-      }
-
-      if (lpWordLocked) {
-        e.preventDefault();
-        const dx = e.touches[0].clientX - lpLockX;
-        const dy = e.touches[0].clientY - lpLockY;
-        if (Math.hypot(dx, dy) < LP_EXPAND_THRESHOLD) return;
-        clearTimeout(lpRefineTimer); lpRefineTimer = null;
-        lpWordLocked = false;
-        isLpSelecting = true;
-      }
-
-      if (isLpSelecting) {
-        e.preventDefault();
-        const ct  = e.touches[0];
-        const target = document.elementFromPoint(ct.clientX, ct.clientY);
-        const layer  = textLayerRef.current;
-        if (target && layer && layer.contains(target)) {
-          const spanIdx = parseInt(target.dataset.spanIdx ?? "-1", 10);
-          if (spanIdx >= 0 && lpStartSpanIdx >= 0) {
-            const fromIdx = Math.min(lpStartSpanIdx, spanIdx);
-            const toIdx   = Math.max(lpStartSpanIdx, spanIdx);
-            const fromEl  = spansRef.current[fromIdx]?.el;
-            const toEl    = spansRef.current[toIdx]?.el;
-            if (fromEl?.firstChild && toEl?.firstChild) {
-              const range = document.createRange();
-              range.setStart(fromEl.firstChild, 0);
-              range.setEnd(toEl.firstChild, toEl.firstChild.textContent.length);
-              window.getSelection()?.removeAllRanges();
-              const text = getSpanRangeText(fromIdx, toIdx);
-              const vr = range.getBoundingClientRect();
-              if (text) {
-                if (hideHyleControls || onSelectionActionRef.current) {
-                  setManualSelection({ startIdx: fromIdx, endIdx: toIdx, text, x: vr.left + vr.width / 2, y: vr.bottom + 8 });
-                } else {
-                  const noun = text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
-                  setManualHyle(noun);
-                  setManualPopup({ x: vr.left + vr.width / 2, y: vr.bottom + 10 });
-                  setManualSelection(null);
-                }
-              }
-            }
-          }
-        }
-        return;
-      }
+      if (annotToolRef.current) return; // an annotation tool is active — this touch belongs to a stroke, not navigation
 
       const dx = e.touches[0].clientX - panX;
       const dy = e.touches[0].clientY - panY;
       const moved = Math.sqrt(dx * dx + dy * dy);
       if (!hasMoved && moved < MOVE_THRESHOLD) return;
 
-      clearTimeout(lpTimer); lpTimer = null;
       hasMoved = true;
       e.preventDefault();
-      el.scrollLeft = panSL - dx;
-      el.scrollTop  = panST - dy;
+      livePanRef.current.targetL = panSL - dx;
+      livePanRef.current.targetT = panST - dy;
+      if (!livePanRef.current.frame) runLivePan(el, livePanRef);
+      panVelocityTracker.push(e.touches[0].clientX, e.touches[0].clientY, performance.now());
     };
 
     const onTouchEnd = (e) => {
       touchInteractionActive = e.touches.length > 0;
-      if (dragHandleRef.current) {
-        dragHandleRef.current = null;
-        setDragHandle(null);
-        return;
-      }
 
       if (e.touches.length < 2 && twoFingerUndoCandidate) {
         if (Date.now() - twoFingerUndoCandidate.startedAt <= TWO_FINGER_UNDO_MAX_MS) {
@@ -2236,8 +2405,6 @@ const PDFPage = ({
         if (twoFingerUndoCandidate.timer) clearTimeout(twoFingerUndoCandidate.timer);
         twoFingerUndoCandidate = null;
       }
-      clearTimeout(lpTimer); lpTimer = null;
-      clearTimeout(lpRefineTimer); lpRefineTimer = null;
 
       if (e.touches.length < 2 && startDist !== null) {
         commitPinchZoom();
@@ -2246,18 +2413,43 @@ const PDFPage = ({
         pinchPrimed = false;
       }
 
-      if (lpWordLocked) { lpWordLocked = false; window.getSelection()?.removeAllRanges(); return; }
-
-      if (isLpSelecting) {
-        isLpSelecting = false;
-        window.getSelection()?.removeAllRanges();
+      if (e.touches.length === 0) {
+        touchInteractionActive = false;
+        livePanRef.current.active = false;
+        syncLivePan(el, livePanRef);
+        if (hasMoved) {
+          const { vx, vy } = panVelocityTracker.velocity();
+          if (Math.hypot(vx, vy) > MOMENTUM_FLICK_MIN) runMomentumScroll(el, vx, vy, momentumFrameRef);
+        } else if (textSelectableRef.current && e.changedTouches.length === 1) {
+          // Double-tap detection — the mouse path gets a real dblclick event,
+          // touch doesn't reliably synthesize one, so track taps ourselves.
+          const ct = e.changedTouches[0];
+          const now = Date.now();
+          const isDoubleTap =
+            now - lastTapTime < DOUBLE_TAP_MS &&
+            Math.hypot(ct.clientX - lastTapX, ct.clientY - lastTapY) < DOUBLE_TAP_DIST;
+          if (isDoubleTap) {
+            lastTapTime = 0;
+            selectWordAtPoint(ct.clientX, ct.clientY);
+          } else {
+            lastTapTime = now;
+            lastTapX = ct.clientX;
+            lastTapY = ct.clientY;
+          }
+        }
+        hasMoved = false;
       }
-      if (e.touches.length === 0) touchInteractionActive = false;
+    };
+
+    const onDblClick = (e) => {
+      if (!textSelectableRef.current) return;
+      e.preventDefault();
+      selectWordAtPoint(e.clientX, e.clientY);
     };
 
     const onContextMenu = (e) => e.preventDefault();
     const onSelectStart = (e) => {
-      if (touchInteractionActive || annotTool) e.preventDefault();
+      if (touchInteractionActive || navigationBlocked) e.preventDefault();
     };
 
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
@@ -2266,11 +2458,13 @@ const PDFPage = ({
     el.addEventListener("touchcancel", onTouchEnd,    { passive: true });
     el.addEventListener("contextmenu", onContextMenu);
     el.addEventListener("selectstart", onSelectStart);
+    el.addEventListener("dblclick",    onDblClick);
 
     return () => {
       if (twoFingerUndoCandidate?.timer) clearTimeout(twoFingerUndoCandidate.timer);
-      clearTimeout(lpTimer);
-      clearTimeout(lpRefineTimer);
+      livePanRef.current.active = false;
+      stopLivePan(livePanRef);
+      stopMomentumScroll(momentumFrameRef);
       if (pinchTransformApplied) {
         const wrap = canvasWrapRef.current;
         if (wrap) {
@@ -2285,8 +2479,9 @@ const PDFPage = ({
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("contextmenu", onContextMenu);
       el.removeEventListener("selectstart", onSelectStart);
+      el.removeEventListener("dblclick",    onDblClick);
     };
-  }, [pdfDoc]);
+  }, [pdfDoc, captureZoomAnchor]);
 
   // ── Mouse drag to pan ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -2296,21 +2491,31 @@ const PDFPage = ({
     let dragging = false;
     let armed = false;
     let startX = 0, startY = 0, scrollL = 0, scrollT = 0;
+    const dragVelocityTracker = createVelocityTracker();
     const PAN_THRESHOLD = 6;
 
     const onMouseDown = (e) => {
       if (e.button !== 0) return;
+      if (annotToolRef.current) return; // an annotation tool is active — this mousedown is the start of a stroke, not a pan
       const tag = e.target.tagName;
       if (tag === "BUTTON" || tag === "SELECT" || tag === "INPUT" || tag === "A") return;
-      if (e.target.closest?.(".sel_handle, #manual_select_bar, #annot_text_input")) return;
+      if (e.target.closest?.("#manual_select_bar, #annot_text_input")) return;
 
+      livePanRef.current.active = false;
+      stopLivePan(livePanRef);
+      stopMomentumScroll(momentumFrameRef); // grabbing the page always catches it mid-coast
       armed = true;
       dragging = false;
       startX   = e.clientX;
       startY   = e.clientY;
       scrollL  = el.scrollLeft;
       scrollT  = el.scrollTop;
-      suppressTextSelectionRef.current = false;
+      livePanRef.current.currentL = scrollL;
+      livePanRef.current.currentT = scrollT;
+      livePanRef.current.targetL = scrollL;
+      livePanRef.current.targetT = scrollT;
+      dragVelocityTracker.reset();
+      dragVelocityTracker.push(startX, startY, performance.now());
     };
 
     const onMouseMove = (e) => {
@@ -2320,14 +2525,16 @@ const PDFPage = ({
         const dy = e.clientY - startY;
         if (Math.hypot(dx, dy) < PAN_THRESHOLD) return;
         dragging = true;
-        suppressTextSelectionRef.current = true;
         el.style.cursor = "grabbing";
         el.style.userSelect = "none";
       }
       if (!dragging) return;
-      el.scrollLeft = scrollL - (e.clientX - startX);
-      el.scrollTop  = scrollT - (e.clientY - startY);
+      livePanRef.current.active = true;
+      livePanRef.current.targetL = scrollL - (e.clientX - startX);
+      livePanRef.current.targetT = scrollT - (e.clientY - startY);
+      if (!livePanRef.current.frame) runLivePan(el, livePanRef);
       e.preventDefault();
+      dragVelocityTracker.push(e.clientX, e.clientY, performance.now());
     };
 
     const onMouseUp = () => {
@@ -2336,9 +2543,10 @@ const PDFPage = ({
       dragging            = false;
       el.style.cursor     = "";
       el.style.userSelect = "";
-      requestAnimationFrame(() => {
-        suppressTextSelectionRef.current = false;
-      });
+      livePanRef.current.active = false;
+      syncLivePan(el, livePanRef);
+      const { vx, vy } = dragVelocityTracker.velocity();
+      if (Math.hypot(vx, vy) > MOMENTUM_FLICK_MIN) runMomentumScroll(el, vx, vy, momentumFrameRef);
     };
 
     el.addEventListener("mousedown", onMouseDown);
@@ -2346,6 +2554,9 @@ const PDFPage = ({
     document.addEventListener("mouseup",   onMouseUp);
 
     return () => {
+      livePanRef.current.active = false;
+      stopLivePan(livePanRef);
+      stopMomentumScroll(momentumFrameRef);
       el.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup",   onMouseUp);
@@ -2407,8 +2618,12 @@ const PDFPage = ({
           span.style.whiteSpace   = "pre";
           span.style.color        = "transparent";
           span.style.transformOrigin = "0% 0%";
-          span.style.userSelect   = "text";
-          span.style.webkitUserSelect = "text";
+          // Selection is handled entirely by our own dblclick/double-tap
+          // logic (see selectWordAtPoint) with a custom highlight overlay —
+          // native browser text selection is switched off so it can't drag-
+          // select a range or fight that custom highlight.
+          span.style.userSelect   = "none";
+          span.style.webkitUserSelect = "none";
           if (itemWidth > 0)
             span.style.width = `${itemWidth}px`;
           if (Math.abs(angle) > 0.01)
@@ -2483,80 +2698,6 @@ const PDFPage = ({
     return () => { layer?.querySelectorAll(".sel_highlight").forEach((el) => el.remove()); };
   }, [manualSelection]);
 
-  // Positions (canvas-space px) of the two drag handles, using real visual bounds
-  const selHandles = useMemo(() => {
-    if (!manualSelection) return null;
-    const { startIdx, endIdx } = manualSelection;
-    const lo  = Math.min(startIdx, endIdx);
-    const hi  = Math.max(startIdx, endIdx);
-    const sEl = spansRef.current[lo]?.el;
-    const eEl = spansRef.current[hi]?.el;
-    const layer = textLayerRef.current;
-    if (!sEl || !eEl || !layer) return null;
-    const layerRect = layer.getBoundingClientRect();
-    const bodyZoom  = parseFloat(document.body.style.zoom) || 1;
-    const sR = sEl.getBoundingClientRect();
-    const eR = eEl.getBoundingClientRect();
-    const toLocal = (r) => ({
-      left:   (r.left   - layerRect.left) / bodyZoom,
-      top:    (r.top    - layerRect.top)  / bodyZoom,
-      right:  (r.right  - layerRect.left) / bodyZoom,
-      bottom: (r.bottom - layerRect.top)  / bodyZoom,
-    });
-    const s    = toLocal(sR);
-    const e    = toLocal(eR);
-    const padS = (s.bottom - s.top) * 0.25;
-    const padE = (e.bottom - e.top) * 0.25;
-    return {
-      start: { x: s.left,  y: s.top - padS, h: (s.bottom - s.top) + padS * 2 },
-      end:   { x: e.right, y: e.top - padE, h: (e.bottom - e.top) + padE * 2 },
-    };
-  }, [manualSelection]);
-
-  // Drag-handle events — attached while a handle is being dragged
-  useEffect(() => {
-    if (!dragHandle) return;
-
-    // Kill native text selection for the duration of the drag
-    const prev = document.body.style.userSelect;
-    document.body.style.userSelect = "none";
-    window.getSelection()?.removeAllRanges();
-
-    const onMove = (e) => {
-      e.preventDefault();
-      const cx = e.touches ? e.touches[0].clientX : e.clientX;
-      const cy = e.touches ? e.touches[0].clientY : e.clientY;
-      // Hit-test behind the handle (temporarily hide it so elementFromPoint sees the text layer)
-      const target = document.elementFromPoint(cx, cy);
-      const layer  = textLayerRef.current;
-      if (!target || !layer || !layer.contains(target)) return;
-      const idx = parseInt(target.dataset.spanIdx ?? "-1", 10);
-      if (idx < 0) return;
-      setManualSelection((sel) => {
-        if (!sel) return sel;
-        if (dragHandle === "start") {
-          const newStart = Math.min(idx, sel.endIdx);
-          const text = spansRef.current.slice(newStart, sel.endIdx + 1).map((s) => s.text).join(" ").trim();
-          return { ...sel, startIdx: newStart, text };
-        } else {
-          const newEnd = Math.max(idx, sel.startIdx);
-          const text = spansRef.current.slice(sel.startIdx, newEnd + 1).map((s) => s.text).join(" ").trim();
-          return { ...sel, endIdx: newEnd, text };
-        }
-      });
-    };
-    const onUp = () => { dragHandleRef.current = null; setDragHandle(null); };
-
-    // Touch drag is handled inline in #pdf_preview's native onTouchMove — only mouse needs window listeners
-    window.addEventListener("mousemove", onMove, { passive: false });
-    window.addEventListener("mouseup",   onUp);
-    return () => {
-      document.body.style.userSelect = prev;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup",   onUp);
-    };
-  }, [dragHandle]);
-
   // ── Clear results on page change ───────────────────────────────────────────
   useEffect(() => {
     if (hyleData !== null && hylePage !== pageNum) {
@@ -2596,8 +2737,10 @@ const PDFPage = ({
       }
       const charsPerPage = sampledPages > 0 ? totalChars / sampledPages : 0;
       setPdfType(charsPerPage < 50 ? "scanned" : charsPerPage < 300 ? "mixed" : "text-based");
+      return doc.numPages;
     } catch {
       setLoadError("Could not open PDF.");
+      return null;
     } finally {
       setLoading(false);
     }
@@ -2613,7 +2756,7 @@ const PDFPage = ({
     loadPdfBytes(arrayBuffer, file.name);
   }, [loadPdfBytes]);
 
-  const loadFromSource = useCallback(async (sourceId, name) => {
+  const loadFromSource = useCallback(async (sourceId, name, jumpToPage = null) => {
     setLoading(true);
     setLoadError("");
     try {
@@ -2625,8 +2768,11 @@ const PDFPage = ({
         return;
       }
       const arrayBuffer = await res.arrayBuffer();
-      await loadPdfBytes(arrayBuffer, name);
+      const numPages = await loadPdfBytes(arrayBuffer, name);
       currentSourceIdRef.current = sourceId;
+      if (jumpToPage && numPages) {
+        setPageNum(Math.min(Math.max(1, parseInt(jumpToPage, 10) || 1), numPages));
+      }
 
       // Check (cheaply — no page param, but only reading the boolean) whether
       // this source was already converted to Markdown from the Sources table.
@@ -2663,20 +2809,20 @@ const PDFPage = ({
   // ── Load from Sources page ────────────────────────────────────────────────
   useEffect(() => {
     if (embeddedSourceId) {
-      const nextKey = `embedded:${embeddedSourceId}:${embeddedPdfName || "document.pdf"}`;
+      const nextKey = `embedded:${embeddedSourceId}:${embeddedPdfName || "document.pdf"}:${initialPage || ""}`;
       if (lastLoadedSourceKeyRef.current === nextKey) return;
       lastLoadedSourceKeyRef.current = nextKey;
-      loadFromSource(embeddedSourceId, embeddedPdfName || "document.pdf");
+      loadFromSource(embeddedSourceId, embeddedPdfName || "document.pdf", initialPage);
       return;
     }
 
-    const { sourceId, pdfName } = location.state || {};
+    const { sourceId, pdfName, page } = location.state || {};
     if (!sourceId) return;
-    const nextKey = `route:${sourceId}:${pdfName || "document.pdf"}`;
+    const nextKey = `route:${sourceId}:${pdfName || "document.pdf"}:${page || ""}`;
     if (lastLoadedSourceKeyRef.current === nextKey) return;
     lastLoadedSourceKeyRef.current = nextKey;
-    loadFromSource(sourceId, pdfName || "document.pdf");
-  }, [embeddedPdfName, embeddedSourceId, loadFromSource, location.state]);
+    loadFromSource(sourceId, pdfName || "document.pdf", page);
+  }, [embeddedPdfName, embeddedSourceId, initialPage, loadFromSource, location.state]);
 
   // ── Load a locally-picked file (embedded, no server round-trip) ────────────
   useEffect(() => {
@@ -2793,7 +2939,7 @@ const PDFPage = ({
   }, [pageCount]);
 
   // Actions -> Text Extraction: instead of the inline pageMdOpen panel, spins
-  // up a real MCTOSHS Draft document containing the WHOLE document's text
+  // up a real AMCTOSHS Draft document containing the WHOLE document's text
   // (every page, in order — not just the one currently open), and navigates
   // there. Each PDF page's text lands as its own run of literal-text blocks
   // (escaped, one line per <div> — not parsed into rich formatting), preceded
@@ -3110,7 +3256,7 @@ const PDFPage = ({
             if (err) { setExtractError(err); break; }
             if (noun && card && mode) {
               setHyleData((prev) => {
-                const all = ["objects","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => prev[c][m].map((it) => it.noun)));
+                const all = ["entities","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => prev[c][m].map((it) => it.noun)));
                 if (all.includes(noun)) return prev;
                 const num = prev[card][mode].length + 1;
                 return {
@@ -3131,45 +3277,13 @@ const PDFPage = ({
   }, [pdfDoc, pageNum, extracting, pdfType, provider, getPageText]);
 
   // ── Manual selection ───────────────────────────────────────────────────────
-  const handleTextMouseDown = useCallback((e) => {
-    mouseDownPosRef.current = { x: e.clientX, y: e.clientY };
-  }, []);
-
-  const handleTextSelection = useCallback((e) => {
-    if (!textSelectable) return;
-    if (suppressTextSelectionRef.current) return;
-    const down = mouseDownPosRef.current;
-    mouseDownPosRef.current = null;
-
-    const moved = down
-      ? (e.clientX - down.x) ** 2 + (e.clientY - down.y) ** 2
-      : 999;
-
-    if (moved >= 64) {
-      // Drag → open popup directly with selected text
-      const sel      = window.getSelection();
-      const dragText = sel?.toString().trim().replace(/\s+/g, " ");
-      if (dragText && sel.rangeCount > 0) {
-        const rect = sel.getRangeAt(0).getBoundingClientRect();
-        if (onSelectionAction || hideHyleControls) {
-          setManualSelection({ startIdx: -1, endIdx: -1, text: dragText, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
-        } else {
-          setManualHyle(dragText.toLowerCase().replace(/[.,;:]+$/, ""));
-          setManualPopup({ x: rect.left + rect.width / 2, y: rect.bottom + 10 });
-        }
-      }
-      return;
-    }
-
-  }, [textSelectable, onSelectionAction]);
-
   const handleManualAdd = useCallback(() => {
     const noun = manualHyle.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
     if (!noun) return;
 
     setHyleData((prev) => {
       const base = prev || EMPTY_HYLES();
-      const all  = ["objects","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => base[c][m].map((it) => it.noun)));
+      const all  = ["entities","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => base[c][m].map((it) => it.noun)));
       if (all.includes(noun)) return base;
       const num = (base[manualCard][manualMode]?.length || 0) + 1;
       return {
@@ -3187,6 +3301,66 @@ const PDFPage = ({
     window.getSelection()?.removeAllRanges();
   }, [manualHyle, manualCard, manualMode, hylePage, pageNum]);
 
+  // Thin selection bar (reading mode): Translate to / Definition /
+  // Linguistic Structure Check — short AI lookups on the double-clicked word.
+  const runSelectionTool = useCallback(async (action) => {
+    const word = manualSelection?.text;
+    if (!word || selectionToolBusy) return;
+    setSelectionToolBusy(action);
+    setSelectionToolError("");
+    setSelectionToolResult(null);
+    const targetLang = localStorage.getItem("mctosh_pdf_translate_lang") || "English";
+    try {
+      const res = await authFetch(apiUrl("/api/ai/text-tool"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: word, action, provider, targetLang }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || "Request failed.");
+      const labels = {
+        translate: `Translation (${targetLang})`,
+        define: "Definition",
+        linguistic_check: "Linguistic Structure",
+      };
+      setSelectionToolResult({ label: labels[action] || action, text: data.result || "" });
+    } catch (e) {
+      setSelectionToolError(e.message || "Request failed.");
+    } finally {
+      setSelectionToolBusy(null);
+    }
+  }, [manualSelection, selectionToolBusy, provider]);
+
+  // Add as Entity Schema (EnS) / Entity Schema Trace (EnST) / Entity Schema
+  // Trace Value (EnSTV) — same underlying entities/traces Hyle cards as the
+  // standard manual-add flow, just one click instead of picking a card from
+  // a dropdown. EnSTV is a value nested under the traces card, tagged
+  // `kind: "value"` so it can be told apart from a plain trace later.
+  const addSelectionAsHyle = useCallback((card, extra = {}) => {
+    const word = manualSelection?.text;
+    if (!word) return;
+    const noun = word.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
+    if (!noun) return;
+    setHyleData((prev) => {
+      const base = prev || EMPTY_HYLES();
+      const all  = ["entities","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => base[c][m].map((it) => it.noun)));
+      if (all.includes(noun)) return base;
+      const mode = manualMode;
+      const num  = (base[card][mode]?.length || 0) + 1;
+      return {
+        ...base,
+        [card]: {
+          ...base[card],
+          [mode]: [...base[card][mode], { id: `${card}_${mode}_${num}`, num, noun, reason: "manual", status: initStatus(), ...extra }],
+        },
+        _total: (base._total || 0) + 1,
+      };
+    });
+    if (!hylePage) setHylePage(pageNum);
+    setManualSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }, [manualSelection, manualMode, hylePage, pageNum]);
+
   const sanitizeSelectedText = useCallback((text) => (
     String(text || "")
       // Drop decorative leader runs at the start of the whole selection
@@ -3199,127 +3373,6 @@ const PDFPage = ({
       .trim()
   ), []);
 
-  const getSpanRangeText = useCallback((startIdx, endIdx) => {
-    const lo = Math.min(startIdx, endIdx);
-    const hi = Math.max(startIdx, endIdx);
-    const spans = spansRef.current.slice(lo, hi + 1);
-    if (spans.length === 0) return "";
-
-    const NO_SPACE_BEFORE = /^[,.;:!?%)\]\}]/;
-    const NO_SPACE_AFTER  = /[(\[\{]$/;
-
-    let text = "";
-    for (let i = 0; i < spans.length; i++) {
-      const cur = spans[i];
-      if (i === 0) {
-        text += cur.text;
-        continue;
-      }
-
-      const prev = spans[i - 1];
-      const prevText = String(prev.text || "");
-      const curText  = String(cur.text || "");
-      const prevRight = Number.isFinite(prev.left) && Number.isFinite(prev.width)
-        ? prev.left + Math.max(prev.width, 0)
-        : null;
-      const curLeft = Number.isFinite(cur.left) ? cur.left : null;
-      const lineBreak =
-        Number.isFinite(prev.top) &&
-        Number.isFinite(cur.top) &&
-        Math.abs(cur.top - prev.top) > Math.max((prev.height || 0), (cur.height || 0)) * 0.45;
-      const paragraphBreak =
-        Number.isFinite(prev.top) &&
-        Number.isFinite(cur.top) &&
-        Math.abs(cur.top - prev.top) > Math.max((prev.height || 0), (cur.height || 0)) * 1.15;
-      const sameLineGap =
-        !lineBreak &&
-        prevRight !== null &&
-        curLeft !== null &&
-        (curLeft - prevRight) > Math.max((prev.height || 0), (cur.height || 0)) * 0.12;
-      const hyphenatedWrap =
-        lineBreak &&
-        /[\p{L}\p{N}]-$/u.test(prevText) &&
-        /^[\p{L}\p{N}]/u.test(curText);
-      const needsBoundarySpace =
-        !hyphenatedWrap &&
-        (lineBreak || sameLineGap) &&
-        prevText &&
-        curText &&
-        !/\s$/.test(prevText) &&
-        !/^\s/.test(curText) &&
-        !NO_SPACE_BEFORE.test(curText) &&
-        !NO_SPACE_AFTER.test(prevText);
-
-      if (hyphenatedWrap) {
-        text = text.replace(/-\s*$/, "");
-      } else if (paragraphBreak) {
-        text += "\n";
-      } else if (needsBoundarySpace) {
-        text += " ";
-      }
-      text += curText;
-    }
-
-    return sanitizeSelectedText(text);
-  }, [sanitizeSelectedText]);
-
-  // ── Selection bar: expand / confirm ───────────────────────────────────────
-  const expandLeft = useCallback(() => {
-    setManualSelection((sel) => {
-      if (!sel || sel.startIdx === 0) return sel;
-      const idx  = sel.startIdx - 1;
-      const text = getSpanRangeText(idx, sel.endIdx);
-      return { ...sel, startIdx: idx, text };
-    });
-  }, [getSpanRangeText]);
-
-  const expandRight = useCallback(() => {
-    setManualSelection((sel) => {
-      if (!sel || sel.endIdx >= spansRef.current.length - 1) return sel;
-      const idx  = sel.endIdx + 1;
-      const text = getSpanRangeText(sel.startIdx, idx);
-      return { ...sel, endIdx: idx, text };
-    });
-  }, [getSpanRangeText]);
-
-  const adjustLeftBoundary = useCallback(() => {
-    setManualSelection((sel) => {
-      if (!sel || sel.startIdx < 0 || sel.endIdx < 0) return sel;
-      const width = Math.abs(sel.endIdx - sel.startIdx);
-      const nextStart = width > 0
-        ? Math.min(sel.startIdx + 1, sel.endIdx)
-        : Math.max(0, sel.startIdx - 1);
-      if (nextStart === sel.startIdx) return sel;
-      return { ...sel, startIdx: nextStart, text: getSpanRangeText(nextStart, sel.endIdx) };
-    });
-  }, [getSpanRangeText]);
-
-  const adjustRightBoundary = useCallback(() => {
-    setManualSelection((sel) => {
-      if (!sel || sel.startIdx < 0 || sel.endIdx < 0) return sel;
-      const width = Math.abs(sel.endIdx - sel.startIdx);
-      const nextEnd = width > 0
-        ? Math.max(sel.startIdx, sel.endIdx - 1)
-        : Math.min(spansRef.current.length - 1, sel.endIdx + 1);
-      if (nextEnd === sel.endIdx) return sel;
-      return { ...sel, endIdx: nextEnd, text: getSpanRangeText(sel.startIdx, nextEnd) };
-    });
-  }, [getSpanRangeText]);
-
-  const stopFooterAdjust = useCallback(() => {
-    if (footerAdjustTimerRef.current) {
-      window.clearInterval(footerAdjustTimerRef.current);
-      footerAdjustTimerRef.current = null;
-    }
-  }, []);
-
-  const startFooterAdjust = useCallback((fn) => {
-    fn();
-    stopFooterAdjust();
-    footerAdjustTimerRef.current = window.setInterval(fn, 140);
-  }, [stopFooterAdjust]);
-
-  useEffect(() => stopFooterAdjust, [stopFooterAdjust]);
 
   const confirmSelection = useCallback(() => {
     if (!manualSelection) return;
@@ -3350,17 +3403,24 @@ const PDFPage = ({
     }
   }, [manualSelection, onSelectionAction, selectionActionBusy]);
 
-  const footerSelectionText =
-    manualPopup
-      ? manualHyle
-      : (hideHyleControls && manualSelection ? manualSelection.text : "");
-  const showFooterSelection = Boolean(manualPopup || (hideHyleControls && manualSelection));
+  const footerSelectionText = manualPopup ? manualHyle : "";
+  // hideHyleControls' word selection now surfaces through the thin
+  // selection bar under the toolbar (below) instead of this bottom footer —
+  // the footer is only for the standalone Hyle-extraction manualPopup flow.
+  const showFooterSelection = Boolean(manualPopup);
+
+  // Reset any Translate/Definition/Linguistic Check result when the
+  // selected word changes (including when it's cleared).
+  useEffect(() => {
+    setSelectionToolResult(null);
+    setSelectionToolError("");
+    setSelectionToolBusy(null);
+  }, [manualSelection]);
 
   // Dismiss selection bar when clicking outside
   useEffect(() => {
     if (!manualSelection) return;
     const handler = (e) => {
-      if (e.target.closest?.(".sel_handle")) return;
       if (selBarRef.current && !selBarRef.current.contains(e.target)) {
         setManualSelection(null);
         window.getSelection()?.removeAllRanges();
@@ -3474,17 +3534,6 @@ const PDFPage = ({
   const handleDragLeave   = () => setDragOver(false);
   const handleInputChange = (e) => loadFile(e.target.files[0]);
 
-  const handleClose = () => {
-    renderTasksRef.current.forEach(t => t?.cancel());
-    pageCanvasRefs.current = []; pageContainerRefs.current = [];
-    pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
-    setPdfDoc(null); setFilename(""); setPageNum(1); setPageCount(0);
-    setPdfType(null); setHyleData(null); setHylePage(null);
-    setExtractError(""); setSavedId(null); setActiveHistoryId(null);
-    setPageViewport(null); setManualPopup(null); setZoom(1);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
   const renderTypeNode = (node, depth = 0) => {
     const isLeaf = !node.children || node.children.length === 0;
     return (
@@ -3509,6 +3558,18 @@ const PDFPage = ({
     );
   };
 
+  // Shared by the Tools dropdown (left group) and the undo/redo/clear group
+  // (right group) in the toolbar below — computed once here instead of
+  // inside either group so the two can live in separate containers.
+  const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
+  const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser" || annotTool === "arrow";
+  const sizeProps =
+    annotTool === "pen"     ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
+    annotTool === "eraser"  ? { min: 6, max: 72, step: 2,   value: eraserSize, onChange: setEraserSize } :
+    annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
+    annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
+    null;
+
   return (
     <div
       id="pdf_page"
@@ -3521,187 +3582,17 @@ const PDFPage = ({
 
       {/* Toolbar */}
       <div id="pdf_toolbar">
-        <button id="pdf_home_btn" onClick={() => navigate(embeddedHomePath)} title={embedded ? "Back to Traces Collector" : homeLabel}>⌂</button>
-        {pdfDoc && <>
-          <button onClick={() => pageContainerRefs.current[pageNum - 2]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum <= 1}>‹</button>
-          <span>{pageNum} / {pageCount}</span>
-          <button onClick={() => pageContainerRefs.current[pageNum]?.scrollIntoView({ behavior: "smooth", block: "start" })} disabled={pageNum >= pageCount}>›</button>
-          <span id="pdf_filename">{filename}</span>
-          {pdfType && (
-            <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>
-              <i className={`fi ${PDF_TYPE_ICON[pdfType]}`} />
-              {PDF_TYPE_LABEL[pdfType]}
-            </span>
-          )}
-          <div id="pdf_zoom_controls">
-            <button
-              onClick={() => zoomFromCenter((z) => z - 0.01)}
-              onMouseDown={() => startZoomHold(-0.01)}
-              onMouseUp={stopZoomHold}
-              onMouseLeave={stopZoomHold}
-              onTouchStart={(e) => { e.preventDefault(); startZoomHold(-0.01); }}
-              onTouchEnd={stopZoomHold}
-              onTouchCancel={stopZoomHold}
-              title="Zoom out 1%"
-            >
-              −
-            </button>
-            <button id="pdf_zoom_label" onClick={() => zoomFromCenter(1)} title="Reset zoom to original size">
-              {Math.round(zoom * 100)}%
-            </button>
-            <button
-              onClick={() => zoomFromCenter((z) => z + 0.01)}
-              onMouseDown={() => startZoomHold(0.01)}
-              onMouseUp={stopZoomHold}
-              onMouseLeave={stopZoomHold}
-              onTouchStart={(e) => { e.preventDefault(); startZoomHold(0.01); }}
-              onTouchEnd={stopZoomHold}
-              onTouchCancel={stopZoomHold}
-              title="Zoom in 1%"
-            >
-              +
-            </button>
-          </div>
-          {currentSourceIdRef.current && (
-            <div className="annot_dd_wrap" ref={actionsMenuRef}>
-              <button
-                type="button"
-                id="pdf_actions_btn"
-                className={actionsMenuOpen ? "pdf_actions_btn--active" : ""}
-                onClick={() => setActionsMenuOpen((o) => !o)}
-                disabled={pageMdBusy || mdDraftBusy}
-                title={hasStoredMarkdown ? "Text Extraction / Linguistic Analysis actions" : "Text Extraction / Linguistic Analysis actions — this document hasn't been extracted yet, Text Extraction will do that first"}
-              >
-                <i className={`fi ${mdDraftBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-menu-dots"}`} /> Actions
-              </button>
-              {mdDraftError && <span className="pdf_actions_error" title={mdDraftError}>⚠ {mdDraftError}</span>}
-              {actionsMenuOpen && (
-                <div className="annot_dd annot_dd--tools" id="pdf_actions_dd">
-                  <button
-                    type="button"
-                    className="annot_dd_item"
-                    onClick={openMarkdownAsDraft}
-                  >
-                    <i className="fi fi-rr-document" />
-                    <span>Text Extraction</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="annot_dd_item"
-                    onClick={() => { setActionsMenuOpen(false); setRangeFrom(pageNum); setRangeTo(pageNum); setRangeAll(false); setRangePickerAction("linguistic"); }}
-                  >
-                    <i className="fi fi-rr-language" />
-                    <span>Linguistic Analysis</span>
-                  </button>
-                </div>
-              )}
-              {rangePickerAction && (
-                <div className="annot_dd" id="pdf_range_picker">
-                  <div id="pdf_range_picker_title">Analyze Language</div>
-                  <label id="pdf_range_all_row">
-                    <input type="checkbox" checked={rangeAll} onChange={(e) => setRangeAll(e.target.checked)} />
-                    All Pages ({pageCount})
-                  </label>
-                  {!rangeAll && (
-                    <div id="pdf_range_inputs">
-                      <label>
-                        From
-                        <input type="number" min={1} max={pageCount} value={rangeFrom} onChange={(e) => setRangeFrom(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
-                      </label>
-                      <label>
-                        To
-                        <input type="number" min={1} max={pageCount} value={rangeTo} onChange={(e) => setRangeTo(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
-                      </label>
-                    </div>
-                  )}
-                  <div id="pdf_range_actions">
-                    <button type="button" className="annot_trigger" onClick={() => setRangePickerAction(null)}>Cancel</button>
-                    <button type="button" className="annot_trigger annot_trigger--active" onClick={confirmRangePicker}>Analyze</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-          {hideHyleControls && (
-            <button
-              id="pdf_text_select_btn"
-              className={textSelectable ? "pdf_text_select_btn--active" : ""}
-              onClick={() => setReaderTextSelectEnabled((enabled) => !enabled)}
-              title={textSelectable ? "Disable text selection" : "Enable text selection"}
-            >
-              Select Text
-            </button>
-          )}
-          {annotHistory.length > 0 && (
-            <button
-              id="pdf_annot_history_btn"
-              className={annotHistoryOpen ? "pdf_annot_history_btn--active" : ""}
-              onClick={() => setAnnotHistoryOpen((v) => !v)}
-              title="Annotation History — every step taken this session"
-            >
-              <i className="fi fi-rr-time-past" /> History
-            </button>
-          )}
-          <button id="pdf_close" onClick={handleClose}>✕</button>
-
-          {/* Hyles toggle + extraction controls */}
-          {!selectionOnly && !hideHyleControls && <>
-            <button
-              id="pdf_hyles_toggle_btn"
-              className={extractionOpen ? "pdf_hyles_toggle_btn--active" : ""}
-              onClick={() => {
-                const next = !extractionOpen;
-                setExtractionOpen(next);
-                setSplitRatio(next ? 0.5 : 1);
-              }}
-            >Hyles</button>
-
-            {extractionOpen && (
-              <div id="pdf_hyles_actions">
-                {hyleData && hyleData._total > 0 && !extracting && (
-                  <button className={`pdf_action_btn${savedId ? " pdf_action_btn--saved" : ""}`} onClick={handleSave} disabled={saving}>
-                    {saving ? "Saving…" : savedId ? "Saved" : "Save"}
-                  </button>
-                )}
-                <button id="pdf_sys_btn" onClick={() => setShowSysModal(true)}>System</button>
-                <AIProviderSelect provider={provider} setProvider={setProvider} disabled={extracting} />
-                {extractMode === "ai" && (
-                  <button id="pdf_extract_btn" onClick={handleExtract} disabled={!canExtract || extracting} title={!canExtract ? "Open a text-based PDF first" : ""}>
-                    {extracting ? "Extracting…" : pdfDoc ? `Extract Page ${pageNum}` : "Extract"}
-                  </button>
-                )}
-              </div>
-            )}
-          </>}
-        </>}
-      </div>
-
-      {/* Annotation toolbar — one compact row: a floating "Tools" dropdown
-          (was a row of 10 always-visible icon buttons), a floating color
-          swatch dropdown (was a row of 8 always-visible swatches, repeated
-          again in the old separate highlight_panel below), an inline size
-          slider + freehand/line toggle when relevant, and undo/clear. This
-          replaces both the old #pdf_annot_toolbar AND the separate
-          #highlight_panel entirely — one row instead of two. */}
-      {pdfDoc && !selectionOnly && (() => {
-        const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
-        const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser" || annotTool === "arrow";
-        const sizeProps =
-          annotTool === "pen"     ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
-          annotTool === "eraser"  ? { min: 6, max: 72, step: 2,   value: eraserSize, onChange: setEraserSize } :
-          annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
-          annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
-          null;
-        return (
-          <div id="pdf_annot_toolbar">
+        <div id="pdf_toolbar_left">
+          {pdfDoc && !selectionOnly && (
+            <>
             <div className="annot_dd_wrap" ref={toolsMenuRef}>
               <button
                 type="button"
-                className={`annot_trigger${annotTool ? " annot_trigger--active" : ""}`}
+                className={`annot_trigger${toolActive ? " annot_trigger--active" : ""}`}
                 onClick={() => { setToolsMenuOpen((o) => !o); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
               >
-                <i className={`fi ${activeToolMeta?.icon || "fi-rr-pencil"}`} />
-                <span className="annot_trigger_label">{activeToolMeta?.label || "Tools"}</span>
+                <i className={`fi ${activeToolMeta?.icon || "fi-rr-arrows-alt"}`} />
+                <span className="annot_trigger_label">{activeToolMeta?.label || "Navigator"}</span>
                 <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
               </button>
               {toolsMenuOpen && (
@@ -3711,7 +3602,7 @@ const PDFPage = ({
                       key={key}
                       type="button"
                       className={`annot_dd_item${annotTool === key ? " annot_dd_item--active" : ""}`}
-                      onClick={() => { setAnnotTool((t) => t === key ? null : key); setToolsMenuOpen(false); }}
+                      onClick={() => { setAnnotTool(key); setToolsMenuOpen(false); }}
                     >
                       <i className={`fi ${icon}`} />
                       <span>{label}</span>
@@ -3721,7 +3612,7 @@ const PDFPage = ({
               )}
             </div>
 
-            {annotTool && annotTool !== "eraser" && (
+            {toolActive && annotTool !== "eraser" && (
               <div className="annot_dd_wrap" ref={colorMenuRef}>
                 <button
                   type="button"
@@ -3979,39 +3870,179 @@ const PDFPage = ({
               </div>
             )}
 
-            {annotTool && annotTool !== "eraser" && (
+            </>
+          )}
+          {currentSourceIdRef.current && (
+            <button
+              type="button"
+              id="pdf_text_extract_btn"
+              onClick={openMarkdownAsDraft}
+              disabled={pageMdBusy || mdDraftBusy}
+              title={hasStoredMarkdown ? "Text Extraction" : "Text Extraction — this document hasn't been extracted yet, this will do that first"}
+            >
+              <i className={`fi ${mdDraftBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-document"}`} />
+            </button>
+          )}
+          {currentSourceIdRef.current && (
+            <div className="annot_dd_wrap" ref={actionsMenuRef}>
               <button
                 type="button"
-                className={`annot_trigger${autoContrast ? " annot_trigger--active" : ""}`}
-                onClick={() => setAutoContrast((v) => !v)}
-                title="Auto contrast: pick black or white ink, whichever reads best against the page under the stroke"
+                id="pdf_linguistic_btn"
+                onClick={() => { setRangeFrom(pageNum); setRangeTo(pageNum); setRangeAll(false); setRangePickerAction("linguistic"); }}
+                disabled={pageMdBusy || mdDraftBusy}
+                title="Linguistic Analysis"
               >
-                <i className="fi fi-rr-eye-dropper" />
-                <span className="annot_trigger_label">Auto contrast</span>
+                <i className="fi fi-rr-language" />
               </button>
+              {mdDraftError && <span className="pdf_actions_error" title={mdDraftError}>⚠ {mdDraftError}</span>}
+              {rangePickerAction && (
+                <div className="annot_dd" id="pdf_range_picker">
+                  <div id="pdf_range_picker_title">Analyze Language</div>
+                  <label id="pdf_range_all_row">
+                    <input type="checkbox" checked={rangeAll} onChange={(e) => setRangeAll(e.target.checked)} />
+                    All Pages ({pageCount})
+                  </label>
+                  {!rangeAll && (
+                    <div id="pdf_range_inputs">
+                      <label>
+                        From
+                        <input type="number" min={1} max={pageCount} value={rangeFrom} onChange={(e) => setRangeFrom(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
+                      </label>
+                      <label>
+                        To
+                        <input type="number" min={1} max={pageCount} value={rangeTo} onChange={(e) => setRangeTo(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
+                      </label>
+                    </div>
+                  )}
+                  <div id="pdf_range_actions">
+                    <button type="button" className="annot_trigger" onClick={() => setRangePickerAction(null)}>Cancel</button>
+                    <button type="button" className="annot_trigger annot_trigger--active" onClick={confirmRangePicker}>Analyze</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {/* Hyles toggle + extraction controls */}
+          {pdfDoc && !selectionOnly && !hideHyleControls && <>
+            <button
+              id="pdf_hyles_toggle_btn"
+              className={extractionOpen ? "pdf_hyles_toggle_btn--active" : ""}
+              onClick={() => {
+                const next = !extractionOpen;
+                setExtractionOpen(next);
+                setSplitRatio(next ? 0.5 : 1);
+              }}
+            >Hyles</button>
+
+            {extractionOpen && (
+              <div id="pdf_hyles_actions">
+                {hyleData && hyleData._total > 0 && !extracting && (
+                  <button className={`pdf_action_btn${savedId ? " pdf_action_btn--saved" : ""}`} onClick={handleSave} disabled={saving}>
+                    {saving ? "Saving…" : savedId ? "Saved" : "Save"}
+                  </button>
+                )}
+                <button id="pdf_sys_btn" onClick={() => setShowSysModal(true)}>System</button>
+                {extractMode === "ai" && (
+                  <button id="pdf_extract_btn" onClick={handleExtract} disabled={!canExtract || extracting} title={!canExtract ? "Open a text-based PDF first" : ""}>
+                    {extracting ? "Extracting…" : pdfDoc ? `Extract Page ${pageNum}` : "Extract"}
+                  </button>
+                )}
+              </div>
             )}
+          </>}
+        </div>
 
-            {/* Page-level controls (not tool options) — pinned to the right */}
+        <div id="pdf_toolbar_center">
+          {pdfDoc && (
+          <div id="pdf_page_nav">
+            <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1} title="Previous page">‹</button>
+            <span id="pdf_page_nav_label">{pageNum} / {pageCount}</span>
+            <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount} title="Next page">›</button>
+          </div>
+          )}
+          {/* In hideHyleControls contexts (e.g. PDFReaderWorkspace) the
+              embedding parent shows this as an icon next to the tab's name
+              instead — see onPdfTypeChange — so it isn't duplicated here. */}
+          {pdfType && !hideHyleControls && (
+            <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>
+              <i className={`fi ${PDF_TYPE_ICON[pdfType]}`} />
+              {PDF_TYPE_LABEL[pdfType]}
+            </span>
+          )}
+        </div>
+
+        <div id="pdf_toolbar_right">
+          {(annotHistory.length > 0 || (pdfDoc && !selectionOnly)) && (
+            /* Page-level controls (not tool options) — undo, history, redo
+               together in one container, in that order. */
             <div id="pdf_annot_right_group">
-              <button
-                type="button"
-                className={`annot_trigger${fingerScrollOnly ? " annot_trigger--active" : ""}`}
-                onClick={() => setFingerScrollOnly((v) => !v)}
-                title="Hand mode: finger only scrolls the page, the pencil draws"
-              >
-                <i className="fi fi-rr-hand" />
-                <span className="annot_trigger_label">Hand</span>
-              </button>
-
               <div id="pdf_annot_actions">
-                <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
-                <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="fi fi-rr-redo" /></button>
-                <button className="annot_action_btn" onClick={handleAnnotClear} title="Clear page" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-trash" /></button>
+                {pdfDoc && !selectionOnly && (
+                  <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
+                )}
+                {annotHistory.length > 0 && (
+                  <button
+                    className={`annot_action_btn${annotHistoryOpen ? " annot_action_btn--active" : ""}`}
+                    onClick={() => setAnnotHistoryOpen((v) => !v)}
+                    title="Annotation History — every step taken this session"
+                  >
+                    <i className="fi fi-rr-time-past" />
+                  </button>
+                )}
+                {pdfDoc && !selectionOnly && (
+                  <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="fi fi-rr-redo" /></button>
+                )}
               </div>
             </div>
+          )}
+        </div>
+      </div>
+
+      {/* Thin selection bar — appears under the toolbar for a double-clicked
+          word in reading mode (hideHyleControls). The onSelectionAction
+          embedding case (e.g. Units Extraction) keeps its own floating
+          #manual_select_bar/#manual_popup_footer instead, unchanged. */}
+      {hideHyleControls && !onSelectionAction && manualSelection && (
+        <div ref={selBarRef} id="pdf_selection_bar">
+          <div id="pdf_selection_bar_row">
+            <span id="pdf_selection_bar_word" title={manualSelection.text}>{manualSelection.text}</span>
+            <div id="pdf_selection_bar_actions">
+              <button type="button" onClick={() => runSelectionTool("translate")} disabled={Boolean(selectionToolBusy)}>
+                <i className={`fi ${selectionToolBusy === "translate" ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-language"}`} />
+                Translate to {localStorage.getItem("mctosh_pdf_translate_lang") || "English"}
+              </button>
+              <button type="button" onClick={() => runSelectionTool("define")} disabled={Boolean(selectionToolBusy)}>
+                <i className={`fi ${selectionToolBusy === "define" ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-book-alt"}`} />
+                Definition
+              </button>
+              <button type="button" onClick={() => runSelectionTool("linguistic_check")} disabled={Boolean(selectionToolBusy)}>
+                <i className={`fi ${selectionToolBusy === "linguistic_check" ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-diagram-project"}`} />
+                Linguistic Structure Check
+              </button>
+              <span id="pdf_selection_bar_sep" />
+              <button type="button" onClick={() => addSelectionAsHyle("entities")} title="Add as Entity Schema">
+                <i className="fi fi-rr-add" /> EnS
+              </button>
+              <button type="button" onClick={() => addSelectionAsHyle("traces")} title="Add as Entity Schema Trace">
+                <i className="fi fi-rr-add" /> EnST
+              </button>
+              <button type="button" onClick={() => addSelectionAsHyle("traces", { kind: "value" })} title="Add as Entity Schema Trace Value">
+                <i className="fi fi-rr-add" /> EnSTV
+              </button>
+            </div>
+            <button type="button" id="pdf_selection_bar_close" onClick={() => setManualSelection(null)} title="Dismiss">
+              <i className="fi fi-rr-cross-small" />
+            </button>
           </div>
-        );
-      })()}
+          {(selectionToolResult || selectionToolError) && (
+            <div id="pdf_selection_bar_result" className={selectionToolError ? "pdf_selection_bar_result--error" : ""}>
+              {selectionToolError
+                ? <span>⚠ {selectionToolError}</span>
+                : <span><strong>{selectionToolResult.label}:</strong> {selectionToolResult.text}</span>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Split area */}
       <div id="pdf_content" ref={contentRef}>
@@ -4149,6 +4180,14 @@ const PDFPage = ({
           <div id="pdf_annot_history_panel">
             <div id="pdf_annot_history_header">
               <span>Annotation History</span>
+              <button
+                id="pdf_annot_history_clear"
+                onClick={handleAnnotClear}
+                title="Clear all annotations on this page"
+                disabled={!(annotations[pageNum]?.length > 0)}
+              >
+                <i className="fi fi-rr-trash" /> Clear page
+              </button>
               <button id="pdf_annot_history_close" onClick={() => setAnnotHistoryOpen(false)} title="Close">✕</button>
             </div>
             <div id="pdf_annot_history_body">
@@ -4182,13 +4221,16 @@ const PDFPage = ({
               ? "0"
               : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0)}px)`,
           }}
-          className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${annotTool ? " pdf_preview--tool-active" : ""}`}
+          className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
         >
           <div id="pdf_preview_scroll" ref={previewRef}>
           {pdfDoc ? (
             <>
               <div id="pdf_canvas_wrap" ref={canvasWrapRef}>
-                {Array.from({ length: pageCount }, (_, i) => i + 1).map(n => (
+                {/* Single-page view: only the current page is ever mounted —
+                    no continuous scroll between pages, navigate with the
+                    page arrows instead. */}
+                {(pageNum ? [pageNum] : []).map(n => (
                   <div
                     key={n}
                     className="pdf_page_container"
@@ -4204,7 +4246,7 @@ const PDFPage = ({
                       <canvas
                         id="pdf_annot_canvas"
                         ref={annotCanvasRef}
-                        style={{ pointerEvents: annotTool ? "auto" : "none", cursor: annotTool === "eraser" ? "cell" : annotTool ? "crosshair" : "default" }}
+                        style={{ pointerEvents: toolActive ? "auto" : "none", cursor: annotTool === "eraser" ? "cell" : toolActive ? "crosshair" : "default" }}
                       />
                       {annotTextInput && (
                         <input
@@ -4233,22 +4275,6 @@ const PDFPage = ({
                           </span>
                         </div>
                       )}
-                      {manualSelection && !manualPopup && onSelectionAction && selHandles && (
-                        <>
-                          <div
-                            className="sel_handle sel_handle--start"
-                            style={{ left: selHandles.start.x, top: selHandles.start.y, height: selHandles.start.h + 8 }}
-                            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("start"); dragHandleRef.current = "start"; }}
-                            onTouchStart={(e) => { e.stopPropagation(); dragHandleRef.current = "start"; setDragHandle("start"); }}
-                          />
-                          <div
-                            className="sel_handle sel_handle--end"
-                            style={{ left: selHandles.end.x, top: selHandles.end.y, height: selHandles.end.h + 8 }}
-                            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setDragHandle("end"); dragHandleRef.current = "end"; }}
-                            onTouchStart={(e) => { e.stopPropagation(); dragHandleRef.current = "end"; setDragHandle("end"); }}
-                          />
-                        </>
-                      )}
                       {manualSelection && !manualPopup && onSelectionAction && (
                         <div ref={selBarRef} id="manual_select_bar" style={{ left: manualSelection.x, top: manualSelection.y }}>
                           <span id="msb_text">{manualSelection.text}</span>
@@ -4270,8 +4296,6 @@ const PDFPage = ({
                           style={pageViewport
                             ? { width: pageViewport.width, height: pageViewport.height }
                             : { inset: 0, position: "absolute" }}
-                          onMouseDown={handleTextMouseDown}
-                          onMouseUp={handleTextSelection}
                         />
                       )}
                       </>
@@ -4350,7 +4374,7 @@ const PDFPage = ({
           <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleInputChange} />
           </div>
           {pdfDoc && pageMinimap.length > 0 && (
-            <div id="pdf_page_minimap" aria-hidden="true">
+            <div id="pdf_page_minimap" aria-label="Page navigator">
               {pageMinimap.map((mini) => {
                 const maxWidth = 92;
                 const maxHeight = 124;
@@ -4359,8 +4383,32 @@ const PDFPage = ({
                 const miniHeight = Math.max(48, mini.pageHeight * scale);
                 return (
                   <div key={mini.page} className="pdf_page_minimap_card">
-                    <div className="pdf_page_minimap_label">p.{mini.page}</div>
-                    <div className="pdf_page_minimap_sheet" style={{ width: miniWidth, height: miniHeight }}>
+                    <div
+                      className="pdf_page_minimap_sheet"
+                      style={{ width: miniWidth, height: miniHeight }}
+                      role="button"
+                      tabIndex={0}
+                      aria-label={`Pan document using page ${mini.page} preview`}
+                      onPointerDown={(e) => startMinimapDrag(mini, e)}
+                      onPointerMove={(e) => moveMinimapDrag(mini, e)}
+                      onPointerUp={(e) => endMinimapDrag(mini, e)}
+                      onPointerCancel={(e) => endMinimapDrag(mini, e)}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        startMinimapDrag(mini, {
+                          ...e,
+                          currentTarget: e.currentTarget,
+                          clientX: e.currentTarget.getBoundingClientRect().left + (miniWidth / 2),
+                          clientY: e.currentTarget.getBoundingClientRect().top + (miniHeight / 2),
+                          preventDefault: () => e.preventDefault(),
+                        });
+                        endMinimapDrag(mini, {
+                          ...e,
+                          currentTarget: e.currentTarget,
+                          pointerId: null,
+                        });
+                      }}
+                    >
                       {mini.previewSrc && (
                         <img
                           className="pdf_page_minimap_image"
@@ -4382,6 +4430,35 @@ const PDFPage = ({
                   </div>
                 );
               })}
+              <div id="pdf_zoom_controls">
+                <button
+                  onClick={() => zoomFromCenter((z) => z - 0.01)}
+                  onMouseDown={() => startZoomHold(-0.01)}
+                  onMouseUp={stopZoomHold}
+                  onMouseLeave={stopZoomHold}
+                  onTouchStart={(e) => { e.preventDefault(); startZoomHold(-0.01); }}
+                  onTouchEnd={stopZoomHold}
+                  onTouchCancel={stopZoomHold}
+                  title="Zoom out 1%"
+                >
+                  −
+                </button>
+                <button id="pdf_zoom_label" onClick={() => zoomFromCenter(1)} title="Reset zoom to original size">
+                  {Math.round(zoom * 100)}%
+                </button>
+                <button
+                  onClick={() => zoomFromCenter((z) => z + 0.01)}
+                  onMouseDown={() => startZoomHold(0.01)}
+                  onMouseUp={stopZoomHold}
+                  onMouseLeave={stopZoomHold}
+                  onTouchStart={(e) => { e.preventDefault(); startZoomHold(0.01); }}
+                  onTouchEnd={stopZoomHold}
+                  onTouchCancel={stopZoomHold}
+                  title="Zoom in 1%"
+                >
+                  +
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -4533,42 +4610,12 @@ const PDFPage = ({
               </>
             ) : (
               <div id="manual_footer_editor">
-                <button
-                  id="manual_footer_left"
-                  type="button"
-                  onClick={adjustLeftBoundary}
-                  onMouseDown={() => startFooterAdjust(adjustLeftBoundary)}
-                  onMouseUp={stopFooterAdjust}
-                  onMouseLeave={stopFooterAdjust}
-                  onTouchStart={(e) => { e.preventDefault(); startFooterAdjust(adjustLeftBoundary); }}
-                  onTouchEnd={stopFooterAdjust}
-                  onTouchCancel={stopFooterAdjust}
-                  disabled={!(manualSelection && manualSelection.startIdx >= 0 && manualSelection.endIdx >= 0)}
-                  title="Trim left edge, then extend to the previous word once only one word remains"
-                >
-                  ←
-                </button>
                 <textarea
                   id="manual_footer_text"
                   value={footerSelectionText}
                   onChange={(e) => setManualSelection((sel) => sel ? { ...sel, text: e.target.value } : sel)}
                   rows={2}
                 />
-                <button
-                  id="manual_footer_right"
-                  type="button"
-                  onClick={adjustRightBoundary}
-                  onMouseDown={() => startFooterAdjust(adjustRightBoundary)}
-                  onMouseUp={stopFooterAdjust}
-                  onMouseLeave={stopFooterAdjust}
-                  onTouchStart={(e) => { e.preventDefault(); startFooterAdjust(adjustRightBoundary); }}
-                  onTouchEnd={stopFooterAdjust}
-                  onTouchCancel={stopFooterAdjust}
-                  disabled={!(manualSelection && manualSelection.startIdx >= 0 && manualSelection.endIdx >= 0)}
-                  title="Trim right edge, then extend to the next word once only one word remains"
-                >
-                  →
-                </button>
               </div>
             )}
             <div id="manual_actions">

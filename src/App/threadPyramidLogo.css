@@ -1,0 +1,24 @@
+/* The 3D object fills the whole pinned stage (see #app_scroll_stage in
+   App.css) — no fixed height, no card border/background of its own, and
+   critically no narrowed/cropped width either: an earlier attempt to make
+   room for the left-side level cards by shrinking this canvas to a right-
+   hand column literally clipped the object at that hard edge whenever
+   orbiting swung part of it past the boundary. The object now reads as
+   shifted right purely through the camera's own framing (see the lateral
+   screen-shift in ThreadPyramidLogo.jsx), so nothing about the object is
+   ever cut off — the ground threads and the object both render across the
+   full canvas, with the translucent card column simply floating on top of
+   whatever's underneath on the left. */
+#thread_logo_canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+
+#thread_logo_canvas canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}

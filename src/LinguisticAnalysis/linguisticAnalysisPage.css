@@ -1,7 +1,8 @@
 #la_page {
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
   display: flex;
   flex-direction: column;
-  height: calc(var(--vh, 1vh) * 100);
+  height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background: var(--color-bg);
   color: var(--color-text);
   overflow: hidden;

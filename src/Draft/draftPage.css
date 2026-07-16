@@ -1,7 +1,8 @@
 #draft_page {
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
   display: flex;
   flex-direction: column;
-  height: calc(var(--vh, 1vh) * 100);
+  height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background: var(--color-bg);
   color: var(--color-text);
 }
@@ -229,10 +230,11 @@
    background around it, which are screen-only editing affordances. */
 @media print {
   #draft_header, #draft_toolbar, #draft_page_setup { display: none !important; }
-  /* The app-wide floating chat FAB (#home_chat_root, rendered outside this
-     page's own DOM tree by AppRouter) sits fixed on every route — it must
-     be hidden explicitly here too, not just this page's own elements. */
-  #home_chat_root { display: none !important; }
+  /* The app-wide footer toolbar (#app_footer, rendered outside this page's
+     own DOM tree by AppRouter — holds the AI chat trigger and split-view
+     button) sits fixed on every route — it must be hidden explicitly here
+     too, not just this page's own elements. */
+  #app_footer { display: none !important; }
   #draft_page {
     height: auto;
     background: #fff !important;

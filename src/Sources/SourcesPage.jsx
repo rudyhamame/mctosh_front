@@ -211,7 +211,7 @@ const SourcesPage = () => {
     setError(null);
     setInfo(null);
     try {
-      setInfo(`Splitting "${prompt.file.name}" into ${parts} parts and uploading each…`);
+      setInfo(`Splitting "${prompt.file.name}" into ${parts} parts behind the scenes…`);
       setCompressionPrompt(null);
       const form = new FormData();
       form.append("file", prompt.file);
@@ -222,13 +222,15 @@ const SourcesPage = () => {
       const res  = await fetch(apiUrl("/api/sources/split-and-save"), { method: "POST", headers: authHeader(), body: form });
       const data = await readResponsePayload(res);
       if (!res.ok) throw new Error(data.error || `Failed to split "${prompt.file.name}".`);
-      setSources((prev) => [...data.sources, ...prev]);
-      const reusedCount = data.parts.filter((p) => p.duplicate || p.reused).length;
-      setInfo(
-        `Split "${prompt.file.name}" into ${data.parts.length} parts and uploaded them` +
-        (data.oversizedParts ? ` (${data.oversizedParts} part${data.oversizedParts > 1 ? "s" : ""} still over the limit even after splitting/compressing).` : ".") +
-        (reusedCount ? ` ${reusedCount} part${reusedCount > 1 ? "s were" : " was"} already in your sources.` : "")
-      );
+      if (data.duplicate) {
+        setInfo(`"${prompt.file.name}" is already in your sources.`);
+      } else {
+        setSources((prev) => [data.source, ...prev]);
+        setInfo(
+          `Uploaded "${prompt.file.name}" as one source, stored behind the scenes as ${data.partCount} parts` +
+          (data.oversizedParts ? ` (${data.oversizedParts} part${data.oversizedParts > 1 ? "s" : ""} still over the limit even after compressing).` : ".")
+        );
+      }
     } catch (e) {
       setError(e.message || "Failed to split this PDF.");
     } finally {
@@ -434,7 +436,7 @@ const SourcesPage = () => {
             ) : compressionPrompt.splitSuggestion ? (
               <div className="sources_split_option">
                 <p className="sources_compress_prompt__note">
-                  Split it into {compressionPrompt.splitSuggestion.suggestedParts} separate PDFs instead (~{formatMb(compressionPrompt.splitSuggestion.estimatedPartSizeBytes)} each, {compressionPrompt.splitSuggestion.numPages} pages total) — each part is saved as its own source, no compression needed.
+                  Split it into {compressionPrompt.splitSuggestion.suggestedParts} pieces behind the scenes instead (~{formatMb(compressionPrompt.splitSuggestion.estimatedPartSizeBytes)} each, {compressionPrompt.splitSuggestion.numPages} pages total) — no compression needed, and it still shows up as one source that opens and reads like a single PDF.
                 </p>
                 <button
                   type="button"
@@ -443,7 +445,7 @@ const SourcesPage = () => {
                   onClick={handleSplitAndUpload}
                 >
                   <strong>Split into {compressionPrompt.splitSuggestion.suggestedParts} parts</strong>
-                  <span>Each part uploaded separately, no re-compression needed unless a part is still too large</span>
+                  <span>Stored as separate pieces, viewed as one seamless document</span>
                 </button>
               </div>
             ) : (
@@ -522,17 +524,19 @@ const SourcesPage = () => {
                 <td className="sources_td_format">{s.format || "—"}</td>
                 <td className="sources_td_name">{s.name}</td>
                 <td className="sources_td_url">
-                  {s.url
-                    ? s.type === "youtube"
+                  {s.type === "youtube"
+                    ? s.url
                       ? <button className="sources_url_link"
                           onClick={() => navigate("/youtube", { state: { sourceId: s._id, sourceName: s.name, sourceUrl: s.url } })}>
                           {s.name}
                         </button>
-                      : <button className="sources_url_link"
+                      : <span className="sources_url_none">—</span>
+                    : (s.key || s.parts?.length)
+                      ? <button className="sources_url_link"
                           onClick={() => navigate("/pdf-reader", { state: { sourceId: s._id, pdfName: s.name } })}>
                           {s.name}
                         </button>
-                    : <span className="sources_url_none">—</span>}
+                      : <span className="sources_url_none">—</span>}
                 </td>
                 <td className="sources_td_markdown">
                   {s.format === "youtube" ? (

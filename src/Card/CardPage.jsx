@@ -16,12 +16,12 @@ const authFetch = (url, options = {}) => {
 const ALL_MODES = ["sub-molecule","molecule","sub-cell","cell","sub-tissue","tissue","sub-organ","organ","sub-system","system","sub-human","human"];
 const modeObj   = () => Object.fromEntries(ALL_MODES.map((m) => [m, []]));
 const EMPTY_HYLES = () => ({
-  objects: modeObj(), traces: modeObj(), phenomena: modeObj(),
+  entities: modeObj(), traces: modeObj(), phenomena: modeObj(),
   concept: modeObj(), models: modeObj(), _total: 0,
 });
 
 const CARDS = [
-  { key: "objects",   label: "Objects" },
+  { key: "entities",  label: "Entities" },
   { key: "traces",    label: "Traces" },
   { key: "phenomena", label: "Phenomena" },
   { key: "concept",   label: "Concept" },
@@ -30,11 +30,17 @@ const CARDS = [
 
 const initStatus = () => ({ value: "pending", at: new Date().toISOString() });
 
+// "objects" was the card name before the Entities rename — extractions saved
+// before that rename still have nouns tagged "objects" in the database, so
+// reads alias it to "entities" here rather than losing that historical data.
+const normalizeCard = (card) => (card === "objects" ? "entities" : card);
+
 const inflateExtraction = (extraction) => {
   const data = EMPTY_HYLES();
   for (const { id, num, noun, card, mode, reason, status } of extraction.nouns || []) {
-    if (data[card]?.[mode]) {
-      data[card][mode].push({ id, num, noun, reason: reason || "", status: status?.value ? status : initStatus() });
+    const normalizedCard = normalizeCard(card);
+    if (data[normalizedCard]?.[mode]) {
+      data[normalizedCard][mode].push({ id, num, noun, reason: reason || "", status: status?.value ? status : initStatus() });
     }
   }
   data._total = extraction.totalNouns || 0;
@@ -43,7 +49,7 @@ const inflateExtraction = (extraction) => {
 
 const deflateNounData = (hyleData) => {
   const nouns = [];
-  for (const card of ["objects","traces","phenomena","concept","models"]) {
+  for (const card of ["entities","traces","phenomena","concept","models"]) {
     for (const mode of ALL_MODES) {
       for (const item of hyleData[card]?.[mode] || []) {
         nouns.push({ id: item.id, num: item.num, noun: item.noun, card, mode, reason: item.reason || "", status: item.status });
@@ -56,7 +62,7 @@ const deflateNounData = (hyleData) => {
 const CardPage = () => {
   const navigate = useNavigate();
   const { card: urlCard } = useParams();
-  const activeCard = CARDS.find((c) => c.key === urlCard)?.key || "objects";
+  const activeCard = CARDS.find((c) => c.key === urlCard)?.key || "entities";
 
   const [hyleData,  setHyleData]  = useState(null);
   const [loading,   setLoading]   = useState(true);
@@ -108,7 +114,7 @@ const CardPage = () => {
     const base = hyleData || EMPTY_HYLES();
 
     // Deduplicate
-    const exists = ["objects","traces","phenomena","concept","models"].some((c) =>
+    const exists = ["entities","traces","phenomena","concept","models"].some((c) =>
       ALL_MODES.some((m) => base[c][m].some((it) => it.noun === noun))
     );
     if (exists) return;

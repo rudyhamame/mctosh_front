@@ -261,7 +261,7 @@ const VOICE_EXAM_LABELS = {
   reading_passage: "Reading Passage",
   symptom_description: "Symptom Description",
   deep_breath_count: "Deep Breath + Count",
-  // Captured directly from a real MCTOSHS intake call (see
+  // Captured directly from a real AMCTOSHS intake call (see
   // back/agent/voiceCallAnalysis.js), not a standalone standardized task —
   // the primary source now, per the app's own patient-facing "Voice Check"
   // page being explicitly secondary/supplementary to this.
@@ -882,7 +882,7 @@ const PatientInstantiationPage = () => {
                 )}
                 {(selectedCall.transcript || []).map((t, i) => (
                   <div key={i} className={`pi_call_transcript_line pi_call_transcript_line--${t.role}`}>
-                    <strong>{t.role === "agent" ? "MCTOSHS" : "Patient"}:</strong> {t.text}
+                    <strong>{t.role === "agent" ? "AMCTOSHS" : "Patient"}:</strong> {t.text}
                   </div>
                 ))}
               </div>
@@ -1154,7 +1154,7 @@ const PatientInstantiationPage = () => {
                       <i className="fi fi-rr-blueprint" style={{ fontSize: "2rem", opacity: 0.3 }} />
                       <p>No Morphe has been designated to this Patient Instance yet.</p>
                       <p id="pi_morphe_hint">
-                        Go to <strong>MCTOSHS Objects Modelling</strong> to build a Morphe and designate it to this representative object.
+                        No Morphe is available to designate to this representative object.
                       </p>
                     </div>
                   )}
@@ -1172,7 +1172,7 @@ const PatientInstantiationPage = () => {
                       <i className="fi fi-rr-waveform-path" style={{ fontSize: "2rem", opacity: 0.3 }} />
                       <p>No voice exams recorded yet.</p>
                       <p id="pi_morphe_hint">
-                        The patient can record a standardized Voice Check from their own MCTOSHS app.
+                        The patient can record a standardized Voice Check from their own AMCTOSHS app.
                       </p>
                     </div>
                   ) : (

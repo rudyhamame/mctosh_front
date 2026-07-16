@@ -61,7 +61,7 @@ const HylomorphismPage = () => {
       <div id="hylo_header">
         <button id="hylo_back_btn" onClick={() => navigate("/home")}>←</button>
         <span id="hylo_header_title">Hyle-to-Meaning</span>
-        <button id="hylo_prompt_btn" onClick={() => setShowPrompt(true)} title="View MCTOSHS Classification Prompt">Prompt</button>
+        <button id="hylo_prompt_btn" onClick={() => setShowPrompt(true)} title="View AMCTOSHS Classification Prompt">Prompt</button>
       </div>
       {showPrompt && <MCTOSHPromptModal onClose={() => setShowPrompt(false)} />}
 

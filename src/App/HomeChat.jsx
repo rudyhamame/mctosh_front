@@ -3,6 +3,7 @@ import "./homeChat.css";
 import { apiUrl } from "../config/api";
 import { AI_PROVIDERS, useAIProvider } from "../hooks/useAIProvider";
 import { readStoredSession } from "../utils/sessionCleanup";
+import AnamAvatar from "./AnamAvatar";
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -18,7 +19,12 @@ const replaceLast = (msgs, text) => {
   return next;
 };
 
-const useContextChat = (userId, provider, withCodebase, withDb) => {
+// `avatarRef`, when provided, mirrors every streamed delta of MCTOSH's own
+// reply onto the Anam avatar (see AnamAvatar.jsx) so it speaks the exact
+// same text as it arrives, then closes out that turn once the stream ends —
+// the avatar is a face on top of this same reply, not a second AI answering
+// independently.
+const useContextChat = (userId, provider, model, withCodebase, withDb, avatarRef) => {
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);
@@ -38,7 +44,7 @@ const useContextChat = (userId, provider, withCodebase, withDb) => {
       const res = await fetch(apiUrl("/api/ai/context-chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, provider, userId, withCodebase, withDb }),
+        body: JSON.stringify({ messages: nextMessages, provider, model, userId, withCodebase, withDb }),
         signal: controller.signal,
       });
 
@@ -65,7 +71,10 @@ const useContextChat = (userId, provider, withCodebase, withDb) => {
               return next;
             });
             else if (error) setMessages(p => replaceLast(p, `Error: ${error}`));
-            else if (delta) setMessages(p => appendToLast(p, delta));
+            else if (delta) {
+              setMessages(p => appendToLast(p, delta));
+              avatarRef?.current?.streamChunk(delta);
+            }
           } catch {}
         }
       }
@@ -76,6 +85,7 @@ const useContextChat = (userId, provider, withCodebase, withDb) => {
     } finally {
       setStreaming(false);
       abortRef.current = null;
+      avatarRef?.current?.endMessage();
     }
   };
 
@@ -375,7 +385,27 @@ const HomeChat = () => {
   const [withDb, setWithDb] = useState(
     () => localStorage.getItem("mctosh_ai_db") === "true"
   );
-  const { messages, streaming, send, stop, reset } = useContextChat(userId, provider, withCodebase, withDb);
+
+  // Same provider/model list as the AI Providers settings page (same
+  // endpoint, same env-var + saved-override resolution) — falls back to the
+  // static AI_PROVIDERS list until this loads so the dropdown is never empty.
+  const [providerOptions, setProviderOptions] = useState(
+    () => AI_PROVIDERS.filter(p => p.id !== "manual").map(p => ({ id: p.id, label: p.label, model: p.sub }))
+  );
+  useEffect(() => {
+    fetch(apiUrl("/api/settings/ai-status"))
+      .then(r => r.json())
+      .then(d => {
+        if (Array.isArray(d.providers) && d.providers.length) {
+          setProviderOptions(d.providers.map(p => ({ id: p.id, label: p.label, model: p.model })));
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const selectedModel = providerOptions.find(p => p.id === provider)?.model || "";
+  const avatarRef = useRef(null);
+  const { messages, streaming, send, stop, reset } = useContextChat(userId, provider, selectedModel, withCodebase, withDb, avatarRef);
   const [isOpen, setIsOpen]        = useState(false);
   const [input, setInput]         = useState("");
   const [listening, setListening] = useState(false);
@@ -393,9 +423,12 @@ const HomeChat = () => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // TTS for text chat (disabled during call — call handles its own TTS)
+  // TTS for text chat (disabled during call — call handles its own TTS — and
+  // while the avatar is open, since AnamAvatar above already speaks every
+  // streamed reply itself; leaving TTS on at the same time would double up
+  // both voices on top of each other).
   useEffect(() => {
-    if (streaming || !ttsOn || inCall) return;
+    if (streaming || !ttsOn || inCall || isOpen) return;
     const last = messages[messages.length - 1];
     if (last?.role !== "assistant" || !last.content) return;
     speak(last.content);
@@ -455,6 +488,7 @@ const HomeChat = () => {
 
       {/* Floating panel */}
       {isOpen && <div id="home_chat">
+      <AnamAvatar ref={avatarRef} />
       <div id="home_chat_header">
         <span id="home_chat_title">Dev AI</span>
         <select
@@ -463,8 +497,8 @@ const HomeChat = () => {
           onChange={e => setProvider(e.target.value)}
           disabled={streaming || inCall}
         >
-          {AI_PROVIDERS.filter(p => p.id !== "manual").map(({ id, label, sub }) => (
-            <option key={id} value={id}>{label} · {sub}</option>
+          {providerOptions.map(({ id, label, model }) => (
+            <option key={id} value={id}>{label} · {model}</option>
           ))}
         </select>
         <div id="home_chat_ctrls">
@@ -508,7 +542,7 @@ const HomeChat = () => {
 
       <div id="home_chat_msgs">
         {messages.length === 0 && (
-          <p id="home_chat_empty">Ask anything about MCTOSHS, the codebase, or your data.</p>
+          <p id="home_chat_empty">Ask anything about AMCTOSHS, the codebase, or your data.</p>
         )}
         {messages.map((msg, i) => {
           const isStreamingLast = msg.role === "assistant" && streaming && i === messages.length - 1;

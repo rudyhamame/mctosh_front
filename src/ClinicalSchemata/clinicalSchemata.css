@@ -1,8 +1,9 @@
 /* ── Root ── */
 #cs_root {
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background: var(--color-bg);
   color: var(--color-text);
   overflow: hidden;
@@ -827,5 +828,54 @@
 .cs_empty i { font-size: 1.6rem; opacity: 0.2; }
 .cs_empty p { margin: 0; }
 .cs_empty_hint { font-size: 0.7rem; opacity: 0.6; }
+
+/* ── Entity Schema Trace row (key → value) ── */
+.cs_trace_row { cursor: default; }
+
+.cs_trace_key {
+  flex: 0 1 auto;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", monospace;
+  font-weight: 600;
+}
+
+.cs_trace_arrow {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.cs_trace_value {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cs_trace_value--empty {
+  color: var(--color-text-muted);
+  font-style: italic;
+  opacity: 0.6;
+}
+
+/* ── Entity Schema JSON preview ── */
+.cs_json_panel {
+  margin: 0.75rem 1.25rem 0;
+  padding: 0.65rem 0.8rem;
+  background: color-mix(in srgb, var(--color-bg) 85%, #000 8%);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: ui-monospace, "Cascadia Code", "SF Mono", monospace;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: #80cbc4;
+  overflow-x: auto;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre;
+}
 
 .cs_inst_empty { padding: 2.5rem 1rem; }

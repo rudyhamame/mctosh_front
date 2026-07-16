@@ -2,8 +2,7 @@
 #split_view_frame {
   display: flex;
   align-items: stretch;
-  height: 100vh;
-  height: calc(var(--vh, 1vh) * 100);
+  height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   width: 100%;
   overflow: hidden;
   position: relative;
@@ -97,28 +96,27 @@
   border: none;
 }
 
-/* ── Floating trigger + picker ── */
+/* ── Trigger + picker ── lives inline in #app_footer_end (AppFooter.jsx)
+   now, not its own floating fixed-position corner button. Kept
+   position:relative purely as the anchor for the picker dropdown below,
+   which still opens upward off of it. ── */
 #split_view_btn_wrap {
-  position: fixed;
-  bottom: 1.5rem;
-  left: 1.5rem;
-  z-index: 1000;
+  position: relative;
 }
 
 #split_view_btn {
-  width: 48px;
-  height: 48px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   border: none;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
   color: var(--color-text-muted);
-  font-size: 1.1rem;
+  font-size: 0.9rem;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22);
   transition: transform 0.15s, color 0.15s, border-color 0.15s;
 }
 #split_view_btn:hover { transform: scale(1.08); color: var(--color-text); }
@@ -131,7 +129,7 @@
 #split_view_picker {
   position: absolute;
   bottom: calc(100% + 0.6rem);
-  left: 0;
+  right: 0; /* the trigger now sits in the footer's right-aligned cluster, so open leftward off it instead of rightward off-screen */
   width: 280px;
   max-height: 60vh;
   overflow-y: auto;

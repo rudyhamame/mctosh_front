@@ -1,7 +1,8 @@
 #pdf_page {
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
   display: flex;
   flex-direction: column;
-  height: calc(var(--vh, 1vh) * 100);
+  height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it (embedded instances override this via .pdf_page--embedded below) */
   background: var(--color-bg);
   color: var(--color-text);
   overflow: hidden;
@@ -18,7 +19,7 @@
   box-sizing: border-box;
 }
 
-/* Embedded inside another page's layout (e.g. Traces Collector) — fill the
+/* Embedded inside another page's layout (e.g. Units Extraction) — fill the
    parent's flex-allocated box instead of the whole browser viewport. */
 #pdf_page.pdf_page--embedded {
   height: 100%;
@@ -123,6 +124,7 @@
 #pdf_toolbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.6rem;
   padding: 0.55rem 1rem;
   border-bottom: 1px solid var(--color-border);
@@ -130,6 +132,21 @@
   flex-shrink: 0;
   background: var(--color-bg);
 }
+
+/* Left = tool selection + document actions, center = page navigation,
+   right = zoom + undo/redo/clear. Each wraps independently so a narrow
+   viewport doesn't force the whole toolbar into one unreadable row. */
+#pdf_toolbar_left,
+#pdf_toolbar_center,
+#pdf_toolbar_right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+#pdf_toolbar_left { flex: 1; min-width: 0; }
+#pdf_toolbar_center { flex-shrink: 0; }
+#pdf_toolbar_right { flex: 1; min-width: 0; justify-content: flex-end; }
 
 #pdf_toolbar button {
   padding: 0.28rem 0.65rem;
@@ -144,15 +161,6 @@
 #pdf_toolbar button:disabled {
   opacity: 0.3;
   cursor: default;
-}
-
-#pdf_filename {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-text-muted);
-  font-size: 0.82rem;
 }
 
 @keyframes pdf_icon_spin { to { transform: rotate(360deg); } }
@@ -178,7 +186,91 @@
 .pdf_type_badge--mixed      { --badge-color: #ff9800; }
 .pdf_type_badge--scanned    { --badge-color: #f44336; }
 
-#pdf_zoom_controls {
+/* ── Thin selection bar (double-clicked word, reading mode) ── */
+#pdf_selection_bar {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  font-size: 0.78rem;
+}
+
+#pdf_selection_bar_row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.75rem;
+}
+
+#pdf_selection_bar_word {
+  flex-shrink: 0;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+  color: var(--color-text);
+  padding-right: 0.5rem;
+  border-right: 1px solid var(--color-border);
+}
+
+#pdf_selection_bar_actions {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+#pdf_selection_bar_actions button {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.22rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#pdf_selection_bar_actions button:disabled { opacity: 0.4; cursor: default; }
+
+#pdf_selection_bar_sep {
+  flex-shrink: 0;
+  width: 1px;
+  align-self: stretch;
+  background: var(--color-border);
+  margin: 0 0.15rem;
+}
+
+#pdf_selection_bar_close {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+#pdf_selection_bar_result {
+  padding: 0.3rem 0.75rem 0.5rem;
+  border-top: 1px dashed var(--color-border);
+  color: var(--color-text);
+  line-height: 1.4;
+}
+#pdf_selection_bar_result strong { color: var(--color-text-muted); font-weight: 600; margin-right: 0.3rem; }
+.pdf_selection_bar_result--error { color: #f44336; }
+
+#pdf_page_nav {
   display: flex;
   align-items: center;
   gap: 0;
@@ -187,7 +279,7 @@
   overflow: hidden;
 }
 
-#pdf_zoom_controls button {
+#pdf_page_nav button {
   padding: 0.28rem 0.55rem;
   border: none;
   border-radius: 0;
@@ -198,36 +290,75 @@
   line-height: 1;
 }
 
-#pdf_zoom_label {
+#pdf_page_nav_label {
   min-width: 3.2rem;
   text-align: center;
   font-size: 0.74rem !important;
   border-left: 1px solid var(--color-border) !important;
   border-right: 1px solid var(--color-border) !important;
+  color: var(--color-text-muted);
+  padding: 0.28rem 0.3rem;
+  display: inline-block;
 }
 
-#pdf_home_btn {
-  color: var(--color-text-muted);
-  font-size: 1rem;
+/* A normal flex child inside #pdf_page_minimap now (the "Page navigator"
+   widget) instead of its own floating bar — sized to its own content and
+   right-aligned like the minimap cards above it (align-items: flex-end). */
+#pdf_zoom_controls {
+  /* #pdf_page_minimap (its parent) sets pointer-events: none on itself and
+     only re-enables it on .pdf_page_minimap_sheet — without this override
+     these buttons inherit that none and silently stop being clickable. */
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(10, 12, 17, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.5);
+}
+
+#pdf_zoom_controls button {
+  padding: 0.3rem 0.6rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: rgba(245, 247, 255, 0.88);
+  font-size: 0.85rem;
+  cursor: pointer;
   line-height: 1;
-  padding: 0.18rem 0.45rem;
+}
+
+#pdf_zoom_label {
+  min-width: 3.2rem;
+  text-align: center;
+  font-size: 0.74rem !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: rgba(245, 247, 255, 0.88);
+  padding: 0.3rem 0.3rem;
+  display: inline-block;
 }
 
 #pdf_close {
   color: var(--color-text-muted);
 }
 
-#pdf_actions_btn {
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--color-text-muted);
+#pdf_text_extract_btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  justify-content: center;
+  padding: 0.32rem 0.55rem;
 }
-#pdf_actions_btn:disabled { opacity: 0.5; cursor: default; }
-.pdf_actions_btn--active { color: #4fc3f7; border-color: #4fc3f7; background: color-mix(in srgb, #4fc3f7 10%, transparent); }
+
+#pdf_linguistic_btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.32rem 0.55rem;
+}
+#pdf_linguistic_btn:disabled { opacity: 0.5; cursor: default; }
 
 #pdf_range_picker {
   min-width: 220px;
@@ -283,17 +414,6 @@
   gap: 0.4rem;
   margin-top: 0.15rem;
 }
-
-#pdf_annot_history_btn {
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--color-text-muted);
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-.pdf_annot_history_btn--active { color: #ab47bc; border-color: #ab47bc; background: color-mix(in srgb, #ab47bc 10%, transparent); }
 
 /* ── Split content area ── */
 #pdf_content {
@@ -721,6 +841,23 @@
   padding: 0.1rem 0.3rem;
 }
 
+#pdf_annot_history_clear {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  padding: 0.25rem 0.55rem;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+#pdf_annot_history_clear:disabled { opacity: 0.35; cursor: default; }
+
 #pdf_annot_history_body {
   flex: 1;
   overflow: auto;
@@ -839,6 +976,20 @@
   opacity: 0;
 }
 
+/* At 100% zoom the page is shown at its natural/fitted size with nothing to
+   frame — fill the viewer edge to edge instead of floating a padded card. */
+#pdf_preview.pdf_preview--zoom-fit #pdf_preview_scroll {
+  padding: 0;
+}
+#pdf_preview.pdf_preview--zoom-fit #pdf_canvas_wrap {
+  padding-bottom: 0;
+  gap: 0;
+  min-width: 100%;
+}
+#pdf_preview.pdf_preview--zoom-fit .pdf_page_container {
+  border-radius: 0;
+}
+
 #pdf_preview.pdf_preview--tool-active,
 #pdf_preview.pdf_preview--tool-active * {
   -webkit-touch-callout: none !important;
@@ -892,9 +1043,9 @@
   min-height: 100%;
   /* Shrink-wrap to the (possibly zoomed-wider-than-viewport) content instead of
      staying at 100% of the scroll container. */
-  width: fit-content;
+  width: max-content;
   min-width: 100%;
-  margin: 0 auto;
+  margin: 0;
 }
 
 .pdf_page_container {
@@ -925,19 +1076,6 @@
   gap: 0.35rem;
 }
 
-.pdf_page_minimap_label {
-  padding: 0.18rem 0.48rem;
-  border-radius: 999px;
-  background: rgba(10, 12, 17, 0.8);
-  border: 1px solid rgba(255,255,255,0.1);
-  color: rgba(245, 247, 255, 0.88);
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  backdrop-filter: blur(12px);
-}
-
 .pdf_page_minimap_sheet {
   position: relative;
   border-radius: 10px;
@@ -948,6 +1086,13 @@
   box-shadow:
     0 14px 34px rgba(0,0,0,0.28),
     0 0 0 1px rgba(0,0,0,0.12);
+  pointer-events: auto;
+  touch-action: none;
+  cursor: grab;
+}
+
+.pdf_page_minimap_sheet:active {
+  cursor: grabbing;
 }
 
 .pdf_page_minimap_sheet::before {
@@ -1042,18 +1187,8 @@
   color: #f8fafc;
 }
 
-/* ── Annotation toolbar (single compact row, floating dropdowns) ── */
-#pdf_annot_toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.4rem 1rem;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
-
+/* ── Annotation controls (Tools/color/size/pen/highlight dropdowns) — now
+   merged directly into #pdf_toolbar instead of their own row. ── */
 .annot_dd_wrap {
   position: relative;
 }
@@ -1113,10 +1248,9 @@
   min-width: 170px;
 }
 
-/* The Actions trigger lives near the right edge of the top toolbar — a
-   left-aligned dropdown there overflows off-screen (clipped by #pdf_page's
-   overflow: hidden). Anchor it to the trigger's right edge instead. */
-#pdf_actions_dd,
+/* The Linguistic Analysis trigger lives near the right edge of the top
+   toolbar — a left-aligned popover there overflows off-screen (clipped by
+   #pdf_page's overflow: hidden). Anchor it to the trigger's right edge instead. */
 #pdf_range_picker {
   left: auto;
   right: 0;
@@ -1456,6 +1590,7 @@
 }
 
 .annot_action_btn:disabled { opacity: 0.3; cursor: default; }
+.annot_action_btn--active { color: #ab47bc; border-color: #ab47bc; background: color-mix(in srgb, #ab47bc 10%, transparent); }
 
 .pdf_page_canvas {
   background: #ffffff;
@@ -1505,41 +1640,7 @@
   color: transparent;
 }
 
-/* span_selected: class kept for handle-position logic, highlight drawn by .sel_highlight rects */
-
-/* ── Selection drag handles ── */
-.sel_handle {
-  position: absolute;
-  width: 2px;
-  background: #3884fd;
-  z-index: 25;
-  touch-action: none;
-  cursor: col-resize;
-}
-
-/* Wider invisible hit target without changing visual width */
-.sel_handle::after {
-  content: "";
-  position: absolute;
-  top: 0; bottom: 0;
-  left: -10px; right: -10px;
-}
-
-.sel_handle::before {
-  content: "";
-  position: absolute;
-  width: 10px;
-  height: 10px;
-  background: #3884fd;
-  border-radius: 50%;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
-.sel_handle--start::before { top: -10px; }
-.sel_handle--end::before   { bottom: -10px; top: auto; }
-
-/* ── Selection bar (expand before confirm) ── */
+/* ── Selection bar (confirm/cancel a double-clicked word) ── */
 #manual_select_bar {
   position: absolute;
   transform: translateX(-50%);
@@ -1657,8 +1758,6 @@
 
 #manual_footer_editor {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 0.45rem;
   align-items: stretch;
 }
 
@@ -1681,24 +1780,6 @@
 
 #manual_footer_text:focus {
   border-color: var(--color-highlight);
-}
-
-#manual_footer_left,
-#manual_footer_right {
-  min-width: 2.35rem;
-  padding: 0 0.55rem;
-  border-radius: 6px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: 1rem;
-  cursor: pointer;
-}
-
-#manual_footer_left:disabled,
-#manual_footer_right:disabled {
-  opacity: 0.35;
-  cursor: default;
 }
 
 #manual_selects {
@@ -1754,10 +1835,6 @@
   }
 
   #manual_popup {
-    grid-template-columns: 1fr;
-  }
-
-  #manual_footer_editor {
     grid-template-columns: 1fr;
   }
 
@@ -1897,8 +1974,7 @@
   color: var(--color-text-muted);
 }
 
-#pdf_hyles_toggle_btn,
-#pdf_text_select_btn {
+#pdf_hyles_toggle_btn {
   padding: 0.25rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: 6px;
@@ -1911,8 +1987,7 @@
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-#pdf_hyles_toggle_btn.pdf_hyles_toggle_btn--active,
-#pdf_text_select_btn.pdf_text_select_btn--active {
+#pdf_hyles_toggle_btn.pdf_hyles_toggle_btn--active {
   background: #e53935;
   border-color: #e53935;
   color: #fff;
@@ -2192,12 +2267,15 @@
    to read as on/off. Real pointer devices (mouse/trackpad) are unaffected. */
 @media (hover: hover) {
   #pdf_drop_zone:hover { border-color: var(--color-highlight); }
-  #pdf_zoom_controls button:hover { color: var(--color-text); background: var(--color-surface); }
-  #pdf_home_btn:hover { color: var(--color-text); }
-  #pdf_actions_btn:hover:not(:disabled) { color: #4fc3f7; border-color: #4fc3f7; }
-  #pdf_annot_history_btn:hover { color: #ab47bc; border-color: #ab47bc; }
+  #pdf_page_nav button:hover:not(:disabled) { color: var(--color-text); background: var(--color-surface); }
+  #pdf_zoom_controls button:hover { color: #fff; background: rgba(255, 255, 255, 0.12); }
+  #pdf_text_extract_btn:hover:not(:disabled),
+  #pdf_linguistic_btn:hover:not(:disabled) { color: #4fc3f7; border-color: #4fc3f7; }
   #pdf_md_panel_close:hover { color: var(--color-text); }
   #pdf_annot_history_close:hover { color: var(--color-text); }
+  #pdf_annot_history_clear:hover:not(:disabled) { color: #f44336; border-color: #f44336; }
+  #pdf_selection_bar_actions button:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+  #pdf_selection_bar_close:hover { color: var(--color-text); background: color-mix(in srgb, var(--color-highlight) 10%, transparent); }
   .pdf_md_stat_btn:hover { color: var(--color-text); border-color: var(--color-text-muted); }
   .pdf_md_delete_btn:hover:not(:disabled) { filter: brightness(1.08); }
   #pdf_md_font_controls button:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
@@ -2218,8 +2296,7 @@
   .phi_row:hover { background: var(--color-surface); }
   .phi_row:hover .phi_td_del { display: block; text-align: right; padding-top: 0; }
   .phi_delete_btn:hover { color: #f44336; border-color: #f44336; }
-  #pdf_hyles_toggle_btn:hover,
-  #pdf_text_select_btn:hover { color: var(--color-text); }
+  #pdf_hyles_toggle_btn:hover { color: var(--color-text); }
   #pdf_sys_btn:hover { color: var(--color-text); }
   #pdf_toolbar .pdf_mode_btn:hover:not(:disabled),
   #pdf_toolbar .pdf_provider_btn:hover:not(:disabled) {

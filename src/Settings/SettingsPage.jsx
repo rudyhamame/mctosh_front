@@ -16,7 +16,7 @@ const authHeader = () => {
 };
 
 const THEMES = [
-  { id: "original", label: "Original", desc: "Deep blue-navy — the MCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
+  { id: "original", label: "Original", desc: "Deep blue-navy — the AMCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
   { id: "light",    label: "Light",    desc: "Clean white with soft contrast",       bg: "#f8f8fc", surface: "#ffffff",  text: "#111122", border: "#d0d0e0" },
   { id: "dark",     label: "Dark",     desc: "Pure black — minimal ink",             bg: "#000000", surface: "#0f0f0f",  text: "#f0f0f0", border: "#222222" },
 ];
@@ -27,7 +27,15 @@ const SECTIONS = [
   { id: "ai_access",  label: "AI Access",       icon: "fi fi-rr-shield-check" },
   { id: "social",     label: "Social Publish",  icon: "fi fi-rr-megaphone" },
   { id: "prediction", label: "Predictive Text", icon: "fi fi-rr-keyboard" },
+  { id: "pdf_reader", label: "PDF Reader",      icon: "fi fi-rr-file-pdf" },
   { id: "theme",      label: "Theme",           icon: "fi fi-rr-palette" },
+];
+
+// Kept in sync with the same list PDFPage.jsx reads from localStorage
+// ("mctosh_pdf_translate_lang") for the selection bar's "Translate to" action.
+const TRANSLATE_LANGUAGES = [
+  "English", "Spanish", "French", "German", "Portuguese", "Italian",
+  "Arabic", "Hindi", "Mandarin Chinese", "Japanese", "Korean", "Russian",
 ];
 
 const applyTheme = (id) => {
@@ -110,10 +118,15 @@ const SettingsPage = () => {
   const location = useLocation();
   const [section,   setSection]   = useState(() => new URLSearchParams(location.search).get("section") || "prompts");
   const [theme,     setTheme]     = useState(() => localStorage.getItem("mctosh_theme") || "original");
+  const [pdfTranslateLang, setPdfTranslateLang] = useState(() => localStorage.getItem("mctosh_pdf_translate_lang") || "English");
   const [aiCodebase, setAiCodebase] = useState(() => localStorage.getItem("mctosh_ai_codebase") === "true");
   const [aiDb,       setAiDb]       = useState(() => localStorage.getItem("mctosh_ai_db")       === "true");
   const [providers, setProviders] = useState([]);
   const [aiLoading, setAiLoading] = useState(true);
+  const [aiRefreshing, setAiRefreshing] = useState(false);
+  const [anamUsage, setAnamUsage] = useState(null);
+  const [anamUsageLoading, setAnamUsageLoading] = useState(true);
+  const [anamUsageError, setAnamUsageError] = useState("");
   const [defProvider, setDefProvider] = useState(() => localStorage.getItem("mctosh_ai_provider") || "groq");
   const [predictPools,   setPredictPools]   = useState([]);
   const [predictLoading, setPredictLoading] = useState(true);
@@ -193,6 +206,38 @@ const SettingsPage = () => {
       .catch(() => {})
       .finally(() => setAiLoading(false));
   }, []);
+
+  // Dev AI Avatar (Anam) usage — org-wide minutes used this calendar month,
+  // computed backend-side from Anam's own session records (see
+  // GET /api/anam/usage in back/routes/AnamAPI.js — Anam has no dedicated
+  // usage API, so this sums session durations itself).
+  useEffect(() => {
+    fetch(apiUrl("/api/anam/usage"), { headers: authHeader() })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || "Could not load Anam usage.");
+        setAnamUsage(d);
+      })
+      .catch((e) => setAnamUsageError(e.message))
+      .finally(() => setAnamUsageLoading(false));
+  }, []);
+
+  // Live refresh: hits each provider's real /models endpoint on the backend
+  // (see ai-status?live=1) instead of just checking whether an env key is
+  // set, so this both confirms the provider is actually reachable right now
+  // and pulls back the model ids really running behind it.
+  const handleRefreshProviders = async () => {
+    setAiRefreshing(true);
+    try {
+      const r = await fetch(apiUrl("/api/settings/ai-status?live=1"));
+      const d = await r.json().catch(() => ({}));
+      setProviders(d.providers || []);
+    } catch {
+      // leave the existing list in place on failure
+    } finally {
+      setAiRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     getPredictionPools()
@@ -296,6 +341,22 @@ const SettingsPage = () => {
   const handleProvider = (id) => {
     setDefProvider(id);
     localStorage.setItem("mctosh_ai_provider", id);
+  };
+
+  // Persists the chosen model for one provider (overrides its env-var
+  // default backend-side — see PATCH /api/settings/ai-provider-model).
+  const handleProviderModel = async (providerId, model) => {
+    setProviders((prev) => prev.map((p) => (p.id === providerId ? { ...p, model } : p)));
+    try {
+      await fetch(apiUrl("/api/settings/ai-provider-model"), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", ...authHeader() },
+        body: JSON.stringify({ providerId, model }),
+      });
+    } catch {
+      // the select already reflects the choice locally; a failed save just
+      // means it won't survive a refresh, which the user can retry
+    }
   };
 
   const handleSaveSocial = async () => {
@@ -543,11 +604,11 @@ const SettingsPage = () => {
           {section === "prompts" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Prompts</h2>
-              <p className="sett_section_desc">Edit the AI prompts used across MCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
+              <p className="sett_section_desc">Edit the AI prompts used across AMCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
 
               <PromptEditor
                 label="Hyle Extraction"
-                desc="Used when extracting hyles from PDF, Word, or image sources — the core MCTOSHS classification engine."
+                desc="Used when extracting hyles from PDF, Word, or image sources — the core AMCTOSHS classification engine."
                 fetchUrl="/api/pdf/system-message"
                 saveUrl="/api/pdf/system-message"
                 method="PATCH"
@@ -562,7 +623,7 @@ const SettingsPage = () => {
                 field="prompt"
               />
               <PromptEditor
-                label="MCTOSHS Classification Prompt"
+                label="AMCTOSHS Classification Prompt"
                 desc="The formal 12-section classification prompt accessible from the Hyle-to-Meaning page. Stored locally in your browser."
                 fetchUrl={null}
                 saveUrl={null}
@@ -575,11 +636,49 @@ const SettingsPage = () => {
           {/* ═══ AI PROVIDERS ═══ */}
           {section === "ai" && (
             <div className="sett_section">
-              <h2 className="sett_section_title">AI Providers</h2>
-              <p className="sett_section_desc">
-                Select the default AI provider used across MCTOSHS. The provider is sent with every extraction and classification request.
-                Configure API keys in your backend environment variables.
-              </p>
+              <div className="sett_section_header_row">
+                <div>
+                  <h2 className="sett_section_title">AI Providers</h2>
+                  <p className="sett_section_desc">
+                    Select the default AI provider used across AMCTOSHS. The provider is sent with every extraction and classification request.
+                    Configure API keys in your backend environment variables.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="sett_btn sett_btn--ghost sett_provider_refresh_btn"
+                  onClick={handleRefreshProviders}
+                  disabled={aiRefreshing || aiLoading}
+                  title="Ping every provider's /models endpoint to refresh status and the live model list"
+                >
+                  <i className={`fi fi-rr-refresh${aiRefreshing ? " sett_spin" : ""}`} />
+                  {aiRefreshing ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Dev AI Avatar (Anam)</span>
+                  {anamUsage?.monthStart && (
+                    <span className="sett_usage_card_period">
+                      {new Date(anamUsage.monthStart).toLocaleDateString(undefined, { month: "long", year: "numeric" })}
+                    </span>
+                  )}
+                </div>
+                {anamUsageLoading ? (
+                  <div className="sett_ai_loading">Loading usage…</div>
+                ) : anamUsageError ? (
+                  <div className="sett_usage_card_error">{anamUsageError}</div>
+                ) : (
+                  <div className="sett_usage_card_body">
+                    <span className="sett_usage_minutes">{anamUsage.minutesUsed.toLocaleString()}</span>
+                    <span className="sett_usage_unit">minutes used this month</span>
+                    <span className="sett_usage_sessions">
+                      {anamUsage.sessionCount.toLocaleString()} session{anamUsage.sessionCount === 1 ? "" : "s"}
+                    </span>
+                  </div>
+                )}
+              </div>
 
               <div id="sett_provider_default_row">
                 <span className="sett_field_label">Default provider</span>
@@ -606,12 +705,40 @@ const SettingsPage = () => {
                       >
                         <div className="sett_provider_top">
                           <span className="sett_provider_name">{p.label}</span>
-                          <span className={`sett_provider_badge${p.configured ? " sett_provider_badge--ok" : " sett_provider_badge--off"}`}>
-                            {p.configured ? "Configured" : "No key"}
+                          <span className={`sett_provider_badge sett_provider_badge--${
+                            p.status === "online" ? "ok"
+                              : p.status === "error" ? "error"
+                              : p.status === "unconfigured" ? "off"
+                              : p.configured ? "ok" : "off"
+                          }`}>
+                            {p.status === "online" ? "Online"
+                              : p.status === "error" ? "Error"
+                              : p.status === "unconfigured" ? "No key"
+                              : (p.configured ? "Configured" : "No key")}
                           </span>
                         </div>
-                        <div className="sett_provider_model">{p.model}</div>
+                        <select
+                          className="sett_provider_model_select"
+                          value={p.model}
+                          onClick={e => e.stopPropagation()}
+                          onChange={e => handleProviderModel(p.id, e.target.value)}
+                          title={p.status === "online" ? "Model in use for this provider" : "Model in use — Refresh to see the provider's live model list"}
+                        >
+                          {Array.from(new Set([p.model, ...(p.models || [])])).map(m => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                        {p.status === "online" && p.modelAvailable === false && (
+                          <div className="sett_provider_model_warn" title="This model wasn't in the provider's live /models list">
+                            ⚠ not listed by provider
+                          </div>
+                        )}
                         <div className="sett_provider_base">{p.baseUrl}</div>
+                        {p.statusMessage && (
+                          <div className={`sett_provider_status_msg${p.status === "error" ? " sett_provider_status_msg--error" : ""}`}>
+                            {p.statusMessage}
+                          </div>
+                        )}
                         {defProvider === p.id && <div className="sett_provider_active_tag">Default</div>}
                       </div>
                     ))}
@@ -768,7 +895,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">AI Access</h2>
               <p className="sett_section_desc">
-                A complete breakdown of what MCTOSHS AI can and cannot access during a conversation. Toggles for codebase and DB are available inside the Dev AI chat panel.
+                A complete breakdown of what AMCTOSHS AI can and cannot access during a conversation. Toggles for codebase and DB are available inside the Dev AI chat panel.
               </p>
 
               <div className="sett_access_group">
@@ -776,7 +903,7 @@ const SettingsPage = () => {
                   <i className="fi fi-rr-check-circle" /> Always available
                 </div>
                 <ul className="sett_access_list">
-                  <li><strong>MCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
+                  <li><strong>AMCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
                   <li><strong>Conversation history</strong> — all messages exchanged in the current session are included with each request, giving the AI full context of the ongoing conversation.</li>
                   <li><strong>Selected AI provider &amp; model</strong> — the provider you choose in the chat dropdown determines which backend inference engine processes the request.</li>
                 </ul>
@@ -836,7 +963,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">Predictive Text</h2>
               <p className="sett_section_desc">
-                Word suggestions appear while typing in any text field across MCTOSHS. Check which text pools feed the
+                Word suggestions appear while typing in any text field across AMCTOSHS. Check which text pools feed the
                 suggestion list below — each pool's word frequencies are combined, so you can mix and match. Turning
                 everything off disables suggestions entirely.
               </p>
@@ -877,11 +1004,37 @@ const SettingsPage = () => {
             </div>
           )}
 
+          {/* ═══ PDF READER ═══ */}
+          {section === "pdf_reader" && (
+            <div className="sett_section">
+              <h2 className="sett_section_title">PDF Reader</h2>
+              <p className="sett_section_desc">
+                Settings for the PDF Reader's selection bar — the thin action bar that appears under the toolbar when you double-click a word.
+              </p>
+
+              <div id="sett_provider_default_row">
+                <span className="sett_field_label">Translate to</span>
+                <select
+                  id="sett_pdf_translate_lang_select"
+                  value={pdfTranslateLang}
+                  onChange={(e) => {
+                    setPdfTranslateLang(e.target.value);
+                    localStorage.setItem("mctosh_pdf_translate_lang", e.target.value);
+                  }}
+                >
+                  {TRANSLATE_LANGUAGES.map((lang) => (
+                    <option key={lang} value={lang}>{lang}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+
           {/* ═══ THEME ═══ */}
           {section === "theme" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Theme</h2>
-              <p className="sett_section_desc">Choose the visual style for MCTOSHS. Applied immediately and remembered across sessions.</p>
+              <p className="sett_section_desc">Choose the visual style for AMCTOSHS. Applied immediately and remembered across sessions.</p>
 
               <div id="sett_theme_grid">
                 {THEMES.map(t => (

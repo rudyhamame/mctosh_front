@@ -1,5 +1,6 @@
 #mccqe_page {
-  min-height: calc(var(--vh, 1vh) * 100);
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
+  min-height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background:
     radial-gradient(circle at top left, rgba(245, 201, 120, 0.14), transparent 30%),
     linear-gradient(180deg, #f7f3ea 0%, #efe8da 100%);

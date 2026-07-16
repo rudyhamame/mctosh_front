@@ -1,5 +1,9 @@
-/* ── App shell ── */
+/* ── App shell ── the app-wide footer is hidden on this route (see
+   AppRouter.js's FooterGate — Dev AI docks inside the canvas instead, see
+   #app_scroll_stage #home_chat_root below), so nothing reserves space for
+   it here: Home gets the full viewport height. ── */
 #App_viewportScale {
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this box instead of the raw viewport */
   width: 100%;
   height: calc(var(--vh, 1vh) * 100);
   overflow: hidden;
@@ -9,266 +13,281 @@
   color: var(--color-text);
 }
 
-/* ── Header ── */
-#app_nav_header {
-  display: flex;
-  align-items: center;
-  padding: 0.65rem 1.25rem;
-  border-bottom: 1px solid var(--color-border);
-  flex-shrink: 0;
-}
-
-#app_nav_title {
-  flex: 1;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-}
-
-#app_scale_controls {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  overflow: hidden;
-  margin-right: 0.5rem;
-}
-
-#app_scale_controls button {
-  padding: 0.28rem 0.6rem;
-  border: none;
-  background: none;
-  color: var(--color-text-muted);
-  font-size: 0.82rem;
-  cursor: pointer;
-  line-height: 1;
-}
-
-#app_scale_controls button:hover:not(:disabled) {
-  color: var(--color-text);
-  background: var(--color-surface);
-}
-
-#app_scale_controls button:disabled { opacity: 0.3; cursor: default; }
-
-#app_scale_label {
-  min-width: 3rem;
-  text-align: center;
-  font-size: 0.74rem !important;
-  border-left: 1px solid var(--color-border) !important;
-  border-right: 1px solid var(--color-border) !important;
-}
-
+/* ── Logout — floats inside the canvas itself now that the old top toolbar
+   is gone, styled as the same translucent glass chip as the level cards so
+   it reads as part of the scene rather than a bar laid over it. ── */
 #app_logout_btn {
-  padding: 0.28rem 0.75rem;
+  position: absolute;
+  top: 1rem;
+  right: 1.25rem;
+  z-index: 3;
+  padding: 0.35rem 0.85rem;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.72rem;
   cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
 }
-#app_logout_btn:hover { color: var(--color-text); }
+#app_logout_btn:hover { color: var(--color-text); border-color: var(--color-text-muted); }
 
-/* ── Home grid ── */
+/* ── Dev AI — docked in the canvas's opposite corner from Logout, now that
+   the app-wide footer (its usual home, see homeChat.css) is hidden on this
+   route. #home_chat_root itself is just a plain inline flex group with no
+   positioning of its own (it's designed to sit inside the footer strip), so
+   it needs to be pinned here instead. ── */
+#app_scroll_stage #home_chat_root {
+  position: absolute;
+  bottom: 1rem;
+  right: 1.25rem;
+  z-index: 3;
+}
+
+/* The popup panel normally docks above the app footer's reserved height —
+   there's no footer here to clear, so it can sit closer to the edge. */
+#app_scroll_stage #home_chat {
+  bottom: 1.5rem;
+}
+
+/* ── Dev AI blends into the canvas ── everywhere else Dev AI lives in the
+   opaque footer strip, where a solid trigger button and panel read fine.
+   Here it floats directly over the 3D scene, so both get the same
+   translucent glass treatment as Logout and the level cards above: a
+   blurred, see-through backing instead of a flat one, so it reads as part
+   of the scene rather than a UI bar laid on top of it. Scoped to this
+   canvas-embedded instance only — the footer's own copy on every other page
+   is untouched. */
+#app_scroll_stage #home_chat_fab {
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+#app_scroll_stage #home_chat_fab:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+#app_scroll_stage #home_chat_fab.home_chat_fab--open {
+  background: color-mix(in srgb, var(--color-text-muted) 18%, transparent);
+  color: var(--color-text);
+}
+
+#app_scroll_stage #home_chat {
+  background: color-mix(in srgb, var(--color-surface) 62%, transparent);
+  border-color: color-mix(in srgb, var(--color-border) 70%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+#app_scroll_stage #home_chat_header {
+  border-color: color-mix(in srgb, var(--color-border) 55%, transparent);
+}
+#app_scroll_stage #home_chat_footer {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--color-border) 55%, transparent);
+}
+
+/* ── Home grid — the scroll-driven 3D stage ── */
 #app_home_grid {
   flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 2.5rem;
-  padding: 2.5rem;
   overflow-y: auto;
-}
-
-/* ── Quote banner ── a compact horizontal pull-quote, not a big centered
-   block — icon and text sit side by side so it stays short, with a
-   pulsing glow + shimmering tagline so it doesn't just sit flat. */
-#app_quote_banner {
+  overflow-x: hidden;
   position: relative;
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  gap: 1.5rem;
-  padding: 1.15rem 2rem;
-  border-radius: 14px;
-  background: linear-gradient(120deg, color-mix(in srgb, var(--color-highlight) 10%, var(--color-surface)), var(--color-surface) 55%);
-  border: 1px solid color-mix(in srgb, var(--color-highlight) 35%, var(--color-border));
-  animation: app_quote_glow 3.5s ease-in-out infinite;
 }
 
-@keyframes app_quote_glow {
-  0%, 100% { box-shadow: 0 0 16px -6px color-mix(in srgb, var(--color-highlight) 45%, transparent); }
-  50%      { box-shadow: 0 0 28px -4px color-mix(in srgb, var(--color-highlight) 70%, transparent); }
+/* Tall track so there's real scroll travel behind the pinned stage — height
+   is set inline per LEVELS.length (see App.js), one viewport-height of
+   travel per biological level. */
+#app_scroll_track {
+  position: relative;
+  width: 100%;
 }
 
-#app_quote_mark {
-  flex-shrink: 0;
-  font-size: 2.5rem;
-  color: var(--color-highlight);
-  opacity: 0.55;
-  line-height: 1;
+/* Pins to the top of #app_home_grid (its nearest scrolling ancestor) for
+   the whole scroll track's height, so the 3D object and the card overlay
+   stay fixed on screen while the page scrolls "through" them. */
+#app_scroll_stage {
+  position: sticky;
+  top: 0;
+  height: calc(var(--vh, 1vh) * 100);
+  overflow: hidden;
 }
 
-#app_quote_body {
+/* ── Scroll hint — fades out the instant the user starts scrolling ── */
+#app_scroll_hint {
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  min-width: 0;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+  z-index: 2;
 }
 
-#app_quote_text {
-  margin: 0;
-  font-family: Georgia, "Iowan Old Style", "Palatino Linotype", serif;
-  font-style: italic;
-  font-size: 1.02rem;
-  line-height: 1.45;
-  color: var(--color-text);
+#app_scroll_hint.app_scroll_hint--hidden {
+  opacity: 0;
 }
 
-#app_quote_tagline {
-  font-size: 0.6rem;
-  font-weight: 700;
+#app_scroll_hint_title {
+  font-size: 1.1rem;
+  font-weight: 800;
   letter-spacing: 0.2em;
-  text-transform: uppercase;
-  background: linear-gradient(90deg, var(--color-highlight), #ff9d7a 45%, var(--color-highlight));
-  background-size: 200% auto;
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-  animation: app_quote_tagline_shimmer 4s linear infinite;
+  color: var(--color-text);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
 }
 
-@keyframes app_quote_tagline_shimmer {
-  to { background-position: -200% 0; }
+#app_scroll_hint_sub {
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
 }
 
-@media (max-width: 720px) {
-  #app_quote_banner { flex-direction: column; text-align: center; }
-  #app_quote_body { align-items: center; }
+/* ── Level card overlay — one group per biological level, stacked in the
+   same spot so only the group whose LED ring the camera is currently
+   passing is visible; the rest wait faded-out underneath it. Lives in the
+   left gutter #thread_logo_canvas leaves free (see threadPyramidLogo.css),
+   never over the object itself. ── */
+#app_level_overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
 }
 
-/* ── Pipeline section ── */
-#app_pipeline_section {
+.app_level_group {
+  position: absolute;
+  left: 4%;
+  top: 50%;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 0.85rem;
-  align-self: stretch;
+  opacity: 0;
+  transform: translate(-18px, -50%);
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  pointer-events: none;
+  width: min(300px, 26vw);
 }
 
-#app_pipeline_label {
-  font-size: 0.56rem;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  opacity: 0.45;
-  font-weight: 700;
-  margin: 0;
-  align-self: center;
+.app_level_group--active {
+  opacity: 1;
+  transform: translate(0, -50%);
+  pointer-events: auto;
 }
 
-#app_pipeline_row {
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  overflow-x: auto;
-  width: 100%;
-  padding-bottom: 0.35rem; /* room for scrollbar */
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-border) transparent;
-}
-
-/* ── Pipeline card ── */
-.app_pipeline_card {
-  position: relative;
-  padding-top: 2rem !important;
-}
-
-.app_pipeline_step_num {
-  position: absolute;
-  top: 0.7rem;
-  left: 1rem;
-  font-size: 0.55rem;
-  font-weight: 800;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  letter-spacing: 0.06em;
-  color: var(--nav-color);
-  opacity: 0.55;
-}
-
-/* ── Pipeline connector ── */
-.app_pipeline_connector {
+.app_level_group_head {
   display: flex;
   align-items: center;
-  padding: 0 0.35rem;
-  flex-shrink: 0;
-  align-self: center;
-  margin-bottom: 0.5rem;
+  gap: 0.55rem;
 }
 
-.app_connector_line {
-  width: 14px;
-  height: 1px;
-  background: var(--color-border);
-}
-
-.app_connector_arrow {
-  font-size: 0.7rem;
-  color: var(--color-text-muted);
-  opacity: 0.35;
-  line-height: 1;
-}
-
-/* ── Other cards section ── */
-#app_other_section {
+.app_level_group_letter {
   display: flex;
-  gap: 1.5rem;
-  flex-wrap: wrap;
+  align-items: center;
   justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--nav-color) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--nav-color) 16%, var(--color-surface));
+  color: var(--nav-color);
+  font-weight: 800;
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
 }
 
-/* ── Home card (shared) ── */
+.app_level_group_label {
+  font-size: 0.6rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--nav-color);
+  font-weight: 700;
+}
+
+.app_level_group_blurb {
+  margin: 0;
+  max-width: 100%;
+  text-align: left;
+  font-size: 0.72rem;
+  font-style: italic;
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
+}
+
+.app_level_group_row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  align-items: stretch;
+  width: 100%;
+}
+
+/* ── Home card — compact and translucent (a glass chip, not an opaque
+   panel), since it now sits over the same stage as the 3D object instead
+   of a plain page background and must never read as blocking it ── */
 .app_home_card {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
-  padding: 2.5rem 2.25rem;
-  width: 260px;
-  border: 1px solid var(--color-border);
-  border-top: 3px solid var(--nav-color);
-  border-radius: 10px;
-  background: var(--color-surface);
+  gap: 0.3rem;
+  padding: 0.75rem 0.9rem;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--nav-color) 35%, var(--color-border));
+  border-left: 3px solid var(--nav-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface) 62%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   cursor: pointer;
   text-align: left;
   transition: border-color 0.15s, background 0.15s, transform 0.12s;
 }
 
 .app_home_card:hover {
-  background: color-mix(in srgb, var(--nav-color) 5%, var(--color-surface));
-  transform: translateY(-3px);
+  background: color-mix(in srgb, var(--nav-color) 12%, var(--color-surface) 62%);
+  transform: translateX(3px);
 }
 
 .app_home_card_icon {
-  font-size: 1.5rem;
+  font-size: 1.1rem;
   color: var(--nav-color);
   line-height: 1;
 }
 
 .app_home_card_label {
-  font-size: 1rem;
+  font-size: 0.82rem;
   font-weight: 700;
   color: var(--nav-color);
   letter-spacing: 0.02em;
 }
 
 .app_home_card_desc {
-  font-size: 0.76rem;
+  font-size: 0.68rem;
   font-weight: 400;
   color: var(--color-text-muted);
-  line-height: 1.6;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  /* Not enough width for a legible side column — the cards drop back to a
+     bottom-anchored, full-width band over the object instead. */
+  .app_level_group {
+    left: 50%;
+    top: auto;
+    bottom: 4%;
+    align-items: center;
+    width: min(92vw, 420px);
+    transform: translate(-50%, 14px);
+  }
+  .app_level_group--active { transform: translate(-50%, 0); }
+  .app_level_group_blurb { text-align: center; }
 }

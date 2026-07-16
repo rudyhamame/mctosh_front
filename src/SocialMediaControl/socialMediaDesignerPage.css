@@ -1,5 +1,6 @@
 #smd_page {
-  min-height: 100vh;
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
+  min-height: calc(100vh - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background:
     radial-gradient(circle at top left, rgba(255, 122, 89, 0.16), transparent 24%),
     radial-gradient(circle at top right, rgba(79, 195, 247, 0.12), transparent 28%),

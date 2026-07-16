@@ -4,9 +4,11 @@ import {
   Navigate,
   Route,
   Routes,
+  useLocation,
   useParams,
 } from "react-router-dom";
 import { SplitViewProvider, SplitViewFrame, SplitViewButton } from "./App/SplitView";
+import AppFooter from "./App/AppFooter";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 import { clearStoredPatientSession, readStoredPatientSession } from "./utils/patientSessionCleanup";
 
@@ -18,6 +20,7 @@ const PredictionOverlay = lazy(() => import("./Prediction/PredictionOverlay"));
 const DraftPage = lazy(() => import("./Draft/DraftPage"));
 const DraftListPage = lazy(() => import("./Draft/DraftListPage"));
 const PDFPage = lazy(() => import("./PDF/PDFPage"));
+const PDFReaderWorkspace = lazy(() => import("./PDF/PDFReaderWorkspace"));
 const CardPage = lazy(() => import("./Card/CardPage"));
 const PhenomenaPage = lazy(() => import("./Phenomena/PhenomenaPage"));
 const AboutPage = lazy(() => import("./About/AboutPage"));
@@ -28,8 +31,6 @@ const YouTubePage = lazy(() => import("./YouTube/YouTubePage"));
 const YouTubeSourcePage = lazy(() => import("./Hylomorphism/YouTubeSourcePage"));
 const SettingsPage = lazy(() => import("./Settings/SettingsPage"));
 const PatientInstantiationPage = lazy(() => import("./PatientInstantiation/PatientInstantiationPage"));
-const PatientModelling = lazy(() => import("./PatientModelling/PatientModelling"));
-const TracesCollector = lazy(() => import("./TracesCollector/TracesCollector"));
 const ClinicalSchemata = lazy(() => import("./ClinicalSchemata/ClinicalSchemata"));
 const UnitsExtraction = lazy(() => import("./UnitsExtraction/UnitsExtraction"));
 const LinguisticAnalysisPage = lazy(() => import("./LinguisticAnalysis/LinguisticAnalysisPage"));
@@ -38,6 +39,10 @@ const SocialMediaControlPage = lazy(() => import("./SocialMediaControl/SocialMed
 const InstagramHomePreviewPage = lazy(() => import("./SocialMediaControl/InstagramHomePreviewPage"));
 const SocialMediaDesignerPage = lazy(() => import("./SocialMediaControl/SocialMediaDesignerPage"));
 const HumanAtlasPage = lazy(() => import("./HumanAtlas/HumanAtlasPage"));
+const FreeformPage = lazy(() => import("./Freeform/FreeformPage"));
+const FreeformListPage = lazy(() => import("./Freeform/FreeformListPage"));
+const ClinicalVignetteGeneratorPage = lazy(() => import("./ClinicalVignetteGenerator/ClinicalVignetteGeneratorPage"));
+const MedicalExamsPage = lazy(() => import("./MedicalExams/MedicalExamsPage"));
 const PatientLoginPage = lazy(() => import("./PatientApp/PatientLoginPage"));
 const PatientSignupPage = lazy(() => import("./PatientApp/PatientSignupPage"));
 const PatientCallPage = lazy(() => import("./PatientApp/PatientCallPage"));
@@ -52,6 +57,18 @@ const RouteFallback = () => <div id="route_loading" aria-hidden="true" />;
 const PdfCardRedirect = () => {
   const { card } = useParams();
   return <Navigate to={`/card/${card}`} replace />;
+};
+
+// Home renders its own Dev AI trigger docked inside the 3D canvas (see
+// App.js) instead of the app-wide footer strip — a bottom toolbar has
+// nowhere to sit over a full-bleed scroll stage. Every other authenticated
+// page keeps the footer (Dev AI + split view) exactly as before; this only
+// suppresses it on that one route. Needs useLocation, which only works
+// inside the <Router> below, so it can't live directly in AppRouter itself.
+const FooterGate = ({ children }) => {
+  const location = useLocation();
+  if (location.pathname === "/home") return null;
+  return children;
 };
 
 const AppRouter = () => {
@@ -127,7 +144,7 @@ const AppRouter = () => {
   );
 
   return (
-    // MCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
+    // AMCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
     // /cvs/ instead of the domain root, so mctoshs.ca/cvs/login is the main page.
     <Router basename="/cvs" future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <SplitViewProvider>
@@ -151,7 +168,7 @@ const AppRouter = () => {
         <Route path="/hylomorphism/youtube_source" element={auth(withSuspense(<YouTubeSourcePage />))} />
         <Route path="/hylomorphism/pdf_source"     element={auth(withSuspense(<PDFPage />))} />
         <Route path="/hylomorphism"       element={auth(withSuspense(<HylomorphismPage />))} />
-        <Route path="/pdf-reader"         element={auth(withSuspense(<PDFPage embeddedHomePath="/home" homeLabel="Home" hideHyleControls />))} />
+        <Route path="/pdf-reader"         element={auth(withSuspense(<PDFReaderWorkspace />))} />
         <Route path="/sources"            element={auth(withSuspense(<SourcesPage />))} />
         <Route path="/youtube"            element={auth(withSuspense(<YouTubePage />))} />
         <Route path="/ai"                 element={auth(withSuspense(<AIChat />))} />
@@ -161,8 +178,6 @@ const AppRouter = () => {
         <Route path="/draft"              element={auth(withSuspense(<DraftListPage />))} />
         <Route path="/draft/:id"          element={auth(withSuspense(<DraftPage />))} />
         <Route path="/patient-instantiation" element={auth(withSuspense(<PatientInstantiationPage />))} />
-        <Route path="/patient-modelling"     element={auth(withSuspense(<PatientModelling />))} />
-        <Route path="/traces-collector"      element={auth(withSuspense(<TracesCollector />))} />
         <Route path="/clinical-schemata"      element={auth(withSuspense(<ClinicalSchemata />))} />
         <Route path="/units-extraction"       element={auth(withSuspense(<UnitsExtraction />))} />
         <Route path="/linguistic-analysis"    element={auth(withSuspense(<LinguisticAnalysisPage />))} />
@@ -170,6 +185,10 @@ const AppRouter = () => {
         <Route path="/instagram-home-preview" element={auth(withSuspense(<InstagramHomePreviewPage />))} />
         <Route path="/social-media-designer"  element={auth(withSuspense(<SocialMediaDesignerPage />))} />
         <Route path="/human-atlas"            element={auth(withSuspense(<HumanAtlasPage />))} />
+        <Route path="/freeform"               element={auth(withSuspense(<FreeformListPage />))} />
+        <Route path="/clinical-vignettes"     element={auth(withSuspense(<ClinicalVignetteGeneratorPage />))} />
+        <Route path="/medical-exams"          element={auth(withSuspense(<MedicalExamsPage />))} />
+        <Route path="/freeform/:id"           element={auth(withSuspense(<FreeformPage />))} />
 
         {/* Patient-facing app — separate account system, separate auth
             gate (authPatient/canAccessPatientRoutes), independent of the
@@ -196,9 +215,15 @@ const AppRouter = () => {
       </Routes>
       </SplitViewFrame>
 
-      {canAccessAuthenticatedRoutes && withSuspense(<HomeChat />)}
+      {canAccessAuthenticatedRoutes && (
+        <FooterGate>
+          <AppFooter>
+            {withSuspense(<HomeChat />)}
+            <SplitViewButton />
+          </AppFooter>
+        </FooterGate>
+      )}
       {canAccessAuthenticatedRoutes && withSuspense(<PredictionOverlay />)}
-      {canAccessAuthenticatedRoutes && <SplitViewButton />}
       </SplitViewProvider>
     </Router>
   );

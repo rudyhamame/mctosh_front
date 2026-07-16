@@ -1,0 +1,219 @@
+#pdfw_root {
+  position: relative; /* containing block for any position:absolute descendants (mirrors the fix already applied to every other page root this app-wide footer sits under) */
+  display: flex;
+  flex-direction: column;
+  height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px));
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+#pdfw_header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+
+#pdfw_back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+#pdfw_back:hover { background: color-mix(in srgb, var(--color-highlight) 8%, transparent); }
+
+#pdfw_split_toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+#pdfw_split_toggle:hover { background: color-mix(in srgb, var(--color-highlight) 8%, transparent); }
+#pdfw_split_toggle.pdfw_split_toggle--active {
+  background: var(--color-highlight);
+  border-color: var(--color-highlight);
+  color: #fff;
+}
+
+#pdfw_panes {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.pdfw_pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+#pdfw_panes.pdfw_panes--split .pdfw_pane:not(:last-child) {
+  border-right: 1px solid var(--color-border);
+}
+
+.pdfw_tabbar {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+}
+
+/* Nested in the shared header (primary pane) instead of its own row — the
+   header already supplies padding/background/border, and the strip should
+   flex to fill the space between the Back and Split-view buttons. */
+#pdfw_header .pdfw_tabbar {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+}
+
+.pdfw_tabstrip {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  /* Shrink-to-fit its tabs (grow: 0) so the "+" button sits right after the
+     last tab instead of being pushed to the far edge of the bar — but still
+     shrink and scroll internally once there's no room left. */
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.pdfw_tab {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 200px;
+  padding: 0.35rem 0.4rem 0.35rem 0.7rem;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.pdfw_tab:hover { background: color-mix(in srgb, var(--color-highlight) 6%, transparent); }
+.pdfw_tab--active {
+  background: var(--color-bg);
+  border-color: var(--color-border);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.pdfw_tab_check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-text-muted);
+}
+.pdfw_tab_check .fi-sr-checkbox { color: var(--color-highlight); }
+
+.pdfw_tab_label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdfw_tab_type {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  opacity: 0.75;
+}
+
+.pdfw_tab_close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.pdfw_tab_close:hover { background: color-mix(in srgb, var(--color-highlight) 20%, transparent); color: var(--color-text); }
+
+.pdfw_tab_add_wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.pdfw_tab_add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.pdfw_tab_add:hover { background: color-mix(in srgb, var(--color-highlight) 8%, transparent); color: var(--color-text); }
+
+.pdfw_picker {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  width: 260px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+  padding: 0.5rem;
+}
+
+.pdfw_picker_select {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.78rem;
+}
+.pdfw_picker_select:disabled { opacity: 0.6; cursor: default; }
+
+.pdfw_pane_body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.pdfw_pane_empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  height: 100%;
+  color: var(--color-text-muted);
+}
+.pdfw_pane_empty i { font-size: 2rem; opacity: 0.4; }
+.pdfw_pane_empty p { margin: 0; font-size: 0.82rem; }

@@ -1,0 +1,24 @@
+/* --app-footer-height is the single source of truth (defined in color.css
+   alongside the other global tokens) — every full-viewport page subtracts
+   it from 100vh, and homeChat.css/splitView.css use it to dock their
+   popovers above this bar, instead of each duplicating the raw px value. */
+#app_footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: var(--app-footer-height, 44px);
+  display: flex;
+  align-items: center;
+  padding: 0 1rem;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  z-index: 950; /* below SplitViewButton/PredictionOverlay's fixed corners, above page content */
+}
+
+#app_footer_end {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}

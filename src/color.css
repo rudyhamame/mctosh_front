@@ -9,6 +9,7 @@
   --color-bg:         #0d0d1a;
   --color-surface:    #1e1e3a;
   --color-border:     #2a2a4a;
+  --app-footer-height: 44px; /* the fixed app-wide toolbar strip in AppFooter.jsx — full-viewport pages must subtract this or their bottom edge/toolbars sit behind it */
 }
 
 /* ── Light theme ───────────────────────────────────────────────────────────── */

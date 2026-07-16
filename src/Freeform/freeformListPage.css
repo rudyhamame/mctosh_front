@@ -1,0 +1,169 @@
+#ffl_list_page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
+  background: var(--color-bg);
+  color: var(--color-text);
+  padding-bottom: 2rem;
+}
+
+#ffl_list_header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#ffl_list_back_btn {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+#ffl_list_back_btn:hover { color: var(--color-text); }
+
+#ffl_list_title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+#ffl_list_new_btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid color-mix(in srgb, var(--color-highlight) 45%, var(--color-border));
+  border-radius: 6px;
+  background: none;
+  color: var(--color-highlight);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+#ffl_list_new_btn:hover:not(:disabled) { filter: brightness(1.15); }
+#ffl_list_new_btn:disabled { opacity: 0.5; cursor: default; }
+
+#ffl_list_status_msg,
+#ffl_list_error {
+  margin: 2rem auto;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+}
+#ffl_list_error { color: #f44336; }
+
+#ffl_list_empty {
+  margin: 3rem auto;
+  text-align: center;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+}
+#ffl_list_empty i { font-size: 2.2rem; opacity: 0.5; }
+#ffl_list_empty button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--color-highlight) 45%, var(--color-border));
+  border-radius: 6px;
+  background: none;
+  color: var(--color-highlight);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 0.3rem;
+}
+
+#ffl_list_grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  padding: 1.2rem;
+}
+
+.ffl_list_card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  cursor: pointer;
+  min-height: 110px;
+}
+.ffl_list_card:hover { border-color: var(--color-text-muted); }
+
+.ffl_list_card_top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ffl_list_card_title {
+  font-weight: 700;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.ffl_list_rename_input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid var(--color-highlight);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.ffl_list_card_actions {
+  display: flex;
+  gap: 0.15rem;
+  flex-shrink: 0;
+}
+.ffl_list_card_actions button {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+.ffl_list_card_actions button:hover:not(:disabled) { color: var(--color-text); }
+.ffl_list_card_actions button:disabled { opacity: 0.4; cursor: default; }
+
+.ffl_list_card_preview {
+  flex: 1;
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.ffl_list_card_date {
+  font-size: 0.62rem;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}

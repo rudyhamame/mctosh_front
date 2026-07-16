@@ -1,8 +1,9 @@
 /* ── Settings page layout ───────────────────────────────────────────────────── */
 #sett_page {
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: calc(100vh - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background: var(--color-bg);
   color: var(--color-text);
   overflow: hidden;
@@ -194,6 +195,25 @@
 .sett_save_status--err { color: var(--color-highlight); }
 
 /* ── AI providers ───────────────────────────────────────────────────────────── */
+.sett_section_header_row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+
+.sett_provider_refresh_btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.sett_spin { animation: sett_spin_kf 0.8s linear infinite; }
+@keyframes sett_spin_kf { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
 #sett_provider_default_row {
   display: flex;
   align-items: center;
@@ -254,13 +274,27 @@
   border-radius: 20px;
   font-weight: 500;
 }
-.sett_provider_badge--ok  { background: #1b5e2033; color: #4caf50; border: 1px solid #4caf5055; }
-.sett_provider_badge--off { background: #33000033; color: #e57373;  border: 1px solid #e5737355; }
+.sett_provider_badge--ok    { background: #1b5e2033; color: #4caf50; border: 1px solid #4caf5055; }
+.sett_provider_badge--off   { background: #33000033; color: #e57373; border: 1px solid #e5737355; }
+.sett_provider_badge--error { background: #4d260033; color: #ffb74d; border: 1px solid #ffb74d55; }
 
-.sett_provider_model {
+.sett_provider_model_select {
+  width: 100%;
   font-size: 11px;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   font-family: monospace;
+  margin-bottom: 4px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  cursor: pointer;
+}
+.sett_provider_model_select:hover { border-color: var(--color-accent); }
+
+.sett_provider_model_warn {
+  font-size: 10px;
+  color: #ffb74d;
   margin-bottom: 4px;
 }
 
@@ -270,6 +304,14 @@
   opacity: 0.6;
   word-break: break-all;
 }
+
+.sett_provider_status_msg {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  opacity: 0.75;
+  margin-top: 6px;
+}
+.sett_provider_status_msg--error { color: #ffb74d; opacity: 1; }
 
 .sett_provider_active_tag {
   position: absolute;
@@ -287,6 +329,66 @@
   color: var(--color-text-muted);
   font-size: 13px;
   padding: 12px 0;
+}
+
+/* ── Dev AI Avatar (Anam) usage card ──────────────────────────────────────── */
+.sett_usage_card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+
+.sett_usage_card_header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.sett_usage_card_title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.sett_usage_card_period {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.75;
+}
+
+.sett_usage_card_body {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sett_usage_minutes {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--color-highlight);
+  font-variant-numeric: tabular-nums;
+}
+
+.sett_usage_unit {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.sett_usage_sessions {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  opacity: 0.65;
+  margin-left: auto;
+}
+
+.sett_usage_card_error {
+  font-size: 12px;
+  color: #ffb74d;
 }
 
 /* ── Social publishing ─────────────────────────────────────────────────────── */

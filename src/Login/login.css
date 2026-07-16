@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   MCTOSHS LOGIN — 3D Rotatable Animation (Three.js)
+   AMCTOSHS LOGIN — 3D Rotatable Animation (Three.js)
    ════════════════════════════════════════════════════════════════ */
 
 /* ── Page shell ── */
@@ -598,7 +598,7 @@
 }
 
 /* ══════════════════════════════════════
-   MCTOSHS Pipeline Nodes
+   AMCTOSHS Pipeline Nodes
    ══════════════════════════════════════ */
 .mctosh_node {
   position: absolute;
@@ -818,7 +818,7 @@
 
 #pr_rim { display: none; }
 
-/* ── Labels card — MCTOSHS / Patient Reality naming + item legend ──
+/* ── Labels card — AMCTOSHS / Patient Reality naming + item legend ──
    Flat, outside #login_stage like #object_info, so it never rotates,
    curves, or tilts with the 3D object and stays legible at all times. */
 #labels_card_head {
@@ -886,9 +886,9 @@
 }
 
 /* ══════════════════════════════════════
-   MCTOSHS — inner 3D solid sphere
+   AMCTOSHS — inner 3D solid sphere
    ══════════════════════════════════════ */
-/* MCTOSHS sphere — glass orb containing all 7 orbital modes inside it */
+/* AMCTOSHS sphere — glass orb containing all 7 orbital modes inside it */
 #mctosh_sphere {
   position: absolute;
   top: 50%; left: 50%;
@@ -920,7 +920,7 @@
   z-index: 3;
 }
 
-/* Void center — inside M orbit, not part of MCTOSHS; matches Patient Reality color */
+/* Void center — inside M orbit, not part of AMCTOSHS; matches Patient Reality color */
 #ms_void {
   position: absolute;
   top: 50%;
@@ -935,7 +935,7 @@
   z-index: 2;
 }
 
-/* Inner M-orbit ring — marks the hollow void boundary inside MCTOSHS */
+/* Inner M-orbit ring — marks the hollow void boundary inside AMCTOSHS */
 #ms_m_ring {
   position: absolute;
   top: 50%;
@@ -976,7 +976,7 @@
   }
 }
 
-/* MCTOSHS label — shown at center of the glass sphere */
+/* AMCTOSHS label — shown at center of the glass sphere */
 #ms_label {
   position: absolute;
   top: 50%; left: 50%;

@@ -39,7 +39,7 @@ const PatientLoginPage = ({ onLogin }) => {
   return (
     <div className="pa_page">
       <div className="pa_card">
-        <h1 className="pa_title">MCTOSHS</h1>
+        <h1 className="pa_title">AMCTOSHS</h1>
         <p className="pa_subtitle">Sign in to talk with your care team.</p>
         <form onSubmit={handleSubmit}>
           <div className="pa_field">

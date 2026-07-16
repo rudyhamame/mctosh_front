@@ -57,7 +57,7 @@ const sharedProxyConfig = {
 };
 
 export default defineConfig({
-  // MCTOSHS | CVS (Cardiovascular System) is a sub-app of the future MCTOSH
+  // AMCTOSHS | CVS (Cardiovascular System) is a sub-app of the future MCTOSH
   // product, served at mctoshs.ca/cvs/ instead of the domain root.
   base: "/cvs/",
   plugins: [react(), basicSsl()],

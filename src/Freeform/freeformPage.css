@@ -1,0 +1,442 @@
+#ff_page {
+  position: relative; /* containing block for #ff_toolbar/#ff_zoom_controls below — without this they had no positioned ancestor and anchored to the raw viewport edge instead of this (correctly footer-shrunk) box */
+  display: flex;
+  flex-direction: column;
+  height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* --vh (set in AppRouter.js from window.innerHeight) instead of raw 100vh — iOS Safari's 100vh includes the area behind its dynamic toolbar, so raw 100vh overshoots the real visible viewport on iPad and pushes this box (and the toolbar anchored to its bottom edge) down behind both Safari's own chrome and the app footer */
+  background: var(--color-bg);
+  overflow: hidden;
+  /* This is app UI chrome, not a document — nothing in the header/toolbar
+     (button labels like "Clear", icons, etc.) should be selectable. Was only
+     applied to #ff_canvas before, so a tap near the Clear button's text on
+     iPad could still highlight it as a native text selection. Doesn't affect
+     the board-name <input> or the sticky/text-element <textarea>s — browsers
+     always allow selection inside actual form controls regardless of an
+     ancestor's user-select. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none; /* also suppress iOS's press-and-hold callout (Copy/Look Up) on this chrome */
+}
+
+/* ── Header ── */
+#ff_header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.7rem 1.1rem;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+  flex-shrink: 0;
+  z-index: 5;
+}
+
+#ff_back {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+/* (hover: hover) matters everywhere in this file — plain :hover rules "stick"
+   on iOS Safari after a tap (it simulates hover on touch and doesn't clear it
+   until you tap elsewhere), which made one-shot action buttons like Clear
+   look permanently selected/active while using other tools. Gating on real
+   hover capability means touch devices never see these at all — a tap just
+   activates the button and moves on, no lingering highlight. */
+@media (hover: hover) {
+  #ff_back:hover { background: color-mix(in srgb, var(--color-highlight) 8%, transparent); }
+}
+
+.ff_page--status {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.9rem;
+  padding: 0.7rem 1.1rem;
+}
+
+#ff_status_msg {
+  margin: 0.4rem 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+#ff_board_name {
+  flex: 1;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+}
+
+#ff_board_name:focus {
+  border-color: var(--color-border);
+  outline: none;
+}
+
+@media (hover: hover) {
+  #ff_board_name:hover { border-color: var(--color-border); }
+}
+
+#ff_save_status {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+#ff_header_actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#ff_header_actions button {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 34px;
+  padding: 0 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  #ff_header_actions button:hover:not(:disabled) { background: color-mix(in srgb, var(--color-highlight) 8%, transparent); }
+}
+#ff_header_actions button:disabled { opacity: 0.35; cursor: default; }
+
+/* ── Canvas ── */
+#ff_canvas {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  background: var(--color-bg);
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none; /* scoped to the canvas only — stops native pinch-zoom/scroll here so the custom pinch gesture below owns it, without affecting the rest of the app */
+}
+
+#ff_dot_grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--color-text-muted) 55%, transparent) 1px, transparent 1px);
+  pointer-events: none;
+}
+
+#ff_world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+#ff_strokes_layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+}
+
+/* ── Elements ── */
+.ff_el {
+  position: absolute;
+  box-sizing: border-box;
+}
+
+.ff_el--selected {
+  outline: 2px dashed var(--color-highlight);
+  outline-offset: 3px;
+}
+
+.ff_shape {
+  border: 2px solid;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.ff_shape--ellipse { border-radius: 50%; }
+
+.ff_shape--draft {
+  opacity: 0.7;
+  border-style: dashed;
+}
+
+/* ── Marquee (container) selection box ── */
+#ff_marquee {
+  position: absolute;
+  border: 1.5px dashed var(--color-highlight);
+  background: color-mix(in srgb, var(--color-highlight) 12%, transparent);
+  pointer-events: none;
+}
+
+.ff_sticky {
+  border: 1.5px solid;
+  border-radius: 10px;
+  padding: 0.6rem 0.7rem;
+  box-shadow: 0 4px 14px -4px rgba(0, 0, 0, 0.25);
+  cursor: move;
+}
+
+.ff_text {
+  cursor: move;
+  padding: 0.2rem 0.3rem;
+}
+
+.ff_el_text {
+  width: 100%;
+  height: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: hidden;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  pointer-events: none;
+  opacity: 0.9;
+}
+
+.ff_sticky .ff_el_text { font-size: 0.85rem; }
+
+.ff_el_editor {
+  width: 100%;
+  height: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  padding: 0;
+}
+
+.ff_resize_handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  background: var(--color-highlight);
+  border: 1.5px solid var(--color-surface);
+  cursor: nwse-resize;
+}
+
+/* ── Floating toolbar ── */
+#ff_toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 1.4rem;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.4rem;
+  border-radius: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.35);
+  z-index: 6;
+}
+
+.ff_tool_btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent; /* suppress iOS Safari's default gray tap-flash overlay, which otherwise briefly masks the real active/hover styling below */
+}
+
+/* (hover: hover) keeps this off touch devices entirely — see the note near
+   the top of this file. :not(--active) is a separate, smaller concern: on
+   desktop, :hover has higher specificity than a single class, so without it
+   resting the mouse over the already-active tool would still override its
+   highlight with the plain hover tint. */
+@media (hover: hover) {
+  .ff_tool_btn:hover:not(.ff_tool_btn--active) { background: color-mix(in srgb, var(--color-highlight) 10%, transparent); color: var(--color-text); }
+}
+
+.ff_tool_btn--active {
+  background: var(--color-highlight);
+  color: #fff;
+}
+
+/* ── Style panel (colors / stroke width) ── */
+#ff_style_panel {
+  position: absolute;
+  left: 50%;
+  bottom: 5.4rem;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.35);
+  z-index: 6;
+}
+
+#ff_color_row { display: flex; gap: 0.4rem; }
+
+.ff_color_swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+}
+
+.ff_color_swatch--active {
+  border-color: var(--color-text);
+  transform: scale(1.15);
+}
+
+#ff_width_row { display: flex; gap: 0.4rem; }
+
+.ff_width_btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  cursor: pointer;
+}
+
+.ff_width_btn span {
+  border-radius: 50%;
+  background: var(--color-text);
+  display: block;
+}
+
+.ff_width_btn--active { border-color: var(--color-highlight); background: color-mix(in srgb, var(--color-highlight) 12%, transparent); }
+
+/* ── Eraser options panel (what to erase / how to erase / brush size) ── */
+#ff_eraser_panel {
+  position: absolute;
+  left: 50%;
+  bottom: 5.4rem;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.35);
+  z-index: 6;
+}
+
+.ff_eraser_group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.ff_eraser_group_label {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  opacity: 0.7;
+}
+
+.ff_eraser_option_row { display: flex; gap: 0.35rem; }
+
+.ff_eraser_option_btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  width: 64px;
+  padding: 0.4rem 0.3rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.ff_eraser_option_btn i { font-size: 0.95rem; }
+.ff_eraser_option_btn span { font-size: 0.62rem; white-space: nowrap; }
+
+@media (hover: hover) {
+  .ff_eraser_option_btn:hover:not(.ff_eraser_option_btn--active) {
+    background: color-mix(in srgb, var(--color-highlight) 10%, transparent);
+    color: var(--color-text);
+  }
+}
+
+.ff_eraser_option_btn--active {
+  border-color: var(--color-highlight);
+  background: var(--color-highlight);
+  color: #fff;
+}
+
+/* ── Zoom controls ── */
+#ff_zoom_controls {
+  position: absolute;
+  right: 1.1rem;
+  bottom: 1.4rem;
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.3rem;
+  border-radius: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.35);
+  z-index: 6;
+}
+
+#ff_zoom_controls button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 0.35rem;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@media (hover: hover) {
+  #ff_zoom_controls button:hover { background: color-mix(in srgb, var(--color-highlight) 10%, transparent); }
+}
+
+#ff_zoom_label { min-width: 44px; }

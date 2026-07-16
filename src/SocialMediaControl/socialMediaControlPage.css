@@ -1,5 +1,6 @@
 #smc_page {
-  min-height: 100vh;
+  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this (footer-shrunk) box instead of the raw viewport */
+  min-height: calc(100vh - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background: var(--color-bg);
   color: var(--color-text);
   overflow-x: hidden;

@@ -167,7 +167,7 @@ export default function LoginAnim() {
     scene.add(buildGlass(PR_R, 0x4fc3f7, 0.06));
     scene.add(buildRimGlow(PR_R + 3, 0x1a6080, 0.18));
 
-    // ── MCTOSHS sphere ────────────────────────────────────────────
+    // ── AMCTOSHS sphere ────────────────────────────────────────────
     scene.add(buildGlass(MS_R, 0x00e5ff, 0.09, THREE.DoubleSide));
     scene.add(buildRimGlow(MS_R - 1, 0x00e5ff, 0.24));
 
