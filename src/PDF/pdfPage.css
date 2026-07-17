@@ -134,15 +134,22 @@
 
 /* ── Toolbar ── */
 #pdf_toolbar {
+  position: absolute;
+  z-index: 26;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.6rem;
-  padding: 0.55rem 1rem;
-  border-bottom: 1px solid var(--color-border);
+  padding: 0.6rem 0.7rem;
+  border: 1px solid color-mix(in srgb, var(--color-border) 88%, rgba(255,255,255,0.12));
+  border-radius: 18px;
   font-size: 0.85rem;
-  flex-shrink: 0;
-  background: var(--color-bg);
+  width: max-content;
+  max-width: min(calc(100% - 2rem), 1100px);
+  background: color-mix(in srgb, var(--color-surface) 86%, transparent);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18), 0 2px 10px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(18px) saturate(1.08);
+  -webkit-backdrop-filter: blur(18px) saturate(1.08);
+  transition: left 0.18s ease, top 0.18s ease, transform 0.18s ease;
 }
 
 /* Left = tool selection + document actions, center = page navigation,
@@ -156,9 +163,70 @@
   flex-wrap: wrap;
   gap: 0.6rem;
 }
-#pdf_toolbar_left { flex: 1; min-width: 0; }
+#pdf_toolbar_left { min-width: 0; }
 #pdf_toolbar_center { flex-shrink: 0; }
-#pdf_toolbar_right { flex: 1; min-width: 0; justify-content: flex-end; }
+#pdf_toolbar_right { min-width: 0; }
+
+#pdf_toolbar.pdf_toolbar--dragging {
+  transition: none;
+}
+
+/* Docked to the left/right edge — lay out as a vertical column instead of
+   the default horizontal row (previously unstyled: dragging the toolbar to
+   a side edge just left a wide horizontal bar sticking out sideways).
+   max-width/max-height swap for the same reason: a side-docked toolbar is
+   height-constrained by the viewport, not width-constrained. */
+#pdf_toolbar.pdf_toolbar--left,
+#pdf_toolbar.pdf_toolbar--right {
+  flex-direction: column;
+  width: max-content;
+  max-width: none;
+  height: max-content;
+  max-height: min(calc(100% - 2rem), 90vh);
+  overflow-y: auto;
+}
+
+#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_handle,
+#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_handle {
+  transform: rotate(90deg);
+}
+
+#pdf_toolbar.pdf_toolbar--left #pdf_toolbar_left,
+#pdf_toolbar.pdf_toolbar--left #pdf_toolbar_center,
+#pdf_toolbar.pdf_toolbar--left #pdf_toolbar_right,
+#pdf_toolbar.pdf_toolbar--right #pdf_toolbar_left,
+#pdf_toolbar.pdf_toolbar--right #pdf_toolbar_center,
+#pdf_toolbar.pdf_toolbar--right #pdf_toolbar_right {
+  flex-direction: column;
+}
+
+/* A vertical toolbar can run taller than the viewport once every tool
+   group is stacked — narrow screens fall back to the horizontal layout
+   (top-docked) instead, same reasoning pdf_toolbar's own default edge
+   already assumes for small viewports. */
+@media (max-width: 700px) {
+  #pdf_toolbar.pdf_toolbar--left,
+  #pdf_toolbar.pdf_toolbar--right {
+    flex-direction: row;
+    width: max-content;
+    max-width: min(calc(100% - 2rem), 1100px);
+    height: auto;
+    max-height: none;
+    overflow-y: visible;
+  }
+  #pdf_toolbar.pdf_toolbar--left .pdf_toolbar_handle,
+  #pdf_toolbar.pdf_toolbar--right .pdf_toolbar_handle {
+    transform: none;
+  }
+  #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_left,
+  #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_center,
+  #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_right,
+  #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_left,
+  #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_center,
+  #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_right {
+    flex-direction: row;
+  }
+}
 
 #pdf_toolbar button {
   padding: 0.28rem 0.65rem;
@@ -173,6 +241,55 @@
 #pdf_toolbar button:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+.pdf_toolbar_handle {
+  width: 34px;
+  height: 34px;
+  padding: 0 !important;
+  border-radius: 999px !important;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted) !important;
+  cursor: grab !important;
+  touch-action: none;
+}
+
+#pdf_toolbar.pdf_toolbar--dragging .pdf_toolbar_handle,
+.pdf_toolbar_handle:active {
+  cursor: grabbing !important;
+}
+
+.pdf_toolbar_handle_grip,
+.pdf_toolbar_handle_grip::before,
+.pdf_toolbar_handle_grip::after {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.pdf_toolbar_handle_grip {
+  position: relative;
+  box-shadow: 8px 0 0 currentColor;
+}
+
+.pdf_toolbar_handle_grip::before {
+  position: absolute;
+  top: -8px;
+  left: 0;
+  box-shadow: 8px 0 0 currentColor;
+}
+
+.pdf_toolbar_handle_grip::after {
+  position: absolute;
+  top: 8px;
+  left: 0;
+  box-shadow: 8px 0 0 currentColor;
 }
 
 @keyframes pdf_icon_spin { to { transform: rotate(360deg); } }
@@ -429,6 +546,7 @@
 
 /* ── Split content area ── */
 #pdf_content {
+  position: relative;
   flex: 1;
   display: flex;
   overflow: hidden;
@@ -942,6 +1060,13 @@
   touch-action: none;
   scrollbar-width: thin;
   scrollbar-color: rgba(236, 240, 255, 0.34) rgba(255, 255, 255, 0.06);
+}
+
+html.theme-light #pdf_preview_scroll {
+  background:
+    radial-gradient(circle at top, rgba(255,255,255,0.78), transparent 42%),
+    linear-gradient(180deg, #f3f3f6, #e7e8ee);
+  scrollbar-color: rgba(120, 128, 148, 0.48) rgba(17, 17, 34, 0.06);
 }
 
 #pdf_preview_scroll::-webkit-scrollbar {
@@ -1623,7 +1748,11 @@
 
 .pdf_page_canvas {
   background: #ffffff;
-  box-shadow: 0 14px 34px rgba(0,0,0,0.3), 0 2px 10px rgba(0,0,0,0.18);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,0.92) inset,
+    0 0 0 1px rgba(17, 24, 39, 0.06),
+    0 10px 24px rgba(15, 23, 42, 0.12),
+    0 2px 8px rgba(15, 23, 42, 0.08);
   filter: contrast(1.06) saturate(1.02) brightness(1.01);
   display: block;
 }

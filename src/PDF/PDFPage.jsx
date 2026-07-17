@@ -168,6 +168,7 @@ const dynamicZoomGain = (baseGain, currentZoom) => baseGain / (1 + ZOOM_RESISTAN
 const ZOOM_HOLD_TICK_MS = 48;
 const ZOOM_HOLD_RAMP_MS = 1800;
 const ZOOM_HOLD_MAX_MULTIPLIER = 8;
+const PDF_FLOATING_TOOLBAR_MARGIN = 16;
 
 // ── Momentum ("billiard ball") panning ──────────────────────────────────────
 // After a drag/pan is released fast enough, the scroll container keeps
@@ -803,9 +804,14 @@ const PDFPage = ({
   const [extractionOpen, setExtractionOpen] = useState(false);
   const savedRatioRef                 = useRef(0.42);
   const contentRef                    = useRef(null);
+  const toolbarRef                    = useRef(null);
+  const toolbarDragStateRef           = useRef(null);
   const fitScaleRef                 = useRef(1);
   const zoomRef                     = useRef(1);
   const extractModeRef              = useRef("ai");
+  const [toolbarDock, setToolbarDock] = useState({ edge: "top", offset: 24 });
+  const [toolbarDragging, setToolbarDragging] = useState(false);
+  const [toolbarBounds, setToolbarBounds] = useState({ top: 0, left: 0, width: 0, height: 0 });
 
   const [hyleData, setHyleData]       = useState(null);
   const [hyleFontSize, setHyleFontSize] = useState(1);
@@ -992,6 +998,124 @@ const PDFPage = ({
       return next;
     });
   }, [mdCurrentPage.page, scrollReaderToPage, splitRatio]);
+
+  const normalizeToolbarDock = useCallback((dock) => {
+    const contentEl = contentRef.current;
+    const toolbarEl = toolbarRef.current;
+    if (!contentEl || !toolbarEl || !dock) return dock;
+    const maxLeft = Math.max(
+      PDF_FLOATING_TOOLBAR_MARGIN,
+      contentEl.clientWidth - toolbarEl.offsetWidth - PDF_FLOATING_TOOLBAR_MARGIN,
+    );
+    const maxTop = Math.max(
+      PDF_FLOATING_TOOLBAR_MARGIN,
+      contentEl.clientHeight - toolbarEl.offsetHeight - PDF_FLOATING_TOOLBAR_MARGIN,
+    );
+    return {
+      edge: dock.edge,
+      offset: Math.round(clamp(
+        dock.offset,
+        PDF_FLOATING_TOOLBAR_MARGIN,
+        dock.edge === "top" || dock.edge === "bottom" ? maxLeft : maxTop,
+      )),
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    const syncToolbarLayout = () => {
+      const contentEl = contentRef.current;
+      if (contentEl) {
+        setToolbarBounds({
+          top: contentEl.offsetTop,
+          left: contentEl.offsetLeft,
+          width: contentEl.clientWidth,
+          height: contentEl.clientHeight,
+        });
+      }
+      setToolbarDock((prev) => {
+        const next = normalizeToolbarDock(prev);
+        return next.edge === prev.edge && next.offset === prev.offset ? prev : next;
+      });
+    };
+    syncToolbarLayout();
+    window.addEventListener("resize", syncToolbarLayout);
+    const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(syncToolbarLayout) : null;
+    if (resizeObserver && contentRef.current) resizeObserver.observe(contentRef.current);
+    if (resizeObserver && toolbarRef.current) resizeObserver.observe(toolbarRef.current);
+    return () => {
+      window.removeEventListener("resize", syncToolbarLayout);
+      resizeObserver?.disconnect();
+    };
+  }, [normalizeToolbarDock]);
+
+  useEffect(() => {
+    const onPointerMove = (event) => {
+      const drag = toolbarDragStateRef.current;
+      if (!drag || (drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
+      event.preventDefault();
+      const nextLeft = clamp(
+        event.clientX - drag.boundsLeft - drag.shiftX,
+        PDF_FLOATING_TOOLBAR_MARGIN,
+        Math.max(PDF_FLOATING_TOOLBAR_MARGIN, drag.boundsWidth - drag.width - PDF_FLOATING_TOOLBAR_MARGIN),
+      );
+      const nextTop = clamp(
+        event.clientY - drag.boundsTop - drag.shiftY,
+        PDF_FLOATING_TOOLBAR_MARGIN,
+        Math.max(PDF_FLOATING_TOOLBAR_MARGIN, drag.boundsHeight - drag.height - PDF_FLOATING_TOOLBAR_MARGIN),
+      );
+      const snapCandidates = [
+        { edge: "top", value: nextTop - PDF_FLOATING_TOOLBAR_MARGIN, offset: nextLeft },
+        { edge: "bottom", value: drag.boundsHeight - PDF_FLOATING_TOOLBAR_MARGIN - (nextTop + drag.height), offset: nextLeft },
+        { edge: "left", value: nextLeft - PDF_FLOATING_TOOLBAR_MARGIN, offset: nextTop },
+        { edge: "right", value: drag.boundsWidth - PDF_FLOATING_TOOLBAR_MARGIN - (nextLeft + drag.width), offset: nextTop },
+      ].sort((a, b) => a.value - b.value);
+      setToolbarDock(normalizeToolbarDock({ edge: snapCandidates[0].edge, offset: snapCandidates[0].offset }));
+    };
+
+    const onPointerEnd = (event) => {
+      const drag = toolbarDragStateRef.current;
+      if (!drag || (drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
+      toolbarDragStateRef.current = null;
+      setToolbarDragging(false);
+      setToolbarDock((prev) => normalizeToolbarDock(prev));
+    };
+
+    window.addEventListener("pointermove", onPointerMove, { passive: false });
+    window.addEventListener("pointerup", onPointerEnd);
+    window.addEventListener("pointercancel", onPointerEnd);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerEnd);
+      window.removeEventListener("pointercancel", onPointerEnd);
+    };
+  }, [normalizeToolbarDock]);
+
+  const handleToolbarDragStart = useCallback((event) => {
+    if (event.button != null && event.button !== 0) return;
+    const contentEl = contentRef.current;
+    const toolbarEl = toolbarRef.current;
+    if (!contentEl || !toolbarEl) return;
+    const contentRect = contentEl.getBoundingClientRect();
+    const toolbarRect = toolbarEl.getBoundingClientRect();
+    toolbarDragStateRef.current = {
+      pointerId: event.pointerId ?? null,
+      shiftX: event.clientX - toolbarRect.left,
+      shiftY: event.clientY - toolbarRect.top,
+      width: toolbarRect.width,
+      height: toolbarRect.height,
+      boundsLeft: contentRect.left,
+      boundsTop: contentRect.top,
+      boundsWidth: contentRect.width,
+      boundsHeight: contentRect.height,
+    };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setToolbarDragging(true);
+    setToolsMenuOpen(false);
+    setColorMenuOpen(false);
+    setPenMenuOpen(false);
+    setHighlightMenuOpen(false);
+    event.preventDefault();
+  }, []);
 
   // ── Annotation History (toolbar "History" button + left column) ────────────
   // A running, in-session log of every annotation step taken (add/undo/redo/
@@ -2509,13 +2633,16 @@ const PDFPage = ({
         }
         const wrap = canvasWrapRef.current;
         if (wrap) {
-          // Keep the live pinch origin in stable wrapper-content coordinates,
-          // not in the wrapper's already-transformed screen box. Re-reading
-          // getBoundingClientRect() from the transformed wrapper on each move
-          // feeds the previous scale back into the next origin calculation and
-          // makes the page drift sideways while pinching.
-          const originX = startSL + lastMidX;
-          const originY = startST + lastMidY;
+          // Anchor the live preview to the content point that started under
+          // the pinch midpoint, then translate by the midpoint's drift. The
+          // older version moved the transform origin itself with lastMidX/Y;
+          // that made a two-finger pinch-pan feel inverted because the page
+          // "chased" the hands by re-scaling around a new origin instead of
+          // actually moving with them.
+          const originX = startSL + startMidX;
+          const originY = startST + startMidY;
+          const driftX = lastMidX - startMidX;
+          const driftY = lastMidY - startMidY;
           // originX/Y are in el's (previewEl's) content-space frame; the
           // transform is applied to wrap, whose own box sits offset from
           // el's padding edge by wrap.offsetLeft/Top (el's padding, plus
@@ -2525,7 +2652,7 @@ const PDFPage = ({
           // visibly drags the shown page up-and-left as the pinch spreads.
           wrap.style.willChange      = "transform";
           wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
-          wrap.style.transform       = `scale(${newZoom / startZoom})`;
+          wrap.style.transform       = `translate(${driftX}px, ${driftY}px) scale(${newZoom / startZoom})`;
           pinchTransformApplied = true;
         }
         if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(newZoom * 100)}%`;
@@ -3753,6 +3880,14 @@ const PDFPage = ({
     annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
     annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
     null;
+  const toolbarStyle =
+    toolbarDock.edge === "top"
+      ? { top: toolbarBounds.top + PDF_FLOATING_TOOLBAR_MARGIN, left: toolbarBounds.left + toolbarDock.offset }
+      : toolbarDock.edge === "bottom"
+        ? { top: toolbarBounds.top + toolbarBounds.height - PDF_FLOATING_TOOLBAR_MARGIN, left: toolbarBounds.left + toolbarDock.offset, transform: "translateY(-100%)" }
+        : toolbarDock.edge === "left"
+          ? { top: toolbarBounds.top + toolbarDock.offset, left: toolbarBounds.left + PDF_FLOATING_TOOLBAR_MARGIN }
+          : { top: toolbarBounds.top + toolbarDock.offset, left: toolbarBounds.left + toolbarBounds.width - PDF_FLOATING_TOOLBAR_MARGIN, transform: "translateX(-100%)" };
 
   return (
     <div
@@ -3765,7 +3900,20 @@ const PDFPage = ({
       {showSysModal && <SystemMessageModal onClose={() => setShowSysModal(false)} />}
 
       {/* Toolbar */}
-      <div id="pdf_toolbar">
+      <div
+        id="pdf_toolbar"
+        ref={toolbarRef}
+        className={`pdf_toolbar--${toolbarDock.edge}${toolbarDragging ? " pdf_toolbar--dragging" : ""}`}
+        style={toolbarStyle}
+      >
+        <button
+          type="button"
+          className="pdf_toolbar_handle"
+          onPointerDown={handleToolbarDragStart}
+          title="Drag tools bar to any edge of the canvas"
+        >
+          <span className="pdf_toolbar_handle_grip" />
+        </button>
         <div id="pdf_toolbar_left">
           {pdfDoc && !selectionOnly && (
             <>
