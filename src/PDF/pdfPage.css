@@ -137,8 +137,9 @@
   position: absolute;
   z-index: 26;
   display: flex;
-  align-items: center;
-  gap: 0.6rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
   padding: 0.6rem 0.7rem;
   border: 1px solid color-mix(in srgb, var(--color-border) 88%, rgba(255,255,255,0.12));
   border-radius: 18px;
@@ -152,20 +153,28 @@
   transition: left 0.18s ease, top 0.18s ease, transform 0.18s ease;
 }
 
-/* Left = tool selection + document actions, center = page navigation,
-   right = zoom + undo/redo/clear. Each wraps independently so a narrow
-   viewport doesn't force the whole toolbar into one unreadable row. */
-#pdf_toolbar_left,
-#pdf_toolbar_center,
-#pdf_toolbar_right {
+#pdf_toolbar_topbar,
+#pdf_toolbar_mainbar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.6rem;
 }
+#pdf_toolbar_topbar {
+  justify-content: flex-end;
+}
+#pdf_toolbar_topbar_controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+#pdf_toolbar_mainbar {
+  justify-content: space-between;
+}
 #pdf_toolbar_left { min-width: 0; }
 #pdf_toolbar_center { flex-shrink: 0; }
-#pdf_toolbar_right { min-width: 0; }
 
 #pdf_toolbar.pdf_toolbar--dragging {
   transition: none;
@@ -193,11 +202,98 @@
 
 #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_left,
 #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_center,
-#pdf_toolbar.pdf_toolbar--left #pdf_toolbar_right,
 #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_left,
 #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_center,
-#pdf_toolbar.pdf_toolbar--right #pdf_toolbar_right {
+#pdf_toolbar.pdf_toolbar--left #pdf_toolbar_topbar_controls,
+#pdf_toolbar.pdf_toolbar--right #pdf_toolbar_topbar_controls,
+#pdf_toolbar.pdf_toolbar--left #pdf_toolbar_mainbar,
+#pdf_toolbar.pdf_toolbar--right #pdf_toolbar_mainbar {
   flex-direction: column;
+  align-items: stretch;
+}
+
+#pdf_toolbar.pdf_toolbar--left #pdf_toolbar_topbar,
+#pdf_toolbar.pdf_toolbar--right #pdf_toolbar_topbar {
+  justify-content: flex-start;
+}
+
+#pdf_toolbar.pdf_toolbar--left .annot_tool_strip,
+#pdf_toolbar.pdf_toolbar--right .annot_tool_strip {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+.annot_tool_separator {
+  width: 1px;
+  height: 1.9rem;
+  background: color-mix(in srgb, var(--color-border) 84%, transparent);
+  flex: 0 0 auto;
+  margin: 0 0.2rem;
+}
+
+#pdf_toolbar.pdf_toolbar--left .annot_tool_separator,
+#pdf_toolbar.pdf_toolbar--right .annot_tool_separator {
+  width: 100%;
+  height: 1px;
+  margin: 0.15rem 0;
+}
+
+/* Color/size/tool-settings row for whichever tool is active (see
+   .annot_tool_options in PDFPage.jsx). At top/bottom dock this is plain
+   static flow, a normal row alongside everything else. At left/right dock
+   the toolbar itself is a narrow vertical column (.annot_tool_strip
+   above) — cramming this row into that same column would either force the
+   toolbar wide again or wrap awkwardly, so it pops out sideways as a
+   floating flyout instead: rightward off a left-docked toolbar, leftward
+   off a right-docked one. #pdf_toolbar is already position:absolute (the
+   floating toolbar itself), so it's the containing block these anchor
+   against — no extra position:relative needed. */
+.annot_tool_options {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+/* Thin divider between the main tool strip and this "sub-toolbar" of
+   options for whichever tool is active — only when it's sitting in normal
+   flow right below the tool strip (top/bottom dock; #pdf_toolbar_left is
+   plain display:block there, so .annot_tool_strip/.annot_tool_options
+   stack vertically, not side by side — a top border is what separates two
+   stacked blocks, not a left one). The left/right dock's flyout below is
+   already a visually distinct floating panel of its own (its own
+   background/border/shadow, see below), so it doesn't need one.
+   :not(:empty) so no stray line shows when no tool's controls are being
+   displayed. */
+#pdf_toolbar:not(.pdf_toolbar--left):not(.pdf_toolbar--right) .annot_tool_options:not(:empty) {
+  margin-top: 0.6rem; /* #pdf_toolbar_left's children stack as plain blocks here, no flex gap to rely on */
+  border-top: 1px solid var(--color-border);
+  padding-top: 0.6rem;
+}
+
+#pdf_toolbar.pdf_toolbar--left .annot_tool_options,
+#pdf_toolbar.pdf_toolbar--right .annot_tool_options {
+  position: absolute;
+  top: 0;
+  flex-wrap: nowrap;
+  background: inherit;
+  border: inherit;
+  border-radius: inherit;
+  box-shadow: inherit;
+  backdrop-filter: inherit;
+  padding: 0.6rem 0.7rem;
+}
+#pdf_toolbar.pdf_toolbar--left .annot_tool_options:empty,
+#pdf_toolbar.pdf_toolbar--right .annot_tool_options:empty {
+  display: none; /* no active tool's controls to show — don't render an empty floating panel */
+}
+#pdf_toolbar.pdf_toolbar--left .annot_tool_options {
+  left: calc(100% + 0.5rem);
+}
+#pdf_toolbar.pdf_toolbar--right .annot_tool_options {
+  right: calc(100% + 0.5rem);
 }
 
 /* A vertical toolbar can run taller than the viewport once every tool
@@ -220,11 +316,25 @@
   }
   #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_left,
   #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_center,
-  #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_right,
   #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_left,
   #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_center,
-  #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_right {
+  #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_topbar_controls,
+  #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_topbar_controls,
+  #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_mainbar,
+  #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_mainbar {
     flex-direction: row;
+  }
+  #pdf_toolbar.pdf_toolbar--left .annot_tool_strip,
+  #pdf_toolbar.pdf_toolbar--right .annot_tool_strip {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  #pdf_toolbar.pdf_toolbar--left .annot_tool_separator,
+  #pdf_toolbar.pdf_toolbar--right .annot_tool_separator {
+    width: 1px;
+    height: 1.9rem;
+    margin: 0 0.2rem;
   }
 }
 
@@ -243,54 +353,51 @@
   cursor: default;
 }
 
-.pdf_toolbar_handle {
-  width: 34px;
-  height: 34px;
-  padding: 0 !important;
-  border-radius: 999px !important;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--color-text-muted) !important;
-  cursor: grab !important;
-  touch-action: none;
-}
-
-#pdf_toolbar.pdf_toolbar--dragging .pdf_toolbar_handle,
-.pdf_toolbar_handle:active {
-  cursor: grabbing !important;
-}
-
-.pdf_toolbar_handle_grip,
-.pdf_toolbar_handle_grip::before,
-.pdf_toolbar_handle_grip::after {
-  display: block;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: currentColor;
-  content: "";
-}
-
-.pdf_toolbar_handle_grip {
-  position: relative;
-  box-shadow: 8px 0 0 currentColor;
-}
-
-.pdf_toolbar_handle_grip::before {
+/* Dedicated drag handle (see .pdf_toolbar_edge_handle further down) — a
+   small, unambiguous grab target instead of the whole toolbar's own
+   chrome, so pressing a tool button never has to be disambiguated from
+   starting a drag. Positioned on whichever edge faces inward, opposite
+   the dock edge — see the dock-scoped rules below. */
+.pdf_toolbar_edge_handle {
   position: absolute;
-  top: -8px;
-  left: 0;
-  box-shadow: 8px 0 0 currentColor;
+  border: none;
+  padding: 0;
+  background: color-mix(in srgb, var(--color-text-muted) 55%, transparent);
+  border-radius: 999px;
+  cursor: grab;
+  touch-action: none; /* this element's only job is the drag gesture — no competing native scroll/select to preserve here, unlike #pdf_toolbar itself */
 }
 
-.pdf_toolbar_handle_grip::after {
-  position: absolute;
-  top: 8px;
-  left: 0;
-  box-shadow: 8px 0 0 currentColor;
+#pdf_toolbar.pdf_toolbar--dragging .pdf_toolbar_edge_handle {
+  cursor: grabbing;
 }
+
+/* Horizontal bar, centered along the toolbar's own width, sitting just
+   inside the edge facing the content — bottom for a top-docked toolbar,
+   top for a bottom-docked one. */
+#pdf_toolbar.pdf_toolbar--top .pdf_toolbar_edge_handle,
+#pdf_toolbar.pdf_toolbar--bottom .pdf_toolbar_edge_handle {
+  width: 36px;
+  height: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+#pdf_toolbar.pdf_toolbar--top .pdf_toolbar_edge_handle { bottom: 4px; }
+#pdf_toolbar.pdf_toolbar--bottom .pdf_toolbar_edge_handle { top: 4px; }
+
+/* Vertical bar, centered along the toolbar's own height, sitting just
+   inside the edge facing the content — right for a left-docked toolbar,
+   left for a right-docked one (the exact opposite pairing from top/bottom
+   above, same "always face the content" reasoning). */
+#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_edge_handle,
+#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_edge_handle {
+  width: 5px;
+  height: 36px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_edge_handle { right: 4px; }
+#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_edge_handle { left: 4px; }
 
 @keyframes pdf_icon_spin { to { transform: rotate(360deg); } }
 .pdf_icon_spin { display: inline-block; animation: pdf_icon_spin 0.9s linear infinite; }
@@ -1347,6 +1454,13 @@ html.theme-light #pdf_preview_scroll {
   position: relative;
 }
 
+.annot_tool_strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 .annot_trigger {
   display: flex;
   align-items: center;
@@ -1376,11 +1490,93 @@ html.theme-light #pdf_preview_scroll {
 }
 
 #pdf_toolbar .annot_trigger {
-  padding: 0.3rem 0.45rem;
+  padding: 0.42rem 0.55rem;
 }
 
 #pdf_toolbar .annot_trigger_label {
   display: none;
+}
+
+#pdf_toolbar .annot_tool_btn {
+  position: relative;
+  min-width: 42px;
+  min-height: 42px;
+  justify-content: center;
+  font-size: 1.15rem;
+  overflow: visible;
+}
+
+/* All toolbar icons sized to match PenToolIcon's own literal 24x24 SVG
+   (font-size in px, not rem, so icon-font glyphs actually line up with a
+   fixed-pixel SVG regardless of root font-size) — .pdf_toolbar_svg_icon
+   targets Pen specifically (the only raw-SVG tool icon left after
+   Navigator/Select Text were removed); the bx-* icon-font glyphs (every
+   other tool, plus undo/history/redo) are the `i` selectors below. */
+#pdf_toolbar .annot_tool_btn i,
+#pdf_toolbar .annot_tool_btn .pdf_toolbar_svg_icon {
+  font-size: 24px;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+}
+
+#pdf_toolbar .annot_action_btn i {
+  font-size: 24px;
+}
+
+.annot_touch_tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 0.45rem);
+  transform: translateX(-50%);
+  padding: 0.28rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.24);
+  animation: annotTouchTooltipIn 0.16s ease-out;
+}
+
+.annot_touch_tooltip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 0.55rem;
+  height: 0.55rem;
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+  border-radius: 0.1rem;
+}
+
+@keyframes annotTouchTooltipIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(0.2rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+#pdf_toolbar .annot_trigger--color {
+  min-width: 42px;
+  min-height: 42px;
+}
+
+#pdf_toolbar .annot_trigger--color .annot_swatch--trigger {
+  width: 20px;
+  height: 20px;
+}
+
+#pdf_toolbar .annot_trigger_chevron {
+  font-size: 0.78rem;
 }
 
 .annot_swatch {
@@ -1388,7 +1584,7 @@ html.theme-light #pdf_preview_scroll {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.25);
+  border: none;
 }
 
 .annot_swatch--trigger {
@@ -1467,6 +1663,7 @@ html.theme-light #pdf_preview_scroll {
   max-height: 320px;
   overflow-y: auto;
   padding: 0.55rem;
+  border: none;
 }
 
 .annot_dd--pen {
@@ -1490,7 +1687,7 @@ html.theme-light #pdf_preview_scroll {
   background:
     radial-gradient(circle at top left, color-mix(in srgb, var(--color-highlight) 24%, transparent), transparent 58%),
     color-mix(in srgb, var(--color-bg) 84%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  border: none;
 }
 
 .annot_color_preview_chip {
@@ -1547,11 +1744,11 @@ html.theme-light #pdf_preview_scroll {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: none;
   cursor: pointer;
   padding: 0;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16), 0 4px 10px rgba(0,0,0,0.14);
-  transition: transform 0.12s, border-color 0.12s, box-shadow 0.12s;
+  transition: transform 0.12s, box-shadow 0.12s;
 }
 
 .annot_swatch_btn:hover {
@@ -1561,7 +1758,6 @@ html.theme-light #pdf_preview_scroll {
 
 .annot_swatch_btn--active {
   transform: scale(1.08);
-  border-color: color-mix(in srgb, var(--color-text) 74%, transparent);
   box-shadow: inset 0 0 0 2px rgba(255,255,255,0.92), 0 0 0 2px color-mix(in srgb, var(--color-highlight) 46%, transparent), 0 8px 18px rgba(0,0,0,0.22);
 }
 
@@ -1699,6 +1895,20 @@ html.theme-light #pdf_preview_scroll {
 .annot_pen_controls--column {
   flex-direction: column;
   flex-wrap: nowrap;
+}
+
+/* Pen's "Stroke shaping" knobs (Smoothing/Pressure assist/Tip taper/Ink
+   flow) are the one part of these dropdowns forced into a column — every
+   other group in both the Pen and Highlight dropdowns is already row-based
+   by default (.annot_pen_panel/.annot_pen_controls above). When the
+   toolbar itself is docked top/bottom (horizontal, plenty of width), keep
+   this section consistent with the rest as a row too; the vertical
+   left/right dock (a narrow column already, see .pdf_toolbar--left/--right
+   elsewhere in this file) keeps the column layout, where it actually fits. */
+#pdf_toolbar.pdf_toolbar--top .annot_pen_controls--column,
+#pdf_toolbar.pdf_toolbar--bottom .annot_pen_controls--column {
+  flex-direction: row;
+  flex-wrap: wrap;
 }
 
 .annot_control {

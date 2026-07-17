@@ -61,6 +61,16 @@ html, body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Disables the browser's native pull-to-refresh gesture app-wide — a
+     swipe-down-from-the-top on a mobile browser (Chrome/Android in
+     particular) normally reloads the whole page, which is almost never
+     what's wanted mid-interaction (e.g. panning a PDF, scrolling a long
+     list) and just discards in-progress state. `contain` (not `none`)
+     specifically: still shows the normal rubber-band/bounce feedback
+     within a scrollable element itself, it just stops that overscroll
+     from chaining up to the page/browser chrome, which is what actually
+     triggers the refresh gesture. */
+  overscroll-behavior-y: contain;
 }
 
 button, input, textarea, select, optgroup {

@@ -71,8 +71,16 @@
   border-right: 1px solid var(--color-border);
 }
 
+/* Three explicit columns — 1fr / auto / 1fr — instead of one flex row.
+   That's what actually centers .pdfw_tabbar_center in the bar regardless
+   of how many tabs are open or whether the right column has any content:
+   both 1fr side columns always claim equal leftover space, so the auto
+   center column lands exactly in the middle either way. A single flex row
+   can't do this against a variable-width, independently-scrolling tab
+   strip (its content would just push the "centered" item off-true). */
 .pdfw_tabbar {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 0.3rem;
   padding: 0.4rem 0.5rem;
@@ -90,6 +98,42 @@
   padding: 0;
   border-bottom: none;
   background: transparent;
+}
+
+.pdfw_tabbar_left {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0; /* lets .pdfw_tabstrip actually shrink/scroll inside its grid track instead of forcing the column wider */
+}
+
+.pdfw_tabbar_center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pdfw_tabbar_right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* Prev/page-number/next, hoisted here from the active tab's own PDFPage
+   toolbar (see PDFReaderWorkspace.jsx's pageNav prop) — reuses
+   #pdf_page_nav/#pdf_page_nav_label's own styling from pdfPage.css (loaded
+   transitively via the PDFPage import); .pdfw_tabbar_center above is what
+   actually centers it, this class no longer needs its own margin. */
+.pdfw_page_nav_group {
+  flex-shrink: 0;
+}
+
+/* Undo/history/redo, hoisted here from the active tab's own PDFPage
+   toolbar (see PDFReaderWorkspace.jsx's undoRedo prop) — reuses
+   #pdf_annot_right_group/#pdf_annot_actions/.annot_action_btn's own
+   styling from pdfPage.css (loaded transitively via the PDFPage import). */
+.pdfw_undo_redo_group {
+  flex-shrink: 0;
 }
 
 .pdfw_tabstrip {

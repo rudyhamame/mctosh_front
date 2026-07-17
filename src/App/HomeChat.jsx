@@ -269,13 +269,15 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
     };
   }, []); // eslint-disable-line
 
-  // The live caption itself: the AI's own reply, revealed exactly as live
-  // as `messages` already updates (each SSE delta is its own re-render —
-  // no separate "typing" animation needed), once it has anything to show;
-  // otherwise the user's own live interim transcript while they're talking,
-  // or a plain state label the rest of the time.
+  // The live caption itself: the AI's own reply, but only once streaming
+  // has actually finished — useContextChat's own endMessage() (which
+  // triggers voice synthesis) fires in the same tick streaming flips
+  // false, so this keeps the caption in sync with when the avatar is about
+  // to actually speak, instead of revealing the reply live as it streams
+  // in well before any voice synthesis starts. Until then: the user's own
+  // live interim transcript while they're talking, or a plain state label.
   const lastMsg = messages[messages.length - 1];
-  const showingReply = lastMsg?.role === "assistant" && lastMsg.content;
+  const showingReply = !streaming && lastMsg?.role === "assistant" && lastMsg.content;
   const caption = showingReply ? stripMd(lastMsg.content) : (transcript || CALL_LABELS[callState] || "");
 
   return <p id="home_live_caption">{caption}</p>;
@@ -352,6 +354,22 @@ const HomeChat = () => {
     speak(last.content);
   }, [streaming]); // eslint-disable-line
 
+  // Held back until streaming is actually done — useContextChat's own
+  // endMessage() (which triggers voice synthesis) fires in the same tick
+  // streaming flips false, so gating on it here keeps the caption in sync
+  // with when the avatar is about to actually speak, instead of revealing
+  // the reply live as it streams in well before any voice synthesis starts.
+  // While still streaming, keeps showing whatever was there before (the
+  // prior reply, or the greeting on the very first turn) rather than the
+  // in-progress one.
+  const mainCaption = (() => {
+    if (streaming) {
+      const priorAssistant = [...messages].slice(0, -1).reverse().find((m) => m.role === "assistant");
+      return priorAssistant ? stripMd(priorAssistant.content) : AVATAR_GREETING;
+    }
+    return messages.length === 0 ? AVATAR_GREETING : stripMd(messages[messages.length - 1]?.content || "");
+  })();
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!input.trim()) return;
@@ -379,11 +397,7 @@ const HomeChat = () => {
           {inCall ? (
             <VoiceCall send={send} streaming={streaming} messages={messages} avatarRef={avatarRef} />
           ) : (
-            <p id="home_live_caption">
-              {messages.length === 0
-                ? AVATAR_GREETING
-                : stripMd(messages[messages.length - 1]?.content || "")}
-            </p>
+            <p id="home_live_caption">{mainCaption}</p>
           )}
 
           <div id="home_voice_ctrls">

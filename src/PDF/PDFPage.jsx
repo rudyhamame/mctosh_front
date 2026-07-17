@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { useAIProvider } from "../hooks/useAIProvider";
 import * as pdfjsLib from "pdfjs-dist";
@@ -76,9 +76,14 @@ const HYLE_TYPE_LABELS = {
   "paradigm":                 "Paradigm",
 };
 
+// "Navigator" and "Select Text" used to live here as their own tools —
+// both removed. Panning is now a three-finger touch gesture (see
+// touchCentroid/the 3-finger branches in the touch-handling effect below)
+// plus plain mouse-drag/wheel-scroll for non-touch input, available
+// regardless of which drawing tool (if any) is selected, rather than
+// needing "Navigator" picked first. Double-tap/double-click text selection
+// is likewise always on in reading mode now, see textSelectable below.
 const ANNOT_TOOLS = [
-  { key: "navigator",     icon: "bx bx-move",            label: "Navigator",     hasSize: false },
-  { key: "select",        icon: "bx bx-selection",       label: "Select Text",   hasSize: false },
   { key: "highlight",     icon: "bx bx-highlight",       label: "Highlight",     hasSize: true  },
   { key: "underline",     icon: "bx bx-underline",       label: "Underline",     hasSize: false },
   { key: "strikethrough", icon: "bx bx-strikethrough",   label: "Strikethrough", hasSize: false },
@@ -90,6 +95,19 @@ const ANNOT_TOOLS = [
   { key: "text",          icon: "bx bx-text",            label: "Text",          hasSize: false },
   { key: "drawText",      icon: "bx bx-magic-wand",      label: "Draw to Text",  hasSize: false },
   { key: "eraser",        icon: "bx bx-eraser",          label: "Eraser",        hasSize: true  },
+];
+const DRAWING_TOOL_ORDER = [
+  "pen",
+  "highlight",
+  "underline",
+  "strikethrough",
+  "line",
+  "arrow",
+  "rect",
+  "circle",
+  "text",
+  "drawText",
+  "eraser",
 ];
 
 // Open Color (yeun.github.io/open-color) — the standard "professional" web
@@ -138,6 +156,13 @@ const ANNOT_HISTORY_META = {
   erase: { icon: "bx bx-eraser", verb: "Erased" },
   clear: { icon: "bx bx-trash",  verb: "Cleared" },
 };
+
+
+const PenToolIcon = () => (
+  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+    <path d="M19.41 3c-.78-.78-2.05-.78-2.83 0l-2.09 2.09L12.7 3.3a.996.996 0 0 0-1.41 0l-6 6 1.41 1.41 5.29-5.29 1.09 1.09-8.79 8.78c-.13.13-.22.29-.26.46l-1 4c-.08.34.01.7.26.95.19.19.45.29.71.29.08 0 .16 0 .24-.03l4-1c.18-.04.34-.13.46-.26L20.99 7.41c.78-.78.78-2.05 0-2.83L19.4 2.99ZM7.48 18.1l-2.11.53.53-2.11 8.6-8.61 1.59 1.59-8.6 8.6ZM17.49 8.09 15.9 6.5l2.09-2.09 1.59 1.58-2.09 2.09Z" />
+  </svg>
+);
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
@@ -763,7 +788,7 @@ const deflateNounData = (hyleData) => {
   return nouns;
 };
 
-const PDFPage = ({
+const PDFPage = forwardRef(({
   embeddedSourceId = "",
   embeddedPdfName = "",
   embeddedFile = null,
@@ -775,7 +800,12 @@ const PDFPage = ({
   hideHyleControls = false,        // hide just the "Hyles" toggle + extraction panel (plain reading/annotation use, e.g. /pdf-reader)
   onPdfTypeChange = null,          // (type) => void — lets an embedding parent (e.g. a tab strip) mirror text-based/mixed/scanned without owning the PDF.js parse itself
   initialPage = null,              // jump to this page once the source finishes loading (e.g. a deep link from Medical Exams) — ignored for embeddedFile/local-file loads
-}) => {
+  hideUndoRedo = false,            // hide the undo/history/redo row from this instance's own toolbar — an embedding parent (e.g. PDFReaderWorkspace's tab bar) is driving it externally via ref instead, see useImperativeHandle below
+  onUndoRedoStateChange = null,    // (state) => void — fired whenever canUndo/canRedo/hasHistory/historyOpen change, so an external driver's own buttons (disabled state, active state) can stay in sync without polling the ref
+  hidePageNav = false,             // same idea as hideUndoRedo, for the prev/page-number/next row
+  onPageNavStateChange = null,     // (state) => void — fired whenever pageNum/pageCount/disabled change
+  fitToContainer = false,          // force the fit-to-container initial zoom even though embedded is true — PDFReaderWorkspace's own reading pane is a full dedicated area, unlike a genuinely cramped embedding (e.g. Units Extraction), so it opts into this instead of "embedded" defaulting to native/1:1 scale for it too
+}, ref) => {
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
   const [pageNum, setPageNum]       = useState(1);
@@ -806,12 +836,15 @@ const PDFPage = ({
   const contentRef                    = useRef(null);
   const toolbarRef                    = useRef(null);
   const toolbarDragStateRef           = useRef(null);
+  const toolbarLongPressRef           = useRef(null); // { timer, onMove, onEnd } — the "holding, not yet armed" phase
+  const toolbarTouchLabelTimerRef     = useRef(0);
   const fitScaleRef                 = useRef(1);
   const zoomRef                     = useRef(1);
   const extractModeRef              = useRef("ai");
   const [toolbarDock, setToolbarDock] = useState({ edge: "top", offset: 24 });
   const [toolbarDragging, setToolbarDragging] = useState(false);
   const [toolbarBounds, setToolbarBounds] = useState({ top: 0, left: 0, width: 0, height: 0 });
+  const [toolbarTouchLabel, setToolbarTouchLabel] = useState(null); // { key, label }
 
   const [hyleData, setHyleData]       = useState(null);
   const [hyleFontSize, setHyleFontSize] = useState(1);
@@ -821,29 +854,48 @@ const PDFPage = ({
   const { provider, setProvider }     = useAIProvider();
   const [showSysModal, setShowSysModal] = useState(false);
 
-  // "navigator" is a tool like any other in ANNOT_TOOLS/the Tools dropdown —
-  // panning and drawing are mutually exclusive, so exactly one tool is always
-  // selected, defaulting to Navigator instead of a separate on/off toggle.
+  // No default/"navigator" tool anymore — nothing is selected until the
+  // user picks a real drawing tool. Panning is a three-finger touch
+  // gesture (or plain mouse-drag/wheel-scroll for non-touch input),
+  // available regardless of tool state, not a tool you switch into (see
+  // touchCentroid/the 3-finger touch branches, and the mouse-drag pan
+  // handler, both gated only on annotToolRef.current below, unchanged).
   // Declared here (ahead of most other state) because textSelectable below
   // reads it immediately.
-  const [annotTool,      setAnnotTool]      = useState("navigator");
-  // Only "navigator" leaves panning enabled — every other tool, including
-  // Select Text, takes over the pointer, so navigation turns off for it too.
-  const navigationBlocked = Boolean(annotTool) && annotTool !== "navigator";
-  // Of those, only real drawing tools actually use the annotation canvas —
-  // Select Text has its own dblclick-based interaction, not canvas drawing.
-  const toolActive = navigationBlocked && annotTool !== "select"; // true only when a real drawing tool is selected
+  const [annotTool,      setAnnotTool]      = useState(null);
+  const navigationBlocked = Boolean(annotTool); // true only when a real drawing tool is selected
+  const toolActive = navigationBlocked;
   const annotToolRef = useRef(null); // mirrors navigationBlocked ? annotTool : null — read inside the pan-gesture effect, whose deps are just [pdfDoc], so annotTool itself would be stale there
+
+  // Left/right-docked flyout (.annot_tool_options in pdfPage.css) should
+  // emerge level with the tool button that was actually clicked, not just
+  // pinned to the top of the toolbar — the active tool can be anywhere
+  // along the vertical strip. Measured relative to the toolbar's own box
+  // (its containing block for position:absolute, see pdfPage.css) so it's
+  // a plain top offset, not a full-page coordinate.
+  const [toolOptionsTop, setToolOptionsTop] = useState(0);
+  useLayoutEffect(() => {
+    if (toolbarDock.edge !== "left" && toolbarDock.edge !== "right") return;
+    const toolbarEl = toolbarRef.current;
+    if (!toolbarEl) return;
+    const activeBtn = toolbarEl.querySelector(".annot_tool_btn.annot_trigger--active");
+    if (!activeBtn) return;
+    const toolbarRect = toolbarEl.getBoundingClientRect();
+    const btnRect = activeBtn.getBoundingClientRect();
+    setToolOptionsTop(btnRect.top - toolbarRect.top);
+  }, [annotTool, toolbarDock.edge]);
 
   // AI vs Manual toggle
   const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
-  // Click/tap-and-hold word selection is part of manual Hyle extraction, but
-  // the plain /pdf-reader picks it from the Tools list ("Select Text") so
-  // reading mode can opt into selection without reopening the full Hyles controls.
+  // Click/tap-and-hold word selection is part of manual Hyle extraction; in
+  // plain reading mode (hideHyleControls) it's simply always on now —
+  // double-tap/double-click a word to select it, no separate "Select Text"
+  // tool to activate first (there used to be one; removed since dblclick
+  // selection doesn't conflict with any drawing tool's own canvas gestures).
   const textSelectable = selectionOnly
     ? true
     : hideHyleControls
-      ? annotTool === "select"
+      ? true
       : extractMode === "manual";
   const [extractionType, setExtractionType] = useState(null); // selected hyle type key
   const [typeTreeOpen,   setTypeTreeOpen]   = useState(false);
@@ -1078,6 +1130,10 @@ const PDFPage = ({
       toolbarDragStateRef.current = null;
       setToolbarDragging(false);
       setToolbarDock((prev) => normalizeToolbarDock(prev));
+      // Restore normal touch handling now that the drag is over — see
+      // handleToolbarDragStart's own comment on why this gets set in the
+      // first place.
+      if (toolbarRef.current) toolbarRef.current.style.touchAction = "";
     };
 
     window.addEventListener("pointermove", onPointerMove, { passive: false });
@@ -1090,8 +1146,18 @@ const PDFPage = ({
     };
   }, [normalizeToolbarDock]);
 
+  // A small dedicated handle (see .pdf_toolbar_edge_handle in pdfPage.css,
+  // positioned on whichever edge faces inward — opposite the dock edge)
+  // is the only drag surface now, so this can start the drag immediately
+  // on press instead of needing a long-press to disambiguate it from
+  // clicking a tool button — the earlier long-press+vibrate approach hit
+  // real iOS Safari reliability issues (Pointer Events/setPointerCapture)
+  // that a dedicated, unambiguous grab target sidesteps entirely.
   const handleToolbarDragStart = useCallback((event) => {
-    if (event.button != null && event.button !== 0) return;
+    if (event.button != null && event.button !== 0 && !event.touches) return;
+    event.preventDefault();
+    const point = (e) => (e.touches ? (e.touches[0] || e.changedTouches[0]) : e);
+    const p0 = point(event);
     const contentEl = contentRef.current;
     const toolbarEl = toolbarRef.current;
     if (!contentEl || !toolbarEl) return;
@@ -1099,8 +1165,8 @@ const PDFPage = ({
     const toolbarRect = toolbarEl.getBoundingClientRect();
     toolbarDragStateRef.current = {
       pointerId: event.pointerId ?? null,
-      shiftX: event.clientX - toolbarRect.left,
-      shiftY: event.clientY - toolbarRect.top,
+      shiftX: p0.clientX - toolbarRect.left,
+      shiftY: p0.clientY - toolbarRect.top,
       width: toolbarRect.width,
       height: toolbarRect.height,
       boundsLeft: contentRect.left,
@@ -1108,14 +1174,28 @@ const PDFPage = ({
       boundsWidth: contentRect.width,
       boundsHeight: contentRect.height,
     };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    if (event.pointerId != null) toolbarEl.setPointerCapture?.(event.pointerId);
     setToolbarDragging(true);
     setToolsMenuOpen(false);
     setColorMenuOpen(false);
     setPenMenuOpen(false);
     setHighlightMenuOpen(false);
-    event.preventDefault();
   }, []);
+
+  const showToolbarTouchLabel = useCallback((key, label) => {
+    if (toolbarTouchLabelTimerRef.current) clearTimeout(toolbarTouchLabelTimerRef.current);
+    setToolbarTouchLabel({ key, label });
+    toolbarTouchLabelTimerRef.current = setTimeout(() => {
+      setToolbarTouchLabel((current) => (current?.key === key ? null : current));
+      toolbarTouchLabelTimerRef.current = 0;
+    }, 1000);
+  }, []);
+
+  useEffect(() => (
+    () => {
+      if (toolbarTouchLabelTimerRef.current) clearTimeout(toolbarTouchLabelTimerRef.current);
+    }
+  ), []);
 
   // ── Annotation History (toolbar "History" button + left column) ────────────
   // A running, in-session log of every annotation step taken (add/undo/redo/
@@ -1134,9 +1214,6 @@ const PDFPage = ({
   const [selectionActionError, setSelectionActionError] = useState("");
 
   // ── Annotation state ──────────────────────────────────────────────────────
-  // "navigator" is a tool like any other in ANNOT_TOOLS/the Tools dropdown —
-  // panning and drawing are mutually exclusive, so exactly one tool is always
-  // selected, defaulting to Navigator instead of a separate on/off toggle.
   const [annotToolColors, setAnnotToolColors] = useState(DEFAULT_ANNOT_TOOL_COLORS);
   const [annotSize,      setAnnotSize]      = useState(16);  // highlight lineWidth
   const [penSize,        setPenSize]        = useState(2);   // pen lineWidth
@@ -1468,10 +1545,17 @@ const PDFPage = ({
     renderedScaleRef.current = new Array(pageCount).fill(null);
     renderedCssSizeRef.current = new Array(pageCount).fill(null);
 
-    // Embedded readers should preserve the PDF's original size instead of fitting to the container.
+    // Genuinely cramped embeddings (e.g. Units Extraction, a PDF preview
+    // inside another page's own UI) preserve the PDF's original size
+    // instead of fitting to the container — fitToContainer opts a specific
+    // embedding OUT of that (see PDFReaderWorkspace.jsx, whose own reading
+    // pane is a full dedicated area, not a cramped side panel, so
+    // documents should scale to fit it like a routed reader would rather
+    // than each rendering at a different raw native size depending on
+    // that particular file's own page dimensions in points).
     pdfDoc.getPage(1).then(page1 => {
       if (cancelled) return;
-      if (embedded) {
+      if (embedded && !fitToContainer) {
         fitScaleRef.current = 1;
       } else {
         const previewWidth = previewRef.current?.clientWidth || 480;
@@ -2138,6 +2222,45 @@ const PDFPage = ({
     if (count > 0) logAnnotHistory({ action: "clear", page: pageNum, count });
   }, [pageNum, annotations, logAnnotHistory]);
 
+  // Lets an embedding parent drive undo/history/redo externally when
+  // hideUndoRedo hides this instance's own copy of that row (see
+  // PDFReaderWorkspace.jsx, which hoists it into its tab bar so a single
+  // row controls whichever tab is active instead of one per open tab).
+  // undoRedoState is reported via onUndoRedoStateChange (an effect, not
+  // just exposed on the ref) because a parent can't otherwise know WHEN to
+  // re-render its own buttons — refs don't trigger renders on their own.
+  const undoRedoState = useMemo(() => ({
+    canUndo: (annotations[pageNum]?.length || 0) > 0,
+    canRedo: (redoStacks[pageNum]?.length || 0) > 0,
+    hasHistory: annotHistory.length > 0,
+    historyOpen: annotHistoryOpen,
+  }), [annotations, pageNum, redoStacks, annotHistory.length, annotHistoryOpen]);
+
+  useEffect(() => {
+    onUndoRedoStateChange?.(undoRedoState);
+  }, [undoRedoState]); // eslint-disable-line react-hooks/exhaustive-deps -- onUndoRedoStateChange is a stable-enough callback prop, not a reactive dep
+
+  // Same pattern as undoRedoState above, for the prev/page-number/next row.
+  const pageNavState = useMemo(() => ({
+    pageNum,
+    pageCount,
+    disabled: pinchActive,
+  }), [pageNum, pageCount, pinchActive]);
+
+  useEffect(() => {
+    onPageNavStateChange?.(pageNavState);
+  }, [pageNavState]); // eslint-disable-line react-hooks/exhaustive-deps -- onPageNavStateChange is a stable-enough callback prop, not a reactive dep
+
+  useImperativeHandle(ref, () => ({
+    undo: handleAnnotUndo,
+    redo: handleAnnotRedo,
+    toggleHistory: () => setAnnotHistoryOpen((v) => !v),
+    ...undoRedoState,
+    goToPrevPage: () => setPageNum((n) => Math.max(1, n - 1)),
+    goToNextPage: () => setPageNum((n) => Math.min(pageCount, n + 1)),
+    ...pageNavState,
+  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState]);
+
   // Debounced commit shared by ctrl+scroll zoom (below) and the +/- zoom
   // buttons (see zoomFromCenter, further down): both only push a cheap CSS
   // transform on canvasWrap while the gesture is in progress, and call the
@@ -2417,6 +2540,15 @@ const PDFPage = ({
       return Math.sqrt(dx * dx + dy * dy);
     };
 
+    // Three-finger pan's own reference point — the average of all three
+    // touches, so the gesture tracks smoothly even if the fingers don't
+    // move in perfect unison.
+    const touchCentroid = (t) => {
+      let x = 0, y = 0;
+      for (let i = 0; i < t.length; i++) { x += t[i].clientX; y += t[i].clientY; }
+      return { x: x / t.length, y: y / t.length };
+    };
+
     // Mirrors the ctrl+scroll zoom path: during the gesture we only push a
     // cheap CSS transform on the canvas wrapper (no React re-render, no PDF.js
     // re-rasterization) so the live pinch tracks the fingers at 60fps instead
@@ -2559,12 +2691,19 @@ const PDFPage = ({
             fireTwoFingerUndo();
           }, 180),
         };
-      } else if (e.touches.length === 1) {
-        if (annotToolRef.current) return; // an annotation tool is active — this touch is the start of a stroke, not a pan
+      } else if (e.touches.length === 3) {
+        // Three-finger pan — deliberately a different finger count from
+        // pinch-zoom/two-finger-undo (both still exactly 2 fingers,
+        // untouched above), so this never has to share or fight over the
+        // same gesture-detection state. Always available regardless of
+        // which drawing tool (if any) is currently selected — panning is
+        // no longer tied to a "Navigator" tool at all (deleted; see
+        // ANNOT_TOOLS). Reuses the same pan/panVelocityTracker/livePanRef
+        // machinery a single-finger pan used to drive.
         touchInteractionActive = true;
-        if (Date.now() < pinchCooldownUntil) return;
-        panX = e.touches[0].clientX;
-        panY = e.touches[0].clientY;
+        const c = touchCentroid(e.touches);
+        panX = c.x;
+        panY = c.y;
         panSL = el.scrollLeft;
         panST = el.scrollTop;
         panVelocityTracker.reset();
@@ -2574,6 +2713,18 @@ const PDFPage = ({
         livePanRef.current.targetL = panSL;
         livePanRef.current.targetT = panST;
         livePanRef.current.active = true;
+        hasMoved = false;
+      } else if (e.touches.length === 1) {
+        // No longer a pan trigger (panning is three-finger only, see
+        // above) — this single-finger tracking only exists so onTouchEnd's
+        // tap-vs-drag bookkeeping (hasMoved) and double-tap-to-select still
+        // work, and so a real drawing stroke (handled by the annotation
+        // canvas's own listeners, not this one) isn't fought over — this
+        // handler deliberately never calls preventDefault()/touches
+        // scroll state for the 1-finger case anymore.
+        touchInteractionActive = true;
+        panX = e.touches[0].clientX;
+        panY = e.touches[0].clientY;
         hasMoved = false;
       }
     };
@@ -2658,21 +2809,39 @@ const PDFPage = ({
         if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(newZoom * 100)}%`;
         return;
       }
-      if (e.touches.length !== 1) return;
-      if (Date.now() < pinchCooldownUntil) return;
-      if (annotToolRef.current) return; // an annotation tool is active — this touch belongs to a stroke, not navigation
+      if (e.touches.length === 3) {
+        // Three-finger pan move — same mechanics single-finger pan used to
+        // drive, just anchored to the 3-touch centroid instead. See the
+        // matching branch in onTouchStart for why this is a distinct
+        // finger count from pinch-zoom/two-finger-undo above.
+        if (Date.now() < pinchCooldownUntil) return;
+        const c = touchCentroid(e.touches);
+        const dx = c.x - panX;
+        const dy = c.y - panY;
+        const moved = Math.sqrt(dx * dx + dy * dy);
+        if (!hasMoved && moved < MOVE_THRESHOLD) return;
 
+        hasMoved = true;
+        e.preventDefault();
+        livePanRef.current.targetL = panSL - dx;
+        livePanRef.current.targetT = panST - dy;
+        if (!livePanRef.current.frame) runLivePan(el, livePanRef);
+        panVelocityTracker.push(c.x, c.y, performance.now());
+        return;
+      }
+
+      if (e.touches.length !== 1) return;
+      // No longer a pan trigger — see the matching branch in onTouchStart.
+      // Only tracks hasMoved so onTouchEnd can still tell a tap from a drag
+      // for double-tap-to-select; never calls preventDefault() or touches
+      // scroll state, so it can't interfere with a real drawing stroke
+      // (handled by the annotation canvas's own listeners) or block native
+      // behavior.
+      if (Date.now() < pinchCooldownUntil) return;
       const dx = e.touches[0].clientX - panX;
       const dy = e.touches[0].clientY - panY;
       const moved = Math.sqrt(dx * dx + dy * dy);
-      if (!hasMoved && moved < MOVE_THRESHOLD) return;
-
-      hasMoved = true;
-      e.preventDefault();
-      livePanRef.current.targetL = panSL - dx;
-      livePanRef.current.targetT = panST - dy;
-      if (!livePanRef.current.frame) runLivePan(el, livePanRef);
-      panVelocityTracker.push(e.touches[0].clientX, e.touches[0].clientY, performance.now());
+      if (!hasMoved && moved >= MOVE_THRESHOLD) hasMoved = true;
     };
 
     const onTouchEnd = (e) => {
@@ -2698,42 +2867,38 @@ const PDFPage = ({
 
       if (e.touches.length === 0) {
         touchInteractionActive = false;
-        if (annotToolRef.current) {
-          // A drawing tool was active for this touch, so it was a pen/
-          // highlighter/etc. stroke, not a pan or a tap-to-select — both
-          // onTouchStart and onTouchMove already bail out early above
-          // (their own `annotToolRef.current` guards) whenever a tool is
-          // active, so livePanRef.current.targetL/targetT and panX/panY/
-          // hasMoved were never updated for this touch at all. Without this
-          // guard, syncLivePan() below would still run unconditionally and
-          // force scrollLeft/scrollTop to whatever pan target was left over
-          // from the last REAL one-finger pan (often still the untouched
-          // {targetL:0, targetT:0} default) — snapping the zoomed-in view
-          // back to the top-left the instant a stroke finishes.
-          hasMoved = false;
-          return;
-        }
         if (pinchJustEnded) {
           // The pinch's OTHER finger already committed the zoom above (or
           // on the touchend just before this one) — this is only the
           // second finger following it off the glass a beat later, not a
-          // one-finger pan. Same reasoning as the annotToolRef.current
-          // guard above: livePanRef was never touched by a pinch, so
-          // syncLivePan() below would snap the scroll to whatever stale
-          // {currentL, currentT} it still had (often {0,0}) instead of
-          // leaving the zoom-to-point correction's own result alone.
+          // pan. livePanRef was never touched by a pinch, so syncLivePan()
+          // below would snap the scroll to whatever stale {currentL,
+          // currentT} it still had (often {0,0}) instead of leaving the
+          // zoom-to-point correction's own result alone.
           pinchJustEnded = false;
           hasMoved = false;
           return;
         }
+        // Only the three-finger pan branches (onTouchStart/onTouchMove
+        // above) ever set livePanRef.current.active — a plain 1-finger tap
+        // or drawing stroke never touches it, so this correctly tells
+        // apart "a real pan just ended" (sync + possible momentum) from
+        // "some other single-finger touch just ended" (neither — syncLivePan
+        // would otherwise snap scrollLeft/scrollTop to stale target values
+        // left over from the last real pan).
+        const wasPanning = livePanRef.current.active;
         livePanRef.current.active = false;
-        syncLivePan(el, livePanRef);
-        if (hasMoved) {
-          const { vx, vy } = panVelocityTracker.velocity();
-          if (Math.hypot(vx, vy) > MOMENTUM_FLICK_MIN) runMomentumScroll(el, vx, vy, momentumFrameRef);
-        } else if (textSelectableRef.current && e.changedTouches.length === 1) {
+        if (wasPanning) {
+          syncLivePan(el, livePanRef);
+          if (hasMoved) {
+            const { vx, vy } = panVelocityTracker.velocity();
+            if (Math.hypot(vx, vy) > MOMENTUM_FLICK_MIN) runMomentumScroll(el, vx, vy, momentumFrameRef);
+          }
+        } else if (!hasMoved && textSelectableRef.current && e.changedTouches.length === 1) {
           // Double-tap detection — the mouse path gets a real dblclick event,
           // touch doesn't reliably synthesize one, so track taps ourselves.
+          // !hasMoved is what tells a genuine tap apart from a drawing
+          // stroke that moved but never became a pan.
           const ct = e.changedTouches[0];
           const now = Date.now();
           const isDoubleTap =
@@ -3892,7 +4057,7 @@ const PDFPage = ({
   );
   const toolbarStyle =
     toolbarDock.edge === "top"
-      ? { top: toolbarBounds.top - 1, left: centeredToolbarLeft }
+      ? { top: toolbarBounds.top + PDF_FLOATING_TOOLBAR_MARGIN + 4, left: centeredToolbarLeft }
       : toolbarDock.edge === "bottom"
         ? { top: toolbarBounds.top + toolbarBounds.height - PDF_FLOATING_TOOLBAR_MARGIN - toolbarHeight, left: centeredToolbarLeft }
         : toolbarDock.edge === "left"
@@ -3916,44 +4081,101 @@ const PDFPage = ({
         className={`pdf_toolbar--${toolbarDock.edge}${toolbarDragging ? " pdf_toolbar--dragging" : ""}`}
         style={toolbarStyle}
       >
+        {/* Dedicated drag handle, not the toolbar's general chrome — always
+            on whichever edge faces inward (opposite the dock edge itself),
+            via .pdf_toolbar_edge_handle's own dock-scoped CSS, so it's
+            reachable from the content side rather than hidden against the
+            screen's own edge. A distinct small target is also what lets
+            this start the drag immediately on press, with no long-press
+            needed to disambiguate it from clicking a tool button. */}
         <button
           type="button"
-          className="pdf_toolbar_handle"
-          onPointerDown={handleToolbarDragStart}
-          title="Drag tools bar to any edge of the canvas"
-        >
-          <span className="pdf_toolbar_handle_grip" />
-        </button>
-        <div id="pdf_toolbar_left">
+          className="pdf_toolbar_edge_handle"
+          onTouchStart={handleToolbarDragStart}
+          onMouseDown={handleToolbarDragStart}
+          title="Drag to move the tools bar to any edge of the canvas"
+        />
+        <div id="pdf_toolbar_topbar">
           {pdfDoc && !selectionOnly && (
-            <>
-            <div className="annot_dd_wrap" ref={toolsMenuRef}>
-              <button
-                type="button"
-                className={`annot_trigger${toolActive ? " annot_trigger--active" : ""}`}
-                onClick={() => { setToolsMenuOpen((o) => !o); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
-              >
-                <i className={activeToolMeta?.icon || "bx bx-move"} />
-                <span className="annot_trigger_label">{activeToolMeta?.label || "Navigator"}</span>
-                <i className="bx bx-chevron-down annot_trigger_chevron" />
-              </button>
-              {toolsMenuOpen && (
-                <div className="annot_dd annot_dd--tools">
-                  {ANNOT_TOOLS.map(({ key, icon, label }) => (
-                    <button
-                      key={key}
-                      type="button"
-                      className={`annot_dd_item${annotTool === key ? " annot_dd_item--active" : ""}`}
-                      onClick={() => { setAnnotTool(key); setToolsMenuOpen(false); }}
-                    >
-                      <i className={icon} />
-                      <span>{label}</span>
-                    </button>
-                  ))}
+            <div id="pdf_toolbar_topbar_controls">
+              {/* Hidden when an embedding parent drives page navigation
+                  externally instead (see hidePageNav prop + the
+                  useImperativeHandle above) — same reasoning as
+                  hideUndoRedo just below. */}
+              {!hidePageNav && (
+                <div id="pdf_page_nav">
+                  <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1 || pinchActive} title="Previous page">‹</button>
+                  <span id="pdf_page_nav_label">{pageNum} / {pageCount}</span>
+                  <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount || pinchActive} title="Next page">›</button>
+                </div>
+              )}
+              {/* Hidden when an embedding parent drives undo/history/redo
+                  externally instead (see hideUndoRedo prop + the
+                  useImperativeHandle above) — e.g. PDFReaderWorkspace hoists
+                  this row into its own tab bar so it isn't duplicated once
+                  per open tab/pane. */}
+              {!hideUndoRedo && (
+                <div id="pdf_annot_right_group">
+                  <div id="pdf_annot_actions">
+                    <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="bx bx-undo" /></button>
+                    {annotHistory.length > 0 && (
+                      <button
+                        className={`annot_action_btn${annotHistoryOpen ? " annot_action_btn--active" : ""}`}
+                        onClick={() => setAnnotHistoryOpen((v) => !v)}
+                        title="Annotation History — every step taken this session"
+                      >
+                        <i className="bx bx-history" />
+                      </button>
+                    )}
+                    <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="bx bx-redo" /></button>
+                  </div>
                 </div>
               )}
             </div>
+          )}
+        </div>
+        <div id="pdf_toolbar_mainbar">
+        <div id="pdf_toolbar_left">
+          {pdfDoc && !selectionOnly && (
+            <>
+            <div className="annot_tool_strip" aria-label="PDF tools">
+              {DRAWING_TOOL_ORDER.map((key) => {
+                const tool = ANNOT_TOOLS.find((item) => item.key === key);
+                if (!tool) return null;
+                return (
+                  <React.Fragment key={key}>
+                    {key === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
+                    <button
+                      type="button"
+                      className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}`}
+                      onPointerDown={(event) => {
+                        if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(key, tool.label);
+                      }}
+                      onClick={() => { setAnnotTool(key); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                      title={tool.label}
+                      aria-label={tool.label}
+                    >
+                      {toolbarTouchLabel?.key === key && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
+                      {key === "pen" ? <PenToolIcon /> : <i className={tool.icon} />}
+                    </button>
+                  </React.Fragment>
+                );
+              })}
+            </div>
 
+            {/* Color/size/tool-settings for whichever tool is currently
+                active — grouped in their own row so they stay a row
+                regardless of toolbar dock edge (see .annot_tool_options in
+                pdfPage.css): at top/bottom it sits inline in the toolbar's
+                own horizontal flow like normal; at left/right (where the
+                toolbar itself is a narrow vertical column, see
+                #pdf_toolbar_left's own --left/--right flex-direction:
+                column) it instead pops out sideways as a flyout row
+                instead of being squeezed into that same narrow column. */}
+            <div
+              className="annot_tool_options"
+              style={(toolbarDock.edge === "left" || toolbarDock.edge === "right") ? { top: toolOptionsTop } : undefined}
+            >
             {toolActive && annotTool !== "eraser" && (
               <div className="annot_dd_wrap" ref={colorMenuRef}>
                 <button
@@ -4211,6 +4433,7 @@ const PDFPage = ({
                 )}
               </div>
             )}
+            </div>
 
             </>
           )}
@@ -4245,13 +4468,6 @@ const PDFPage = ({
         </div>
 
         <div id="pdf_toolbar_center">
-          {pdfDoc && (
-          <div id="pdf_page_nav">
-            <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1 || pinchActive} title="Previous page">‹</button>
-            <span id="pdf_page_nav_label">{pageNum} / {pageCount}</span>
-            <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount || pinchActive} title="Next page">›</button>
-          </div>
-          )}
           {/* In hideHyleControls contexts (e.g. PDFReaderWorkspace) the
               embedding parent shows this as an icon next to the tab's name
               instead — see onPdfTypeChange — so it isn't duplicated here. */}
@@ -4262,32 +4478,8 @@ const PDFPage = ({
             </span>
           )}
         </div>
-
-        <div id="pdf_toolbar_right">
-          {(annotHistory.length > 0 || (pdfDoc && !selectionOnly)) && (
-            /* Page-level controls (not tool options) — undo, history, redo
-               together in one container, in that order. */
-            <div id="pdf_annot_right_group">
-              <div id="pdf_annot_actions">
-                {pdfDoc && !selectionOnly && (
-                  <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="bx bx-undo" /></button>
-                )}
-                {annotHistory.length > 0 && (
-                  <button
-                    className={`annot_action_btn${annotHistoryOpen ? " annot_action_btn--active" : ""}`}
-                    onClick={() => setAnnotHistoryOpen((v) => !v)}
-                    title="Annotation History — every step taken this session"
-                  >
-                    <i className="bx bx-history" />
-                  </button>
-                )}
-                {pdfDoc && !selectionOnly && (
-                  <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="bx bx-redo" /></button>
-                )}
-              </div>
-            </div>
-          )}
         </div>
+
       </div>
 
       {/* Thin selection bar — appears under the toolbar for a double-clicked
@@ -4928,6 +5120,8 @@ const PDFPage = ({
       )}
     </div>
   );
-};
+});
+
+PDFPage.displayName = "PDFPage";
 
 export default PDFPage;

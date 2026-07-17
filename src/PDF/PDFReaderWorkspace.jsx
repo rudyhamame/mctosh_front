@@ -5,6 +5,12 @@ import { readStoredSession } from "../utils/sessionCleanup";
 import PDFPage, { PDF_TYPE_ICON } from "./PDFPage";
 import "./pdfReaderWorkspace.css";
 
+const BackArrowIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+    <path d="M16.46 4.11a1 1 0 0 0-1.04.07l-10 7a.997.997 0 0 0 0 1.64l10 7c.17.12.37.18.57.18a.997.997 0 0 0 1-1V5c0-.37-.21-.71-.54-.89ZM15 17.08 7.74 12 15 6.92z" />
+  </svg>
+);
+
 const authFetch = (url, options = {}) => {
   const token = readStoredSession()?.token || "";
   return fetch(url, {
@@ -27,7 +33,10 @@ const makeTab = (sourceId, name, page = null) => ({
 // "quick-switch shortcuts" — PDFPage remounts fresh on every tab switch
 // (via the `key` prop where it's rendered) rather than preserving each
 // tab's page position/zoom/in-progress annotations.
-const TabStrip = ({ tabs, setTabs, activeId, setActiveId, tabTypes, splitModeOn, checkedIds, onToggleCheck }) => {
+const TabStrip = ({
+  tabs, setTabs, activeId, setActiveId, tabTypes, splitModeOn, checkedIds, onToggleCheck,
+  undoRedo, pageNav,
+}) => {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [sources, setSources] = useState([]);
   const [loadingSources, setLoadingSources] = useState(false);
@@ -78,66 +87,114 @@ const TabStrip = ({ tabs, setTabs, activeId, setActiveId, tabTypes, splitModeOn,
 
   return (
     <div className="pdfw_tabbar">
-      <div className="pdfw_tabstrip">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            className={`pdfw_tab${t.id === activeId ? " pdfw_tab--active" : ""}`}
-            onClick={() => setActiveId(t.id)}
-            title={t.name}
-          >
-            {splitModeOn && (
-              <span
-                className="pdfw_tab_check"
-                onClick={(e) => { e.stopPropagation(); onToggleCheck(t.id); }}
-              >
-                <i className={checkedIds.includes(t.id) ? "bxf bx-checkbox-checked" : "bx bx-checkbox"} />
+      {/* Three explicit grid columns (see pdfReaderWorkspace.css) instead
+          of one flex row — a single row can't genuinely CENTER page-nav
+          against the tab strip's own variable, scrollable width; a
+          1fr/auto/1fr grid keeps the center column mathematically
+          centered in the bar regardless of tab count or whether
+          undo/redo is even rendered. */}
+      <div className="pdfw_tabbar_left">
+        <div className="pdfw_tabstrip">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              className={`pdfw_tab${t.id === activeId ? " pdfw_tab--active" : ""}`}
+              onClick={() => setActiveId(t.id)}
+              title={t.name}
+            >
+              {splitModeOn && (
+                <span
+                  className="pdfw_tab_check"
+                  onClick={(e) => { e.stopPropagation(); onToggleCheck(t.id); }}
+                >
+                  <i className={checkedIds.includes(t.id) ? "bxf bx-checkbox-checked" : "bx bx-checkbox"} />
+                </span>
+              )}
+              <span className="pdfw_tab_label">{t.name}</span>
+              {tabTypes?.[t.id] && (
+                <i
+                  className={`${PDF_TYPE_ICON[tabTypes[t.id]]} pdfw_tab_type`}
+                  title={tabTypes[t.id]}
+                />
+              )}
+              <span className="pdfw_tab_close" onClick={(e) => closeTab(e, t.id)}>
+                <i className="bx bx-x" />
               </span>
-            )}
-            <span className="pdfw_tab_label">{t.name}</span>
-            {tabTypes?.[t.id] && (
-              <i
-                className={`${PDF_TYPE_ICON[tabTypes[t.id]]} pdfw_tab_type`}
-                title={tabTypes[t.id]}
-              />
-            )}
-            <span className="pdfw_tab_close" onClick={(e) => closeTab(e, t.id)}>
-              <i className="bx bx-x" />
-            </span>
+            </button>
+          ))}
+        </div>
+
+        {/* Deliberately a sibling of .pdfw_tabstrip, not a child — the strip
+            scrolls horizontally (overflow-x: auto), and per the CSS overflow
+            spec that also computes overflow-y to auto, which would clip the
+            picker popover below since it renders outside the strip's own
+            bounding box. Living outside the scroll container avoids that
+            entirely instead of fighting it with overflow-y: visible (which
+            the spec doesn't allow to survive next to overflow-x: auto). */}
+        <div className="pdfw_tab_add_wrap" ref={pickerRef}>
+          <button className="pdfw_tab_add" onClick={() => setPickerOpen((v) => !v)} title="Open a document in a new tab">
+            <i className="bx bx-plus" />
           </button>
-        ))}
+          {pickerOpen && (
+            <div className="pdfw_picker">
+              <select
+                className="pdfw_picker_select"
+                autoFocus
+                value=""
+                disabled={loadingSources || sources.length === 0}
+                onChange={(e) => {
+                  const s = sources.find((src) => src._id === e.target.value);
+                  if (s) openTab(s._id, s.name);
+                }}
+              >
+                <option value="" disabled>
+                  {loadingSources ? "Loading…" : sources.length === 0 ? "No sources available" : "Select a source…"}
+                </option>
+                {sources.map((s) => (
+                  <option key={s._id} value={s._id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Deliberately a sibling of .pdfw_tabstrip, not a child — the strip
-          scrolls horizontally (overflow-x: auto), and per the CSS overflow
-          spec that also computes overflow-y to auto, which would clip the
-          picker popover below since it renders outside the strip's own
-          bounding box. Living outside the scroll container avoids that
-          entirely instead of fighting it with overflow-y: visible (which
-          the spec doesn't allow to survive next to overflow-x: auto). */}
-      <div className="pdfw_tab_add_wrap" ref={pickerRef}>
-        <button className="pdfw_tab_add" onClick={() => setPickerOpen((v) => !v)} title="Open a document in a new tab">
-          <i className="bx bx-plus" />
-        </button>
-        {pickerOpen && (
-          <div className="pdfw_picker">
-            <select
-              className="pdfw_picker_select"
-              autoFocus
-              value=""
-              disabled={loadingSources || sources.length === 0}
-              onChange={(e) => {
-                const s = sources.find((src) => src._id === e.target.value);
-                if (s) openTab(s._id, s.name);
-              }}
-            >
-              <option value="" disabled>
-                {loadingSources ? "Loading…" : sources.length === 0 ? "No sources available" : "Select a source…"}
-              </option>
-              {sources.map((s) => (
-                <option key={s._id} value={s._id}>{s.name}</option>
-              ))}
-            </select>
+      {/* Hoisted here from PDFPage's own toolbar (see hidePageNav prop on
+          the active tab's PDFPage instance below) — one row for whichever
+          tab is active, instead of one per open tab/pane. Always rendered
+          (even when empty) so it keeps its own grid column and stays the
+          true center regardless of whether a document with pages is open. */}
+      <div className="pdfw_tabbar_center">
+        {pageNav && pageNav.pageCount > 0 && (
+          <div id="pdf_page_nav" className="pdfw_page_nav_group">
+            <button onClick={pageNav.goToPrevPage} disabled={pageNav.pageNum <= 1 || pageNav.disabled} title="Previous page">‹</button>
+            <span id="pdf_page_nav_label">{pageNav.pageNum} / {pageNav.pageCount}</span>
+            <button onClick={pageNav.goToNextPage} disabled={pageNav.pageNum >= pageNav.pageCount || pageNav.disabled} title="Next page">›</button>
+          </div>
+        )}
+      </div>
+
+      {/* Hoisted here from PDFPage's own toolbar (see hideUndoRedo prop on
+          the active tab's PDFPage instance below) — one row for whichever
+          tab is active, instead of one per open tab/pane. Always rendered
+          (even when empty) so it keeps its own grid column, matching the
+          center column's own reasoning above. */}
+      <div className="pdfw_tabbar_right">
+        {undoRedo && (
+          <div id="pdf_annot_right_group" className="pdfw_undo_redo_group">
+            <div id="pdf_annot_actions">
+              <button className="annot_action_btn" onClick={undoRedo.undo} title="Undo last" disabled={!undoRedo.canUndo}><i className="bx bx-undo" /></button>
+              {undoRedo.hasHistory && (
+                <button
+                  className={`annot_action_btn${undoRedo.historyOpen ? " annot_action_btn--active" : ""}`}
+                  onClick={undoRedo.toggleHistory}
+                  title="Annotation History — every step taken this session"
+                >
+                  <i className="bx bx-history" />
+                </button>
+              )}
+              <button className="annot_action_btn" onClick={undoRedo.redo} title="Redo" disabled={!undoRedo.canRedo}><i className="bx bx-redo" /></button>
+            </div>
           </div>
         )}
       </div>
@@ -148,16 +205,29 @@ const TabStrip = ({ tabs, setTabs, activeId, setActiveId, tabTypes, splitModeOn,
 // One tab's page, rendered as its own pane — no per-pane toolbar or tab
 // strip of its own; split view is just N of these side by side, driven
 // entirely by which tabs are checked in the single shared TabStrip above.
-const PaneBody = ({ tab, onTabTypeChange }) => (
+// isActive/pdfPageRef/onUndoRedoStateChange/onPageNavStateChange are only
+// ever passed for whichever ONE pane corresponds to activeId — the rest
+// render their own undo/redo + page nav internally as normal (hideUndoRedo/
+// hidePageNav stay false for them), since a single hoisted row in the tab
+// bar can only ever drive one tab's state at a time; split view showing
+// several *other* tabs alongside the active one keeps each of those with
+// their own in-toolbar controls.
+const PaneBody = ({ tab, onTabTypeChange, isActive, pdfPageRef, onUndoRedoStateChange, onPageNavStateChange }) => (
   <div className="pdfw_pane_body">
     {tab ? (
       <PDFPage
         key={tab.id}
+        ref={isActive ? pdfPageRef : undefined}
         embeddedSourceId={tab.sourceId}
         embeddedPdfName={tab.name}
         embeddedHomePath="/home"
         homeLabel="Home"
         hideHyleControls
+        fitToContainer
+        hideUndoRedo={isActive}
+        onUndoRedoStateChange={isActive ? onUndoRedoStateChange : undefined}
+        hidePageNav={isActive}
+        onPageNavStateChange={isActive ? onPageNavStateChange : undefined}
         initialPage={tab.page}
         onPdfTypeChange={(type) => onTabTypeChange(tab.id, type)}
       />
@@ -236,11 +306,36 @@ const PDFReaderWorkspace = () => {
     ? checkedIds.map((id) => tabs.find((t) => t.id === id)).filter(Boolean)
     : [tabs.find((t) => t.id === activeId) || null];
 
+  // Undo/history/redo, hoisted from the active tab's own PDFPage toolbar
+  // into the tab bar (see TabStrip's undoRedo prop) — undoRedoState is
+  // reported via PDFPage's onUndoRedoStateChange effect (a ref alone can't
+  // trigger this component to re-render its own buttons). Reset to
+  // defaults whenever the active tab changes; the new pane's own
+  // mount-time effect reports its real state again immediately after.
+  const activePageRef = useRef(null);
+  const [undoRedoState, setUndoRedoState] = useState({ canUndo: false, canRedo: false, hasHistory: false, historyOpen: false });
+  useEffect(() => { setUndoRedoState({ canUndo: false, canRedo: false, hasHistory: false, historyOpen: false }); }, [activeId]);
+  const undoRedo = activeId ? {
+    ...undoRedoState,
+    undo: () => activePageRef.current?.undo(),
+    redo: () => activePageRef.current?.redo(),
+    toggleHistory: () => activePageRef.current?.toggleHistory(),
+  } : null;
+
+  // Same pattern as undoRedo above, for the prev/page-number/next row.
+  const [pageNavState, setPageNavState] = useState({ pageNum: 1, pageCount: 0, disabled: false });
+  useEffect(() => { setPageNavState({ pageNum: 1, pageCount: 0, disabled: false }); }, [activeId]);
+  const pageNav = activeId ? {
+    ...pageNavState,
+    goToPrevPage: () => activePageRef.current?.goToPrevPage(),
+    goToNextPage: () => activePageRef.current?.goToNextPage(),
+  } : null;
+
   return (
     <div id="pdfw_root">
       <div id="pdfw_header">
         <button id="pdfw_back" onClick={() => navigate("/home")} title="Back to Home">
-          <i className="bx bx-arrow-back" />
+          <BackArrowIcon />
         </button>
         <TabStrip
           tabs={tabs}
@@ -251,6 +346,8 @@ const PDFReaderWorkspace = () => {
           splitModeOn={splitModeOn}
           checkedIds={checkedIds}
           onToggleCheck={onToggleCheck}
+          undoRedo={undoRedo}
+          pageNav={pageNav}
         />
         {tabs.length > 1 && (
           <button
@@ -268,7 +365,14 @@ const PDFReaderWorkspace = () => {
       <div id="pdfw_panes" className={panesToShow.length > 1 ? "pdfw_panes--split" : ""}>
         {panesToShow.map((tab, i) => (
           <div className="pdfw_pane" key={tab?.id ?? `empty_${i}`}>
-            <PaneBody tab={tab} onTabTypeChange={onTabTypeChange} />
+            <PaneBody
+              tab={tab}
+              onTabTypeChange={onTabTypeChange}
+              isActive={Boolean(tab) && tab.id === activeId}
+              pdfPageRef={activePageRef}
+              onUndoRedoStateChange={setUndoRedoState}
+              onPageNavStateChange={setPageNavState}
+            />
           </div>
         ))}
       </div>
