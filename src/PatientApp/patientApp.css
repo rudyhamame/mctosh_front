@@ -510,7 +510,7 @@
   right: 12%;
 }
 
-/* ── AMCTOSHS turn-taking state — "lk.agent.state" room attribute ── */
+/* ── MCTOSHS turn-taking state — "lk.agent.state" room attribute ── */
 .pa_agent_state {
   display: flex;
   align-items: center;

@@ -93,7 +93,7 @@ const DraftListPage = () => {
     <div id="draft_list_page">
       <div id="draft_list_header">
         <button id="draft_list_back_btn" onClick={() => navigate("/home")} title="Back to Home">←</button>
-        <span id="draft_list_title">AMCTOSHS Draft</span>
+        <span id="draft_list_title">MCTOSHS Draft</span>
         <button id="draft_list_new_btn" onClick={createDraft} disabled={creating}>
           <i className="fi fi-rr-add" /> New Document
         </button>

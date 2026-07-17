@@ -23,7 +23,7 @@ const MCTOSHS_ORBITS = [
   { id: "s2", letter: "S",  r:  48, color: "#ffd54f", dur: "512s", dir: "cw", delay: "0s" },
 ];
 
-// Full name for each orbit letter — the biological/social scale AMCTOSHS is
+// Full name for each orbit letter — the biological/social scale MCTOSHS is
 // built from, matching the same naming used in ClinicalSchemata and the
 // ontology validation schema elsewhere in the app.
 const SCHEMA_NAMES = {
@@ -71,7 +71,7 @@ const CARDIAC_ANNOTATIONS = [
   {
     d: 0.00,  abbr: "t₀",   desc: "Endothelial Normalcy",
     color: "rgba(0,220,110,0.85)",
-    note: "M at 12 o'clock — all AMCTOSHS dimensions in full homeostasis · Coronary endothelium intact · No disease signal",
+    note: "M at 12 o'clock — all MCTOSHS dimensions in full homeostasis · Coronary endothelium intact · No disease signal",
     engaged: ["M"],
     config: { compResilience: 0.90, kSp: 2.8, dmpOrb: 1.50, pressureCoeff: 0.50, breakdownForce: 0.40, extraDepth: 0.08, cMirrorRatio: 0.40 },
   },
@@ -120,14 +120,14 @@ const CARDIAC_ANNOTATIONS = [
   {
     d: 0.188, abbr: "COc",  desc: "Complete Occlusion · STEMI",
     color: "rgba(228,4,4,0.92)",
-    note: "M near t_end · All AMCTOSHS dimensions at maximum depth · T: ST elevation, troponin peak · O: complete lumen occlusion · H: cardiogenic shock",
+    note: "M near t_end · All MCTOSHS dimensions at maximum depth · T: ST elevation, troponin peak · O: complete lumen occlusion · H: cardiogenic shock",
     engaged: ["M", "C", "T", "O", "OS", "H", "S"],
     config: { compResilience: 0.10, kSp: 1.2, dmpOrb: 1.25, pressureCoeff: 3.80, breakdownForce: 4.50, extraDepth: 0.32, cMirrorRatio: 0.72 },
   },
   {
     d: 0.20,  abbr: "t_end", desc: "Ventricular Fibrillation · Cardiac Arrest",
     color: "rgba(200,0,0,0.94)", anchor: "end",
-    note: "M reaches 6 o'clock — system collapse · AMCTOSHS cascade reaches π · C/T/O/OS/H/S all failed · Lethal arrhythmia from transmural ischaemia",
+    note: "M reaches 6 o'clock — system collapse · MCTOSHS cascade reaches π · C/T/O/OS/H/S all failed · Lethal arrhythmia from transmural ischaemia",
     engaged: ["M", "C", "T", "O", "OS", "H", "S"],
     config: { compResilience: 0.02, kSp: 1.0, dmpOrb: 1.20, pressureCoeff: 5.50, breakdownForce: 6.50, extraDepth: 0.36, cMirrorRatio: 0.78 },
   },
@@ -660,7 +660,7 @@ export default function Login({ onLogin }) {
         <div id="login_brand">
           <div id="login_sigil"><span>M</span></div>
           <div id="login_brand_text">
-            <h1 id="login_wordmark">AMCTOSHS | CVS</h1>
+            <h1 id="login_wordmark">MCTOSHS | CVS</h1>
             <p id="login_platform_label">Cardiovascular Clinical Intelligence Platform</p>
           </div>
         </div>
@@ -886,7 +886,7 @@ export default function Login({ onLogin }) {
               floating inside the object. ── */}
           <div id="anim_footer_items">
             <div id="labels_card_head">
-              <span id="labels_card_mctoshs">AMCTOSHS</span>
+              <span id="labels_card_mctoshs">MCTOSHS</span>
               <span id="labels_card_pr">Patient Reality</span>
             </div>
             <ul id="labels_card_list">
@@ -923,7 +923,7 @@ export default function Login({ onLogin }) {
       {/* ── RIGHT: Form Panel ── */}
       <div id="login_panel" className={panelHidden ? "login_panel_hidden" : ""}>
 
-        {/* Which side of AMCTOSHS to sign into — clinicians use this panel's
+        {/* Which side of MCTOSHS to sign into — clinicians use this panel's
             own form below; patients get routed to the separate patient
             account system (independent auth, see AppRouter). */}
         <div id="login_role_tabs" role="tablist" aria-label="Log in as">
@@ -1024,7 +1024,7 @@ export default function Login({ onLogin }) {
           {error && <p id="login_error" role="alert">{error}</p>}
 
           <button type="submit" id="login_submit" disabled={loading}>
-            {loading ? "Authenticating…" : mode === "signup" ? "Create account" : "Enter AMCTOSHS"}
+            {loading ? "Authenticating…" : mode === "signup" ? "Create account" : "Enter MCTOSHS"}
           </button>
 
           <button type="button" id="login_toggle" onClick={toggle}>
@@ -1042,7 +1042,7 @@ export default function Login({ onLogin }) {
         </form>
 
         <footer id="login_footer">
-          <span>AMCTOSHS | CVS &middot; From representation to reality</span>
+          <span>MCTOSHS | CVS &middot; From representation to reality</span>
           <span>&copy; {new Date().getFullYear()} Rudy Hamame</span>
         </footer>
       </div>

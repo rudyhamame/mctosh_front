@@ -10,6 +10,13 @@
   --color-surface:    #1e1e3a;
   --color-border:     #2a2a4a;
   --app-footer-height: 44px; /* the fixed app-wide toolbar strip in AppFooter.jsx — full-viewport pages must subtract this or their bottom edge/toolbars sit behind it */
+  /* -apple-system/BlinkMacSystemFont resolve to San Francisco on Apple's
+     own platforms (Safari/WebKit) — SF automatically swaps between its
+     Text and Display optical sizes based on font-size on its own, so one
+     stack already gets both without naming them as separate font files.
+     No font files are bundled or imported; every other platform just
+     falls through to its own closest native system font. */
+  --font-family-system: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Arial, sans-serif;
 }
 
 /* ── Light theme ───────────────────────────────────────────────────────────── */
@@ -38,10 +45,38 @@ html.theme-dark {
   --color-border:     #222222;
 }
 
-/* ── Global reset ─────────────────────────────────────────────────────────── */
+/* ── Global reset + typography (matches native iOS/iPadOS) ───────────────────
+   One system stack for the whole app; regular weight and a comfortable
+   (iPadOS-like) line-height by default, with headings/buttons stepping up
+   to medium/semibold the way the native HIG does. Form controls don't
+   inherit font-family/size from the page by default in any browser — every
+   button/input/textarea/select/menu/modal needs that spelled out below or
+   it silently falls back to the browser's own UA font instead. */
 html, body {
   background-color: var(--color-bg);
   color: var(--color-text);
+  font-family: var(--font-family-system);
+  font-weight: 400;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+button, input, textarea, select, optgroup {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: inherit;
+  font-weight: 600; /* semibold — matches iOS/iPadOS large-title/section-header weight */
+  line-height: 1.2;
+}
+
+button {
+  font-weight: 500; /* medium — matches iOS/iPadOS button label weight */
 }
 
 /* Printing a dark theme as-is would waste a full page of dark ink behind

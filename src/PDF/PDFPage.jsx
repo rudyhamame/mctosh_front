@@ -150,6 +150,19 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const roundZoom = (value) => Math.round(value * 100) / 100;
 const normalizeZoom = (value) => clamp(roundZoom(value), MIN_ZOOM, MAX_ZOOM);
 const normalizePinchZoom = (value) => Math.max(PINCH_ZOOM_FLOOR, roundZoom(value));
+// Effort scales with how far the CURRENT zoom already is from the natural
+// 1.0 (100%) point — like a real lens/zoom ring, each further step gets
+// progressively harder to turn rather than staying uniformly sensitive
+// across the whole range. log(zoom) makes it symmetric between zooming in
+// and zooming out (zoom=2 and zoom=0.5 apply the same resistance). Shared
+// by every zoom path (pinch, ctrl+scroll, held +/- buttons) so "how it
+// feels to zoom" is consistent no matter which input drives it. Stiff
+// enough that reaching an extreme zoom (500%+) takes real, deliberate
+// effort rather than a single aggressive pinch — at 1.5 a big finger-spread
+// could still fling the page to 1000%+ in one gesture, which read as
+// physically unrealistic (a real lens doesn't behave like that).
+const ZOOM_RESISTANCE = 4;
+const dynamicZoomGain = (baseGain, currentZoom) => baseGain / (1 + ZOOM_RESISTANCE * Math.abs(Math.log(currentZoom)));
 // Held +/- zoom buttons: tick rate, and how fast/how far the per-tick step
 // accelerates the longer the button stays down (see startZoomHold).
 const ZOOM_HOLD_TICK_MS = 48;
@@ -773,6 +786,18 @@ const PDFPage = ({
   const [dragOver, setDragOver]     = useState(false);
   const [pageViewport, setPageViewport] = useState(null);
   const [zoom, setZoom]               = useState(1);
+  // True for the duration of an actual (primed) pinch gesture — used to
+  // lock out everything else a stray second/third contact point could
+  // otherwise trigger while the user's fingers are still down: page-nav
+  // buttons/minimap (real React state so they can be declaratively
+  // disabled) plus text selection (touchInteractionActive below, which
+  // onSelectStart already checks). Declared up here, not down by the rest
+  // of the pinch/zoom state, because startMinimapDrag/panFromMinimapPoint
+  // (defined earlier in the component) already read it in their own
+  // useCallback dependency arrays — those arrays evaluate every render, so
+  // referencing pinchActive before its declaration threw "Cannot access
+  // 'pinchActive' before initialization" the instant the component rendered.
+  const [pinchActive, setPinchActive] = useState(false);
   const [splitRatio,     setSplitRatio]    = useState(1);
   const [mdPanelWidth,   setMdPanelWidth]  = useState(340); // resizable width of the Markdown/Actions left column
   const [extractionOpen, setExtractionOpen] = useState(false);
@@ -925,6 +950,7 @@ const PDFPage = ({
   }, []);
 
   const startMinimapDrag = useCallback((mini, event) => {
+    if (pinchActive) return; // a pinch is still in progress on the main view — don't also start navigating via the minimap
     const sheet = event.currentTarget;
     const pointerId = "pointerId" in event ? event.pointerId : null;
     minimapDragRef.current = {
@@ -936,7 +962,7 @@ const PDFPage = ({
     if (pointerId != null) sheet.setPointerCapture?.(pointerId);
     event.preventDefault();
     panFromMinimapPoint(mini, event.clientX, event.clientY);
-  }, [panFromMinimapPoint]);
+  }, [panFromMinimapPoint, pinchActive]);
 
   const moveMinimapDrag = useCallback((mini, event) => {
     const dragState = minimapDragRef.current;
@@ -1125,6 +1151,14 @@ const PDFPage = ({
   const pageViewportsRef  = useRef([]);
   const renderedScaleRef  = useRef([]); // scale each page's canvas was last rendered at — lets us skip already-current pages
   const renderedCssSizeRef = useRef([]); // last displayed CSS size per page, separate from the HiDPI backing buffer size
+  // How many backing-buffer pixels the CURRENT page's canvas gets per CSS
+  // pixel — i.e. (page canvas.width / displayViewport.width), already
+  // folding in both devicePixelRatio AND the MAX_RENDER_CANVAS_* safety cap
+  // (see renderPage below). The annotation canvas mirrors this exact ratio
+  // instead of re-deriving its own, so it can never end up sharper/blurrier
+  // than the page underneath it, or exceed the same browser canvas-size
+  // ceiling the page canvas is already careful to respect.
+  const currentBackingScaleRef = useRef(1);
   const pageNumRef        = useRef(1);
   pageNumRef.current      = pageNum;  // sync during render
 
@@ -1139,6 +1173,13 @@ const PDFPage = ({
   useLongPressSelect(mdTextRef);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
+  // The zoom % label — pinch/ctrl-scroll/held +/- all defer the real `zoom`
+  // state update until the gesture settles (a live re-render on every tick
+  // would re-trigger the expensive PDF.js rasterization this whole scheme
+  // exists to avoid). Written to directly during the gesture instead, same
+  // as canvasWrapRef's own transform, so the number still tracks live
+  // without paying for a React re-render on every tick.
+  const zoomLabelRef = useRef(null);
   const momentumFrameRef = useRef(0); // shared by touch-pan and mouse-drag-pan momentum coasting
   const livePanRef = useRef({
     frame: 0,
@@ -1283,7 +1324,10 @@ const PDFPage = ({
     renderTasksRef.current[n - 1] = task;
     renderedScaleRef.current[n - 1] = displayScale;
     task.promise.catch(err => { if (err?.name !== "RenderingCancelledException") console.error(err); });
-    if (n === pageNumRef.current) setPageViewport(displayViewport);
+    if (n === pageNumRef.current) {
+      setPageViewport(displayViewport);
+      currentBackingScaleRef.current = c.width / Math.max(1, displayViewport.width);
+    }
   }, [pdfDoc, zoom]);
 
   // Full reset + initial render whenever a new document (or page count) loads.
@@ -1362,9 +1406,24 @@ const PDFPage = ({
 
   // Apply zoom-to-point scroll correction after canvas re-renders at new zoom.
   // Also strips any CSS pinch-transform that was held until this point.
+  //
+  // renderPage() is async (it awaits pdfDoc.getPage before it ever touches
+  // pageViewport), so the [zoom] state commits — and this effect's first
+  // firing happens — well before the page container has actually resized to
+  // the new zoom. Reading pageEl.offsetWidth/Height at that point returns
+  // the OLD, still-small size; at a big zoom jump (e.g. pinching to 255%)
+  // the resulting target undershoots badly enough to go negative and clamp
+  // to (0,0) — the page snapping to its own upper-left corner the instant
+  // the pinch lifted. renderedScaleRef is set (by renderPage) in the same
+  // synchronous block as the pageViewport update that actually resizes the
+  // page, right before it, so comparing against it here tells us whether
+  // the DOM has really caught up yet — if not, leave the correction pending
+  // instead of consuming it early; the effect fires again once pageViewport
+  // itself updates, by which point the size is correct.
   useEffect(() => {
     const pending = scrollAfterZoomRef.current;
     if (!pending || !previewRef.current) return;
+    if (renderedScaleRef.current[pageNumRef.current - 1] !== fitScaleRef.current * zoom) return;
     scrollAfterZoomRef.current = null;
     const el   = previewRef.current;
     const wrap = canvasWrapRef.current;
@@ -1391,7 +1450,7 @@ const PDFPage = ({
       el.scrollLeft = Math.max(0, pending.left);
       el.scrollTop  = Math.max(0, pending.top);
     });
-  }, [zoom]);
+  }, [zoom, pageViewport]);
 
   useEffect(() => {
     if (!pdfDoc || !previewRef.current) {
@@ -1490,13 +1549,25 @@ const PDFPage = ({
   useEffect(() => {
     const ac = annotCanvasRef.current;
     if (!ac || !pageViewport) return;
-    ac.width  = Math.max(1, Math.floor(pageViewport.width));
-    ac.height = Math.max(1, Math.floor(pageViewport.height));
+    // Backing buffer at the SAME device-pixel density (and safety cap) as
+    // the page canvas underneath — see currentBackingScaleRef. Sizing this
+    // 1:1 with CSS pixels (the old behaviour) made every stroke look soft
+    // on any HiDPI screen, worst at low zoom where the buffer itself is
+    // tiny; the CSS size (ac.style.width/height) still tracks the page
+    // exactly, only the internal bitmap resolution changes here.
+    const backingScale = currentBackingScaleRef.current || 1;
+    ac.width  = Math.max(1, Math.floor(pageViewport.width * backingScale));
+    ac.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
     ac.style.width = `${pageViewport.width}px`;
     ac.style.height = `${pageViewport.height}px`;
     const scale = fitScaleRef.current * zoom;
     const ctx = ac.getContext("2d");
-    ctx.clearRect(0, 0, ac.width, ac.height);
+    // Setting width/height above reset the transform to identity — redraw()
+    // (in the pointer-handling effect below) relies on this same transform
+    // staying in place for the rest of the gesture, since it never resizes
+    // the canvas itself.
+    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
     for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
   }, [annotations, pageNum, pageViewport]);
 
@@ -1621,13 +1692,16 @@ const PDFPage = ({
     const ac = annotCanvasRef.current;
     if (!ac || !toolActive) return;
 
-    // Returns coordinates in PDF-point space (canvas pixels ÷ scale)
+    // Returns coordinates in PDF-point space (CSS pixels ÷ scale). Note this
+    // is deliberately independent of the annotation canvas's backing-buffer
+    // resolution (ac.width/height, which now runs at device-pixel density —
+    // see currentBackingScaleRef) — `scale` (fitScale*zoom) was calibrated
+    // against CSS pixels, so multiplying by a device-pixel-buffer ratio here
+    // would inflate every stroke's stored position by that same ratio.
     const getScale = () => fitScaleRef.current * zoomRef.current;
     const toCanvas = (e) => {
       const rect  = ac.getBoundingClientRect();
       const scale = getScale();
-      const sx    = ac.width  / rect.width;
-      const sy    = ac.height / rect.height;
       const cx    = e.touches ? e.touches[0].clientX : e.clientX;
       const cy    = e.touches ? e.touches[0].clientY : e.clientY;
       const pressure = typeof e.pressure === "number"
@@ -1636,8 +1710,8 @@ const PDFPage = ({
           ? e.touches[0].force
           : 0.5;
       return {
-        x: (cx - rect.left) * sx / scale,
-        y: (cy - rect.top) * sy / scale,
+        x: (cx - rect.left) / scale,
+        y: (cy - rect.top) / scale,
         vx: cx,
         vy: cy,
         t: typeof e.timeStamp === "number" ? e.timeStamp : performance.now(),
@@ -1666,11 +1740,9 @@ const PDFPage = ({
 
       const canvasRect = ac.getBoundingClientRect();
       const scale = getScale();
-      const sx = ac.width / canvasRect.width;
-      const sy = ac.height / canvasRect.height;
       const spanRect = span.getBoundingClientRect();
-      const centerY = ((spanRect.top + spanRect.height / 2) - canvasRect.top) * sy / scale;
-      const textHeight = Math.max(8, (spanRect.height * sy / scale) * 0.82);
+      const centerY = ((spanRect.top + spanRect.height / 2) - canvasRect.top) / scale;
+      const textHeight = Math.max(8, (spanRect.height / scale) * 0.82);
       return {
         ...basePoint,
         y: lockedY ?? centerY,
@@ -1689,19 +1761,23 @@ const PDFPage = ({
       if (!span) return null;
       const canvasRect = ac.getBoundingClientRect();
       const scale = getScale();
-      const sx = ac.width / canvasRect.width;
       const spanRect = span.getBoundingClientRect();
       return {
         ...alignedPoint,
-        startX: ((spanRect.left - canvasRect.left) * sx) / scale,
-        endX: ((spanRect.right - canvasRect.left) * sx) / scale,
+        startX: (spanRect.left - canvasRect.left) / scale,
+        endX: (spanRect.right - canvasRect.left) / scale,
       };
     };
 
     const redraw = (extra) => {
       const scale = getScale();
       const ctx = ac.getContext("2d");
-      ctx.clearRect(0, 0, ac.width, ac.height);
+      // clientWidth/Height (CSS pixels), not ac.width/height (the device-
+      // pixel backing buffer) — the sizing effect above already left this
+      // context's transform scaled up to match that buffer, so clearRect
+      // here needs to stay in the same post-transform CSS-pixel space
+      // everything else in this function draws in.
+      ctx.clearRect(0, 0, ac.clientWidth, ac.clientHeight);
       for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
       if (extra) drawAnnotation(ctx, extra, scale);
     };
@@ -1990,7 +2066,6 @@ const PDFPage = ({
       const wrap = canvasWrapRef.current;
       if (!wrap) return;
       const state = wheelZoomStateRef.current;
-      const delta = e.deltaY < 0 ? 1.08 : 1 / 1.08;
 
       if (!state.timer) {
         state.baseZoom = zoomRef.current;
@@ -1998,6 +2073,12 @@ const PDFPage = ({
         state.startSL = el.scrollLeft;
         state.startST = el.scrollTop;
       }
+
+      // 1.08 per tick at gain 1 — dynamicZoomGain shrinks the exponent (not
+      // the 1.08 base itself) as pendingZoom drifts from 1.0, same resistance
+      // curve the pinch handler uses.
+      const tickGain = dynamicZoomGain(1, state.pendingZoom);
+      const delta = e.deltaY < 0 ? Math.pow(1.08, tickGain) : Math.pow(1.08, -tickGain);
 
       state.midX = e.clientX - rect.left; // el (scroll container) is never itself transformed, safe to re-read every tick
       state.midY = e.clientY - rect.top;
@@ -2014,8 +2095,17 @@ const PDFPage = ({
       state.originX = originX;
       state.originY = originY;
 
-      wrap.style.transformOrigin = `${originX}px ${originY}px`;
+      // transform-origin is relative to wrap's OWN border box, not to el's
+      // (previewEl's) content-space — but originX/Y above are measured in
+      // el's frame (scrollLeft + viewport-relative point). wrap sits offset
+      // from el's padding edge by wrap.offsetLeft/Top (el's own padding,
+      // plus wrap's margin:auto centering when the page is narrower than
+      // the viewer), so that offset must be subtracted out here or the live
+      // preview zooms around a point down-and-right of the real cursor —
+      // which visibly drifts the shown page up-and-left as the scale grows.
+      wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
       wrap.style.transform = `scale(${state.pendingZoom / state.baseZoom})`;
+      if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(state.pendingZoom * 100)}%`;
 
       if (state.timer) clearTimeout(state.timer);
       state.timer = setTimeout(commitLiveZoom, 70);
@@ -2050,7 +2140,17 @@ const PDFPage = ({
     // normalizeZoom (not normalizePinchZoom) so held/repeated clicks stay
     // clamped to [MIN_ZOOM, MAX_ZOOM] — the looser pinch bound is only for
     // an actual pinch gesture, which is allowed to briefly overshoot.
-    const rawTarget = typeof nextZoom === "function" ? nextZoom(state.pendingZoom) : nextZoom;
+    // A function nextZoom is always an incremental step (the +/- buttons,
+    // held or clicked) — dampen that step the same way pinch/ctrl-scroll
+    // are dampened. A plain numeric nextZoom is a deliberate absolute jump
+    // (e.g. reset to 100%), which should land exactly, not be resisted.
+    let rawTarget;
+    if (typeof nextZoom === "function") {
+      const rawStep = nextZoom(state.pendingZoom) - state.pendingZoom;
+      rawTarget = state.pendingZoom + rawStep * dynamicZoomGain(1, state.pendingZoom);
+    } else {
+      rawTarget = nextZoom;
+    }
     state.pendingZoom = normalizeZoom(rawTarget);
 
     // Viewport center, in viewport-relative coordinates — el (the scroll
@@ -2070,8 +2170,13 @@ const PDFPage = ({
     state.originY = originY;
 
     wrap.style.willChange      = "transform";
-    wrap.style.transformOrigin = `${originX}px ${originY}px`;
+    // Same wrap-vs-el frame mismatch as the ctrl+scroll handler above:
+    // transform-origin is relative to wrap's own border box, so wrap's own
+    // offset within el (padding + auto-centering margin) must be subtracted
+    // from the el-frame origin computed above.
+    wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
     wrap.style.transform       = `scale(${state.pendingZoom / state.baseZoom})`;
+    if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(state.pendingZoom * 100)}%`;
 
     if (state.timer) clearTimeout(state.timer);
     state.timer = setTimeout(commitLiveZoom, 90);
@@ -2157,6 +2262,23 @@ const PDFPage = ({
     const panVelocityTracker = createVelocityTracker();
     let hasMoved = false;
     let touchInteractionActive = false;
+    // A real pinch almost never lifts both fingers in exact sync — one
+    // finger lifting first fires touchend at touches.length===1 (where
+    // commitPinchZoom() actually runs, see below), then the second fires a
+    // SEPARATE touchend at touches.length===0 a beat later. That second
+    // event used to fall straight into the touches.length===0 branch below
+    // and call syncLivePan() unconditionally, forcing scrollLeft/scrollTop
+    // to livePanRef's currentL/currentT — which a pinch-only gesture never
+    // touches, so it's still whatever stale value (often the untouched
+    // {0,0} default) was left over from before. That synchronous DOM write
+    // raced the zoom-to-point correction effect (which is deferred behind
+    // an async re-render) and could win, snapping the freshly-zoomed page
+    // back to its own upper-left corner right as the pinch lifted. Set the
+    // instant commitPinchZoom() actually runs, checked and cleared the
+    // instant the last finger lifts — mirrors the annotToolRef.current
+    // guard just below it, which fixes the identical race for a drawing
+    // stroke's own touch-lift.
+    let pinchJustEnded = false;
 
     // Selection is double-click/double-tap only — a single word, no drag or
     // long-press range expansion. Just need last-tap bookkeeping to detect
@@ -2193,8 +2315,18 @@ const PDFPage = ({
         el.getBoundingClientRect().left + lastMidX,
         el.getBoundingClientRect().top + lastMidY
       ) || {
-        left: (startSL + startMidX) * (lastPinchZoom / startZoom) - lastMidX,
-        top: (startST + startMidY) * (lastPinchZoom / startZoom) - lastMidY,
+        // Must use lastMidX/lastMidY on BOTH sides here, not startMidX/
+        // startMidY — the live preview above anchors its transform-origin
+        // at `startSL + lastMidX` (the CURRENT midpoint), not the gesture's
+        // starting one. Mixing start-space content position with a
+        // last-space viewport subtraction only matched when a pinch's
+        // midpoint never drifted from where it started; a real pinch's
+        // fingers almost always drift some as they spread, so this
+        // fallback (only hit when captureZoomAnchor itself returns null)
+        // was landing short of the actual target — up and to the left of
+        // wherever the gesture actually ended.
+        left: (startSL + lastMidX) * (lastPinchZoom / startZoom) - lastMidX,
+        top: (startST + lastMidY) * (lastPinchZoom / startZoom) - lastMidY,
       };
       setZoom(lastPinchZoom);
       // The preview transform stays in place until the [zoom] effect swaps it
@@ -2277,11 +2409,14 @@ const PDFPage = ({
       livePanRef.current.active = false;
       stopLivePan(livePanRef);
       stopMomentumScroll(momentumFrameRef); // grabbing the page always catches it mid-coast
+      pinchJustEnded = false; // a brand new touch sequence starting — any earlier pinch's tail is over
 
       if (e.touches.length === 2) {
+        touchInteractionActive = true; // wasn't being set for the 2-finger case at all — left text selection unblocked during a pinch
         const elRect = el.getBoundingClientRect();
         startDist = touchDist(e.touches);
         pinchPrimed = startDist >= MIN_PINCH_START_DIST;
+        if (pinchPrimed) setPinchActive(true);
         startZoom = zoomRef.current;
         lastPinchZoom = startZoom;
         lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
@@ -2329,7 +2464,6 @@ const PDFPage = ({
       // for the whole gesture; the undo-candidate check still runs inside,
       // independently, purely to decide whether to fire the undo gesture.
       if (e.touches.length === 2 && startDist !== null) {
-        clearTimeout(lpTimer); lpTimer = null; isLpSelecting = false;
         e.preventDefault();
         const nextDist = touchDist(e.touches);
         const elRect = el.getBoundingClientRect();
@@ -2354,13 +2488,25 @@ const PDFPage = ({
           startST = el.scrollTop;
           lastPinchZoom = startZoom;
           pinchPrimed = true;
+          setPinchActive(true);
           return;
         }
         if (Math.abs(nextDist - startDist) < PINCH_JITTER_PX) return;
         const rawRatio = Math.max(0.01, nextDist / startDist);
-        const newZoom = normalizePinchZoom(startZoom * Math.pow(rawRatio, PINCH_GAIN));
+        const newZoom = normalizePinchZoom(startZoom * Math.pow(rawRatio, dynamicZoomGain(PINCH_GAIN, startZoom)));
         if (newZoom === lastPinchZoom) return;
         lastPinchZoom = newZoom;
+        // A real zoom change is happening — a pinch must never also fire the
+        // two-finger-undo gesture below it, no matter how small or slow the
+        // motion was (the movedFar check above uses a distance THRESHOLD, so
+        // a small-but-real pinch that stays under it could still leave this
+        // candidate alive and fire an unwanted undo on release). Once the
+        // zoom has actually moved, that's unambiguous: this is a pinch, not
+        // a tap, full stop.
+        if (twoFingerUndoCandidate) {
+          if (twoFingerUndoCandidate.timer) clearTimeout(twoFingerUndoCandidate.timer);
+          twoFingerUndoCandidate = null;
+        }
         const wrap = canvasWrapRef.current;
         if (wrap) {
           // Keep the live pinch origin in stable wrapper-content coordinates,
@@ -2370,11 +2516,19 @@ const PDFPage = ({
           // makes the page drift sideways while pinching.
           const originX = startSL + lastMidX;
           const originY = startST + lastMidY;
+          // originX/Y are in el's (previewEl's) content-space frame; the
+          // transform is applied to wrap, whose own box sits offset from
+          // el's padding edge by wrap.offsetLeft/Top (el's padding, plus
+          // wrap's margin:auto centering when the page is narrower than the
+          // viewer). Without subtracting that out, the live pinch preview
+          // scales around a point down-and-right of the real fingers, which
+          // visibly drags the shown page up-and-left as the pinch spreads.
           wrap.style.willChange      = "transform";
-          wrap.style.transformOrigin = `${originX}px ${originY}px`;
+          wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
           wrap.style.transform       = `scale(${newZoom / startZoom})`;
           pinchTransformApplied = true;
         }
+        if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(newZoom * 100)}%`;
         return;
       }
       if (e.touches.length !== 1) return;
@@ -2411,10 +2565,40 @@ const PDFPage = ({
         startDist = null;
         pinchCooldownUntil = Date.now() + PINCH_COOLDOWN_MS;
         pinchPrimed = false;
+        setPinchActive(false);
+        pinchJustEnded = true;
       }
 
       if (e.touches.length === 0) {
         touchInteractionActive = false;
+        if (annotToolRef.current) {
+          // A drawing tool was active for this touch, so it was a pen/
+          // highlighter/etc. stroke, not a pan or a tap-to-select — both
+          // onTouchStart and onTouchMove already bail out early above
+          // (their own `annotToolRef.current` guards) whenever a tool is
+          // active, so livePanRef.current.targetL/targetT and panX/panY/
+          // hasMoved were never updated for this touch at all. Without this
+          // guard, syncLivePan() below would still run unconditionally and
+          // force scrollLeft/scrollTop to whatever pan target was left over
+          // from the last REAL one-finger pan (often still the untouched
+          // {targetL:0, targetT:0} default) — snapping the zoomed-in view
+          // back to the top-left the instant a stroke finishes.
+          hasMoved = false;
+          return;
+        }
+        if (pinchJustEnded) {
+          // The pinch's OTHER finger already committed the zoom above (or
+          // on the touchend just before this one) — this is only the
+          // second finger following it off the glass a beat later, not a
+          // one-finger pan. Same reasoning as the annotToolRef.current
+          // guard above: livePanRef was never touched by a pinch, so
+          // syncLivePan() below would snap the scroll to whatever stale
+          // {currentL, currentT} it still had (often {0,0}) instead of
+          // leaving the zoom-to-point correction's own result alone.
+          pinchJustEnded = false;
+          hasMoved = false;
+          return;
+        }
         livePanRef.current.active = false;
         syncLivePan(el, livePanRef);
         if (hasMoved) {
@@ -2939,7 +3123,7 @@ const PDFPage = ({
   }, [pageCount]);
 
   // Actions -> Text Extraction: instead of the inline pageMdOpen panel, spins
-  // up a real AMCTOSHS Draft document containing the WHOLE document's text
+  // up a real MCTOSHS Draft document containing the WHOLE document's text
   // (every page, in order — not just the one currently open), and navigates
   // there. Each PDF page's text lands as its own run of literal-text blocks
   // (escaped, one line per <div> — not parsed into rich formatting), preceded
@@ -3955,9 +4139,9 @@ const PDFPage = ({
         <div id="pdf_toolbar_center">
           {pdfDoc && (
           <div id="pdf_page_nav">
-            <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1} title="Previous page">‹</button>
+            <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1 || pinchActive} title="Previous page">‹</button>
             <span id="pdf_page_nav_label">{pageNum} / {pageCount}</span>
-            <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount} title="Next page">›</button>
+            <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount || pinchActive} title="Next page">›</button>
           </div>
           )}
           {/* In hideHyleControls contexts (e.g. PDFReaderWorkspace) the
@@ -4443,7 +4627,12 @@ const PDFPage = ({
                 >
                   −
                 </button>
-                <button id="pdf_zoom_label" onClick={() => zoomFromCenter(1)} title="Reset zoom to original size">
+                <button
+                  id="pdf_zoom_label"
+                  ref={zoomLabelRef}
+                  onClick={() => zoomFromCenter(1)}
+                  title="Reset zoom to original size"
+                >
                   {Math.round(zoom * 100)}%
                 </button>
                 <button

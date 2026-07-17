@@ -12,6 +12,18 @@
      the browser's native text-selection callout. */
   user-select: none;
   -webkit-user-select: none;
+  /* Blocks the BROWSER's own native pinch-zoom (and double-tap-zoom) for
+     the reader as a whole — same fix Login.jsx already applies for the
+     same reason. Only the PDF's own canvas gets to zoom on touch, via its
+     own custom pinch handler (see PDFPage.jsx); a stray two-finger touch
+     anywhere else in the toolbar/panels/background used to zoom the whole
+     browser viewport instead, which reads as broken on a page that's
+     supposed to feel like a native app. More specific descendant rules
+     (#pdf_preview_scroll, .pdf_page_minimap_sheet, etc., all already
+     touch-action:none for their own custom gestures) still win over this
+     for themselves — this only fills in everywhere else that had no
+     touch-action override at all. */
+  touch-action: manipulation;
 }
 
 #pdf_page.pdf_page--footer-open {
@@ -1038,6 +1050,17 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* safe center (not plain center): when zoomed out enough that the page(s)
+     are shorter than the viewer pane, this centers them vertically in the
+     leftover space. Plain `center` on a *scrollable* flex container has a
+     well-known quirk where, once content overflows again (many pages, or
+     zoomed back in), the browser centers the overflow too and clips the
+     start of it off-screen — scrolling to the top no longer reaches the
+     actual top of page 1. `safe` is the CSS-spec fix for exactly that: it
+     falls back to start-alignment whenever centering would overflow, so
+     normal top-to-bottom scrolling through a full document is never broken.
+  */
+  justify-content: safe center;
   gap: 16px;
   padding-bottom: 24px;
   min-height: 100%;
@@ -1045,7 +1068,13 @@
      staying at 100% of the scroll container. */
   width: max-content;
   min-width: 100%;
-  margin: 0;
+  /* align-items:center only centers a page against this wrapper's OWN box —
+     with width:max-content this box itself shrinks to the page's width, so
+     without an auto margin here it just sits flush left in the (usually
+     wider) scroll container instead of centered in it. min-width:100%
+     covers the zoomed-wide case, where width==container width and this
+     margin resolves to 0 anyway. */
+  margin: 0 auto;
 }
 
 .pdf_page_container {

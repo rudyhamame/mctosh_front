@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import "./homeChat.css";
 import { apiUrl } from "../config/api";
 import { AI_PROVIDERS, useAIProvider } from "../hooks/useAIProvider";
 import { readStoredSession } from "../utils/sessionCleanup";
-import AnamAvatar from "./AnamAvatar";
+import { AVATAR_GREETING, speakableText } from "./AnamAvatar";
+import AvatarContainer from "../Avatar/AvatarContainer";
+import AvatarProviderSelector from "../Avatar/AvatarProviderSelector";
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -23,8 +26,10 @@ const replaceLast = (msgs, text) => {
 // reply onto the Anam avatar (see AnamAvatar.jsx) so it speaks the exact
 // same text as it arrives, then closes out that turn once the stream ends —
 // the avatar is a face on top of this same reply, not a second AI answering
-// independently.
-const useContextChat = (userId, provider, model, withCodebase, withDb, avatarRef) => {
+// independently. `currentPage` (the route the user is actually looking at
+// right now, see useLocation() in HomeChat below) is sent with every turn
+// so the AI's own reply can be aware of it.
+const useContextChat = (userId, provider, model, withCodebase, withDb, avatarRef, currentPage) => {
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);
@@ -44,7 +49,9 @@ const useContextChat = (userId, provider, model, withCodebase, withDb, avatarRef
       const res = await fetch(apiUrl("/api/ai/context-chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: nextMessages, provider, model, userId, withCodebase, withDb }),
+        body: JSON.stringify({
+          messages: nextMessages, provider, model, userId, withCodebase, withDb, currentPage,
+        }),
         signal: controller.signal,
       });
 
@@ -95,119 +102,6 @@ const useContextChat = (userId, provider, model, withCodebase, withDb, avatarRef
   return { messages, streaming, send, stop, reset };
 };
 
-// ── Minimal markdown renderer ─────────────────────────────────────────────────
-
-const inlineMarkdown = (text) => {
-  const parts = [];
-  const re = /(`[^`]+`)|(\*\*\*(.+?)\*\*\*)|(\*\*(.+?)\*\*)|(\*(.+?)\*)/g;
-  let last = 0, m, key = 0;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    if (m[1]) parts.push(<code key={key++}>{m[1].slice(1, -1)}</code>);
-    else if (m[2]) parts.push(<strong key={key++}><em>{m[3]}</em></strong>);
-    else if (m[4]) parts.push(<strong key={key++}>{m[5]}</strong>);
-    else if (m[6]) parts.push(<em key={key++}>{m[7]}</em>);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return parts;
-};
-
-const Markdown = ({ children }) => {
-  const raw = children || "";
-  const blocks = [];
-  const lines = raw.split("\n");
-  let i = 0, key = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    // Fenced code block
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const codeLines = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      blocks.push(<pre key={key++}><code>{codeLines.join("\n")}</code></pre>);
-      i++; continue;
-    }
-
-    // Headings
-    const hm = line.match(/^(#{1,6})\s+(.*)/);
-    if (hm) {
-      const Tag = `h${hm[1].length}`;
-      blocks.push(<Tag key={key++}>{inlineMarkdown(hm[2])}</Tag>);
-      i++; continue;
-    }
-
-    // Horizontal rule
-    if (/^---+$/.test(line.trim())) {
-      blocks.push(<hr key={key++} />);
-      i++; continue;
-    }
-
-    // Unordered list
-    if (/^[-*]\s/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^[-*]\s/.test(lines[i])) {
-        items.push(<li key={i}>{inlineMarkdown(lines[i].slice(2))}</li>);
-        i++;
-      }
-      blocks.push(<ul key={key++}>{items}</ul>);
-      continue;
-    }
-
-    // Ordered list
-    if (/^\d+\.\s/.test(line)) {
-      const items = [];
-      while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
-        items.push(<li key={i}>{inlineMarkdown(lines[i].replace(/^\d+\.\s/, ""))}</li>);
-        i++;
-      }
-      blocks.push(<ol key={key++}>{items}</ol>);
-      continue;
-    }
-
-    // Blockquote
-    if (line.startsWith("> ")) {
-      const qLines = [];
-      while (i < lines.length && lines[i].startsWith("> ")) {
-        qLines.push(lines[i].slice(2));
-        i++;
-      }
-      blocks.push(<blockquote key={key++}>{inlineMarkdown(qLines.join(" "))}</blockquote>);
-      continue;
-    }
-
-    // Blank line — skip
-    if (line.trim() === "") { i++; continue; }
-
-    // Paragraph — collect consecutive non-special lines
-    const pLines = [];
-    while (
-      i < lines.length &&
-      lines[i].trim() !== "" &&
-      !lines[i].startsWith("#") &&
-      !lines[i].startsWith("```") &&
-      !lines[i].startsWith("> ") &&
-      !/^[-*]\s/.test(lines[i]) &&
-      !/^\d+\.\s/.test(lines[i]) &&
-      !/^---+$/.test(lines[i].trim())
-    ) {
-      pLines.push(lines[i]);
-      i++;
-    }
-    if (pLines.length) {
-      blocks.push(<p key={key++}>{inlineMarkdown(pLines.join(" "))}</p>);
-    }
-  }
-
-  return <div className="hc_md">{blocks}</div>;
-};
-
 // ── TTS utility ──────────────────────────────────────────────────────────────
 
 const stripMd = (text) => text
@@ -232,7 +126,7 @@ const unlockSpeech = () => {
 };
 
 const speak = (text, onDone) => {
-  const clean = stripMd(text);
+  const clean = speakableText(stripMd(text));
   if (!clean) { onDone?.(); return; }
   if (!window.speechSynthesis) { onDone?.(); return; }
 
@@ -272,13 +166,25 @@ const CALL_LABELS = {
   speaking:  "Speaking…",
 };
 
-const VoiceCall = ({ onEnd, send, streaming, messages }) => {
+// No "avatar finished speaking" event exists on the Anam client to hook
+// into (checked the SDK — only stream-started/session events, nothing for
+// audio playback actually ending), so how long the avatar keeps talking
+// after its own text finishes streaming has to be estimated from the reply
+// length instead — generous enough (~18 chars/sec, floor 600ms) that the
+// mic re-arming early and picking up the avatar's own trailing voice as if
+// it were the user speaking is the failure mode avoided, not triggered.
+const estimateSpeakingMs = (text) => Math.max(600, String(text || "").length * 55);
+
+// No boxed overlay, no controls of its own — just the STT loop, rendering a
+// single live caption line under the avatar (see HomeChat.jsx). Ending the
+// call is just unmounting this (the shared call-toggle button does that),
+// which the mount effect's own cleanup below already handles.
+const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
   const [callState, setCallState]     = useState("listening");
   const [transcript, setTranscript]   = useState("");
   const activeRef  = useRef(true);
   const recRef     = useRef(null);
   const sendRef    = useRef(send);
-  const msgCountRef = useRef(messages.length); // track when new reply arrives
 
   useEffect(() => { sendRef.current = send; });
 
@@ -329,13 +235,25 @@ const VoiceCall = ({ onEnd, send, streaming, messages }) => {
     try { rec.start(); } catch {}
   };
 
-  // When streaming ends → speak the reply → then listen again
+  // When streaming ends → speak the reply → then listen again. If the
+  // avatar is live it's already speaking this exact reply itself (see
+  // useContextChat's avatarRef.streamChunk/endMessage calls, which run
+  // unconditionally whenever an avatar is mounted, call or no call) — using
+  // the browser's own TTS on top of that here would talk over it with a
+  // second voice, so this only falls back to speak() when there's no live
+  // avatar to have already covered it.
   useEffect(() => {
     if (streaming || callState !== "thinking") return;
     const last = messages[messages.length - 1];
     if (last?.role !== "assistant" || !last.content) return;
 
     setCallState("speaking");
+    if (avatarRef?.current?.isLive?.()) {
+      const t = setTimeout(() => {
+        if (activeRef.current) startListening();
+      }, estimateSpeakingMs(last.content));
+      return () => clearTimeout(t);
+    }
     speak(last.content, () => {
       if (activeRef.current) startListening();
     });
@@ -351,27 +269,16 @@ const VoiceCall = ({ onEnd, send, streaming, messages }) => {
     };
   }, []); // eslint-disable-line
 
-  const handleEnd = () => {
-    activeRef.current = false;
-    recRef.current?.stop();
-    window.speechSynthesis.cancel(); // stop any ongoing TTS
-    onEnd();
-  };
+  // The live caption itself: the AI's own reply, revealed exactly as live
+  // as `messages` already updates (each SSE delta is its own re-render —
+  // no separate "typing" animation needed), once it has anything to show;
+  // otherwise the user's own live interim transcript while they're talking,
+  // or a plain state label the rest of the time.
+  const lastMsg = messages[messages.length - 1];
+  const showingReply = lastMsg?.role === "assistant" && lastMsg.content;
+  const caption = showingReply ? stripMd(lastMsg.content) : (transcript || CALL_LABELS[callState] || "");
 
-  return (
-    <div id="home_call_overlay">
-      <div id="home_call_orb_wrap">
-        <div id="home_call_orb" data-state={callState} />
-      </div>
-      <span id="home_call_status">{CALL_LABELS[callState]}</span>
-      {transcript && (
-        <p id="home_call_transcript">&ldquo;{transcript}&rdquo;</p>
-      )}
-      <button id="home_call_end" onClick={handleEnd}>
-        <i className="fi fi-rr-circle-phone-hangup" /> End Call
-      </button>
-    </div>
-  );
+  return <p id="home_live_caption">{caption}</p>;
 };
 
 // ── Main panel ────────────────────────────────────────────────────────────────
@@ -379,11 +286,22 @@ const VoiceCall = ({ onEnd, send, streaming, messages }) => {
 const HomeChat = () => {
   const { provider, setProvider }  = useAIProvider();
   const userId = readStoredSession()?.my_id;
+  // Rendered once, app-wide (see AppRouter.js), outside of <Routes> — but
+  // useLocation() still tracks navigation from anywhere inside the Router,
+  // so this stays current even though HomeChat itself never remounts as
+  // the user moves between pages.
+  const location = useLocation();
+  const currentPage = location.pathname + location.search;
   const [withCodebase, setWithCodebase] = useState(
     () => localStorage.getItem("mctosh_ai_codebase") === "true"
   );
+  // Database context defaults ON (unlike codebase context, opt-in above) —
+  // Dev AI should have access to your data from the moment you open it,
+  // without needing to remember to flip the DB toggle on first. Still
+  // respects an explicit "off" from the toggle button, persisted the same
+  // way as before.
   const [withDb, setWithDb] = useState(
-    () => localStorage.getItem("mctosh_ai_db") === "true"
+    () => localStorage.getItem("mctosh_ai_db") !== "false"
   );
 
   // Same provider/model list as the AI Providers settings page (same
@@ -405,72 +323,34 @@ const HomeChat = () => {
 
   const selectedModel = providerOptions.find(p => p.id === provider)?.model || "";
   const avatarRef = useRef(null);
-  const { messages, streaming, send, stop, reset } = useContextChat(userId, provider, selectedModel, withCodebase, withDb, avatarRef);
+  const { messages, streaming, send, stop, reset } = useContextChat(userId, provider, selectedModel, withCodebase, withDb, avatarRef, currentPage);
   const [isOpen, setIsOpen]        = useState(false);
   const [input, setInput]         = useState("");
-  const [listening, setListening] = useState(false);
   const [ttsOn, setTtsOn]         = useState(false);
   const [inCall, setInCall]       = useState(false);
 
-  const bottomRef    = useRef(null);
-  const recognitionRef = useRef(null);
-  const finalTextRef   = useRef("");
-  const sendRef        = useRef(send);
-
-  useEffect(() => { sendRef.current = send; });
-
+  // Ready to listen the instant the panel opens — no separate "start call"
+  // click needed, the avatar greets you and starts the mic itself (see
+  // AnamAvatar's own auto-greeting and VoiceCall's mount-time
+  // startListening). Turns back off on close so reopening always starts
+  // this same fresh, rather than silently resuming whatever inCall was
+  // left at from the last time the panel was open.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (!SR) return;
+    setInCall(isOpen);
+  }, [isOpen]);
 
-  // TTS for text chat (disabled during call — call handles its own TTS — and
-  // while the avatar is open, since AnamAvatar above already speaks every
-  // streamed reply itself; leaving TTS on at the same time would double up
-  // both voices on top of each other).
+  // TTS for typed (non-call) turns — skipped whenever the avatar is live,
+  // since useContextChat's own avatarRef.streamChunk/endMessage calls
+  // already speak every reply unconditionally (call or no call, open or
+  // not); this is purely the fallback for when there's no live avatar to
+  // have covered it, so the two never talk over each other.
   useEffect(() => {
-    if (streaming || !ttsOn || inCall || isOpen) return;
+    if (streaming || !ttsOn || inCall || avatarRef.current?.isLive?.()) return;
     const last = messages[messages.length - 1];
     if (last?.role !== "assistant" || !last.content) return;
     speak(last.content);
   }, [streaming]); // eslint-disable-line
-
-  // Auto-send when push-to-talk mic ends
-  useEffect(() => {
-    if (listening) return;
-    const text = finalTextRef.current.trim();
-    if (!text) return;
-    finalTextRef.current = "";
-    setInput("");
-    sendRef.current(text);
-  }, [listening]);
-
-  const toggleListen = () => {
-    if (listening) { recognitionRef.current?.stop(); return; }
-    if (!SR) return;
-    window.speechSynthesis.cancel();
-
-    const rec = new SR();
-    rec.continuous     = false;
-    rec.interimResults = true;
-    rec.lang           = "en-US";
-
-    rec.onresult = (e) => {
-      const t = Array.from(e.results).map(r => r[0].transcript).join("");
-      setInput(t);
-      if (e.results[e.results.length - 1].isFinal) {
-        finalTextRef.current = t;
-        rec.stop();
-      }
-    };
-
-    rec.onerror = () => setListening(false);
-    rec.onend   = () => setListening(false);
-
-    finalTextRef.current = "";
-    recognitionRef.current = rec;
-    rec.start();
-    setListening(true);
-  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -479,141 +359,111 @@ const HomeChat = () => {
     setInput("");
   };
 
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSubmit(e); }
-  };
-
   return (
     <div id="home_chat_root">
 
-      {/* Floating panel */}
-      {isOpen && <div id="home_chat">
-      <AnamAvatar ref={avatarRef} />
-      <div id="home_chat_header">
-        <span id="home_chat_title">Dev AI</span>
-        <select
-          id="home_chat_provider"
-          value={provider}
-          onChange={e => setProvider(e.target.value)}
-          disabled={streaming || inCall}
-        >
-          {providerOptions.map(({ id, label, model }) => (
-            <option key={id} value={id}>{label} · {model}</option>
-          ))}
-        </select>
-        <div id="home_chat_ctrls">
-          <button
-            className={`home_chat_ctrl${withCodebase ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
-            onClick={() => setWithCodebase(v => { localStorage.setItem("mctosh_ai_codebase", String(!v)); return !v; })}
-            title={withCodebase ? "Codebase ON" : "Codebase OFF"}
-          >
-            <i className="fi fi-rr-terminal" />
-          </button>
-          <button
-            className={`home_chat_ctrl${withDb ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
-            onClick={() => setWithDb(v => { localStorage.setItem("mctosh_ai_db", String(!v)); return !v; })}
-            title={withDb ? "DB context ON" : "DB context OFF"}
-          >
-            <i className="fi fi-rr-database" />
-          </button>
-          {SR && (
+      {/* Floats at the bottom-center of the whole app — no boxed chat
+          container anymore, just the avatar, a live caption of whatever's
+          currently being said (either side), a slim control row, and a
+          minimal type-instead-of-talk fallback. No border/background of
+          its own (see homeChat.css/anamAvatar.css). */}
+      {isOpen && (
+        <div id="home_avatar_float">
+          <AvatarContainer ref={avatarRef} />
+
+          {inCall ? (
+            <VoiceCall send={send} streaming={streaming} messages={messages} avatarRef={avatarRef} />
+          ) : (
+            <p id="home_live_caption">
+              {messages.length === 0
+                ? AVATAR_GREETING
+                : stripMd(messages[messages.length - 1]?.content || "")}
+            </p>
+          )}
+
+          <div id="home_voice_ctrls">
+            <AvatarProviderSelector compact />
+            <select
+              id="home_chat_provider"
+              value={provider}
+              onChange={e => setProvider(e.target.value)}
+              disabled={streaming}
+            >
+              {providerOptions.map(({ id, label, model }) => (
+                <option key={id} value={id}>{label} · {model}</option>
+              ))}
+            </select>
             <button
-              className={`home_chat_ctrl${inCall ? " home_chat_ctrl--call" : ""}`}
-              onClick={() => { if (!inCall) unlockSpeech(); setInCall(v => !v); }}
-              title={inCall ? "Voice call: ON" : "Voice call: OFF"}
+              className={`home_chat_ctrl${withCodebase ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
+              onClick={() => setWithCodebase(v => { localStorage.setItem("mctosh_ai_codebase", String(!v)); return !v; })}
+              title={withCodebase ? "Codebase ON" : "Codebase OFF"}
             >
-              <i className={`fi ${inCall ? "fi-rr-phone-slash" : "fi-rr-phone-call"}`} />
+              <i className="fi fi-rr-terminal" />
             </button>
-          )}
-          <button
-            className={`home_chat_ctrl${ttsOn ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
-            onClick={() => { setTtsOn(v => { if (!v) unlockSpeech(); else window.speechSynthesis.cancel(); return !v; }); }}
-            title={ttsOn ? "TTS: ON" : "TTS: OFF"}
-          >
-            <i className={`fi ${ttsOn ? "fi-rr-volume" : "fi-rr-volume-mute"}`} />
-          </button>
-          {messages.length > 0 && !streaming && !inCall && (
-            <button className="home_chat_ctrl" onClick={() => { window.speechSynthesis.cancel(); reset(); }} title="Clear conversation">
-              <i className="fi fi-rr-trash" />
+            <button
+              className={`home_chat_ctrl${withDb ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
+              onClick={() => setWithDb(v => { localStorage.setItem("mctosh_ai_db", String(!v)); return !v; })}
+              title={withDb ? "DB context ON" : "DB context OFF"}
+            >
+              <i className="fi fi-rr-database" />
             </button>
-          )}
+            {SR && (
+              <button
+                className={`home_chat_ctrl${inCall ? " home_chat_ctrl--call" : ""}`}
+                onClick={() => { if (!inCall) unlockSpeech(); setInCall(v => !v); }}
+                title={inCall ? "Voice call: ON" : "Voice call: OFF"}
+              >
+                <i className={`fi ${inCall ? "fi-rr-phone-slash" : "fi-rr-phone-call"}`} />
+              </button>
+            )}
+            <button
+              className={`home_chat_ctrl${ttsOn ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
+              onClick={() => { setTtsOn(v => { if (!v) unlockSpeech(); else window.speechSynthesis.cancel(); return !v; }); }}
+              title={ttsOn ? "TTS: ON" : "TTS: OFF"}
+            >
+              <i className={`fi ${ttsOn ? "fi-rr-volume" : "fi-rr-volume-mute"}`} />
+            </button>
+            {messages.length > 0 && !streaming && (
+              <button className="home_chat_ctrl" onClick={() => { window.speechSynthesis.cancel(); reset(); }} title="Clear conversation">
+                <i className="fi fi-rr-trash" />
+              </button>
+            )}
+          </div>
+
+          <form id="home_voice_input_form" onSubmit={handleSubmit}>
+            <input
+              type="text"
+              placeholder="Or type instead…"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              disabled={streaming}
+            />
+            {streaming ? (
+              <button type="button" className="home_chat_send" onClick={stop}>
+                <i className="fi fi-rr-stop-circle" />
+              </button>
+            ) : (
+              <button type="submit" className="home_chat_send" disabled={!input.trim()}>
+                <i className="fi fi-rr-paper-plane-top" />
+              </button>
+            )}
+          </form>
         </div>
-      </div>
-
-      <div id="home_chat_msgs">
-        {messages.length === 0 && (
-          <p id="home_chat_empty">Ask anything about AMCTOSHS, the codebase, or your data.</p>
-        )}
-        {messages.map((msg, i) => {
-          const isStreamingLast = msg.role === "assistant" && streaming && i === messages.length - 1;
-          return (
-            <div
-              key={i}
-              className={[
-                "home_chat_msg",
-                `home_chat_msg--${msg.role}`,
-                isStreamingLast ? "home_chat_msg--streaming" : "",
-              ].filter(Boolean).join(" ")}
-            >
-              {msg.role === "assistant" ? (
-                <>
-                  <Markdown>{msg.content}</Markdown>
-                  {msg.model && <span className="hc_msg_model">{msg.model}</span>}
-                </>
-              ) : msg.content}
-            </div>
-          );
-        })}
-        <div ref={bottomRef} />
-      </div>
-
-      {inCall && (
-        <VoiceCall
-          onEnd={() => setInCall(false)}
-          send={send}
-          streaming={streaming}
-          messages={messages}
-        />
       )}
-
-      <form id="home_chat_footer" onSubmit={handleSubmit}>
-        <textarea
-          id="home_chat_input"
-          rows={1}
-          placeholder={listening ? "Listening…" : "Ask about code or data…"}
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          disabled={streaming || listening || inCall}
-        />
-        {SR && (
-          <button
-            type="button"
-            id="home_chat_mic"
-            className={listening ? "home_chat_mic--active" : ""}
-            onClick={toggleListen}
-            disabled={streaming || inCall}
-            title={listening ? "Stop recording" : "Voice input"}
-          >
-            <i className={`fi ${listening ? "fi-rr-microphone-slash" : "fi-rr-microphone"}`} />
-          </button>
-        )}
-        {streaming ? (
-          <button type="button" className="home_chat_send" onClick={stop}>
-            <i className="fi fi-rr-stop-circle" />
-          </button>
-        ) : (
-          <button type="submit" className="home_chat_send" disabled={!input.trim() || listening || inCall}>
-            <i className="fi fi-rr-paper-plane-top" />
-          </button>
-        )}
-      </form>
-      </div>} {/* end panel */}
 
       {/* FAB */}
       <button
         id="home_chat_fab"
-        onClick={() => setIsOpen(v => !v)}
+        onClick={() => {
+          // Opening auto-engages the call (see the isOpen->inCall effect
+          // above) — unlocking speechSynthesis here, synchronously inside
+          // this actual click, is what lets the browser-TTS fallback path
+          // (used when the avatar itself isn't live) speak at all; done
+          // from an effect instead, Safari silently refuses it since it's
+          // no longer inside a real user gesture by then.
+          if (!isOpen) unlockSpeech();
+          setIsOpen(v => !v);
+        }}
         title={isOpen ? "Close AI" : "Dev AI"}
         className={isOpen ? "home_chat_fab--open" : ""}
       >

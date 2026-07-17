@@ -82,9 +82,9 @@ const InstagramHomePreviewPage = () => {
       <header id="ig_preview_header">
         <div>
           <p className="ig_preview_eyebrow">Instagram Home Preview</p>
-          <h1>{selectedPost?.title || "AMCTOSHS feed preview"}</h1>
+          <h1>{selectedPost?.title || "MCTOSHS feed preview"}</h1>
           <p className="ig_preview_subtitle">
-            A clean standalone tab for reviewing how your AMCTOSHS Instagram post feels before publishing.
+            A clean standalone tab for reviewing how your MCTOSHS Instagram post feels before publishing.
           </p>
         </div>
         <div className="ig_preview_actions">
@@ -134,7 +134,7 @@ const InstagramHomePreviewPage = () => {
           <div className="ig_preview_single">
             <div className="ig_preview_phone_frame">
               <div className="ig_preview_phone_topbar">
-                <span>AMCTOSHS</span>
+                <span>MCTOSHS</span>
                 <span>{selectedPost?.format || "Post"}</span>
               </div>
               <div className="ig_preview_phone_canvas">

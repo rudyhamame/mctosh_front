@@ -254,6 +254,14 @@
 }
 .sett_provider_card:hover { border-color: var(--color-accent); }
 .sett_provider_card--active { border-color: var(--color-highlight) !important; }
+.sett_provider_card--disabled { cursor: not-allowed; opacity: 0.5; }
+.sett_provider_card--disabled:hover { border-color: var(--color-border); }
+
+#sett_tts_provider_grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
 
 .sett_provider_top {
   display: flex;

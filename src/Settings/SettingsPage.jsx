@@ -6,7 +6,18 @@ import { MCTOSH_PROMPT_TEXT } from "../Hylomorphism/mctoshPrompt";
 import { getPredictionPools, setPredictionPoolEnabled, rebuildPredictionPool, ingestPredictionPool } from "../utils/predictionApi";
 import objectivesEn from "../MCC/mccqeObjectivesData.json";
 import objectivesAr from "../MCC/mccqeObjectivesArabicData.json";
+import AvatarProviderSelector from "../Avatar/AvatarProviderSelector";
+import {
+  readVoiceSettings, writeVoiceSettings,
+  TTS_PROVIDERS, readTtsProviderId, writeTtsProviderId,
+} from "../Avatar/local3d/ttsProviderSettings";
 import "./settingsPage.css";
+
+const TTS_PROVIDER_OPTIONS = [
+  { id: TTS_PROVIDERS.BROWSER, label: "Browser Speech Synthesis", desc: "Free, built into your browser — no setup needed." },
+  { id: TTS_PROVIDERS.OPENVOICE, label: "OpenVoiceClone", desc: "Speaks in your own cloned voice — needs a voice profile below." },
+  { id: TTS_PROVIDERS.KOKORO, label: "Kokoro", desc: "Not available yet — reserved for a future self-hosted option.", disabled: true },
+];
 
 const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
 
@@ -16,7 +27,7 @@ const authHeader = () => {
 };
 
 const THEMES = [
-  { id: "original", label: "Original", desc: "Deep blue-navy — the AMCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
+  { id: "original", label: "Original", desc: "Deep blue-navy — the MCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
   { id: "light",    label: "Light",    desc: "Clean white with soft contrast",       bg: "#f8f8fc", surface: "#ffffff",  text: "#111122", border: "#d0d0e0" },
   { id: "dark",     label: "Dark",     desc: "Pure black — minimal ink",             bg: "#000000", surface: "#0f0f0f",  text: "#f0f0f0", border: "#222222" },
 ];
@@ -127,6 +138,10 @@ const SettingsPage = () => {
   const [anamUsage, setAnamUsage] = useState(null);
   const [anamUsageLoading, setAnamUsageLoading] = useState(true);
   const [anamUsageError, setAnamUsageError] = useState("");
+  const [ttsProviderId, setTtsProviderId] = useState(() => readTtsProviderId());
+  const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState(() => readVoiceSettings().voiceProfileId);
+  const [voiceProfiles, setVoiceProfiles] = useState([]);
+  const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(true);
   const [defProvider, setDefProvider] = useState(() => localStorage.getItem("mctosh_ai_provider") || "groq");
   const [predictPools,   setPredictPools]   = useState([]);
   const [predictLoading, setPredictLoading] = useState(true);
@@ -221,6 +236,27 @@ const SettingsPage = () => {
       .catch((e) => setAnamUsageError(e.message))
       .finally(() => setAnamUsageLoading(false));
   }, []);
+
+  useEffect(() => {
+    fetch(apiUrl("/api/voice-clone/profile"), { headers: authHeader() })
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || "Could not load voice profiles.");
+        setVoiceProfiles(d.profiles || []);
+      })
+      .catch(() => setVoiceProfiles([]))
+      .finally(() => setVoiceProfilesLoading(false));
+  }, []);
+
+  const handleTtsProvider = (id) => {
+    setTtsProviderId(id);
+    writeTtsProviderId(id);
+  };
+
+  const handleVoiceProfile = (id) => {
+    setSelectedVoiceProfileId(id);
+    writeVoiceSettings({ voiceProfileId: id || null });
+  };
 
   // Live refresh: hits each provider's real /models endpoint on the backend
   // (see ai-status?live=1) instead of just checking whether an env key is
@@ -604,11 +640,11 @@ const SettingsPage = () => {
           {section === "prompts" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Prompts</h2>
-              <p className="sett_section_desc">Edit the AI prompts used across AMCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
+              <p className="sett_section_desc">Edit the AI prompts used across MCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
 
               <PromptEditor
                 label="Hyle Extraction"
-                desc="Used when extracting hyles from PDF, Word, or image sources — the core AMCTOSHS classification engine."
+                desc="Used when extracting hyles from PDF, Word, or image sources — the core MCTOSHS classification engine."
                 fetchUrl="/api/pdf/system-message"
                 saveUrl="/api/pdf/system-message"
                 method="PATCH"
@@ -623,7 +659,7 @@ const SettingsPage = () => {
                 field="prompt"
               />
               <PromptEditor
-                label="AMCTOSHS Classification Prompt"
+                label="MCTOSHS Classification Prompt"
                 desc="The formal 12-section classification prompt accessible from the Hyle-to-Meaning page. Stored locally in your browser."
                 fetchUrl={null}
                 saveUrl={null}
@@ -640,7 +676,7 @@ const SettingsPage = () => {
                 <div>
                   <h2 className="sett_section_title">AI Providers</h2>
                   <p className="sett_section_desc">
-                    Select the default AI provider used across AMCTOSHS. The provider is sent with every extraction and classification request.
+                    Select the default AI provider used across MCTOSHS. The provider is sent with every extraction and classification request.
                     Configure API keys in your backend environment variables.
                   </p>
                 </div>
@@ -678,6 +714,72 @@ const SettingsPage = () => {
                     </span>
                   </div>
                 )}
+              </div>
+
+              <div className="sett_usage_card">
+                <AvatarProviderSelector />
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Local 3D Voice</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.6rem" }}>
+                  Choose which engine the local 3D avatar speaks with. OpenVoiceClone needs at least one ready
+                  voice profile — record or upload one below, then select it here.
+                </p>
+
+                <div id="sett_tts_provider_grid">
+                  {TTS_PROVIDER_OPTIONS.map((opt) => (
+                    <div
+                      key={opt.id}
+                      className={`sett_provider_card${ttsProviderId === opt.id ? " sett_provider_card--active" : ""}${opt.disabled ? " sett_provider_card--disabled" : ""}`}
+                      onClick={() => !opt.disabled && handleTtsProvider(opt.id)}
+                    >
+                      <div className="sett_provider_top">
+                        <span className="sett_provider_name">{opt.label}</span>
+                        {ttsProviderId === opt.id && <span className="sett_provider_active_tag">Active</span>}
+                      </div>
+                      <div className="sett_provider_status_msg">{opt.desc}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {ttsProviderId === TTS_PROVIDERS.OPENVOICE && (
+                  <div id="sett_provider_default_row" style={{ marginTop: "0.8rem" }}>
+                    <span className="sett_field_label">Voice profile</span>
+                    {voiceProfilesLoading ? (
+                      <span className="sett_ai_loading">Loading…</span>
+                    ) : (
+                      <select
+                        value={selectedVoiceProfileId || ""}
+                        onChange={(e) => handleVoiceProfile(e.target.value)}
+                      >
+                        <option value="">— Select a voice profile —</option>
+                        {voiceProfiles.map((p) => (
+                          <option key={p.id} value={p.id} disabled={!p.hasEmbedding}>
+                            {p.name} ({p.language === "ar" ? "Arabic" : "English"}){p.hasEmbedding ? "" : " — processing…"}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                )}
+
+                {ttsProviderId === TTS_PROVIDERS.OPENVOICE && !voiceProfilesLoading && voiceProfiles.length === 0 && (
+                  <p className="sett_provider_status_msg" style={{ marginTop: "0.5rem" }}>
+                    No voice profiles yet — create one to use your own cloned voice.
+                  </p>
+                )}
+
+                <button
+                  type="button"
+                  className="sett_btn sett_btn--ghost"
+                  style={{ marginTop: "0.8rem" }}
+                  onClick={() => navigate("/voice-profile")}
+                >
+                  Manage voice profiles
+                </button>
               </div>
 
               <div id="sett_provider_default_row">
@@ -895,7 +997,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">AI Access</h2>
               <p className="sett_section_desc">
-                A complete breakdown of what AMCTOSHS AI can and cannot access during a conversation. Toggles for codebase and DB are available inside the Dev AI chat panel.
+                A complete breakdown of what MCTOSHS AI can and cannot access during a conversation. Toggles for codebase and DB are available inside the Dev AI chat panel.
               </p>
 
               <div className="sett_access_group">
@@ -903,7 +1005,7 @@ const SettingsPage = () => {
                   <i className="fi fi-rr-check-circle" /> Always available
                 </div>
                 <ul className="sett_access_list">
-                  <li><strong>AMCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
+                  <li><strong>MCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
                   <li><strong>Conversation history</strong> — all messages exchanged in the current session are included with each request, giving the AI full context of the ongoing conversation.</li>
                   <li><strong>Selected AI provider &amp; model</strong> — the provider you choose in the chat dropdown determines which backend inference engine processes the request.</li>
                 </ul>
@@ -963,7 +1065,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">Predictive Text</h2>
               <p className="sett_section_desc">
-                Word suggestions appear while typing in any text field across AMCTOSHS. Check which text pools feed the
+                Word suggestions appear while typing in any text field across MCTOSHS. Check which text pools feed the
                 suggestion list below — each pool's word frequencies are combined, so you can mix and match. Turning
                 everything off disables suggestions entirely.
               </p>
@@ -1034,7 +1136,7 @@ const SettingsPage = () => {
           {section === "theme" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Theme</h2>
-              <p className="sett_section_desc">Choose the visual style for AMCTOSHS. Applied immediately and remembered across sessions.</p>
+              <p className="sett_section_desc">Choose the visual style for MCTOSHS. Applied immediately and remembered across sessions.</p>
 
               <div id="sett_theme_grid">
                 {THEMES.map(t => (

@@ -22,3 +22,109 @@
   width: 100% !important;
   height: 100% !important;
 }
+
+/* ── Camera preset panel ── a dev tool for manually tuning and saving the
+   camera's own shot per level, since there's no way to see the 3D scene
+   while writing its code — drag/pinch to the shot you want live, save it,
+   done. Fixed to the viewport (top-left, clear of Logout/level-cards/Dev
+   AI) rather than absolute within the sticky stage, matching the climb
+   scrollbar's own reasoning for that choice. */
+#camera_preset_panel {
+  position: fixed;
+  top: 1rem;
+  left: 1.25rem;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: min(320px, calc(100vw - 2.5rem));
+  font-size: 0.72rem;
+}
+
+#camera_preset_panel_toggle {
+  padding: 0.35rem 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+#camera_preset_panel_toggle:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+#camera_preset_panel.camera_preset_panel--open #camera_preset_panel_toggle { color: var(--color-text); }
+
+#camera_preset_panel_body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+#camera_preset_panel_hint {
+  margin: 0 0 0.2rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+  line-height: 1.4;
+}
+
+.camera_preset_row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.camera_preset_row--active {
+  border-color: var(--color-border);
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.camera_preset_row_label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.camera_preset_row_dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #66bb6a;
+  flex-shrink: 0;
+}
+
+.camera_preset_row_actions {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.camera_preset_row_actions button {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.camera_preset_row_actions button:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+.camera_preset_row_actions button:disabled { opacity: 0.4; cursor: not-allowed; }

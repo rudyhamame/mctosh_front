@@ -7,9 +7,6 @@
   min-height: calc(100vh - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer (shown when authenticated) instead of running underneath it */
   background: #ffffff;
   color: #111827;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
 }
 
 /* ─── Hero ─── */

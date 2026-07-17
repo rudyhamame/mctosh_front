@@ -46,20 +46,23 @@
   z-index: 3;
 }
 
-/* The popup panel normally docks above the app footer's reserved height —
-   there's no footer here to clear, so it can sit closer to the edge. */
-#app_scroll_stage #home_chat {
+/* The floating avatar stack normally docks above the app footer's reserved
+   height — there's no footer here to clear, so it can sit closer to the
+   edge. */
+#app_scroll_stage #home_avatar_float {
   bottom: 1.5rem;
 }
 
 /* ── Dev AI blends into the canvas ── everywhere else Dev AI lives in the
-   opaque footer strip, where a solid trigger button and panel read fine.
-   Here it floats directly over the 3D scene, so both get the same
-   translucent glass treatment as Logout and the level cards above: a
-   blurred, see-through backing instead of a flat one, so it reads as part
-   of the scene rather than a UI bar laid on top of it. Scoped to this
-   canvas-embedded instance only — the footer's own copy on every other page
-   is untouched. */
+   opaque footer strip, where a solid trigger button reads fine. Here it
+   floats directly over the 3D scene, so it gets the same translucent glass
+   treatment as Logout and the level cards above: a blurred, see-through
+   backing instead of a flat one, so it reads as part of the scene rather
+   than a UI bar laid on top of it. Scoped to this canvas-embedded instance
+   only — the footer's own copy on every other page is untouched. The
+   floating avatar stack itself (#home_avatar_float) needs no matching
+   treatment — it has no card/background of its own to blend in the first
+   place. */
 #app_scroll_stage #home_chat_fab {
   background: color-mix(in srgb, var(--color-surface) 55%, transparent);
   backdrop-filter: blur(6px);
@@ -74,20 +77,6 @@
 #app_scroll_stage #home_chat_fab.home_chat_fab--open {
   background: color-mix(in srgb, var(--color-text-muted) 18%, transparent);
   color: var(--color-text);
-}
-
-#app_scroll_stage #home_chat {
-  background: color-mix(in srgb, var(--color-surface) 62%, transparent);
-  border-color: color-mix(in srgb, var(--color-border) 70%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
-#app_scroll_stage #home_chat_header {
-  border-color: color-mix(in srgb, var(--color-border) 55%, transparent);
-}
-#app_scroll_stage #home_chat_footer {
-  background: transparent;
-  border-color: color-mix(in srgb, var(--color-border) 55%, transparent);
 }
 
 /* ── Home grid — the scroll-driven 3D stage ── */
@@ -141,14 +130,12 @@
   font-weight: 800;
   letter-spacing: 0.2em;
   color: var(--color-text);
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
 }
 
 #app_scroll_hint_sub {
   font-size: 0.72rem;
   letter-spacing: 0.04em;
   color: var(--color-text-muted);
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
 }
 
 /* ── Level card overlay — one group per biological level, stacked in the
@@ -221,7 +208,6 @@
   font-style: italic;
   line-height: 1.55;
   color: var(--color-text-muted);
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
 }
 
 .app_level_group_row {

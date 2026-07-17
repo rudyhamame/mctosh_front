@@ -78,7 +78,7 @@ const PatientSettingsPage = ({ onLogout }) => {
   // clinician continuity (see PatientAuthAPI.js's DELETE /account).
   const handleDeleteAccount = async () => {
     if (!window.confirm(
-      "Delete your AMCTOSHS account? You won't be able to log in with this email again. This cannot be undone."
+      "Delete your MCTOSHS account? You won't be able to log in with this email again. This cannot be undone."
     )) return;
 
     setError("");
@@ -107,7 +107,7 @@ const PatientSettingsPage = ({ onLogout }) => {
     <div className="pa_page">
       <div className="pa_card">
         <h1 className="pa_title">Settings</h1>
-        <p className="pa_subtitle">Manage your AMCTOSHS account.</p>
+        <p className="pa_subtitle">Manage your MCTOSHS account.</p>
 
         <div className="pa_settings_list">
           <button

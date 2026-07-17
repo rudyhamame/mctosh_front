@@ -14,7 +14,7 @@ const authHeaders = (json = true) => {
   return headers;
 };
 
-// AMCTOSHS's own turn-taking state, published by the LiveKit Agents
+// MCTOSHS's own turn-taking state, published by the LiveKit Agents
 // framework as the "lk.agent.state" room attribute on its participant
 // (initializing/idle/listening/thinking/speaking — automatic, not
 // something back/agent/patientCallAgent.js sets itself). "stuck" is the
@@ -78,11 +78,11 @@ const PatientCallPage = () => {
   // Conversation language toggle — sent to the backend at call start (see
   // startCall below) and locked in for that call via dispatch metadata
   // (back/agent/patientCallAgent.js). Only the live conversation switches;
-  // whatever AMCTOSHS records into the patient's profile (recordField) is
+  // whatever MCTOSHS records into the patient's profile (recordField) is
   // always translated to English regardless of this setting, since the
   // clinician-side patient instantiation page is English-only.
   const [language, setLanguage] = useState("en");
-  // AMCTOSHS's turn-taking state — see AGENT_STATE_LABELS above.
+  // MCTOSHS's turn-taking state — see AGENT_STATE_LABELS above.
   const [agentState, setAgentState] = useState("");
   const roomRef = useRef(null);
   const audioRef = useRef(null);
@@ -149,9 +149,9 @@ const PatientCallPage = () => {
         setAgentState("");
       });
 
-      // AMCTOSHS's turn-taking state — read the initial value as soon as
+      // MCTOSHS's turn-taking state — read the initial value as soon as
       // its participant joins (attributes may already be set by then),
-      // then track live changes the same way. When AMCTOSHS ends the call
+      // then track live changes the same way. When MCTOSHS ends the call
       // itself (see back/agent/patientCallAgent.js's finishCallTool), it
       // deletes the LiveKit room outright rather than publishing a state
       // for this side to react to — that force-disconnects every
@@ -166,7 +166,7 @@ const PatientCallPage = () => {
         if (state) setAgentState(state);
       });
 
-      // Text side of the call — AMCTOSHS's replies arrive here regardless of
+      // Text side of the call — MCTOSHS's replies arrive here regardless of
       // whether this particular turn was spoken or typed (see
       // agent/patientCallAgent.js, which mirrors every assistant reply onto
       // this same topic), AND so does a transcript of anything the patient
@@ -195,7 +195,7 @@ const PatientCallPage = () => {
           // Older/malformed payload — treat as a plain assistant message.
         }
         // Mark a barge-in reply visibly (not just the truncated words on
-        // their own) — otherwise it reads as AMCTOSHS's complete, deliberate
+        // their own) — otherwise it reads as MCTOSHS's complete, deliberate
         // reply instead of a sentence the patient cut off mid-way.
         setMessages((prev) => [...prev, { from: role === "user" ? "patient" : "agent", text, interrupted }]);
       });
@@ -259,7 +259,7 @@ const PatientCallPage = () => {
       // mute it themselves. Confirmed against real calls, TWICE: OpenAI's
       // transcription model hallucinated a short, clean-sounding word
       // ("Divorced") out of silence/noise and it got attributed to the
-      // patient as something they'd actually said, interrupting AMCTOSHS's
+      // patient as something they'd actually said, interrupting MCTOSHS's
       // own reply — with the patient having said and typed nothing at all
       // at that point. Muting-after-send (see sendMessage) only closed
       // that gap AFTER a patient's first typed message; this closes it
@@ -292,7 +292,7 @@ const PatientCallPage = () => {
     // them as a phantom spoken turn while they read/type the next one.
     // Confirmed against a real call: with the mic left on throughout, a
     // hallucinated one-word STT answer ("Divorced") appeared as if spoken,
-    // interrupting AMCTOSHS's own reply — nothing was actually said. The
+    // interrupting MCTOSHS's own reply — nothing was actually said. The
     // backend's RECORDING RULE (see patientCallAgent.js) only guards
     // against ACTING on a hallucination like that; this stops it from
     // reaching the mic pipeline at all while texting. No auto-unmute —
@@ -345,7 +345,7 @@ const PatientCallPage = () => {
           <div className="pa_stage_copy">
             <div className="pa_stage_topbar">
               <div className="pa_stage_topbar_left">
-                <span className="pa_stage_eyebrow">Patient-side AMCTOSHS AI</span>
+                <span className="pa_stage_eyebrow">Patient-side MCTOSHS AI</span>
                 {session?.patientId && <span className="pa_patient_badge">{session.patientId}</span>}
               </div>
               <div className="pa_stage_topbar_right">
@@ -362,7 +362,7 @@ const PatientCallPage = () => {
               {status === "in-call" && agentState !== "stuck" && (muted
                 ? "You're connected — type below, or tap Unmute to talk instead."
                 : "You're connected — speak or type, whichever you prefer.")}
-              {status === "in-call" && agentState === "stuck" && "AMCTOSHS lost its train of thought — please end and start a new call."}
+              {status === "in-call" && agentState === "stuck" && "MCTOSHS lost its train of thought — please end and start a new call."}
               {status === "ended" && "Call ended. Thank you."}
             </p>
 
@@ -430,7 +430,7 @@ const PatientCallPage = () => {
             <div className="pa_chat_messages" dir={language === "ar" ? "rtl" : "ltr"}>
               {messages.length === 0 && (
                 <p className="pa_chat_empty">
-                  {status === "in-call" ? "Type a message below, or just start speaking." : "Start a call to talk with AMCTOSHS."}
+                  {status === "in-call" ? "Type a message below, or just start speaking." : "Start a call to talk with MCTOSHS."}
                 </p>
               )}
               {messages.map((m, i) => (

@@ -545,7 +545,7 @@ export default function ClinicalSchemata() {
               {extractPanelOpen && (
                 <div id="cs_extract_panel">
                   <p className="cs_extract_desc">
-                    The AI will read all source documents in your AMCTOSHS Hyle
+                    The AI will read all source documents in your MCTOSHS Hyle
                     and extract schema traces relevant to&nbsp;
                     <strong>{selectedEntity.name}</strong> at the&nbsp;
                     <strong>{selectedEntity.dimension}</strong> dimension.

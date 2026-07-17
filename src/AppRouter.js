@@ -8,6 +8,7 @@ import {
   useParams,
 } from "react-router-dom";
 import { SplitViewProvider, SplitViewFrame, SplitViewButton } from "./App/SplitView";
+import { AvatarProviderContextProvider } from "./Avatar/AvatarProviderContext";
 import AppFooter from "./App/AppFooter";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 import { clearStoredPatientSession, readStoredPatientSession } from "./utils/patientSessionCleanup";
@@ -30,6 +31,7 @@ const SourcesPage = lazy(() => import("./Sources/SourcesPage"));
 const YouTubePage = lazy(() => import("./YouTube/YouTubePage"));
 const YouTubeSourcePage = lazy(() => import("./Hylomorphism/YouTubeSourcePage"));
 const SettingsPage = lazy(() => import("./Settings/SettingsPage"));
+const VoiceProfilePage = lazy(() => import("./VoiceProfile/VoiceProfilePage"));
 const PatientInstantiationPage = lazy(() => import("./PatientInstantiation/PatientInstantiationPage"));
 const ClinicalSchemata = lazy(() => import("./ClinicalSchemata/ClinicalSchemata"));
 const UnitsExtraction = lazy(() => import("./UnitsExtraction/UnitsExtraction"));
@@ -144,9 +146,10 @@ const AppRouter = () => {
   );
 
   return (
-    // AMCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
+    // MCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
     // /cvs/ instead of the domain root, so mctoshs.ca/cvs/login is the main page.
     <Router basename="/cvs" future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <AvatarProviderContextProvider>
       <SplitViewProvider>
       <SplitViewFrame>
       <Routes>
@@ -170,6 +173,7 @@ const AppRouter = () => {
         <Route path="/hylomorphism"       element={auth(withSuspense(<HylomorphismPage />))} />
         <Route path="/pdf-reader"         element={auth(withSuspense(<PDFReaderWorkspace />))} />
         <Route path="/sources"            element={auth(withSuspense(<SourcesPage />))} />
+        <Route path="/voice-profile"      element={auth(withSuspense(<VoiceProfilePage />))} />
         <Route path="/youtube"            element={auth(withSuspense(<YouTubePage />))} />
         <Route path="/ai"                 element={auth(withSuspense(<AIChat />))} />
         <Route path="/card/:card"         element={auth(withSuspense(<CardPage />))} />
@@ -225,6 +229,7 @@ const AppRouter = () => {
       )}
       {canAccessAuthenticatedRoutes && withSuspense(<PredictionOverlay />)}
       </SplitViewProvider>
+      </AvatarProviderContextProvider>
     </Router>
   );
 };

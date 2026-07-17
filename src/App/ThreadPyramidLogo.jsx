@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import "./threadPyramidLogo.css";
@@ -10,587 +10,397 @@ import "./threadPyramidLogo.css";
 // whole time. Every one of those internal turns is close enough to see —
 // that's the whole point, it's what actually shows this is one thread
 // weaving back and forth rather than a field of separate parallel ones.
-// Only the very first and very last row keep going instead of turning,
-// out to a hidden distance, so the thread as a whole still never actually
-// ends — infinity lives at the two true open ends, not in hiding every
-// turn along the way.
-//
-// In exactly one place along that one thread, it rises up out of the
-// ground and back down again — a single curve, nothing else changed.
+// Only the very first and very last row keep going instead of turning —
+// see the free-end bends further down, where those two true open ends
+// (per floor) bend vertically instead of receding into the horizontal
+// distance. Flat otherwise, nothing else rises out of it — just the
+// ground threads themselves.
 
 const GROUND_Y = 0;
 const ROW_COUNT = 40; // how many back-and-forth passes the one thread makes
 const FIELD_HALF_WIDTH = 1000; // lateral spread, perpendicular to the shared direction — wider field, same row count, so rows sit further apart
 const INNER_HALF_LENGTH = 320; // how far each INTERNAL turn sits from center — close enough to actually see the weave, now covering more ground along each row's own run
-const OUTER_HALF_LENGTH = 4000; // how far the two TRUE open ends (first row's start, last row's end) reach — far enough neither is ever near the camera
-const THREAD_RADIUS = 0.4;
-// Soft, slightly warm off-white rather than stark pure white — a fully
-// saturated white line at high brightness against a near-black background
-// is a harsh, high-contrast look that's uncomfortable to look at for long.
-const THREAD_COLOR = "#cfd2dc";
+const THREAD_RADIUS = 1.4; // thick enough that a whole floor reads as a solid, prominent band rather than a fine wire
 
 // One fixed direction the thread runs along on each pass.
 const AXIS_ANGLE = 0.35; // radians — arbitrary, just fixed
 const AXIS = new THREE.Vector3(Math.cos(AXIS_ANGLE), 0, Math.sin(AXIS_ANGLE));
 const PERP = new THREE.Vector3(-AXIS.z, 0, AXIS.x); // perpendicular — the direction consecutive passes step across
 
-const point = (along, lateral, height = 0) =>
-  new THREE.Vector3(0, GROUND_Y + height, 0).addScaledVector(AXIS, along).addScaledVector(PERP, lateral);
+const point = (along, lateral) =>
+  new THREE.Vector3(0, GROUND_Y, 0).addScaledVector(AXIS, along).addScaledVector(PERP, lateral);
 
-// Where the thread rises — a plain symmetric curve, envelope-pinned to
-// ground level at both edges (sin(pi*t): zero at t=0 and t=1), so it
-// settles back into being flat with no seam. Has to fit inside one internal
-// row's own span (±INNER_HALF_LENGTH) with room either side for flat
-// lead-in/out before the row's own turn.
-const ARCH_SPAN = 100; // half-width of the curve's near (atomic, rising) side, along the thread's own direction
-const ARCH_SAMPLES = 150; // resolution across the curve
-// The far side (past the midline, the molecular area) is deliberately
-// wider than the near side — same t:0.5..1 parameter range, just stretched
-// over more distance, so the height curve (a function of t, not along)
-// keeps working unchanged everywhere that reads it.
-const MOLECULE_SPAN = 180;
-const alongForT = (t) => (t <= 0.5
-  ? -ARCH_SPAN + t * (ARCH_SPAN * 2)
-  : (t - 0.5) * (MOLECULE_SPAN * 2));
+const ROW_STEP = ROW_COUNT > 1 ? (FIELD_HALF_WIDTH * 2) / (ROW_COUNT - 1) : 0;
+const lateralForRow = (r) => -FIELD_HALF_WIDTH + r * ROW_STEP;
 
-// The atoms the human body is built from — its most abundant elements by
-// mass, each one its own raised, knotted thread. Atomic number stands in
-// for "energy needed for atom creation" (heavier nuclei cost more fusion
-// energy to build, which holds across this whole set — none of them are
-// past the iron group where that trend reverses), so height is derived
-// directly from atomic number: every atom gets a distinct number, so no two
-// threads ever rise to the same height.
-const BODY_ATOMS = [
-  { atomicNumber: 8 }, // Oxygen
-  { atomicNumber: 6 }, // Carbon
-  { atomicNumber: 1 }, // Hydrogen
-  { atomicNumber: 7 }, // Nitrogen
-  { atomicNumber: 20 }, // Calcium
-  { atomicNumber: 15 }, // Phosphorus
-  { atomicNumber: 19 }, // Potassium
-  { atomicNumber: 16 }, // Sulfur
-  { atomicNumber: 11 }, // Sodium
-  { atomicNumber: 17 }, // Chlorine
-  { atomicNumber: 12 }, // Magnesium
-  { atomicNumber: 26 }, // Iron
-  { atomicNumber: 30 }, // Zinc
-  { atomicNumber: 29 }, // Copper
-  { atomicNumber: 25 }, // Manganese
-  { atomicNumber: 53 }, // Iodine
-  { atomicNumber: 34 }, // Selenium
-  { atomicNumber: 42 }, // Molybdenum
-  { atomicNumber: 27 }, // Cobalt
-];
-// Element symbol by proton count (index 0 = 1 proton = H) — covers every
-// proton count this set ever reaches (up to iodine, 53). Used to label an
-// atom mid-formation by whatever element its CURRENT proton count actually
-// is, not just its final one: 1 proton reads H, 2 reads He, and so on,
-// right up the real periodic table, until it reaches its own target count.
-const PERIODIC_TABLE_SYMBOLS = [
-  "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne",
-  "Na", "Mg", "Al", "Si", "P", "S", "Cl", "Ar", "K", "Ca",
-  "Sc", "Ti", "V", "Cr", "Mn", "Fe", "Co", "Ni", "Cu", "Zn",
-  "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr", "Y", "Zr",
-  "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
-  "Sb", "Te", "I",
-];
-const symbolForProtonCount = (n) => PERIODIC_TABLE_SYMBOLS[n - 1];
-// Hydrogen — one proton — is the unit. Its own height is set once
-// (rendering minimum, not artistic: a single proton particle, radius
-// PROTON_PARTICLE_RADIUS below, would clip through the ground if it rose
-// any less than that radius plus a little clearance), and every other
-// atom's height is just that same unit multiplied by its own proton count —
-// no separate max/normalization, H directly defines what one proton is
-// worth for all of them.
-const H_UNIT_HEIGHT = 10; // PROTON_PARTICLE_RADIUS (1.6) + clearance — hydrogen's own height, and one proton's worth for everyone else
-const archHeightForAtom = (atomicNumber) => atomicNumber * H_UNIT_HEIGHT;
-const MAX_ATOMIC_NUMBER = Math.max(...BODY_ATOMS.map((atom) => atom.atomicNumber));
+// One floor per level of App.js's own scroll (LEVELS): Hyle, Atoms,
+// Molecules, Cells, Tissues, Organs, Organ Systems, Humans, Societies —
+// nine identical copies of the same weave, stacked directly above one
+// another like floors of a building — each one its own complete, separate
+// thread (not one thread climbing between floors), spaced evenly apart
+// vertically.
+const FLOOR_COUNT = 9;
+const FLOOR_SPACING = 200;
+// Which floor is Atoms and which is Molecules, matching App.js's own
+// LEVELS order (Hyle=0 first) — the cargo below rides on these two floors
+// specifically.
+const ATOMIC_FLOOR_INDEX = 1;
+const MOLECULAR_FLOOR_INDEX = 2;
 
-// App.js's `climbProgress` (passed in as `progress`) is 0 while the camera
-// sits at the Hyle/ground stage and then climbs 0..1 evenly across the
-// seven real levels (see App.js's LEVELS: Atoms, Molecules, Cell, Tissue,
-// Organ, Organ System, Human) as the user scrolls — Atoms is the first of
-// those seven, so this whole build-up is scoped to that first seventh: it
-// starts the instant the climb begins and is fully built by the time the
-// camera reaches Molecules. Hardcoded rather than imported since it's just
-// "1 / (seven real levels)" — would need updating if LEVELS' count changes.
-const ATOMIC_LEVEL_PROGRESS_SPAN = 1 / 7;
+// Every floor's own thread has two true open ends — row 0's own start (the
+// PROXIMAL one, closest to where the whole thread's own path structurally
+// begins) and the last row's own end (the DISTAL one). Rather than every
+// floor's own pair receding flat into the horizontal distance, each end
+// bends vertically — a quarter-turn (sin/cos easing, so the tangent is
+// purely horizontal at the join, purely vertical at the tip) from the same
+// INNER_HALF_LENGTH join every ordinary internal turn already uses — and
+// alternates direction floor to floor:
+//   floor 0: proximal down, distal up
+//   floor 1: proximal up,   distal down
+//   floor 2: proximal down, distal up
+//   ...and so on, even floors matching floor 0, odd floors matching floor 1.
+// Two neighboring floors' facing ends (floor 0's distal-up meeting floor
+// 1's distal-down; floor 1's proximal-up meeting floor 2's proximal-down;
+// and so on) bend the identical horizontal distance and exactly half of
+// FLOOR_SPACING vertically each, so their tips land on the exact same
+// point in space — blending into one continuous connector rather than two
+// separate stubs. Only the two ends with nothing to meet stay true open
+// ends, hanging past the whole stack instead: whichever end (proximal or
+// distal — which one it is depends on FLOOR_COUNT's own parity) points
+// down at floor 0, and whichever end points up at the very last floor.
+const FREE_END_BEND_ALONG = -INNER_HALF_LENGTH; // where every bend starts
+const FREE_END_BEND_RUN = 140; // horizontal distance every bend covers
+const FREE_END_BEND_SAMPLES = 20;
+const HALF_FLOOR_SPACING = FLOOR_SPACING / 2; // internal floor-to-floor bends each cover exactly this much, so they meet in the middle
+const OPEN_FREE_END_DROP = 260; // the stack's own two true open ends (bottom of floor 0, top of the last floor) hang this far past it
+// sign: +1 (bends up) is only ever open at the very last floor (nothing
+// above it); -1 (bends down) is only ever open at floor 0 (nothing below
+// it) — true regardless of FLOOR_COUNT's own parity, unlike a hardcoded
+// "floor 0 or last floor" check on one specific end alone would be.
+const isOpenFreeEnd = (sign, floorIndex) =>
+  (sign === -1 && floorIndex === 0) || (sign === 1 && floorIndex === FLOOR_COUNT - 1);
 
-// Each atom finishes building at its own point within that span, in
-// proportion to its own proton count — hydrogen (fewest protons) finishes
-// almost immediately, iodine (the most) takes the whole span to fully form,
-// since "how tall it ends up" and "how long it takes to get there" are the
-// same underlying quantity: protons.
-const revealFractionForAtom = (atomicNumber, progress) => {
-  const atomProgressEnd = (atomicNumber / MAX_ATOMIC_NUMBER) * ATOMIC_LEVEL_PROGRESS_SPAN;
-  if (atomProgressEnd <= 0) return 1;
-  return Math.min(1, Math.max(0, progress / atomProgressEnd));
+// Evenly-lit identical floors are hard to tell apart from a distance —
+// each one now gets its own hue (evenly spread around the color wheel, so
+// no two floors are ever confusable) and a much brighter glow than the
+// single shared thread color this used to be, so a floor reads clearly the
+// instant it's visible.
+const FLOOR_GLOW_EMISSIVE_INTENSITY = 1.0;
+const colorForFloor = (floorIndex) => new THREE.Color().setHSL(floorIndex / FLOOR_COUNT, 0.85, 0.6);
+
+const buildGroundThread = () => {
+  const group = new THREE.Group();
+
+  const buildFloor = (floorIndex) => {
+    const floor = new THREE.Group();
+    const floorColor = colorForFloor(floorIndex);
+    const threadMaterial = new THREE.MeshStandardMaterial({
+      color: floorColor,
+      emissive: floorColor,
+      emissiveIntensity: FLOOR_GLOW_EMISSIVE_INTENSITY,
+      roughness: 0.5,
+      metalness: 0.05,
+    });
+    const addTube = (points, segments) => {
+      const curve = new THREE.CatmullRomCurve3(points);
+      const geometry = new THREE.TubeGeometry(curve, segments, THREAD_RADIUS, 10, false); // more radial segments than before — THREAD_RADIUS is thick enough now that a hexagonal cross-section would show
+      floor.add(new THREE.Mesh(geometry, threadMaterial));
+    };
+
+    // sign: +1 bends up, -1 bends down. drop: how far, in local (this
+    // floor's own) coordinates — HALF_FLOOR_SPACING for an internal bend
+    // that meets its neighbor exactly halfway, OPEN_FREE_END_DROP for a
+    // true open end with no neighbor to meet.
+    const addFreeEndBend = (lateral, sign, drop) => {
+      const bendPoints = [];
+      for (let s = 0; s <= FREE_END_BEND_SAMPLES; s++) {
+        const u = s / FREE_END_BEND_SAMPLES;
+        const alongOffset = -FREE_END_BEND_RUN * Math.sin((u * Math.PI) / 2);
+        const rise = sign * drop * (1 - Math.cos((u * Math.PI) / 2));
+        bendPoints.push(
+          new THREE.Vector3(0, rise, 0)
+            .addScaledVector(AXIS, FREE_END_BEND_ALONG + alongOffset)
+            .addScaledVector(PERP, lateral)
+        );
+      }
+      addTube(bendPoints, FREE_END_BEND_SAMPLES);
+    };
+
+    const isEven = floorIndex % 2 === 0;
+    const proximalSign = isEven ? -1 : 1;
+    const distalSign = isEven ? 1 : -1;
+    const proximalDrop = isOpenFreeEnd(proximalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
+    const distalDrop = isOpenFreeEnd(distalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
+
+    for (let r = 0; r < ROW_COUNT; r++) {
+      const lateral = lateralForRow(r);
+      const forward = r % 2 === 0; // alternating direction each pass — what makes it one continuous back-and-forth thread
+      const startAlong = forward ? -INNER_HALF_LENGTH : INNER_HALF_LENGTH;
+      const endAlong = forward ? INNER_HALF_LENGTH : -INNER_HALF_LENGTH;
+
+      if (r === 0) {
+        addFreeEndBend(lateral, proximalSign, proximalDrop);
+        addTube([point(FREE_END_BEND_ALONG, lateral), point(endAlong, lateral)], 2);
+      } else if (r === ROW_COUNT - 1) {
+        addTube([point(startAlong, lateral), point(FREE_END_BEND_ALONG, lateral)], 2);
+        addFreeEndBend(lateral, distalSign, distalDrop);
+      } else {
+        addTube([point(startAlong, lateral), point(endAlong, lateral)], 2);
+      }
+
+      // The turn — a short connector from the end of this pass to the start
+      // of the next, at the next row's lateral position. Still the same one
+      // continuous thread, just changing rows.
+      if (r < ROW_COUNT - 1) {
+        const nextLateral = lateralForRow(r + 1);
+        addTube([point(endAlong, lateral), point(endAlong, nextLateral)], 2);
+      }
+    }
+
+    return floor;
+  };
+
+  const floorGroups = []; // indexed by floor — read by the component to show only the active level's own floor
+  for (let f = 0; f < FLOOR_COUNT; f++) {
+    const floor = buildFloor(f);
+    floor.position.y = f * FLOOR_SPACING;
+    group.add(floor);
+    floorGroups.push(floor);
+  }
+
+  return { group, floorGroups };
 };
 
-// The atom itself doesn't sit fixed at the arch's peak throughout — it
-// travels along the rising half of the curve as it builds, starting at
-// t=0 (the arch's own left edge, height 0, same place the flat thread
-// hands off into the rise) and arriving at t=0.5 (dead center, the peak)
-// exactly when fully formed. Same sin(pi*t) curve the dome tube itself
-// uses, just swept only across its first half.
-const markerTForFraction = (f) => f * 0.5;
+const disposeGroundThread = (group) => {
+  group.traverse((obj) => {
+    if (obj.isMesh) {
+      obj.geometry.dispose();
+      obj.material.dispose();
+    }
+  });
+};
 
-// The curved section is its own separate mesh/material from the flat
-// thread either side of it — same color and same fabric (matches this
-// project's convention of telling parts apart by brightness, not a
-// different material), just a much higher emissive intensity, so the
-// raised part visibly glows against the dim flat thread it rises out of.
-const FLAT_EMISSIVE_INTENSITY = 0.28;
-const GLOW_EMISSIVE_INTENSITY = 1.4;
-
-// Right at the atom's current position on the rising thread, its own node
-// carries a cluster of small proton particles, one per proton, built up one
-// at a time as the atom forms (see revealFractionForAtom above) rather than
-// appearing all at once. The cluster's own radius isn't picked per atom —
-// it comes straight from how many spheres of PROTON_PARTICLE_RADIUS are
-// actually in it right now, sized so neighboring protons sit touching
-// (hugging) rather than adrift in a loosely-scaled shell: the Fibonacci-
-// sphere lattice's own nearest-neighbor spacing is ~3.6/sqrt(n) radians, so
-// solving for the radius that turns that spacing into two touching
-// particles (chord length = 2 * PROTON_PARTICLE_RADIUS) gives a radius
-// proportional to sqrt(n) — the same packing math real nucleon clusters
-// follow, not an arbitrary linear-with-protons guess.
-const PROTON_PARTICLE_RADIUS = 1.6; // each individual proton in the cluster
-const PROTON_PACKING_CONSTANT = 2 / 3.6;
-const protonClusterRadius = (visibleProtons) =>
-  visibleProtons <= 1 ? 0 : PROTON_PACKING_CONSTANT * PROTON_PARTICLE_RADIUS * Math.sqrt(visibleProtons);
-const ATOM_COLOR = "#ffb74d";
-// Emissive is unlit self-glow — added uniformly no matter which way a
-// surface faces, so it ignores the directional light entirely. A thin tube
-// barely shows that (little of its curved surface is visible from any one
-// angle), but a solid sphere at the thread's own GLOW_EMISSIVE_INTENSITY
-// washes out completely flat, no matter how it's lit. Much lower here so
-// the directional light's highlight/shadow actually shows through.
-const NODE_EMISSIVE_INTENSITY = 0.3;
-
-// A cover drapes over the whole atomic level — one continuous surface
-// spanning every raised row (lateral) and each row's own rise from ground
-// up to its own peak (along), so it's a compliant sheet rather than a flat
-// lid: it always mimics the terrain laterally, folding down low over
-// hydrogen and rising all the way up over iodine, the tallest — every atom
-// touches it at its own true height, never a single shared one. What
-// changes once every atom has finished (see atomicLevelComplete below) is
-// only the along-axis shape of each row's own strip: instead of curving
-// back down past the midline the way the dome/thread itself does, it holds
-// level at that atom's own peak height from the midline onward — the
-// "far" half of the cover reads as horizontal once nothing is left to form
-// — and is colored differently too, in the app's own established Molecule
-// color (see App.js's LEVELS), since a flat, settled surface past the
-// midline is what actually resembles the molecular level, not the still-
-// folded atomic terrain on the near side.
-const COVER_ALONG_SAMPLES = 40; // resolution along each row's own rise — kept even so the midline lands exactly on a sample
-const MOLECULE_COLOR = "#7e57c2";
-const COVER_OPACITY = 0.3;
-const COVER_EMISSIVE_INTENSITY = 0.25; // low, same reasoning as NODE_EMISSIVE_INTENSITY — let directional shading show the folds
-
-// Each node's element symbol, drawn onto a small canvas and used as a
-// sprite texture — sprites always face the camera, so the label stays
-// legible from any angle without tracking the camera by hand.
+// Element symbol, drawn onto a small canvas and used as a sprite texture —
+// sprites always face the camera, so a label stays legible from any angle
+// without tracking the camera by hand. Canvas is wide (2:1) with an
+// auto-shrinking font so longer formulas ("Fe²⁺/Fe³⁺", "C₆H₁₂O₆") still
+// fit without the font going illegibly small for short ones ("O₂").
 const LABEL_CANVAS_SIZE = 128;
-const LABEL_WORLD_SIZE = 22;
-const LABEL_CLEARANCE = 12; // added to that atom's own node radius, so the label clears whatever size the node actually is
-
-// A dashed vertical line drops straight from each node down to the ground
-// directly beneath it — a plain, literal indicator of how far that atom's
-// proton count lifted it — with the proton count itself labeled at the
-// line's own midpoint.
-const PROTON_LINE_DASH_SIZE = 4;
-const PROTON_LINE_GAP_SIZE = 3;
-
-// Electrons — a neutral atom has exactly as many as it has protons, but
-// they're not another number to read off a line: a small shell of dots
-// orbiting the node itself, distinct from the proton indicator both in
-// where it sits and in color (cool blue against the proton line's amber).
-const ELECTRON_RADIUS = 1.2;
-const ELECTRON_ORBIT_CLEARANCE = 6; // added to that atom's own node radius
-const ELECTRON_COLOR = "#64b5f6";
-
-// Evenly spreads `count` points across a unit sphere (the standard
-// Fibonacci-sphere construction) — used so each atom's electron shell reads
-// as a real 3D cloud around its node from any camera angle, not a flat ring
-// that vanishes edge-on.
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
-const fibonacciSpherePoint = (index, count) => {
-  if (count <= 1) return new THREE.Vector3(0, 1, 0);
-  const y = 1 - (index / (count - 1)) * 2; // 1..-1
-  const radiusAtY = Math.sqrt(Math.max(0, 1 - y * y));
-  const theta = GOLDEN_ANGLE * index;
-  return new THREE.Vector3(Math.cos(theta) * radiusAtY, y, Math.sin(theta) * radiusAtY);
-};
-
-const createLabelSprite = (text) => {
+const createLabelSprite = (text, worldSize) => {
   const canvas = document.createElement("canvas");
-  canvas.width = LABEL_CANVAS_SIZE;
+  canvas.width = LABEL_CANVAS_SIZE * 2;
   canvas.height = LABEL_CANVAS_SIZE;
   const ctx = canvas.getContext("2d");
-  // Same system-UI stack Portfolio.jsx already uses elsewhere in the app —
-  // a real font choice rather than the generic "sans-serif" fallback,
-  // still native (no webfont to load onto a canvas mid-render).
-  ctx.font = '700 64px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const fontStack = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  let fontSize = 64;
+  ctx.font = `700 ${fontSize}px ${fontStack}`;
+  const maxTextWidth = canvas.width * 0.9;
+  const measuredWidth = ctx.measureText(text).width;
+  if (measuredWidth > maxTextWidth) {
+    fontSize = Math.max(22, Math.floor(fontSize * (maxTextWidth / measuredWidth)));
+    ctx.font = `700 ${fontSize}px ${fontStack}`;
+  }
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#fff8ec";
-  ctx.fillText(text, LABEL_CANVAS_SIZE / 2, LABEL_CANVAS_SIZE / 2 + 4);
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 4);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
   const sprite = new THREE.Sprite(material);
-  sprite.scale.set(LABEL_WORLD_SIZE, LABEL_WORLD_SIZE, 1);
+  sprite.scale.set(worldSize * 2, worldSize, 1); // matches the canvas's own 2:1 aspect ratio
   return sprite;
 };
 
-const buildGroundThread = (progress) => {
+// ── Cargo — the essential ions (Atoms floor) and essential molecules
+// (Molecules floor) that exist without any cellular process, each one
+// driving back and forth along its own row of that floor's own thread —
+// never rising, never leaving that floor's own flat plane, trapped in 2D
+// the way the thread itself is.
+const ATOMIC_CARGO = ["K⁺", "Na⁺", "Ca²⁺", "Mg²⁺", "Cl⁻", "H⁺", "Fe²⁺/Fe³⁺", "Zn²⁺"];
+const MOLECULAR_CARGO = ["H₂O", "O₂", "CO₂", "C₆H₁₂O₆", "NH₃", "H₂O₂", "HCO₃⁻", "PO₄³⁻"];
+
+// A plain small sphere in a near-white color read poorly — against a
+// bright, glowing, differently-colored floor every few rows, there's no
+// single cargo color that ever contrasts reliably. Two fixes together: a
+// faceted gem shape (an icosahedron, flat-shaded, so each face catches the
+// light differently — reads as a distinct 3D object even at a glance,
+// unlike a smooth sphere) instead of a plain ball, plus a thin dark
+// outline shell (a slightly larger copy of the same geometry, rendered
+// back-face-only in near-black) that silhouettes the cargo against
+// whatever color happens to be behind it — a value/contrast fix, not a
+// hue one, so it works regardless of which floor's own color it's on.
+const CARGO_RADIUS = 4.5;
+const CARGO_COLOR = "#fff8ec";
+const CARGO_EMISSIVE_INTENSITY = 1.3;
+const CARGO_OUTLINE_COLOR = "#05070d";
+const CARGO_OUTLINE_SCALE = 1.28;
+const CARGO_CLEARANCE = CARGO_RADIUS * CARGO_OUTLINE_SCALE + 2; // lifts the cargo just clear of the thread's own surface, not clipping through it
+const CARGO_LABEL_WORLD_SIZE = 14;
+const CARGO_LABEL_CLEARANCE = 8;
+// Each item drives back and forth along its own row, staying within the
+// visible weave span (away from the free-end bends either side) — a
+// simple there-and-back "drive," not a full traversal of the whole
+// back-and-forth thread.
+const CARGO_TRAVEL_HALF_SPAN = INNER_HALF_LENGTH;
+const CARGO_SPEED = 45; // world units per second
+const CARGO_PERIOD = (CARGO_TRAVEL_HALF_SPAN * 4) / CARGO_SPEED; // seconds for one full there-and-back cycle
+
+const buildCargo = () => {
   const group = new THREE.Group();
+  const items = []; // { mesh, lateral, offset } — read every frame by updateCargo below
 
-  const makeMaterial = (color, emissiveIntensity) => new THREE.MeshStandardMaterial({
-    color,
-    emissive: new THREE.Color(color),
-    emissiveIntensity,
-    roughness: 0.5,
-    metalness: 0.05,
+  const cargoMaterial = new THREE.MeshStandardMaterial({
+    color: CARGO_COLOR,
+    emissive: new THREE.Color(CARGO_COLOR),
+    emissiveIntensity: CARGO_EMISSIVE_INTENSITY,
+    roughness: 0.35,
+    metalness: 0.15,
+    flatShading: true, // facets catch the light unevenly, so the gem shape reads as 3D even from a distance
   });
-  const flatMaterial = makeMaterial(THREAD_COLOR, FLAT_EMISSIVE_INTENSITY);
-  const glowMaterial = makeMaterial(THREAD_COLOR, GLOW_EMISSIVE_INTENSITY);
-  const protonMaterial = makeMaterial(ATOM_COLOR, NODE_EMISSIVE_INTENSITY);
-  const protonGeometry = new THREE.SphereGeometry(PROTON_PARTICLE_RADIUS, 8, 8);
-  const electronMaterial = makeMaterial(ELECTRON_COLOR, NODE_EMISSIVE_INTENSITY);
-  const electronGeometry = new THREE.SphereGeometry(ELECTRON_RADIUS, 8, 8);
-  const moleculeThreadMaterial = makeMaterial(MOLECULE_COLOR, GLOW_EMISSIVE_INTENSITY);
-  const makeCoverMaterial = (color) => new THREE.MeshStandardMaterial({
-    color,
-    emissive: new THREE.Color(color),
-    emissiveIntensity: COVER_EMISSIVE_INTENSITY,
-    roughness: 0.6,
-    metalness: 0.05,
-    transparent: true,
-    opacity: COVER_OPACITY,
-    side: THREE.DoubleSide, // folds mean the camera can end up looking at either face
-  });
-  const coverMaterial = makeCoverMaterial(ATOM_COLOR); // near half — still-folded atomic terrain
-  const coverMoleculeMaterial = makeCoverMaterial(MOLECULE_COLOR); // far half, past the midline
-  const protonLineMaterial = new THREE.LineDashedMaterial({
-    color: ATOM_COLOR,
-    dashSize: PROTON_LINE_DASH_SIZE,
-    gapSize: PROTON_LINE_GAP_SIZE,
-  });
+  const cargoGeometry = new THREE.IcosahedronGeometry(CARGO_RADIUS, 0); // detail 0 = the plain 20-face icosahedron, not a smoothed sphere
+  const outlineMaterial = new THREE.MeshBasicMaterial({ color: CARGO_OUTLINE_COLOR, side: THREE.BackSide });
+  const outlineGeometry = new THREE.IcosahedronGeometry(CARGO_RADIUS * CARGO_OUTLINE_SCALE, 0);
 
-  const addTube = (points, segments, material) => {
-    const curve = new THREE.CatmullRomCurve3(points);
-    const geometry = new THREE.TubeGeometry(curve, segments, THREAD_RADIUS, 6, false);
-    group.add(new THREE.Mesh(geometry, material));
+  const floorGroups = {}; // floorIndex -> its own cargo group, for the floors that have cargo — read by the component to show only the active level's own floor
+
+  const addCargoForFloor = (floorIndex, labels) => {
+    const floorGroup = new THREE.Group();
+    floorGroup.position.y = floorIndex * FLOOR_SPACING;
+    group.add(floorGroup);
+    floorGroups[floorIndex] = floorGroup;
+
+    labels.forEach((label, i) => {
+      // Spread across the rows between the two free-end bends (row 0 and
+      // the last row), evenly, so cargo doesn't cluster near either end.
+      const r = 1 + Math.round(((i + 0.5) * (ROW_COUNT - 2)) / labels.length);
+      const lateral = lateralForRow(r);
+
+      const itemGroup = new THREE.Group();
+      itemGroup.add(new THREE.Mesh(outlineGeometry, outlineMaterial)); // rendered first, back faces only, so it silhouettes the gem inside it
+      itemGroup.add(new THREE.Mesh(cargoGeometry, cargoMaterial));
+      const sprite = createLabelSprite(label, CARGO_LABEL_WORLD_SIZE);
+      sprite.position.y = CARGO_RADIUS * CARGO_OUTLINE_SCALE + CARGO_LABEL_CLEARANCE;
+      itemGroup.add(sprite);
+      floorGroup.add(itemGroup);
+
+      items.push({ mesh: itemGroup, lateral, offset: i / labels.length });
+    });
   };
 
-  const rowStep = ROW_COUNT > 1 ? (FIELD_HALF_WIDTH * 2) / (ROW_COUNT - 1) : 0;
-  // One row per atom, consecutive and centered in the field — the cluster
-  // of rises reads as a single group (the atoms the body is built from),
-  // not scattered arbitrarily across the whole thread. Arranged as a bell:
-  // the heaviest atom dead center, the next two heaviest immediately either
-  // side of it, and so on outward, so the lightest atoms land at the two
-  // outer edges of the cluster and the whole row of rises reads as one
-  // symmetric bell curve rather than a scattered or strictly sorted line.
-  const raisedRowStart = Math.floor(ROW_COUNT / 2) - Math.floor(BODY_ATOMS.length / 2);
-  const bellOrder = new Array(BODY_ATOMS.length);
-  const sortedDesc = [...BODY_ATOMS].sort((a, b) => b.atomicNumber - a.atomicNumber);
-  const center = Math.floor(BODY_ATOMS.length / 2);
-  let left = center;
-  let right = center;
-  sortedDesc.forEach((atom, i) => {
-    if (i === 0) {
-      bellOrder[center] = atom;
-    } else if (i % 2 === 1) {
-      left -= 1;
-      bellOrder[left] = atom;
-    } else {
-      right += 1;
-      bellOrder[right] = atom;
-    }
-  });
-  const atomForRow = new Map(bellOrder.map((atom, i) => [raisedRowStart + i, atom]));
-  const coverProfile = []; // {lateral, archHeight} per raised row, in lateral order — what the cover drapes over
-  // Iodine (the heaviest atom here) takes the whole climb to finish, so its
-  // own completion IS the atomic level's completion — once it's done, every
-  // atom has satisfied its identity. See the cover-building section below
-  // for what that changes.
-  const atomicLevelComplete = revealFractionForAtom(MAX_ATOMIC_NUMBER, progress) >= 1;
+  addCargoForFloor(ATOMIC_FLOOR_INDEX, ATOMIC_CARGO);
+  addCargoForFloor(MOLECULAR_FLOOR_INDEX, MOLECULAR_CARGO);
 
-  // Pre-pass: each raised row's current build state (how tall it's risen,
-  // how many of its protons have formed so far), computed up front so the
-  // proton/electron instanced meshes below can be sized exactly — no
-  // slack, no unused instances to hide.
-  const rowState = new Map();
-  let totalVisibleProtons = 0;
-  let maxActiveHeight = 0; // tallest any atom has actually risen to so far — drives the camera's own framing, see the component below
-  for (const [r, atom] of atomForRow) {
-    const f = revealFractionForAtom(atom.atomicNumber, progress);
-    // No floor — at f=0 (t=0) the atom hasn't started forming yet, so
-    // zero protons and zero electrons exist, not even one. They accumulate
-    // one at a time from nothing as f climbs toward 1.
-    const visibleProtons = Math.round(f * atom.atomicNumber);
-    const archHeight = archHeightForAtom(atom.atomicNumber) * f;
-    rowState.set(r, { atom, archHeight, visibleProtons, f });
-    totalVisibleProtons += visibleProtons;
-    maxActiveHeight = Math.max(maxActiveHeight, archHeight);
+  return { group, items, floorGroups };
+};
+
+// Called every animation frame — moves each cargo item along its own row
+// via a constant-speed triangle wave (drive out, drive back), staggered by
+// its own offset so a floor's items don't all move in lockstep.
+const updateCargo = (items, elapsedSeconds) => {
+  for (const item of items) {
+    const cyclePhase = (elapsedSeconds / CARGO_PERIOD + item.offset) % 1;
+    const t = cyclePhase < 0.5 ? cyclePhase * 2 : 2 - cyclePhase * 2; // 0 -> 1 -> 0
+    const along = -CARGO_TRAVEL_HALF_SPAN + t * (CARGO_TRAVEL_HALF_SPAN * 2);
+    item.mesh.position.copy(point(along, item.lateral));
+    item.mesh.position.y += CARGO_CLEARANCE;
   }
-  // One shared instanced mesh each for every proton and every electron
-  // currently visible across every atom — far cheaper than a separate mesh
-  // per particle when the total runs into the hundreds. Electrons form
-  // 1-for-1 with protons (neutral atoms), so the two totals match.
-  const protonMesh = new THREE.InstancedMesh(protonGeometry, protonMaterial, totalVisibleProtons);
-  const electronMesh = new THREE.InstancedMesh(electronGeometry, electronMaterial, totalVisibleProtons);
-  let particleInstanceIndex = 0;
-
-  for (let r = 0; r < ROW_COUNT; r++) {
-    const lateral = -FIELD_HALF_WIDTH + r * rowStep;
-    const forward = r % 2 === 0; // alternating direction each pass — what makes it one continuous back-and-forth thread
-    // Only the very first row's own start and the very last row's own end
-    // are true open ends of the whole thread — those reach OUTER_HALF_LENGTH,
-    // hidden far away. Every other row boundary is an internal turn,
-    // reaching only INNER_HALF_LENGTH — close enough to actually see.
-    const startLength = r === 0 ? OUTER_HALF_LENGTH : INNER_HALF_LENGTH;
-    const endLength = r === ROW_COUNT - 1 ? OUTER_HALF_LENGTH : INNER_HALF_LENGTH;
-    const startAlong = forward ? -startLength : startLength;
-    const endAlong = forward ? endLength : -endLength;
-
-    if (!atomForRow.has(r)) {
-      addTube([point(startAlong, lateral), point(endAlong, lateral)], 2, flatMaterial);
-    } else {
-      const { atom, archHeight, visibleProtons, f } = rowState.get(r); // this row's own unique rise, right now
-      // Built in a fixed increasing-along order (-ARCH_SPAN to +ARCH_SPAN),
-      // then reversed for a backward pass — the curve's own shape doesn't
-      // care which direction it's traversed in, only the connecting flat
-      // legs on either side do, which have to enter/exit whichever edge of
-      // the dome the row's own travel direction actually reaches first.
-      const domeEntry = forward ? -ARCH_SPAN : MOLECULE_SPAN;
-      const domeExit = forward ? MOLECULE_SPAN : -ARCH_SPAN;
-      addTube([point(startAlong, lateral), point(domeEntry, lateral)], 2, flatMaterial);
-
-      const domeHeightAt = (t) => Math.sin(Math.PI * t) * archHeight;
-      if (f < 1) {
-        // Still forming — the whole rise stays one continuous solid tube,
-        // same as ever, since there's no "used path" to deteriorate yet.
-        const domePoints = [];
-        for (let s = 0; s <= ARCH_SAMPLES; s++) {
-          const t = s / ARCH_SAMPLES;
-          domePoints.push(point(alongForT(t), lateral, domeHeightAt(t)));
-        }
-        if (!forward) domePoints.reverse();
-        addTube(domePoints, ARCH_SAMPLES, glowMaterial);
-      } else {
-        // Fully formed, reached the midline — the left half (the path it
-        // took to get there) stays a single unbroken tube. The right half
-        // (past the midline, ahead of the atom) is what deteriorates into
-        // a broken, dashed trail instead of staying solid.
-        const mid = Math.floor(ARCH_SAMPLES / 2);
-        const leftPoints = [];
-        for (let s = 0; s <= mid; s++) {
-          const t = s / ARCH_SAMPLES;
-          leftPoints.push(point(alongForT(t), lateral, domeHeightAt(t)));
-        }
-        addTube(leftPoints, mid, glowMaterial);
-
-        const DASH_COUNT = 14;
-        const DASH_DUTY_CYCLE = 0.55; // fraction of each dash-gap cycle actually drawn
-        const DASH_SAMPLES_PER_DASH = 4;
-        const dashCycleLength = 0.5 / DASH_COUNT;
-        for (let i = 0; i < DASH_COUNT; i++) {
-          const tStart = 0.5 + i * dashCycleLength;
-          const tEnd = tStart + dashCycleLength * DASH_DUTY_CYCLE;
-          const dashPoints = [];
-          for (let d = 0; d <= DASH_SAMPLES_PER_DASH; d++) {
-            const t = tStart + (tEnd - tStart) * (d / DASH_SAMPLES_PER_DASH);
-            dashPoints.push(point(alongForT(t), lateral, domeHeightAt(t)));
-          }
-          addTube(dashPoints, DASH_SAMPLES_PER_DASH, glowMaterial);
-        }
-      }
-
-      // Where the atom itself currently sits on that same curve — at t=0
-      // (the left edge, height 0) when f=0, sweeping up to t=0.5 (dead
-      // center, the peak) exactly when fully formed at f=1.
-      const markerT = markerTForFraction(f);
-      const atomAlong = alongForT(markerT); // markerT never exceeds 0.5, so this always resolves via the near-side branch
-      const atomHeight = Math.sin(Math.PI * markerT) * archHeight;
-      const atomPoint = point(atomAlong, lateral, atomHeight);
-
-      // Once formed, the atom grows a thread of its own out into the
-      // molecular area — the start of a bond reaching toward where a
-      // molecule will form — running flat at the atom's own height,
-      // matching the plane it's extending into, out to where that plane
-      // itself ends.
-      if (f >= 1) {
-        addTube([atomPoint, point(MOLECULE_SPAN, lateral, archHeight)], 2, moleculeThreadMaterial);
-      }
-
-      const clusterRadius = protonClusterRadius(visibleProtons);
-      const electronOrbitRadius = clusterRadius + ELECTRON_ORBIT_CLEARANCE;
-      for (let p = 0; p < visibleProtons; p++) {
-        const dir = fibonacciSpherePoint(p, visibleProtons);
-        const protonPosition = atomPoint.clone().addScaledVector(dir, clusterRadius);
-        protonMesh.setMatrixAt(particleInstanceIndex, new THREE.Matrix4().setPosition(protonPosition));
-        const electronPosition = atomPoint.clone().addScaledVector(dir, electronOrbitRadius);
-        electronMesh.setMatrixAt(particleInstanceIndex, new THREE.Matrix4().setPosition(electronPosition));
-        particleInstanceIndex++;
-      }
-      coverProfile.push({ lateral, archHeight });
-
-      // Nothing to label before the first proton exists — at t=0 there's no
-      // atom yet, just the bare thread. Once one forms, its label tracks
-      // whatever element its CURRENT proton count actually is (1 -> H,
-      // 2 -> He, ...), not its final target, so it visibly steps through
-      // the periodic table as it builds.
-      if (visibleProtons > 0) {
-        const label = createLabelSprite(symbolForProtonCount(visibleProtons));
-        label.position.copy(atomPoint);
-        label.position.y += clusterRadius + LABEL_CLEARANCE;
-        group.add(label);
-
-        // Straight down from the atom to the ground directly below wherever
-        // it currently is — a literal, unadorned measure of its own rise,
-        // with its proton count labeled right at the midpoint. Labeled with
-        // however many protons have formed so far, not the final count — it
-        // grows right along with the cluster.
-        const groundBelowAtom = point(atomAlong, lateral, 0);
-        const protonLineGeometry = new THREE.BufferGeometry().setFromPoints([groundBelowAtom, atomPoint]);
-        const protonLine = new THREE.Line(protonLineGeometry, protonLineMaterial);
-        protonLine.computeLineDistances(); // required for the dash pattern to render
-        group.add(protonLine);
-
-        const protonCountLabel = createLabelSprite(String(visibleProtons));
-        protonCountLabel.position.copy(groundBelowAtom);
-        protonCountLabel.position.y = (groundBelowAtom.y + atomPoint.y) / 2;
-        group.add(protonCountLabel);
-      }
-
-      addTube([point(domeExit, lateral), point(endAlong, lateral)], 2, flatMaterial);
-    }
-
-    // The turn — a short connector from the end of this pass to the start
-    // of the next, at the next row's lateral position. Same flat material;
-    // this is still the same one continuous thread, just changing rows.
-    if (r < ROW_COUNT - 1) {
-      const nextLateral = -FIELD_HALF_WIDTH + (r + 1) * rowStep;
-      addTube([point(endAlong, lateral), point(endAlong, nextLateral)], 2, flatMaterial);
-    }
-  }
-
-  protonMesh.instanceMatrix.needsUpdate = true;
-  electronMesh.instanceMatrix.needsUpdate = true;
-  group.add(protonMesh);
-  group.add(electronMesh);
-
-  if (coverProfile.length >= 2) {
-    // A grid: one column per raised row (lateral), each column sampled
-    // along that row's own rise (same sin(pi*t) shape the thread itself
-    // uses, scaled by that row's own archHeight) — so the surface is
-    // exactly the same terrain the nodes sit on, not a flat approximation
-    // of it. Neighboring columns can differ wildly in height (protons vary
-    // a lot across this set), which is what makes it fold rather than lie
-    // flat laterally: it has no choice but to follow each column's own
-    // peak. Along each column's own strip, the near half (t<=0.5, up to
-    // the midline) always follows that same rising curve — but once the
-    // atomic level is complete, the far half (t>0.5) stops curving back
-    // down and holds level at that column's own peak height instead, so
-    // the "after the midline" side reads as horizontal.
-    const columns = coverProfile.length;
-    const coverMid = COVER_ALONG_SAMPLES / 2; // exact — COVER_ALONG_SAMPLES is kept even
-
-    // Built as two separate strips (near half / far half) rather than one,
-    // purely so each half can carry its own material/color — the near
-    // strip's own last column of vertices and the far strip's own first
-    // column land on the exact same points (both sample ai=coverMid), so
-    // the seam between the two colors is geometrically seamless even
-    // though they're two different meshes.
-    const buildCoverStrip = (aiStart, aiEnd, material) => {
-      const positions = [];
-      for (let ci = 0; ci < columns; ci++) {
-        const { lateral, archHeight } = coverProfile[ci];
-        for (let ai = aiStart; ai <= aiEnd; ai++) {
-          const t = ai / COVER_ALONG_SAMPLES;
-          const height = atomicLevelComplete && t > 0.5 ? archHeight : Math.sin(Math.PI * t) * archHeight;
-          const p = point(alongForT(t), lateral, height);
-          positions.push(p.x, p.y, p.z);
-        }
-      }
-
-      const stripSamples = aiEnd - aiStart;
-      const rowLength = stripSamples + 1;
-      const indices = [];
-      for (let ci = 0; ci < columns - 1; ci++) {
-        for (let ai = 0; ai < stripSamples; ai++) {
-          const a = ci * rowLength + ai;
-          const b = (ci + 1) * rowLength + ai;
-          const c = (ci + 1) * rowLength + ai + 1;
-          const d = ci * rowLength + ai + 1;
-          indices.push(a, b, d, b, c, d);
-        }
-      }
-
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-      geometry.setIndex(indices);
-      geometry.computeVertexNormals();
-      group.add(new THREE.Mesh(geometry, material));
-    };
-
-    buildCoverStrip(0, coverMid, coverMaterial);
-    buildCoverStrip(coverMid, COVER_ALONG_SAMPLES, coverMoleculeMaterial);
-  }
-
-  return { group, maxActiveHeight };
 };
 
 // Sprite.geometry is a single plane geometry three.js shares across every
 // Sprite in the whole app (a module-level singleton) — only dispose it for
-// real meshes/lines (each with their own geometry), or disposing a group
-// would free GPU buffers any other sprite elsewhere still depends on.
-const disposeGroundThread = (group) => {
+// real meshes (each with their own geometry), or disposing a cargo item
+// would free GPU buffers every other sprite elsewhere still depends on.
+const disposeCargo = (group) => {
   group.traverse((obj) => {
-    if (obj.isMesh || obj.isLine) obj.geometry.dispose();
+    if (obj.isMesh) obj.geometry.dispose();
     if (obj.isSprite) obj.material.map?.dispose();
     if (obj.material) obj.material.dispose();
   });
 };
 
-// The camera's two framing endpoints — nothing grown yet (a tight
-// close-up on the bare ground where the first atom will appear) and the
-// tallest atom fully formed (the original wide establishing shot, pulled
-// back and raised enough to take in many rows of the zigzag at once).
-// Growth is lerped between them by however tall the tallest active atom
-// actually is right now (see the progress effect below).
-const FULL_ATOMIC_HEIGHT = archHeightForAtom(MAX_ATOMIC_NUMBER);
-const CAMERA_WIDE_FOCUS = new THREE.Vector3(0, 20, 0);
-const CAMERA_WIDE_POSITION = new THREE.Vector3(120, 340, 520);
-const CAMERA_WIDE_DISTANCE = CAMERA_WIDE_POSITION.distanceTo(CAMERA_WIDE_FOCUS);
-// The ground field is wide and dense (FIELD_HALF_WIDTH=1000, rows spaced
-// ~51 apart, each running 320 deep) — a close distance picked without that
-// in mind put the camera right up against, or inside, nearby thread
-// geometry instead of just "close to the atoms." Pulled back generously
-// (comparable to the field's own half-width) so it clears that field
-// regardless of which row ends up nearest the camera — still a
-// meaningfully tighter shot than CAMERA_WIDE below, just not so tight it
-// risks sitting inside the scene.
-const CAMERA_CLOSE_FOCUS = new THREE.Vector3(0, 40, 0);
-const CAMERA_CLOSE_DISTANCE = 950;
+// Manually-tuned camera shots, one per level (keyed by index into App.js's
+// LEVELS), saved from the floating control panel below — the alternative to
+// guessing framing values with no way to actually see the result. Persisted
+// in localStorage so a tuning session survives a reload.
+const CAMERA_PRESETS_STORAGE_KEY = "mctoshs_thread_camera_presets";
+const loadCameraPresets = () => {
+  try {
+    const raw = localStorage.getItem(CAMERA_PRESETS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+const saveCameraPresetsToStorage = (presets) => {
+  try {
+    localStorage.setItem(CAMERA_PRESETS_STORAGE_KEY, JSON.stringify(presets));
+  } catch {
+    // Private browsing / storage full / disabled — the preset still applies
+    // for the rest of this session via React state, it just won't survive
+    // a reload.
+  }
+};
 
-const ThreadPyramidLogo = ({ progress = 1 }) => {
+// No more built-in per-level default framing — every level's shot comes
+// from a saved preset (the control panel below) or it doesn't move at all.
+// This is just where the camera sits before any level has one saved yet:
+// pulled back generously (the ground field is wide and dense —
+// FIELD_HALF_WIDTH=1000, rows spaced ~51 apart, each running 320 deep) and
+// centered on the middle of the whole floor stack vertically, so it starts
+// clear of the field rather than up against or inside it.
+const INITIAL_CAMERA_FOCUS = new THREE.Vector3(0, ((FLOOR_COUNT - 1) * FLOOR_SPACING) / 2, 0);
+const INITIAL_CAMERA_DISTANCE = 1400;
+
+// How long a level-to-level camera transition takes, and its easing curve
+// (slow-in, fast-through-the-middle, slow-out) — a plain cubic ease, not a
+// linear lerp, so the motion reads as a deliberate camera move rather than
+// a robotic slide.
+const CAMERA_TRANSITION_MS = 1200;
+const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
   const groundThreadRef = useRef(null);
+  const cargoItemsRef = useRef([]); // read fresh every animation frame by the mount effect's own animate() loop below
+  const floorVisibilityGroupsRef = useRef({}); // floorIndex -> [groups] — every ground/cargo group that floor owns, toggled by the activeLevel effect below
+  const [cameraPresets, setCameraPresets] = useState(loadCameraPresets);
+  const [presetPanelOpen, setPresetPanelOpen] = useState(false);
+
+  const saveCurrentViewAsPreset = (levelIndex) => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+    const preset = {
+      position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+      target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
+    };
+    setCameraPresets((prev) => {
+      const next = { ...prev, [levelIndex]: preset };
+      saveCameraPresetsToStorage(next);
+      return next;
+    });
+  };
+
+  const clearPresetForLevel = (levelIndex) => {
+    setCameraPresets((prev) => {
+      if (!(levelIndex in prev)) return prev;
+      const next = { ...prev };
+      delete next[levelIndex];
+      saveCameraPresetsToStorage(next);
+      return next;
+    });
+  };
 
   // Mount-only: renderer, camera, lights, controls — everything that
   // doesn't need to change as the user scrolls. Kept separate from the
-  // ground-thread build below so scrolling (which changes `progress`
-  // continuously) never tears down and recreates the renderer/controls,
-  // just the geometry that actually depends on how far the atoms have
-  // built up.
+  // ground-thread build below so scrolling never tears down and recreates
+  // the renderer/controls, just the geometry.
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
@@ -606,26 +416,26 @@ const ThreadPyramidLogo = ({ progress = 1 }) => {
 
     const scene = new THREE.Scene();
     sceneRef.current = scene;
-    const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 1, 4000);
+    // far=4000 used to clip the object once zoomed far enough out — the
+    // floor stack's own extent (FLOOR_SPACING * (FLOOR_COUNT-1) vertically,
+    // plus each floor's own free-end bends and the field's own width/depth)
+    // plus how far out a user can actually zoom (see controls.maxDistance
+    // below) both need real headroom under this so nothing at the object's
+    // own far side is ever clipped away.
+    const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight, 1, 20000);
     cameraRef.current = camera;
 
-    // Starting shot before the progress effect below gets a chance to
-    // frame things properly — the wide establishing shot, pulled back and
-    // raised enough to take in many rows of the zigzag at once, since that
-    // repetition is what actually reads as "goes back and forth."
-    const focus = CAMERA_WIDE_FOCUS.clone();
-    camera.position.copy(CAMERA_WIDE_POSITION);
+    // Starting shot before any preset is loaded/applies — see
+    // INITIAL_CAMERA_FOCUS/DISTANCE above.
+    const focus = INITIAL_CAMERA_FOCUS.clone();
+    const direction = new THREE.Vector3(120, 340, 520).sub(new THREE.Vector3(0, 40, 0)).normalize();
+    camera.position.copy(focus).addScaledVector(direction, INITIAL_CAMERA_DISTANCE);
     camera.lookAt(focus);
 
     // Ambient only, plus one soft directional light. No point lights with a
     // finite falloff distance (those create a literal lit/unlit circle
     // wherever their falloff sphere meets the ground) — a directional light
-    // has no falloff distance at all, so it's safe from that bug, and it's
-    // what the node spheres actually need: under ambient alone every
-    // surface gets the same flat brightness regardless of its normal, so a
-    // sphere reads as a flat dot instead of a lit, curved ball. The flat
-    // thread stays effectively unchanged (self-emissive, thin enough that
-    // shading barely registers on it); the spheres are what pick this up.
+    // has no falloff distance at all, so it's safe from that bug.
     scene.add(new THREE.AmbientLight(0x9aa0c0, 0.35));
     const nodeLight = new THREE.DirectionalLight(0xfff3e0, 0.55);
     nodeLight.position.set(150, 420, 260);
@@ -648,7 +458,12 @@ const ThreadPyramidLogo = ({ progress = 1 }) => {
     controls.target.copy(focus);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.enableZoom = true; // minDistance/maxDistance deliberately left at OrbitControls' own defaults (0/Infinity) — no zoom limit either way
+    controls.enableZoom = true;
+    // Capped well short of the camera's own far plane (20000, see above) so
+    // zooming out can never push part of the object past it and clip —
+    // still generous enough to pull back and see the whole 8-floor stack
+    // at once with plenty of room to spare.
+    controls.maxDistance = 8000;
     controls.enablePan = true; // right-click-drag pans with a mouse; see controls.touches below for the touch equivalent
     controls.touches = {
       ONE: undefined, // freed for native page scroll rather than camera rotate
@@ -765,8 +580,10 @@ const ThreadPyramidLogo = ({ progress = 1 }) => {
     mount.addEventListener("wheel", onWheel, { passive: false, capture: true });
 
     let raf;
+    const cargoStartTime = performance.now();
     const animate = () => {
       raf = requestAnimationFrame(animate);
+      updateCargo(cargoItemsRef.current, (performance.now() - cargoStartTime) / 1000);
       controls.update();
       renderer.render(scene, camera);
     };
@@ -802,51 +619,150 @@ const ThreadPyramidLogo = ({ progress = 1 }) => {
     };
   }, []);
 
-  // Rebuilds just the ground-thread group whenever `progress` changes —
-  // the renderer/camera/controls above are untouched, so this is cheap
-  // enough to run on every scroll-driven progress update. Also reframes
-  // the camera so the currently-active scene — however tall it's grown so
-  // far — stays in view: the user's own rotation (the camera's direction
-  // relative to its target) is preserved, only the distance and the
-  // target's own height are adjusted, so this never fights a drag/orbit
-  // already in progress, it just keeps pace with growth.
+  // Builds the ground-thread group once, on mount — it's flat and static,
+  // nothing about it depends on scroll progress anymore, so there's no
+  // reason to rebuild it on every scroll tick the way the old atom/molecule
+  // geometry once needed to.
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    // React runs this effect's own cleanup (below) before re-running it on
-    // the next `progress` change, so the previous group is already removed
-    // and disposed by the time this line runs — nothing to guard against.
-    const { group: groundThread, maxActiveHeight } = buildGroundThread(progress);
+    const { group: groundThread, floorGroups } = buildGroundThread();
     scene.add(groundThread);
     groundThreadRef.current = groundThread;
 
-    const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (camera && controls) {
-      // Lerped between a tight close-up (nothing grown yet) and the
-      // original wide establishing shot (the tallest atom fully formed) —
-      // matches CAMERA_WIDE_POSITION/CAMERA_WIDE_FOCUS exactly at growth=1,
-      // so the very first frame (mount, before anything's built) and the
-      // fully-grown state both land on the same shot they always have.
-      const growth = Math.min(1, maxActiveHeight / FULL_ATOMIC_HEIGHT);
-      const targetHeight = THREE.MathUtils.lerp(CAMERA_CLOSE_FOCUS.y, CAMERA_WIDE_FOCUS.y, growth);
-      const distance = THREE.MathUtils.lerp(CAMERA_CLOSE_DISTANCE, CAMERA_WIDE_DISTANCE, growth);
-
-      const direction = camera.position.clone().sub(controls.target).normalize();
-      const newTarget = new THREE.Vector3(controls.target.x, targetHeight, controls.target.z);
-      camera.position.copy(newTarget).addScaledVector(direction, distance);
-      controls.target.copy(newTarget);
-    }
+    const visibilityGroups = floorVisibilityGroupsRef.current;
+    floorGroups.forEach((floorGroup, floorIndex) => {
+      if (!visibilityGroups[floorIndex]) visibilityGroups[floorIndex] = [];
+      visibilityGroups[floorIndex].push(floorGroup);
+    });
 
     return () => {
       scene.remove(groundThread);
       disposeGroundThread(groundThread);
       groundThreadRef.current = null;
     };
-  }, [progress]);
+  }, []);
 
-  return <div ref={mountRef} id="thread_logo_canvas" />;
+  // Builds the cargo group once, on mount too — the items themselves move
+  // every frame (see the mount effect's own animate() loop above, which
+  // reads cargoItemsRef.current fresh each tick), but the meshes/sprites
+  // that represent them are created just this once.
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    const { group: cargoGroup, items, floorGroups } = buildCargo();
+    scene.add(cargoGroup);
+    cargoItemsRef.current = items;
+
+    const visibilityGroups = floorVisibilityGroupsRef.current;
+    Object.entries(floorGroups).forEach(([floorIndex, floorGroup]) => {
+      const idx = Number(floorIndex);
+      if (!visibilityGroups[idx]) visibilityGroups[idx] = [];
+      visibilityGroups[idx].push(floorGroup);
+    });
+
+    return () => {
+      scene.remove(cargoGroup);
+      disposeCargo(cargoGroup);
+      cargoItemsRef.current = [];
+    };
+  }, []);
+
+  // Shows only the active level's own floor — every other floor's ground
+  // thread (and cargo, on the floors that have any) hidden rather than
+  // removed/rebuilt, so switching back to a previous level is instant.
+  useEffect(() => {
+    Object.entries(floorVisibilityGroupsRef.current).forEach(([floorIndex, groups]) => {
+      const visible = Number(floorIndex) === activeLevel;
+      groups.forEach((g) => { g.visible = visible; });
+    });
+  }, [activeLevel]);
+
+  // Frames the camera for whichever level is currently active — no built-in
+  // default framing anymore, only a saved preset (the control panel below)
+  // ever moves the camera, and it eases there over CAMERA_TRANSITION_MS
+  // rather than snapping instantly, so a level change reads as a deliberate
+  // camera move. With no preset saved yet, the camera simply stays wherever
+  // it already was — the previous level's own shot (or wherever it's been
+  // manually left) — rather than jumping to any guessed framing. Scrolling
+  // to a NEW level again before a transition finishes cancels the in-flight
+  // one via this effect's own cleanup and starts the next straight from
+  // wherever the camera actually is at that moment — interruptible, not
+  // queued.
+  useEffect(() => {
+    const camera = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!camera || !controls) return;
+
+    const preset = cameraPresets[activeLevel];
+    if (!preset) return;
+
+    const startPosition = camera.position.clone();
+    const startTarget = controls.target.clone();
+    const endPosition = new THREE.Vector3(preset.position.x, preset.position.y, preset.position.z);
+    const endTarget = new THREE.Vector3(preset.target.x, preset.target.y, preset.target.z);
+    const startTime = performance.now();
+    let frame;
+
+    const step = (now) => {
+      const t = Math.min(1, (now - startTime) / CAMERA_TRANSITION_MS);
+      const eased = easeInOutCubic(t);
+      camera.position.lerpVectors(startPosition, endPosition, eased);
+      controls.target.lerpVectors(startTarget, endTarget, eased);
+      if (t < 1) frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+
+    return () => cancelAnimationFrame(frame);
+  }, [activeLevel, cameraPresets]);
+
+  return (
+    <>
+      <div ref={mountRef} id="thread_logo_canvas" />
+      <div id="camera_preset_panel" className={presetPanelOpen ? "camera_preset_panel--open" : ""}>
+        <button
+          id="camera_preset_panel_toggle"
+          onClick={() => setPresetPanelOpen((open) => !open)}
+        >
+          {presetPanelOpen ? "Hide camera panel" : "Camera panel"}
+        </button>
+        {presetPanelOpen && (
+          <div id="camera_preset_panel_body">
+            <p id="camera_preset_panel_hint">
+              Scroll to a level, drag/pinch to the shot you want, then save it.
+            </p>
+            {levelLabels.map((label, i) => (
+              <div
+                key={label}
+                className={`camera_preset_row${i === activeLevel ? " camera_preset_row--active" : ""}`}
+              >
+                <span className="camera_preset_row_label">
+                  {label}
+                  {cameraPresets[i] && <span className="camera_preset_row_dot" title="Custom shot saved" />}
+                </span>
+                <div className="camera_preset_row_actions">
+                  <button
+                    disabled={i !== activeLevel}
+                    onClick={() => saveCurrentViewAsPreset(i)}
+                    title={i === activeLevel ? "Save the current view for this level" : "Scroll to this level first"}
+                  >
+                    Save current view
+                  </button>
+                  {cameraPresets[i] && (
+                    <button onClick={() => clearPresetForLevel(i)} title="Remove the saved shot">
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
 };
 
 export default ThreadPyramidLogo;

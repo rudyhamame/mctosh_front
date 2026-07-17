@@ -1,0 +1,32 @@
+/* Matches .anam_avatar's own sizing/aesthetic (see anamAvatar.css) — the two
+   providers sit in the exact same floating slot in HomeChat.jsx, so
+   swapping between them shouldn't visibly jump in size. No border, no
+   background beyond the canvas itself. */
+.local3d_avatar {
+  position: relative;
+  width: 168px;
+  height: 168px;
+  border-radius: 50%;
+  overflow: hidden;
+  filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.35));
+}
+
+.local3d_avatar canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.local3d_avatar_status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1rem;
+  text-align: center;
+  font-size: 0.62rem;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(0, 0, 0, 0.55);
+}

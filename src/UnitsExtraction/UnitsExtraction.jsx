@@ -100,7 +100,7 @@ export default function UnitsExtraction() {
           <i className="fi fi-rr-arrow-left" />
         </button>
         <div id="ue_header_titles">
-          <span id="ue_title">AMCTOSHS Units Extraction while Studying</span>
+          <span id="ue_title">MCTOSHS Units Extraction while Studying</span>
           <span id="ue_subtitle">Select a span of text to run a Linguistic Analysis on it</span>
         </div>
         <div id="ue_header_meta">

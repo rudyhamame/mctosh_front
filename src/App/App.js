@@ -8,17 +8,16 @@ import "./App.css";
 // AI needs its own instance docked inside the canvas here instead.
 const HomeChat = lazy(() => import("./HomeChat"));
 
-// The 14 navigable tools, regrouped by which of the six AMCTOSHS biological
-// scales they sit closest to — Molecule (rawest hyle/text) up through Human
-// (whole-app, whole-person) — plus a leading Hyle stage that isn't one of
-// the six scales at all: the ground threads themselves, before any of them
-// has risen into the object. Ground threads sit flat in a 2D plane (see
-// buildGroundThreads in ThreadPyramidLogo.jsx) — full of indeterminacy, no
-// length, height, location, direction, or shape resolved in 3D yet. Only
-// once a thread is studied does it rise and start becoming a Molecule; this
-// grouping drives the scroll stage below, holding the camera at the ground
-// for this first stage before the climb through the six scales begins (see
-// climbProgress in the App component).
+// The 14 navigable tools, regrouped by which of the eight MCTOSHS
+// biological/social scales they sit closest to — Atoms (the essential
+// ions) up through Society (whole population) — plus a leading Hyle stage
+// that isn't one of the eight scales at all: the ground threads
+// themselves, before any of them has risen into the object. Ground threads
+// sit flat in a 2D plane (see buildGroundThreads in ThreadPyramidLogo.jsx)
+// — full of indeterminacy, no length, height, location, direction, or
+// shape resolved in 3D yet. This grouping drives the scroll stage below,
+// holding the camera at the ground for this first stage before the climb
+// through the eight scales begins (see climbProgress in the App component).
 const LEVELS = [
   {
     label: "Hyle",
@@ -29,8 +28,8 @@ const LEVELS = [
       {
         path: "/sources",
         icon: "fi-rr-books",
-        label: "AMCTOSHS Hyle",
-        description: "Store and manage PDFs as the hyle source library for AMCTOSHS extraction and analysis",
+        label: "MCTOSHS Hyle",
+        description: "Store and manage PDFs as the hyle source library for MCTOSHS extraction and analysis",
         color: "#4fc3f7",
       },
     ],
@@ -39,7 +38,7 @@ const LEVELS = [
     label: "Atoms",
     color: "#ffb74d",
     letter: "A",
-    blurb: "Before it's a molecule, it's an atom: protons and electrons accumulate one at a time right where the thread first begins to rise, out of the raw ground itself.",
+    blurb: "The essential ions — potassium, sodium, calcium, magnesium, chloride, hydrogen, iron, zinc — driving along the thread, trapped flat in their own 2D floor.",
     cards: [],
   },
   {
@@ -58,7 +57,7 @@ const LEVELS = [
       {
         path: "/units-extraction",
         icon: "fi-rr-book-open-reader",
-        label: "AMCTOSHS Units Extraction while Studying",
+        label: "MCTOSHS Units Extraction while Studying",
         description: "Read a source and select any span of text to run a linguistic analysis on it",
         color: "#b39ddb",
       },
@@ -100,7 +99,7 @@ const LEVELS = [
       {
         path: "/draft",
         icon: "fi-rr-notebook",
-        label: "AMCTOSHS Draft",
+        label: "MCTOSHS Draft",
         description: "A running scratchpad for notes you find while reading — autosaves as you write",
         color: "#ffca28",
       },
@@ -156,7 +155,7 @@ const LEVELS = [
       {
         path: "/social-media-control",
         icon: "fi-rr-megaphone",
-        label: "AMCTOSHS Social Media Control",
+        label: "MCTOSHS Social Media Control",
         description: "Plan campaigns, shape captions, review post drafts, and prepare Instagram publishing workflows",
         color: "#ff8a65",
       },
@@ -174,9 +173,23 @@ const LEVELS = [
         description: "Control prompts, AI providers, and app theme",
         color: "#78909c",
       },
+      {
+        path: "/voice-profile",
+        icon: "fi-rr-microphone",
+        label: "Voice Profiles",
+        description: "Record or upload your own voice for the local 3D avatar's cloned-voice speech",
+        color: "#ab47bc",
+      },
     ],
   },
+  {
+    label: "Societies",
+    color: "#ff8a65",
+    letter: "S",
+    cards: [],
+  },
 ];
+const LEVEL_LABELS = LEVELS.map((level) => level.label);
 
 const App = ({ onLogout }) => {
   const navigate = useNavigate();
@@ -218,7 +231,11 @@ const App = ({ onLogout }) => {
       <div id="app_home_grid" ref={scrollRef} onScroll={handleScroll}>
         <div id="app_scroll_track" style={{ height: `${trackVh}vh` }}>
           <div id="app_scroll_stage">
-            <ThreadPyramidLogo progress={climbProgress} />
+            <ThreadPyramidLogo
+              progress={climbProgress}
+              activeLevel={activeLevel}
+              levelLabels={LEVEL_LABELS}
+            />
 
             <button id="app_logout_btn" onClick={onLogout}>Logout</button>
 
@@ -227,7 +244,7 @@ const App = ({ onLogout }) => {
             </Suspense>
 
             <div id="app_scroll_hint" className={progress > 0.03 ? "app_scroll_hint--hidden" : ""}>
-              <span id="app_scroll_hint_title">AMCTOSHS</span>
+              <span id="app_scroll_hint_title">MCTOSHS</span>
               <span id="app_scroll_hint_sub">Scroll to study the hyle and climb the six biological scales ↓</span>
             </div>
 
