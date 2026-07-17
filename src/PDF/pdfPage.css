@@ -1375,6 +1375,14 @@ html.theme-light #pdf_preview_scroll {
   opacity: 0.6;
 }
 
+#pdf_toolbar .annot_trigger {
+  padding: 0.3rem 0.45rem;
+}
+
+#pdf_toolbar .annot_trigger_label {
+  display: none;
+}
+
 .annot_swatch {
   display: inline-block;
   width: 16px;

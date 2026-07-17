@@ -20,9 +20,9 @@ const PDF_TYPE_LABEL = {
 };
 
 export const PDF_TYPE_ICON = {
-  "text-based": "fi-rr-check-circle",
-  "mixed":      "fi-rr-triangle-warning",
-  "scanned":    "fi-rr-image",
+  "text-based": "bx bx-check-circle",
+  "mixed":      "bx bx-error",
+  "scanned":    "bx bx-image",
 };
 
 const CARDS = [
@@ -77,19 +77,19 @@ const HYLE_TYPE_LABELS = {
 };
 
 const ANNOT_TOOLS = [
-  { key: "navigator",     icon: "fi-rr-arrows-alt",           label: "Navigator",     hasSize: false },
-  { key: "select",        icon: "fi-rr-cursor-text",          label: "Select Text",   hasSize: false },
-  { key: "highlight",     icon: "fi-rr-highlighter",          label: "Highlight",     hasSize: true  },
-  { key: "underline",     icon: "fi-rr-underline",            label: "Underline",     hasSize: false },
-  { key: "strikethrough", icon: "fi-rr-strikethrough",        label: "Strikethrough", hasSize: false },
-  { key: "pen",           icon: "fi-rr-pencil",               label: "Pen",           hasSize: true  },
-  { key: "line",          icon: "fi-rr-minus",                label: "Line",          hasSize: false },
-  { key: "arrow",         icon: "fi-rr-arrow-small-right",    label: "Arrow",         hasSize: true  },
-  { key: "rect",          icon: "fi-rr-rectangle-horizontal", label: "Rectangle",     hasSize: false },
-  { key: "circle",        icon: "fi-rr-circle",               label: "Ellipse",       hasSize: false },
-  { key: "text",          icon: "fi-rr-text",                 label: "Text",          hasSize: false },
-  { key: "drawText",      icon: "fi-rr-sparkles",             label: "Draw to Text",  hasSize: false },
-  { key: "eraser",        icon: "fi-rr-eraser",               label: "Eraser",        hasSize: true  },
+  { key: "navigator",     icon: "bx bx-move",            label: "Navigator",     hasSize: false },
+  { key: "select",        icon: "bx bx-selection",       label: "Select Text",   hasSize: false },
+  { key: "highlight",     icon: "bx bx-highlight",       label: "Highlight",     hasSize: true  },
+  { key: "underline",     icon: "bx bx-underline",       label: "Underline",     hasSize: false },
+  { key: "strikethrough", icon: "bx bx-strikethrough",   label: "Strikethrough", hasSize: false },
+  { key: "pen",           icon: "bx bx-pencil",          label: "Pen",           hasSize: true  },
+  { key: "line",          icon: "bx bx-minus",           label: "Line",          hasSize: false },
+  { key: "arrow",         icon: "bx bx-right-arrow-alt", label: "Arrow",         hasSize: true  },
+  { key: "rect",          icon: "bx bx-rectangle",       label: "Rectangle",     hasSize: false },
+  { key: "circle",        icon: "bx bx-circle",          label: "Ellipse",       hasSize: false },
+  { key: "text",          icon: "bx bx-text",            label: "Text",          hasSize: false },
+  { key: "drawText",      icon: "bx bx-magic-wand",      label: "Draw to Text",  hasSize: false },
+  { key: "eraser",        icon: "bx bx-eraser",          label: "Eraser",        hasSize: true  },
 ];
 
 // Open Color (yeun.github.io/open-color) — the standard "professional" web
@@ -132,11 +132,11 @@ const DEFAULT_ANNOT_TOOL_COLORS = {
 };
 
 const ANNOT_HISTORY_META = {
-  add:   { icon: "fi-rr-plus",       verb: "Added" },
-  undo:  { icon: "fi-rr-undo",       verb: "Undid" },
-  redo:  { icon: "fi-rr-redo",       verb: "Redid" },
-  erase: { icon: "fi-rr-eraser",     verb: "Erased" },
-  clear: { icon: "fi-rr-trash",      verb: "Cleared" },
+  add:   { icon: "bx bx-plus",   verb: "Added" },
+  undo:  { icon: "bx bx-undo",   verb: "Undid" },
+  redo:  { icon: "bx bx-redo",   verb: "Redid" },
+  erase: { icon: "bx bx-eraser", verb: "Erased" },
+  clear: { icon: "bx bx-trash",  verb: "Cleared" },
 };
 
 const MIN_ZOOM = 0.25;
@@ -3880,14 +3880,24 @@ const PDFPage = ({
     annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
     annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
     null;
+  const toolbarWidth = toolbarRef.current?.offsetWidth || 0;
+  const toolbarHeight = toolbarRef.current?.offsetHeight || 0;
+  const centeredToolbarLeft = toolbarBounds.left + Math.max(
+    PDF_FLOATING_TOOLBAR_MARGIN,
+    (toolbarBounds.width - toolbarWidth) / 2,
+  );
+  const centeredToolbarTop = toolbarBounds.top + Math.max(
+    PDF_FLOATING_TOOLBAR_MARGIN,
+    (toolbarBounds.height - toolbarHeight) / 2,
+  );
   const toolbarStyle =
     toolbarDock.edge === "top"
-      ? { top: toolbarBounds.top + PDF_FLOATING_TOOLBAR_MARGIN, left: toolbarBounds.left + toolbarDock.offset }
+      ? { top: toolbarBounds.top - 1, left: centeredToolbarLeft }
       : toolbarDock.edge === "bottom"
-        ? { top: toolbarBounds.top + toolbarBounds.height - PDF_FLOATING_TOOLBAR_MARGIN, left: toolbarBounds.left + toolbarDock.offset, transform: "translateY(-100%)" }
+        ? { top: toolbarBounds.top + toolbarBounds.height - PDF_FLOATING_TOOLBAR_MARGIN - toolbarHeight, left: centeredToolbarLeft }
         : toolbarDock.edge === "left"
-          ? { top: toolbarBounds.top + toolbarDock.offset, left: toolbarBounds.left + PDF_FLOATING_TOOLBAR_MARGIN }
-          : { top: toolbarBounds.top + toolbarDock.offset, left: toolbarBounds.left + toolbarBounds.width - PDF_FLOATING_TOOLBAR_MARGIN, transform: "translateX(-100%)" };
+          ? { top: centeredToolbarTop, left: toolbarBounds.left + PDF_FLOATING_TOOLBAR_MARGIN }
+          : { top: centeredToolbarTop, left: toolbarBounds.left + toolbarBounds.width - PDF_FLOATING_TOOLBAR_MARGIN - toolbarWidth };
 
   return (
     <div
@@ -3923,9 +3933,9 @@ const PDFPage = ({
                 className={`annot_trigger${toolActive ? " annot_trigger--active" : ""}`}
                 onClick={() => { setToolsMenuOpen((o) => !o); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
               >
-                <i className={`fi ${activeToolMeta?.icon || "fi-rr-arrows-alt"}`} />
+                <i className={activeToolMeta?.icon || "bx bx-move"} />
                 <span className="annot_trigger_label">{activeToolMeta?.label || "Navigator"}</span>
-                <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+                <i className="bx bx-chevron-down annot_trigger_chevron" />
               </button>
               {toolsMenuOpen && (
                 <div className="annot_dd annot_dd--tools">
@@ -3936,7 +3946,7 @@ const PDFPage = ({
                       className={`annot_dd_item${annotTool === key ? " annot_dd_item--active" : ""}`}
                       onClick={() => { setAnnotTool(key); setToolsMenuOpen(false); }}
                     >
-                      <i className={`fi ${icon}`} />
+                      <i className={icon} />
                       <span>{label}</span>
                     </button>
                   ))}
@@ -3954,7 +3964,7 @@ const PDFPage = ({
                 >
                   <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
                   <span className="annot_trigger_label">Ink</span>
-                  <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+                  <i className="bx bx-chevron-down annot_trigger_chevron" />
                 </button>
                 {colorMenuOpen && (
                   <div className="annot_dd annot_dd--colors">
@@ -4007,9 +4017,9 @@ const PDFPage = ({
                   onClick={() => { setPenMenuOpen((o) => !o); setToolsMenuOpen(false); setColorMenuOpen(false); setHighlightMenuOpen(false); }}
                   title="Pen settings"
                 >
-                  <i className="fi fi-rr-settings-sliders" />
+                  <i className="bx bx-slider-alt" />
                   <span className="annot_trigger_label">Stroke shaping</span>
-                  <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+                  <i className="bx bx-chevron-down annot_trigger_chevron" />
                 </button>
                 {penMenuOpen && (
                   <div className="annot_dd annot_dd--pen">
@@ -4127,9 +4137,9 @@ const PDFPage = ({
                   onClick={() => { setHighlightMenuOpen((o) => !o); setToolsMenuOpen(false); setColorMenuOpen(false); setPenMenuOpen(false); }}
                   title="Highlight settings"
                 >
-                  <i className="fi fi-rr-marker" />
+                  <i className="bx bx-highlight" />
                   <span className="annot_trigger_label">Highlight</span>
-                  <i className="fi fi-rr-angle-small-down annot_trigger_chevron" />
+                  <i className="bx bx-chevron-down annot_trigger_chevron" />
                 </button>
                 {highlightMenuOpen && (
                   <div className="annot_dd annot_dd--highlight">
@@ -4204,56 +4214,6 @@ const PDFPage = ({
 
             </>
           )}
-          {currentSourceIdRef.current && (
-            <button
-              type="button"
-              id="pdf_text_extract_btn"
-              onClick={openMarkdownAsDraft}
-              disabled={pageMdBusy || mdDraftBusy}
-              title={hasStoredMarkdown ? "Text Extraction" : "Text Extraction — this document hasn't been extracted yet, this will do that first"}
-            >
-              <i className={`fi ${mdDraftBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-document"}`} />
-            </button>
-          )}
-          {currentSourceIdRef.current && (
-            <div className="annot_dd_wrap" ref={actionsMenuRef}>
-              <button
-                type="button"
-                id="pdf_linguistic_btn"
-                onClick={() => { setRangeFrom(pageNum); setRangeTo(pageNum); setRangeAll(false); setRangePickerAction("linguistic"); }}
-                disabled={pageMdBusy || mdDraftBusy}
-                title="Linguistic Analysis"
-              >
-                <i className="fi fi-rr-language" />
-              </button>
-              {mdDraftError && <span className="pdf_actions_error" title={mdDraftError}>⚠ {mdDraftError}</span>}
-              {rangePickerAction && (
-                <div className="annot_dd" id="pdf_range_picker">
-                  <div id="pdf_range_picker_title">Analyze Language</div>
-                  <label id="pdf_range_all_row">
-                    <input type="checkbox" checked={rangeAll} onChange={(e) => setRangeAll(e.target.checked)} />
-                    All Pages ({pageCount})
-                  </label>
-                  {!rangeAll && (
-                    <div id="pdf_range_inputs">
-                      <label>
-                        From
-                        <input type="number" min={1} max={pageCount} value={rangeFrom} onChange={(e) => setRangeFrom(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
-                      </label>
-                      <label>
-                        To
-                        <input type="number" min={1} max={pageCount} value={rangeTo} onChange={(e) => setRangeTo(Math.max(1, Math.min(pageCount, Number(e.target.value) || 1)))} />
-                      </label>
-                    </div>
-                  )}
-                  <div id="pdf_range_actions">
-                    <button type="button" className="annot_trigger" onClick={() => setRangePickerAction(null)}>Cancel</button>
-                    <button type="button" className="annot_trigger annot_trigger--active" onClick={confirmRangePicker}>Analyze</button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
           {/* Hyles toggle + extraction controls */}
           {pdfDoc && !selectionOnly && !hideHyleControls && <>
             <button
@@ -4297,7 +4257,7 @@ const PDFPage = ({
               instead — see onPdfTypeChange — so it isn't duplicated here. */}
           {pdfType && !hideHyleControls && (
             <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>
-              <i className={`fi ${PDF_TYPE_ICON[pdfType]}`} />
+                <i className={PDF_TYPE_ICON[pdfType]} />
               {PDF_TYPE_LABEL[pdfType]}
             </span>
           )}
@@ -4310,7 +4270,7 @@ const PDFPage = ({
             <div id="pdf_annot_right_group">
               <div id="pdf_annot_actions">
                 {pdfDoc && !selectionOnly && (
-                  <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="fi fi-rr-undo" /></button>
+                  <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="bx bx-undo" /></button>
                 )}
                 {annotHistory.length > 0 && (
                   <button
@@ -4318,11 +4278,11 @@ const PDFPage = ({
                     onClick={() => setAnnotHistoryOpen((v) => !v)}
                     title="Annotation History — every step taken this session"
                   >
-                    <i className="fi fi-rr-time-past" />
+                    <i className="bx bx-history" />
                   </button>
                 )}
                 {pdfDoc && !selectionOnly && (
-                  <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="fi fi-rr-redo" /></button>
+                  <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="bx bx-redo" /></button>
                 )}
               </div>
             </div>
@@ -4340,30 +4300,30 @@ const PDFPage = ({
             <span id="pdf_selection_bar_word" title={manualSelection.text}>{manualSelection.text}</span>
             <div id="pdf_selection_bar_actions">
               <button type="button" onClick={() => runSelectionTool("translate")} disabled={Boolean(selectionToolBusy)}>
-                <i className={`fi ${selectionToolBusy === "translate" ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-language"}`} />
+                <i className={selectionToolBusy === "translate" ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-globe"} />
                 Translate to {localStorage.getItem("mctosh_pdf_translate_lang") || "English"}
               </button>
               <button type="button" onClick={() => runSelectionTool("define")} disabled={Boolean(selectionToolBusy)}>
-                <i className={`fi ${selectionToolBusy === "define" ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-book-alt"}`} />
+                <i className={selectionToolBusy === "define" ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-book"} />
                 Definition
               </button>
               <button type="button" onClick={() => runSelectionTool("linguistic_check")} disabled={Boolean(selectionToolBusy)}>
-                <i className={`fi ${selectionToolBusy === "linguistic_check" ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-diagram-project"}`} />
+                <i className={selectionToolBusy === "linguistic_check" ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-git-branch"} />
                 Linguistic Structure Check
               </button>
               <span id="pdf_selection_bar_sep" />
               <button type="button" onClick={() => addSelectionAsHyle("entities")} title="Add as Entity Schema">
-                <i className="fi fi-rr-add" /> EnS
+                <i className="bx bx-plus" /> EnS
               </button>
               <button type="button" onClick={() => addSelectionAsHyle("traces")} title="Add as Entity Schema Trace">
-                <i className="fi fi-rr-add" /> EnST
+                <i className="bx bx-plus" /> EnST
               </button>
               <button type="button" onClick={() => addSelectionAsHyle("traces", { kind: "value" })} title="Add as Entity Schema Trace Value">
-                <i className="fi fi-rr-add" /> EnSTV
+                <i className="bx bx-plus" /> EnSTV
               </button>
             </div>
             <button type="button" id="pdf_selection_bar_close" onClick={() => setManualSelection(null)} title="Dismiss">
-              <i className="fi fi-rr-cross-small" />
+              <i className="bx bx-x" />
             </button>
           </div>
           {(selectionToolResult || selectionToolError) && (
@@ -4416,7 +4376,7 @@ const PDFPage = ({
                   disabled={pageMdBusy || pageMdDeleteBusy || Boolean(pageMdRange?.all)}
                   title={pageMdRange?.all ? "Every page is already loaded" : "Load every page's Markdown so you can page through the whole document without re-fetching"}
                 >
-                  <i className="fi fi-rr-layers" /> {pageMdRange?.all ? "Loaded" : "All Pages"}
+                  <i className="bx bx-layer" /> {pageMdRange?.all ? "Loaded" : "All Pages"}
                 </button>
                 <button
                   type="button"
@@ -4425,7 +4385,7 @@ const PDFPage = ({
                   disabled={pageMdBusy || pageMdDeleteBusy || !pageMdText}
                   title="Delete cached markdown for the currently displayed page"
                 >
-                  <i className={`fi ${pageMdDeleteBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-trash"}`} /> {pageMdDeleteBusy ? "Deleting…" : "Delete Page"}
+                  <i className={pageMdDeleteBusy ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-trash"} /> {pageMdDeleteBusy ? "Deleting…" : "Delete Page"}
                 </button>
                 <button
                   type="button"
@@ -4434,7 +4394,7 @@ const PDFPage = ({
                   disabled={pageMdBusy || pageMdDeleteBusy || !pageMdText}
                   title="Delete every cached markdown page for this source"
                 >
-                  <i className={`fi ${pageMdDeleteBusy ? "fi-rr-spinner pdf_icon_spin" : "fi-rr-trash"}`} /> {pageMdDeleteBusy ? "Deleting…" : "Delete All"}
+                  <i className={pageMdDeleteBusy ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-trash"} /> {pageMdDeleteBusy ? "Deleting…" : "Delete All"}
                 </button>
               </div>
             )}
@@ -4446,7 +4406,7 @@ const PDFPage = ({
                   onClick={() => showMarkdownPageInPdf("words")}
                   title="Show this markdown page in the PDF viewer and highlight the counted words there"
                 >
-                  <i className="fi fi-rr-text" /> {mdStats.words} words
+                  <i className="bx bx-text" /> {mdStats.words} words
                 </button>
                 <button
                   type="button"
@@ -4454,7 +4414,7 @@ const PDFPage = ({
                   onClick={() => showMarkdownPageInPdf("chars")}
                   title="Show this markdown page in the PDF viewer and highlight the counted characters there"
                 >
-                  <i className="fi fi-rr-keyboard" /> {mdStats.chars} characters
+                  <i className="bx bx-keyboard" /> {mdStats.chars} characters
                 </button>
                 <button
                   type="button"
@@ -4463,7 +4423,7 @@ const PDFPage = ({
                   onClick={handleVoiceSelect}
                   title="Select text by voice — say a word or phrase to find and highlight it"
                 >
-                  <i className="fi fi-rr-microphone" /> Voice
+                  <i className="bx bx-microphone" /> Voice
                 </button>
                 <div id="pdf_md_font_controls">
                   <button type="button" onClick={() => setMdFontScale((s) => Math.max(0.7, +(s - 0.1).toFixed(1)))} title="Smaller text" disabled={mdFontScale <= 0.7}>A−</button>
@@ -4518,7 +4478,7 @@ const PDFPage = ({
                 title="Clear all annotations on this page"
                 disabled={!(annotations[pageNum]?.length > 0)}
               >
-                <i className="fi fi-rr-trash" /> Clear page
+                <i className="bx bx-trash" /> Clear page
               </button>
               <button id="pdf_annot_history_close" onClick={() => setAnnotHistoryOpen(false)} title="Close">✕</button>
             </div>
@@ -4528,7 +4488,7 @@ const PDFPage = ({
                 const toolLabel = ANNOT_TOOLS.find((t) => t.key === h.type)?.label || (h.type === "text" ? "Text" : h.type);
                 return (
                   <div key={h.id} className="anh_row">
-                    <i className={`fi ${meta.icon} anh_icon`} />
+                    <i className={`${meta.icon} anh_icon`} />
                     <div className="anh_main">
                       <span className="anh_label">
                         {meta.verb}{h.action === "clear" ? ` ${h.count} item${h.count === 1 ? "" : "s"}` : h.action === "erase" ? ` ${h.count} mark${h.count === 1 ? "" : "s"}` : toolLabel ? ` ${toolLabel}` : ""}

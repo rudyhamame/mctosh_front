@@ -91,18 +91,18 @@ const TabStrip = ({ tabs, setTabs, activeId, setActiveId, tabTypes, splitModeOn,
                 className="pdfw_tab_check"
                 onClick={(e) => { e.stopPropagation(); onToggleCheck(t.id); }}
               >
-                <i className={`fi ${checkedIds.includes(t.id) ? "fi-sr-checkbox" : "fi-rr-square"}`} />
+                <i className={checkedIds.includes(t.id) ? "bxf bx-checkbox-checked" : "bx bx-checkbox"} />
               </span>
             )}
             <span className="pdfw_tab_label">{t.name}</span>
             {tabTypes?.[t.id] && (
               <i
-                className={`fi ${PDF_TYPE_ICON[tabTypes[t.id]]} pdfw_tab_type`}
+                className={`${PDF_TYPE_ICON[tabTypes[t.id]]} pdfw_tab_type`}
                 title={tabTypes[t.id]}
               />
             )}
             <span className="pdfw_tab_close" onClick={(e) => closeTab(e, t.id)}>
-              <i className="fi fi-rr-cross-small" />
+              <i className="bx bx-x" />
             </span>
           </button>
         ))}
@@ -117,7 +117,7 @@ const TabStrip = ({ tabs, setTabs, activeId, setActiveId, tabTypes, splitModeOn,
           the spec doesn't allow to survive next to overflow-x: auto). */}
       <div className="pdfw_tab_add_wrap" ref={pickerRef}>
         <button className="pdfw_tab_add" onClick={() => setPickerOpen((v) => !v)} title="Open a document in a new tab">
-          <i className="fi fi-rr-add" />
+          <i className="bx bx-plus" />
         </button>
         {pickerOpen && (
           <div className="pdfw_picker">
@@ -163,7 +163,7 @@ const PaneBody = ({ tab, onTabTypeChange }) => (
       />
     ) : (
       <div className="pdfw_pane_empty">
-        <i className="fi fi-rr-file-pdf" />
+        <i className="bxf bx-file-pdf" />
         <p>No document open — click + to open one</p>
       </div>
     )}
@@ -240,7 +240,7 @@ const PDFReaderWorkspace = () => {
     <div id="pdfw_root">
       <div id="pdfw_header">
         <button id="pdfw_back" onClick={() => navigate("/home")} title="Back to Home">
-          <i className="fi fi-rr-arrow-left" />
+          <i className="bx bx-arrow-back" />
         </button>
         <TabStrip
           tabs={tabs}
@@ -259,7 +259,7 @@ const PDFReaderWorkspace = () => {
             onClick={toggleSplitMode}
             title={splitModeOn ? "Stop selecting tabs to split" : "Check two or more tabs to view their pages side by side"}
           >
-            <i className={`fi ${splitModeOn ? "fi-rr-square" : "fi-rr-columns-3"}`} />
+            <i className={splitModeOn ? "bx bx-checkbox" : "bx bx-columns"} />
             {splitModeOn ? "Done" : "Split view"}
           </button>
         )}
