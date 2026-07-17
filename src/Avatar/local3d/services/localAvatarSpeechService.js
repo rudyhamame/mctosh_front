@@ -3,12 +3,20 @@
 // from. Two real paths, chosen per-call based on what the provider actually
 // returned:
 //
-//   1. Provider returned a real audioUrl (a hosted TTS result, e.g. a
-//      future working AzureTTSProvider) — played through an <audio>
-//      element wired into a real Web Audio AnalyserNode, so amplitude is
-//      genuine RMS of the actual output. If the provider also supplied a
-//      viseme timeline, that drives the mouth shape directly instead
-//      (more accurate than amplitude); amplitude is the fallback.
+//   1. Provider returned a real audioUrl (a hosted TTS result, e.g.
+//      OpenVoiceClone) — fetched and decoded into an AudioBuffer, played via
+//      an AudioBufferSourceNode wired into a real Web Audio AnalyserNode, so
+//      amplitude is genuine RMS of the actual output. If the provider also
+//      supplied a viseme timeline, that drives the mouth shape directly
+//      instead (more accurate than amplitude); amplitude is the fallback.
+//      Deliberately NOT an <audio> element routed through
+//      createMediaElementSource() — that combination is a long-documented
+//      source of silent-playback bugs specifically on Safari/WebKit (iOS in
+//      particular), even with crossOrigin set and correct CORS headers on
+//      the resource. fetch()+decodeAudioData()+AudioBufferSourceNode only
+//      needs CORS for the fetch() itself (which is the well-supported,
+//      reliable path everywhere, including iOS Safari) and never touches
+//      that WebKit-specific quirk at all.
 //   2. Provider returned no audioUrl (BrowserTTSProvider's only case, since
 //      the Web Speech API exposes no accessible audio buffer in any
 //      browser) — speechSynthesis.speak() is called directly here, and
@@ -18,8 +26,21 @@
 //      speechSynthesis output — it's the standard workaround other
 //      browser-TTS-driven avatars use too.
 export const createLocalAvatarSpeechService = (ttsProvider) => {
-  let audioEl = null;
-  let audioCtx = null;
+  let bufferSource = null; // current AudioBufferSourceNode, if a real-audioUrl reply is playing
+  let currentBuffer = null; // its decoded AudioBuffer — kept for pause/resume-by-offset
+  let playStartedAtCtxTime = 0; // audioCtx.currentTime when the current segment started
+  let pausedOffset = 0; // seconds into currentBuffer we'd resume from
+  // One AudioContext for the whole service's lifetime, not one per speak()
+  // call. A context created fresh right as an async chat reply arrives
+  // (not inside a real click/keypress handler) is exactly the case
+  // browsers' autoplay policy targets — resume() can silently reject and
+  // leave it "suspended" forever, producing dead-silent output with no
+  // visible error. A single context created lazily on the FIRST speak()
+  // call — which in practice always follows the user's own action of
+  // sending a message — only has to clear that bar once; every later
+  // speak() reuses the same (by then already-running) context instead of
+  // re-litigating the autoplay check from scratch.
+  let sharedAudioCtx = null;
   let analyser = null;
   let rafId = null;
   let visemeTimers = [];
@@ -31,6 +52,11 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
   // not just audio that already started playing, or an obsolete reply can
   // finish speaking over a newer one (see Local3DAvatarView.jsx's endMessage).
   let currentAbortController = null;
+
+  const getAudioContext = () => {
+    if (!sharedAudioCtx) sharedAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return sharedAudioCtx;
+  };
 
   const stopAmplitudeLoop = () => {
     if (rafId) cancelAnimationFrame(rafId);
@@ -45,16 +71,15 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
   const teardownAudio = () => {
     stopAmplitudeLoop();
     clearVisemeTimers();
-    if (audioEl) {
-      audioEl.pause();
-      audioEl.src = "";
-      audioEl = null;
+    if (bufferSource) {
+      bufferSource.onended = null; // about to stop it ourselves — not a natural finish
+      try { bufferSource.stop(); } catch { /* already stopped/never started — fine */ }
+      bufferSource = null;
     }
-    if (audioCtx) {
-      audioCtx.close().catch(() => {});
-      audioCtx = null;
-      analyser = null;
-    }
+    currentBuffer = null;
+    pausedOffset = 0;
+    // sharedAudioCtx is deliberately NOT closed here — see getAudioContext.
+    analyser = null;
   };
 
   const runAmplitudeLoop = () => {
@@ -74,52 +99,72 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     tick();
   };
 
-  const speakViaAudioUrl = (result) => new Promise((resolve) => {
-    audioEl = new Audio();
-    // Must be set BEFORE .src (crossOrigin only affects requests made after
-    // it's applied) — result.audioUrl is a cross-origin Cloudinary URL, and
-    // createMediaElementSource() below routes 100% of playback through the
-    // Web Audio graph. Without this, browsers silently zero the output of a
-    // tainted cross-origin source (to block audio fingerprinting) — the
-    // element still reports "playing" and onended still fires, but nothing
-    // reaches the speakers. Requires the resource to actually send
-    // Access-Control-Allow-Origin (Cloudinary's res.cloudinary.com CDN
-    // delivery domain does; its Admin API download domain does not — see
-    // back/routes/TTSAPI.js's own comment on using secure_url, not that).
-    audioEl.crossOrigin = "anonymous";
-    audioEl.src = result.audioUrl;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const source = audioCtx.createMediaElementSource(audioEl);
-    analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 256;
-    source.connect(analyser);
-    analyser.connect(audioCtx.destination);
+  const speakViaAudioUrl = (result, signal) => new Promise((resolve, reject) => {
+    const audioCtx = getAudioContext();
 
-    if (result.visemes?.length) {
-      visemeTimers = result.visemes.map((v) =>
-        setTimeout(() => onVisemeCb?.(v.viseme), Math.max(0, v.time)));
-    } else {
-      runAmplitudeLoop();
-    }
+    const startPlayback = (decoded) => {
+      if (signal?.aborted) { resolve(); return; } // superseded while we were fetching/decoding
+      currentBuffer = decoded;
+      pausedOffset = 0;
 
-    const finish = () => {
-      teardownAudio();
-      onVisemeCb?.("mouthClose");
-      resolve();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.connect(audioCtx.destination);
+
+      if (result.visemes?.length) {
+        visemeTimers = result.visemes.map((v) =>
+          setTimeout(() => onVisemeCb?.(v.viseme), Math.max(0, v.time)));
+      } else {
+        runAmplitudeLoop();
+      }
+
+      const finish = () => {
+        teardownAudio();
+        onVisemeCb?.("mouthClose");
+        resolve();
+      };
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = decoded;
+      source.connect(analyser);
+      source.onended = finish;
+      bufferSource = source;
+      playStartedAtCtxTime = audioCtx.currentTime;
+
+      // A suspended context produces dead-silent output with no error and
+      // no visible symptom other than "nothing happened" — logged
+      // explicitly (not swallowed) so a resume failure is actually
+      // diagnosable instead of indistinguishable from every other kind of
+      // silent failure.
+      audioCtx.resume()
+        .then(() => {
+          if (audioCtx.state !== "running") {
+            console.warn("[Local3DAvatar] AudioContext did not reach 'running' after resume() — state:", audioCtx.state, "(likely blocked by the browser's autoplay policy; playback will be silent until the page gets a direct user gesture, e.g. a tap on the chat panel)");
+          }
+        })
+        .catch((err) => {
+          console.warn("[Local3DAvatar] AudioContext.resume() failed — playback will be silent:", err);
+        });
+      try {
+        source.start(0);
+      } catch (err) {
+        console.error("[Local3DAvatar] AudioBufferSourceNode.start() failed:", err);
+        finish();
+      }
     };
-    audioEl.onended = finish;
-    audioEl.onerror = finish;
-    // A freshly-created AudioContext can start "suspended" (autoplay
-    // policy) — this speak() call happens inside an async chat-response
-    // callback, not a direct click handler, so it isn't guaranteed to count
-    // as the kind of user-gesture continuation that auto-resumes a context.
-    // Left unresumed, playback proceeds with zero audible output and no
-    // error, same symptom as the crossOrigin bug above.
-    audioCtx.resume().catch(() => {});
-    audioEl.play().catch((err) => {
-      console.error("[Local3DAvatar] audio playback failed:", err);
-      finish();
-    });
+
+    fetch(result.audioUrl, { signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Fetching synthesized audio failed (${res.status})`);
+        return res.arrayBuffer();
+      })
+      .then((bytes) => audioCtx.decodeAudioData(bytes))
+      .then(startPlayback)
+      .catch((err) => {
+        if (err?.name === "AbortError") { resolve(); return; } // superseded — not a real failure
+        console.error("[Local3DAvatar] failed to fetch/decode synthesized audio:", err);
+        reject(err);
+      });
   });
 
   const speakViaBrowserSynthesis = (result) => new Promise((resolve) => {
@@ -178,7 +223,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       if (signal.aborted) return; // synthesis finished but was superseded before playback could start
       onPlaybackStart?.();
       if (result.audioUrl) {
-        await speakViaAudioUrl(result);
+        await speakViaAudioUrl(result, signal);
       } else {
         await speakViaBrowserSynthesis(result);
       }
@@ -193,12 +238,56 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       onVisemeCb?.("mouthClose");
     },
     pause() {
-      if (audioEl) audioEl.pause();
-      else window.speechSynthesis?.pause();
+      if (bufferSource && sharedAudioCtx) {
+        pausedOffset += sharedAudioCtx.currentTime - playStartedAtCtxTime;
+        bufferSource.onended = null;
+        try { bufferSource.stop(); } catch { /* already stopped — fine */ }
+        bufferSource = null;
+      } else {
+        window.speechSynthesis?.pause();
+      }
     },
     resume() {
-      if (audioEl) audioEl.play().catch(() => {});
-      else window.speechSynthesis?.resume();
+      // AudioBufferSourceNode has no native pause/resume (start() can only
+      // ever be called once per node) — re-created from the same decoded
+      // buffer at the offset pause() recorded, rather than restarting from
+      // the beginning.
+      if (currentBuffer && sharedAudioCtx && analyser) {
+        const source = sharedAudioCtx.createBufferSource();
+        source.buffer = currentBuffer;
+        source.connect(analyser);
+        source.onended = () => { teardownAudio(); onVisemeCb?.("mouthClose"); };
+        bufferSource = source;
+        playStartedAtCtxTime = sharedAudioCtx.currentTime;
+        source.start(0, Math.min(pausedOffset, currentBuffer.duration));
+      } else {
+        window.speechSynthesis?.resume();
+      }
+    },
+    // Must be called synchronously inside a real user gesture (a click/tap
+    // event handler, not an async callback) — same rule and same reason as
+    // HomeChat.jsx's own unlockSpeech() for the Web Speech API, just for
+    // the separate AudioContext gate a network-backed provider
+    // (OpenVoiceClone) actually uses. Without this, speak() only ever
+    // creates/resumes the shared AudioContext from inside an async
+    // chat-response callback, which iOS Safari in particular does NOT
+    // count as gesture-adjacent — resume() silently stays "suspended"
+    // forever, and playback is dead silent with no error.
+    unlockAudio() {
+      const ctx = getAudioContext();
+      ctx.resume().catch(() => {});
+      // Also unlocks a silent AudioBufferSourceNode blip through the same
+      // context — belt-and-suspenders alongside resume() above, since some
+      // WebKit versions have historically tied the "is audio unlocked"
+      // flag to an actual node having been started inside a gesture, not
+      // just resume() being called.
+      try {
+        const blip = ctx.createBuffer(1, 1, ctx.sampleRate);
+        const src = ctx.createBufferSource();
+        src.buffer = blip;
+        src.connect(ctx.destination);
+        src.start(0);
+      } catch { /* best-effort — resume() above is the primary unlock */ }
     },
   };
 };

@@ -25,6 +25,7 @@ const AvatarContainer = forwardRef((_props, ref) => {
     resume: () => innerRef.current?.resume?.(),
     stop: () => innerRef.current?.stop?.(),
     setMuted: (muted) => innerRef.current?.setMuted?.(muted),
+    unlockAudio: () => innerRef.current?.unlockAudio?.(),
     destroy: () => innerRef.current?.destroy?.(),
   }), [provider]);
 

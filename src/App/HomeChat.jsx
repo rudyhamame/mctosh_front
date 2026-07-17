@@ -355,6 +355,11 @@ const HomeChat = () => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!input.trim()) return;
+    // Synchronous, inside the real submit gesture — cheap/idempotent if
+    // already unlocked earlier (see the panel-open/call/TTS toggle sites
+    // above), and a safety net for whichever gesture happens to be the
+    // FIRST one in a given session.
+    avatarRef.current?.unlockAudio?.();
     send(input);
     setInput("");
   };
@@ -410,7 +415,7 @@ const HomeChat = () => {
             {SR && (
               <button
                 className={`home_chat_ctrl${inCall ? " home_chat_ctrl--call" : ""}`}
-                onClick={() => { if (!inCall) unlockSpeech(); setInCall(v => !v); }}
+                onClick={() => { if (!inCall) { unlockSpeech(); avatarRef.current?.unlockAudio?.(); } setInCall(v => !v); }}
                 title={inCall ? "Voice call: ON" : "Voice call: OFF"}
               >
                 <i className={`fi ${inCall ? "fi-rr-phone-slash" : "fi-rr-phone-call"}`} />
@@ -418,7 +423,7 @@ const HomeChat = () => {
             )}
             <button
               className={`home_chat_ctrl${ttsOn ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
-              onClick={() => { setTtsOn(v => { if (!v) unlockSpeech(); else window.speechSynthesis.cancel(); return !v; }); }}
+              onClick={() => { setTtsOn(v => { if (!v) { unlockSpeech(); avatarRef.current?.unlockAudio?.(); } else window.speechSynthesis.cancel(); return !v; }); }}
               title={ttsOn ? "TTS: ON" : "TTS: OFF"}
             >
               <i className={`fi ${ttsOn ? "fi-rr-volume" : "fi-rr-volume-mute"}`} />
@@ -461,7 +466,7 @@ const HomeChat = () => {
           // (used when the avatar itself isn't live) speak at all; done
           // from an effect instead, Safari silently refuses it since it's
           // no longer inside a real user gesture by then.
-          if (!isOpen) unlockSpeech();
+          if (!isOpen) { unlockSpeech(); avatarRef.current?.unlockAudio?.(); }
           setIsOpen(v => !v);
         }}
         title={isOpen ? "Close AI" : "Dev AI"}

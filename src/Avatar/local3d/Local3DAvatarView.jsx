@@ -178,6 +178,9 @@ const Local3DAvatarView = forwardRef((_props, ref) => {
       mutedRef.current = Boolean(muted);
       if (mutedRef.current) speechServiceRef.current.stop();
     },
+    // Must be called synchronously from a real click/tap — see
+    // localAvatarSpeechService.js's own unlockAudio() for why.
+    unlockAudio: () => speechServiceRef.current.unlockAudio?.(),
     destroy: () => {
       speechServiceRef.current.stop();
     },
