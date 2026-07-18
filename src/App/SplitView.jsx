@@ -16,8 +16,6 @@ const SPLIT_VIEW_PAGES = [
   { path: "/patient-instantiation",  icon: "fi-rr-hospital-user",       label: "Patient Instantiation" },
   { path: "/hylomorphism",           icon: "fi-rr-diagram-project",     label: "Hylomorphism" },
   { path: "/pdf-reader",             icon: "fi-rr-file-pdf",            label: "PDF Reader" },
-  { path: "/units-extraction",       icon: "fi-rr-book-open-reader",    label: "MCTOSHS Units Extraction while Studying" },
-  { path: "/linguistic-analysis",    icon: "fi-rr-language",            label: "Clinical Linguistic Analysis" },
   { path: "/mcc/mccqe/objectives",   icon: "fi-rr-document-signed",     label: "MCCQE Objectives" },
   { path: "/draft",                  icon: "fi-rr-notebook",            label: "MCTOSHS Draft" },
   { path: "/ai",                     icon: "fi-rr-comment-alt",         label: "AI Chat" },

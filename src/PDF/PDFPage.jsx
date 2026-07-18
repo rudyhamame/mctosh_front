@@ -96,15 +96,17 @@ const ANNOT_TOOLS = [
   { key: "drawText",      icon: "bx bx-magic-wand",      label: "Draw to Text",  hasSize: false },
   { key: "eraser",        icon: "bx bx-eraser",          label: "Eraser",        hasSize: true  },
 ];
+// "shapes" is not a real annotTool value — it's a placeholder in the main
+// strip that opens a sub-toolbar (see shapesMenuOpen) containing the four
+// SHAPE_TOOL_KEYS below, so they don't each take their own slot in the
+// primary row.
+const SHAPE_TOOL_KEYS = ["line", "arrow", "rect", "circle"];
 const DRAWING_TOOL_ORDER = [
   "pen",
   "highlight",
   "underline",
   "strikethrough",
-  "line",
-  "arrow",
-  "rect",
-  "circle",
+  "shapes",
   "text",
   "drawText",
   "eraser",
@@ -164,6 +166,18 @@ const PenToolIcon = () => (
   </svg>
 );
 
+const ShapesToolIcon = () => (
+  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+    <path d="M20 8h-2.27c-.89-3.47-4.07-6-7.73-6-4.41 0-8 3.59-8 8 0 3.66 2.53 6.84 6 7.73V20c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2M8 10v5.64c-2.34-.83-4-3.08-4-5.64 0-3.31 2.69-6 6-6 2.57 0 4.81 1.66 5.64 4H10c-1.1 0-2 .9-2 2m12 10H10V10h10z" />
+  </svg>
+);
+
+const ArrowToolIcon = () => (
+  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+    <path d="M6 13h8.09l-3.3 3.29 1.42 1.42 5.7-5.71-5.7-5.71-1.42 1.42 3.3 3.29H6z" />
+  </svg>
+);
+
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
 // Pinch-to-zoom (touch, and trackpad pinch which browsers deliver as ctrl+wheel)
@@ -194,6 +208,12 @@ const ZOOM_HOLD_TICK_MS = 48;
 const ZOOM_HOLD_RAMP_MS = 1800;
 const ZOOM_HOLD_MAX_MULTIPLIER = 8;
 const PDF_FLOATING_TOOLBAR_MARGIN = 16;
+// How far past its own resting margin the handle has to be dragged, toward
+// the edge the toolbar is already docked at, before the toolbar tucks away
+// collapsed (see toolbarCollapsed) — has to clear "just reached the edge"
+// (that's the normal resting position already) by a deliberate margin so an
+// ordinary drag-to-reposition near that edge doesn't collapse it by accident.
+const TOOLBAR_COLLAPSE_THRESHOLD = 56;
 
 // ── Momentum ("billiard ball") panning ──────────────────────────────────────
 // After a drag/pan is released fast enough, the scroll container keeps
@@ -845,6 +865,18 @@ const PDFPage = forwardRef(({
   const [toolbarDragging, setToolbarDragging] = useState(false);
   const [toolbarBounds, setToolbarBounds] = useState({ top: 0, left: 0, width: 0, height: 0 });
   const [toolbarTouchLabel, setToolbarTouchLabel] = useState(null); // { key, label }
+  // Dragging the handle further into the edge the toolbar is already
+  // docked at (past its own resting margin, not just up to it) tucks the
+  // whole toolbar out of view behind that edge — only the handle stays
+  // reachable, so it can be dragged/tapped again to bring the toolbar back.
+  // Refs (not the state directly) are what handleToolbarDragStart/the
+  // pointermove tracking effect read — both are useCallback([])/useEffect
+  // with stable deps, so a directly-closed-over state value would go stale.
+  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
+  const toolbarCollapsedRef = useRef(false);
+  useEffect(() => { toolbarCollapsedRef.current = toolbarCollapsed; }, [toolbarCollapsed]);
+  const toolbarDockRef = useRef(toolbarDock);
+  useEffect(() => { toolbarDockRef.current = toolbarDock; }, [toolbarDock]);
 
   const [hyleData, setHyleData]       = useState(null);
   const [hyleFontSize, setHyleFontSize] = useState(1);
@@ -854,15 +886,13 @@ const PDFPage = forwardRef(({
   const { provider, setProvider }     = useAIProvider();
   const [showSysModal, setShowSysModal] = useState(false);
 
-  // No default/"navigator" tool anymore — nothing is selected until the
-  // user picks a real drawing tool. Panning is a three-finger touch
-  // gesture (or plain mouse-drag/wheel-scroll for non-touch input),
-  // available regardless of tool state, not a tool you switch into (see
-  // touchCentroid/the 3-finger touch branches, and the mouse-drag pan
-  // handler, both gated only on annotToolRef.current below, unchanged).
+  // Start with a real drawing tool selected so the toolbar is immediately
+  // live when the PDF loads. Panning is still available through the
+  // dedicated gesture/mouse paths below, regardless of which tool is
+  // selected.
   // Declared here (ahead of most other state) because textSelectable below
   // reads it immediately.
-  const [annotTool,      setAnnotTool]      = useState(null);
+  const [annotTool,      setAnnotTool]      = useState("pen");
   const navigationBlocked = Boolean(annotTool); // true only when a real drawing tool is selected
   const toolActive = navigationBlocked;
   const annotToolRef = useRef(null); // mirrors navigationBlocked ? annotTool : null — read inside the pan-gesture effect, whose deps are just [pdfDoc], so annotTool itself would be stale there
@@ -1105,13 +1135,30 @@ const PDFPage = forwardRef(({
       const drag = toolbarDragStateRef.current;
       if (!drag || (drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
       event.preventDefault();
+      const rawLeft = event.clientX - drag.boundsLeft - drag.shiftX;
+      const rawTop  = event.clientY - drag.boundsTop - drag.shiftY;
+
+      // Pushed further into the edge it's already docked at (past the
+      // resting margin, not just up to it) — tuck it away collapsed. Only
+      // ever checked against collapseEdge, the edge fixed at drag-start, so
+      // snapping to a *different* edge mid-drag can't also trigger this.
+      const pastEdge =
+        drag.collapseEdge === "top"    ? PDF_FLOATING_TOOLBAR_MARGIN - rawTop :
+        drag.collapseEdge === "bottom" ? (rawTop + drag.height) - (drag.boundsHeight - PDF_FLOATING_TOOLBAR_MARGIN) :
+        drag.collapseEdge === "left"   ? PDF_FLOATING_TOOLBAR_MARGIN - rawLeft :
+                                          (rawLeft + drag.width) - (drag.boundsWidth - PDF_FLOATING_TOOLBAR_MARGIN);
+      if (pastEdge > TOOLBAR_COLLAPSE_THRESHOLD) {
+        setToolbarCollapsed(true);
+        return; // frozen at the last dock position for the rest of this gesture
+      }
+
       const nextLeft = clamp(
-        event.clientX - drag.boundsLeft - drag.shiftX,
+        rawLeft,
         PDF_FLOATING_TOOLBAR_MARGIN,
         Math.max(PDF_FLOATING_TOOLBAR_MARGIN, drag.boundsWidth - drag.width - PDF_FLOATING_TOOLBAR_MARGIN),
       );
       const nextTop = clamp(
-        event.clientY - drag.boundsTop - drag.shiftY,
+        rawTop,
         PDF_FLOATING_TOOLBAR_MARGIN,
         Math.max(PDF_FLOATING_TOOLBAR_MARGIN, drag.boundsHeight - drag.height - PDF_FLOATING_TOOLBAR_MARGIN),
       );
@@ -1156,6 +1203,15 @@ const PDFPage = forwardRef(({
   const handleToolbarDragStart = useCallback((event) => {
     if (event.button != null && event.button !== 0 && !event.touches) return;
     event.preventDefault();
+    // Collapsed: this press only reveals the toolbar again — it doesn't
+    // also start a drag. Measuring the toolbar's rect here would capture
+    // its collapsed (near-zero) size, since the setToolbarCollapsed(false)
+    // below hasn't re-rendered/re-laid-out yet — a real drag has to wait
+    // for a second, separate press once the toolbar is back to full size.
+    if (toolbarCollapsedRef.current) {
+      setToolbarCollapsed(false);
+      return;
+    }
     const point = (e) => (e.touches ? (e.touches[0] || e.changedTouches[0]) : e);
     const p0 = point(event);
     const contentEl = contentRef.current;
@@ -1173,10 +1229,14 @@ const PDFPage = forwardRef(({
       boundsTop: contentRect.top,
       boundsWidth: contentRect.width,
       boundsHeight: contentRect.height,
+      // Fixed for the whole gesture — which edge "collapse" pushes toward
+      // (see the pointermove tracking effect below). Read from the ref,
+      // not toolbarDock directly: this callback has an empty dep array.
+      collapseEdge: toolbarDockRef.current.edge,
     };
     if (event.pointerId != null) toolbarEl.setPointerCapture?.(event.pointerId);
     setToolbarDragging(true);
-    setToolsMenuOpen(false);
+    setShapesMenuOpen(false);
     setColorMenuOpen(false);
     setPenMenuOpen(false);
     setHighlightMenuOpen(false);
@@ -1234,20 +1294,14 @@ const PDFPage = forwardRef(({
   const [drawTextBusy, setDrawTextBusy] = useState(false);
   const [drawTextStatus, setDrawTextStatus] = useState("");
   const [drawTextProgress, setDrawTextProgress] = useState(0);
-  const [toolsMenuOpen,  setToolsMenuOpen]  = useState(false); // floating tools dropdown
+  const [shapesMenuOpen,  setShapesMenuOpen]  = useState(false); // floating Shapes sub-toolbar (line/arrow/rect/circle)
   const [colorMenuOpen,  setColorMenuOpen]  = useState(false); // floating color dropdown
   const [penMenuOpen,    setPenMenuOpen]    = useState(false); // floating pen controls dropdown
   const [highlightMenuOpen, setHighlightMenuOpen] = useState(false); // floating highlight controls dropdown
-  const toolsMenuRef = useRef(null);
+  const shapesMenuRef = useRef(null);
   const colorMenuRef = useRef(null);
   const penMenuRef = useRef(null);
   const highlightMenuRef = useRef(null);
-  // Linguistic Analysis's page-range picker popover
-  const actionsMenuRef = useRef(null);
-  const [rangePickerAction, setRangePickerAction]   = useState(null); // null | "markdown" | "linguistic"
-  const [rangeFrom,          setRangeFrom]          = useState(1);
-  const [rangeTo,            setRangeTo]            = useState(1);
-  const [rangeAll,           setRangeAll]           = useState(false);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
   const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
@@ -1334,16 +1388,16 @@ const PDFPage = forwardRef(({
 
   // Close the floating tools/color/pen/highlight dropdowns on an outside click
   useEffect(() => {
-    if (!toolsMenuOpen && !colorMenuOpen && !penMenuOpen && !highlightMenuOpen) return;
+    if (!shapesMenuOpen && !colorMenuOpen && !penMenuOpen && !highlightMenuOpen) return;
     const onDocPointerDown = (e) => {
-      if (toolsMenuOpen && toolsMenuRef.current && !toolsMenuRef.current.contains(e.target)) setToolsMenuOpen(false);
+      if (shapesMenuOpen && shapesMenuRef.current && !shapesMenuRef.current.contains(e.target)) setShapesMenuOpen(false);
       if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
       if (penMenuOpen && penMenuRef.current && !penMenuRef.current.contains(e.target)) setPenMenuOpen(false);
       if (highlightMenuOpen && highlightMenuRef.current && !highlightMenuRef.current.contains(e.target)) setHighlightMenuOpen(false);
     };
     document.addEventListener("mousedown", onDocPointerDown);
     return () => document.removeEventListener("mousedown", onDocPointerDown);
-  }, [toolsMenuOpen, colorMenuOpen, penMenuOpen, highlightMenuOpen]);
+  }, [shapesMenuOpen, colorMenuOpen, penMenuOpen, highlightMenuOpen]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -3577,24 +3631,6 @@ const PDFPage = forwardRef(({
     }
   }, [pageMdDeleteBusy]);
 
-  // Confirms the Actions-dropdown page-range picker for Linguistic Analysis
-  // (the Markdown action now opens the panel directly — see the "Markdown"
-  // dropdown item below — so this only ever handles the "linguistic" case).
-  const confirmRangePicker = useCallback(() => {
-    const from = rangeAll ? 1 : Math.max(1, Math.min(rangeFrom, rangeTo));
-    const to   = rangeAll ? pageCount : Math.max(rangeFrom, rangeTo);
-    navigate("/linguistic-analysis", {
-      state: {
-        sourceId: currentSourceIdRef.current,
-        pdfName: filename,
-        rangeFrom: from,
-        rangeTo: to,
-        rangeAll,
-      },
-    });
-    setRangePickerAction(null);
-  }, [rangeAll, rangeFrom, rangeTo, pageCount, navigate, filename]);
-
   // ── Select markdown text by voice (Web Speech API) ──────────────────────────
   const handleVoiceSelect = useCallback(() => {
     const SpeechRecognitionCtor = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -4055,8 +4091,23 @@ const PDFPage = forwardRef(({
     PDF_FLOATING_TOOLBAR_MARGIN,
     (toolbarBounds.height - toolbarHeight) / 2,
   );
-  const toolbarStyle =
-    toolbarDock.edge === "top"
+  // Collapsed: the toolbar's own chrome/content is hidden (see
+  // .pdf_toolbar--collapsed in pdfPage.css, which also zeroes its
+  // padding/border), so toolbarWidth/toolbarHeight above read as ~0 —
+  // anchoring flush at the true content edge (no resting margin) is what
+  // puts the handle's own bulge right at the boundary, tucked away, instead
+  // of still floating MARGIN px inside it.
+  const toolbarStyle = toolbarCollapsed
+    ? (
+        toolbarDock.edge === "top"
+          ? { top: toolbarBounds.top, left: centeredToolbarLeft }
+          : toolbarDock.edge === "bottom"
+            ? { top: toolbarBounds.top + toolbarBounds.height, left: centeredToolbarLeft }
+            : toolbarDock.edge === "left"
+              ? { top: centeredToolbarTop, left: toolbarBounds.left }
+              : { top: centeredToolbarTop, left: toolbarBounds.left + toolbarBounds.width }
+      )
+    : toolbarDock.edge === "top"
       ? { top: toolbarBounds.top + PDF_FLOATING_TOOLBAR_MARGIN + 4, left: centeredToolbarLeft }
       : toolbarDock.edge === "bottom"
         ? { top: toolbarBounds.top + toolbarBounds.height - PDF_FLOATING_TOOLBAR_MARGIN - toolbarHeight, left: centeredToolbarLeft }
@@ -4078,7 +4129,7 @@ const PDFPage = forwardRef(({
       <div
         id="pdf_toolbar"
         ref={toolbarRef}
-        className={`pdf_toolbar--${toolbarDock.edge}${toolbarDragging ? " pdf_toolbar--dragging" : ""}`}
+        className={`pdf_toolbar--${toolbarDock.edge}${toolbarDragging ? " pdf_toolbar--dragging" : ""}${toolbarCollapsed ? " pdf_toolbar--collapsed" : ""}`}
         style={toolbarStyle}
       >
         {/* Dedicated drag handle, not the toolbar's general chrome — always
@@ -4140,6 +4191,45 @@ const PDFPage = forwardRef(({
             <>
             <div className="annot_tool_strip" aria-label="PDF tools">
               {DRAWING_TOOL_ORDER.map((key) => {
+                if (key === "shapes") {
+                  const shapesActive = SHAPE_TOOL_KEYS.includes(annotTool);
+                  return (
+                    <div className="annot_dd_wrap" key="shapes" ref={shapesMenuRef}>
+                      <button
+                        type="button"
+                        className={`annot_trigger annot_tool_btn${(shapesActive || shapesMenuOpen) ? " annot_trigger--active" : ""}`}
+                        onClick={() => { setShapesMenuOpen((o) => !o); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                        title="Shapes"
+                        aria-label="Shapes"
+                      >
+                        <ShapesToolIcon />
+                      </button>
+                      {shapesMenuOpen && (
+                        <div className="annot_dd annot_dd--shapes">
+                          {SHAPE_TOOL_KEYS.map((shapeKey) => {
+                            const shapeTool = ANNOT_TOOLS.find((item) => item.key === shapeKey);
+                            return (
+                              <button
+                                key={shapeKey}
+                                type="button"
+                                className={`annot_trigger annot_tool_btn${annotTool === shapeKey ? " annot_trigger--active" : ""}`}
+                                onPointerDown={(event) => {
+                                  if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(shapeKey, shapeTool.label);
+                                }}
+                                onClick={() => { setAnnotTool(shapeKey); setShapesMenuOpen(false); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                                title={shapeTool.label}
+                                aria-label={shapeTool.label}
+                              >
+                                {toolbarTouchLabel?.key === shapeKey && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
+                                {shapeKey === "arrow" ? <ArrowToolIcon /> : <i className={shapeTool.icon} />}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
                 const tool = ANNOT_TOOLS.find((item) => item.key === key);
                 if (!tool) return null;
                 return (
@@ -4181,7 +4271,7 @@ const PDFPage = forwardRef(({
                 <button
                   type="button"
                   className="annot_trigger annot_trigger--color"
-                  onClick={() => { setColorMenuOpen((o) => !o); setToolsMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                  onClick={() => { setColorMenuOpen((o) => !o); setShapesMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
                   title="Color"
                 >
                   <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
@@ -4236,7 +4326,7 @@ const PDFPage = forwardRef(({
                 <button
                   type="button"
                   className={`annot_trigger${penMenuOpen ? " annot_trigger--active" : ""}`}
-                  onClick={() => { setPenMenuOpen((o) => !o); setToolsMenuOpen(false); setColorMenuOpen(false); setHighlightMenuOpen(false); }}
+                  onClick={() => { setPenMenuOpen((o) => !o); setShapesMenuOpen(false); setColorMenuOpen(false); setHighlightMenuOpen(false); }}
                   title="Pen settings"
                 >
                   <i className="bx bx-slider-alt" />
@@ -4356,7 +4446,7 @@ const PDFPage = forwardRef(({
                 <button
                   type="button"
                   className={`annot_trigger${highlightMenuOpen ? " annot_trigger--active" : ""}`}
-                  onClick={() => { setHighlightMenuOpen((o) => !o); setToolsMenuOpen(false); setColorMenuOpen(false); setPenMenuOpen(false); }}
+                  onClick={() => { setHighlightMenuOpen((o) => !o); setShapesMenuOpen(false); setColorMenuOpen(false); setPenMenuOpen(false); }}
                   title="Highlight settings"
                 >
                   <i className="bx bx-highlight" />

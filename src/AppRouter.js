@@ -34,8 +34,6 @@ const SettingsPage = lazy(() => import("./Settings/SettingsPage"));
 const VoiceProfilePage = lazy(() => import("./VoiceProfile/VoiceProfilePage"));
 const PatientInstantiationPage = lazy(() => import("./PatientInstantiation/PatientInstantiationPage"));
 const ClinicalSchemata = lazy(() => import("./ClinicalSchemata/ClinicalSchemata"));
-const UnitsExtraction = lazy(() => import("./UnitsExtraction/UnitsExtraction"));
-const LinguisticAnalysisPage = lazy(() => import("./LinguisticAnalysis/LinguisticAnalysisPage"));
 const MCCQEObjectivesPage = lazy(() => import("./MCC/MCCQEObjectivesPage"));
 const SocialMediaControlPage = lazy(() => import("./SocialMediaControl/SocialMediaControlPage"));
 const InstagramHomePreviewPage = lazy(() => import("./SocialMediaControl/InstagramHomePreviewPage"));
@@ -183,8 +181,6 @@ const AppRouter = () => {
         <Route path="/draft/:id"          element={auth(withSuspense(<DraftPage />))} />
         <Route path="/patient-instantiation" element={auth(withSuspense(<PatientInstantiationPage />))} />
         <Route path="/clinical-schemata"      element={auth(withSuspense(<ClinicalSchemata />))} />
-        <Route path="/units-extraction"       element={auth(withSuspense(<UnitsExtraction />))} />
-        <Route path="/linguistic-analysis"    element={auth(withSuspense(<LinguisticAnalysisPage />))} />
         <Route path="/social-media-control"   element={auth(withSuspense(<SocialMediaControlPage />))} />
         <Route path="/instagram-home-preview" element={auth(withSuspense(<InstagramHomePreviewPage />))} />
         <Route path="/social-media-designer"  element={auth(withSuspense(<SocialMediaDesignerPage />))} />

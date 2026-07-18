@@ -147,10 +147,19 @@
   width: max-content;
   max-width: min(calc(100% - 2rem), 1100px);
   background: color-mix(in srgb, var(--color-surface) 86%, transparent);
-  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.18), 0 2px 10px rgba(15, 23, 42, 0.08);
+  /* Three-tier depth (tight contact shadow → mid → soft far ambient) reads
+     as a single deliberate floating panel instead of one flat blur, plus a
+     hairline inset sheen along the top edge for the glass/backdrop-filter
+     look — both stay low-opacity so they hold up on light and dark theme
+     surfaces alike without a separate per-theme override. */
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.10),
+    0 8px 20px -6px rgba(15, 23, 42, 0.22),
+    0 26px 48px -14px rgba(15, 23, 42, 0.24),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
   backdrop-filter: blur(18px) saturate(1.08);
   -webkit-backdrop-filter: blur(18px) saturate(1.08);
-  transition: left 0.18s ease, top 0.18s ease, transform 0.18s ease;
+  transition: left 0.18s ease, top 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
 }
 
 #pdf_toolbar_topbar,
@@ -176,9 +185,49 @@
 #pdf_toolbar_left { min-width: 0; }
 #pdf_toolbar_center { flex-shrink: 0; }
 
+/* transition: none avoids the resting-state's left/top/transform easing
+   fighting the drag-tracking effect's own per-frame position updates; the
+   lifted box-shadow below is the "picked up" tactile cue while dragging,
+   settling back to the resting three-tier shadow above once released. */
 #pdf_toolbar.pdf_toolbar--dragging {
   transition: none;
+  box-shadow:
+    0 2px 4px rgba(15, 23, 42, 0.14),
+    0 14px 28px -6px rgba(15, 23, 42, 0.28),
+    0 36px 64px -16px rgba(15, 23, 42, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
+
+/* Dragging the handle past its own resting margin, toward the edge it's
+   already docked at, tucks the toolbar's own chrome away entirely — the
+   box shrinks to nothing (no padding/border/shadow/background of its own)
+   and JS anchors it flush at the true content edge (see the toolbarStyle
+   branch for toolbarCollapsed), so only .pdf_toolbar_edge_handle's own
+   bulge is left poking into view. Grabbing/tapping that handle again is
+   what brings it back (see handleToolbarDragStart). */
+#pdf_toolbar.pdf_toolbar--collapsed {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+#pdf_toolbar.pdf_toolbar--collapsed #pdf_toolbar_topbar,
+#pdf_toolbar.pdf_toolbar--collapsed #pdf_toolbar_mainbar {
+  display: none;
+}
+
+/* REVERTED: touch-action: none here (top/bottom dock) was meant to stop a
+   touch on the toolbar from reaching the browser's native pull-to-refresh
+   recognizer, but touch-action is an intersection down the ancestor chain
+   — a descendant button can never opt back OUT of an ancestor's none, so
+   this silently broke tap-to-select on every tool button too (confirmed:
+   buttons stopped even highlighting as selected on iOS Safari). A broken
+   toolbar is a worse bug than an occasional pull-to-refresh, so this is
+   back to inheriting #pdf_page's own touch-action: manipulation default
+   until a fix that doesn't cover interactive descendants is found. */
 
 /* Docked to the left/right edge — lay out as a vertical column instead of
    the default horizontal row (previously unstyled: dragging the toolbar to
@@ -193,6 +242,11 @@
   height: max-content;
   max-height: min(calc(100% - 2rem), 90vh);
   overflow-y: auto;
+  /* No explicit touch-action override here (same reasoning as the
+     top/bottom revert above) — restricting it, even to pan-y, still risks
+     the same "descendant buttons can't opt back out" problem, and this
+     dock's own overflow-y: auto scroll already worked fine on touch before
+     the pull-to-refresh fix touched it. */
 }
 
 #pdf_toolbar.pdf_toolbar--left .pdf_toolbar_handle,
@@ -363,41 +417,56 @@
   border: none;
   padding: 0;
   background: color-mix(in srgb, var(--color-text-muted) 55%, transparent);
-  border-radius: 999px;
   cursor: grab;
   touch-action: none; /* this element's only job is the drag gesture — no competing native scroll/select to preserve here, unlike #pdf_toolbar itself */
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22);
 }
 
 #pdf_toolbar.pdf_toolbar--dragging .pdf_toolbar_edge_handle {
   cursor: grabbing;
 }
 
-/* Horizontal bar, centered along the toolbar's own width, sitting just
-   inside the edge facing the content — bottom for a top-docked toolbar,
-   top for a bottom-docked one. */
+/* Sized to sit entirely OUTSIDE the toolbar's own box (offset by its own
+   full width/height, not a few px in from the edge) so it reads as a tab
+   bulging off the edge rather than a control overlapping the toolbar's
+   own chrome/content. Only the corners facing away from the toolbar are
+   rounded — the edge flush against the toolbar stays square so the tab
+   looks attached to it rather than floating free. */
 #pdf_toolbar.pdf_toolbar--top .pdf_toolbar_edge_handle,
 #pdf_toolbar.pdf_toolbar--bottom .pdf_toolbar_edge_handle {
-  width: 36px;
-  height: 5px;
+  width: 40px;
+  height: 14px;
   left: 50%;
   transform: translateX(-50%);
 }
-#pdf_toolbar.pdf_toolbar--top .pdf_toolbar_edge_handle { bottom: 4px; }
-#pdf_toolbar.pdf_toolbar--bottom .pdf_toolbar_edge_handle { top: 4px; }
+#pdf_toolbar.pdf_toolbar--top .pdf_toolbar_edge_handle {
+  bottom: -14px;
+  border-radius: 0 0 10px 10px;
+}
+#pdf_toolbar.pdf_toolbar--bottom .pdf_toolbar_edge_handle {
+  top: -14px;
+  border-radius: 10px 10px 0 0;
+}
 
-/* Vertical bar, centered along the toolbar's own height, sitting just
-   inside the edge facing the content — right for a left-docked toolbar,
-   left for a right-docked one (the exact opposite pairing from top/bottom
-   above, same "always face the content" reasoning). */
+/* Same "fully outside, flush on the attached edge" treatment, rotated for
+   a left/right-docked toolbar — right for a left-docked toolbar, left for
+   a right-docked one (the exact opposite pairing from top/bottom above,
+   same "always face the content" reasoning). */
 #pdf_toolbar.pdf_toolbar--left .pdf_toolbar_edge_handle,
 #pdf_toolbar.pdf_toolbar--right .pdf_toolbar_edge_handle {
-  width: 5px;
-  height: 36px;
+  width: 14px;
+  height: 40px;
   top: 50%;
   transform: translateY(-50%);
 }
-#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_edge_handle { right: 4px; }
-#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_edge_handle { left: 4px; }
+#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_edge_handle {
+  right: -14px;
+  border-radius: 0 10px 10px 0;
+}
+#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_edge_handle {
+  left: -14px;
+  border-radius: 10px 0 0 10px;
+}
 
 @keyframes pdf_icon_spin { to { transform: rotate(360deg); } }
 .pdf_icon_spin { display: inline-block; animation: pdf_icon_spin 0.9s linear infinite; }
@@ -1612,6 +1681,34 @@ html.theme-light #pdf_preview_scroll {
 #pdf_range_picker {
   left: auto;
   right: 0;
+}
+
+/* Shapes sub-toolbar (line/arrow/rect/circle) — a row of plain tool
+   buttons rather than a settings panel, so it stays a compact horizontal
+   strip instead of the default 170px settings-dropdown width. */
+.annot_dd--shapes {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.annot_dd--shapes .annot_trigger {
+  border: none;
+}
+
+/* At left/right dock the Shapes trigger sits in the narrow, scrollable
+   .annot_tool_strip column — dropping the row below it (the default
+   top:100%) can run past the toolbar's own overflow-y:auto bounds, so it
+   pops out sideways instead, same reasoning as .annot_tool_options. */
+#pdf_toolbar.pdf_toolbar--left .annot_dd--shapes,
+#pdf_toolbar.pdf_toolbar--right .annot_dd--shapes {
+  top: 0;
+  left: calc(100% + 6px);
+}
+#pdf_toolbar.pdf_toolbar--right .annot_dd--shapes {
+  left: auto;
+  right: calc(100% + 6px);
 }
 
 .pdf_actions_error {

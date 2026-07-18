@@ -47,20 +47,6 @@ const LEVELS = [
     letter: "M",
     blurb: "Studying begins: logic buried in the folds surfaces as a thread first rises out of the ground and takes shape in 3D.",
     cards: [
-      {
-        path: "/linguistic-analysis",
-        icon: "fi-rr-language",
-        label: "Clinical Linguistic Analysis",
-        description: "Extract morphemes, words, syntagms, clauses, sentences, and paragraphs from any converted PDF page",
-        color: "#69f0ae",
-      },
-      {
-        path: "/units-extraction",
-        icon: "fi-rr-book-open-reader",
-        label: "MCTOSHS Units Extraction while Studying",
-        description: "Read a source and select any span of text to run a linguistic analysis on it",
-        color: "#b39ddb",
-      },
     ],
   },
   {
