@@ -289,8 +289,56 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       ctx.stroke();
       break;
     case "text":
-      ctx.font = `${visibleSize((ann.fontSize || 16) * s, 11)}px sans-serif`;
-      ctx.fillText(ann.text || "", p(ann.x), p(ann.y));
+      ctx.save();
+      {
+        const text = ann.text || "";
+        const fontSize = visibleSize((ann.fontSize || 16) * s, 11);
+        const fontFamily = ann.fontFamily || "sans-serif";
+        const fontWeight = ann.fontBold ? "700" : "400";
+        const fontStyle = ann.fontItalic ? "italic" : "normal";
+        const textAlign = ann.textAlign || "left";
+        const baseline = ann.textBaseline || "alphabetic";
+        ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${JSON.stringify(fontFamily)}`;
+        ctx.textAlign = textAlign;
+        ctx.textBaseline = baseline;
+        const x = p(ann.x);
+        const y = p(ann.y);
+        const metrics = ctx.measureText(text);
+        const textWidth = metrics.width;
+        const ascent = metrics.actualBoundingBoxAscent ?? fontSize * 0.8;
+        const descent = metrics.actualBoundingBoxDescent ?? fontSize * 0.2;
+        const textTop = baseline === "top" ? y : y - ascent;
+        const textHeight = ascent + descent;
+        const left = textAlign === "center" ? x - textWidth / 2 : textAlign === "right" ? x - textWidth : x;
+        const padX = Math.max(3, fontSize * 0.18);
+        const padY = Math.max(2, fontSize * 0.16);
+        ctx.fillStyle = ann.color;
+        if (ann.textBordered) {
+          ctx.save();
+          ctx.lineWidth = Math.max(1, fontSize * 0.08);
+          ctx.strokeStyle = ann.color;
+          ctx.globalAlpha = 0.85;
+          if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(left - padX, textTop - padY, textWidth + padX * 2, textHeight + padY * 2, [Math.max(3, fontSize * 0.12)]);
+            ctx.stroke();
+          } else {
+            ctx.strokeRect(left - padX, textTop - padY, textWidth + padX * 2, textHeight + padY * 2);
+          }
+          ctx.restore();
+        }
+        ctx.fillText(text, x, y);
+        if (ann.textUnderline) {
+          ctx.save();
+          ctx.lineWidth = Math.max(1, fontSize * 0.075);
+          ctx.beginPath();
+          ctx.moveTo(left, textTop + textHeight + Math.max(1.5, padY * 0.45));
+          ctx.lineTo(left + textWidth, textTop + textHeight + Math.max(1.5, padY * 0.45));
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      ctx.restore();
       break;
     default: break;
   }

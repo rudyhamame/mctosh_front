@@ -85,14 +85,33 @@ const HYLE_TYPE_LABELS = {
 // is likewise always on in reading mode now, see textSelectable below.
 const ANNOT_TOOLS = [
   { key: "highlight",     icon: "bx bx-highlight",       label: "Highlight",     hasSize: true  },
-  { key: "underline",     icon: "bx bx-underline",       label: "Underline",     hasSize: false },
+  {
+    key: "underline",
+    iconSvg: (
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
+        <path d="M5 18h14v2H5zM17 8V4H7v4h2V6h2v8H9v2h6v-2h-2V6h2v2z" />
+      </svg>
+    ),
+    label: "Underline",
+    hasSize: false,
+  },
   { key: "strikethrough", icon: "bx bx-strikethrough",   label: "Strikethrough", hasSize: false },
   { key: "pen",           icon: "bx bx-pencil",          label: "Pen",           hasSize: true  },
   { key: "line",          icon: "bx bx-minus",           label: "Line",          hasSize: false },
   { key: "arrow",         icon: "bx bx-right-arrow-alt", label: "Arrow",         hasSize: true  },
   { key: "rect",          icon: "bx bx-rectangle",       label: "Rectangle",     hasSize: false },
   { key: "circle",        icon: "bx bx-circle",          label: "Ellipse",       hasSize: false },
-  { key: "text",          icon: "bx bx-text",            label: "Text",          hasSize: false },
+  {
+    key: "text",
+    iconSvg: (
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
+        <path d="M7 9h10v2H7zm0 4h7v2H7z" />
+        <path d="M12 2C6.49 2 2 6.49 2 12c0 2.12.68 4.19 1.93 5.9l-1.75 2.53c-.21.31-.24.7-.06 1.03.17.33.51.54.89.54h9c5.51 0 10-4.49 10-10S17.51 2 12 2m0 18H4.91L6 18.43c.26-.37.23-.88-.06-1.22A7.98 7.98 0 0 1 4.01 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8Z" />
+      </svg>
+    ),
+    label: "Text",
+    hasSize: false,
+  },
   { key: "drawText",      icon: "bx bx-magic-wand",      label: "Draw to Text",  hasSize: false },
   { key: "eraser",        icon: "bx bx-eraser",          label: "Eraser",        hasSize: true  },
 ];
@@ -151,8 +170,18 @@ const DEFAULT_ANNOT_TOOL_COLORS = {
   drawText: "#212529",
 };
 
+const TEXT_FONT_FAMILIES = [
+  { key: "Georgia", label: "Georgia" },
+  { key: "Arial", label: "Arial" },
+  { key: "Verdana", label: "Verdana" },
+  { key: "Trebuchet MS", label: "Trebuchet MS" },
+  { key: "Times New Roman", label: "Times New Roman" },
+  { key: "Courier New", label: "Courier New" },
+];
+
 const ANNOT_HISTORY_META = {
   add:   { icon: "bx bx-plus",   verb: "Added" },
+  edit:  { icon: "bx bx-edit",   verb: "Edited" },
   undo:  { icon: "bx bx-undo",   verb: "Undid" },
   redo:  { icon: "bx bx-redo",   verb: "Redid" },
   erase: { icon: "bx bx-eraser", verb: "Erased" },
@@ -175,6 +204,20 @@ const ShapesToolIcon = () => (
 const ArrowToolIcon = () => (
   <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
     <path d="M6 13h8.09l-3.3 3.29 1.42 1.42 5.7-5.71-5.7-5.71-1.42 1.42 3.3 3.29H6z" />
+  </svg>
+);
+
+const StrokeBorderIcon = () => (
+  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+    <path d="M11 7h2v2h-2zm0 8h2v2h-2zm-4-4h2v2H7zm8 0h2v2h-2zm-4 0h2v2h-2z" />
+    <path d="M17 3H3v18h18V3zm2 4v12H5V5h14z" />
+  </svg>
+);
+
+const InfoIcon = () => (
+  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+    <path d="M11 11h2v6h-2zm0-4h2v2h-2z" />
+    <path d="M16.71 2.29A1 1 0 0 0 16 2H8c-.27 0-.52.11-.71.29l-5 5A1 1 0 0 0 2 8v8c0 .27.11.52.29.71l5 5c.19.19.44.29.71.29h8c.27 0 .52-.11.71-.29l5-5A1 1 0 0 0 22 16V8c0-.27-.11-.52-.29-.71zM20 15.58l-4.41 4.41H8.42l-4.41-4.41V8.41L8.42 4h7.17L20 8.41z" />
   </svg>
 );
 
@@ -383,40 +426,6 @@ const DEFAULT_HIGHLIGHT_SETTINGS = {
   softness: 72,
   body: 58,
 };
-const PEN_TYPES = [
-  { key: "ball", label: "Ball pen" },
-  { key: "fountain", label: "Fountain pen" },
-];
-const PEN_THEMES = [
-  {
-    key: "artistic",
-    label: "Artistic",
-    penType: "fountain",
-    settings: {
-      stabilization: 32,
-      pressureAssist: 72,
-      taper: 88,
-      flow: 76,
-      border: true,
-      nibAngle: 48,
-      nibSpread: 84,
-    },
-  },
-  {
-    key: "professional",
-    label: "Professional",
-    penType: "ball",
-    settings: {
-      stabilization: 68,
-      pressureAssist: 42,
-      taper: 38,
-      flow: 24,
-      border: false,
-      nibAngle: 35,
-      nibSpread: 68,
-    },
-  },
-];
 const smoothStrokePoint = (points, nextPoint, stabilization, scale = 1) => {
   if (!points.length) return nextPoint;
   const previous = points[points.length - 1];
@@ -573,6 +582,8 @@ const KNOB_MIN_PX  = 8;
 const KNOB_MAX_PX  = 22;
 const KNOB_PAD_PX  = 12;
 const KNOB_TRACK_W = 64;
+const KNOB_LABEL_W  = 44;
+const KNOB_TOTAL_W  = KNOB_TRACK_W + KNOB_LABEL_W;
 
 const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
   const trackRef = useRef(null);
@@ -580,7 +591,7 @@ const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
 
   const updateFromClientX = useCallback((clientX) => {
     const rect = trackRef.current.getBoundingClientRect();
-    const usable = rect.width - KNOB_PAD_PX * 2;
+    const usable = KNOB_TRACK_W - KNOB_PAD_PX * 2;
     let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
     frac = Math.min(1, Math.max(0, frac));
     let val = min + frac * (max - min);
@@ -612,7 +623,7 @@ const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
       <div
         className="annot_size_knob_track"
         ref={trackRef}
-        style={{ width: KNOB_TRACK_W }}
+        style={{ width: KNOB_TOTAL_W }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -628,9 +639,8 @@ const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
             background: dashed ? "transparent" : color,
           }}
         />
+        <span className="annot_size_label">{Number.isInteger(value) ? value : value.toFixed(1)}pt</span>
       </div>
-      {/* Shown in "pt" — the unit these tools' size is conventionally read in, same as font size */}
-      <span className="annot_size_label">{Number.isInteger(value) ? value : value.toFixed(1)}pt</span>
     </div>
   );
 };
@@ -695,7 +705,7 @@ const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%
 
   const updateFromClientX = useCallback((clientX) => {
     const rect = trackRef.current.getBoundingClientRect();
-    const usable = rect.width - KNOB_PAD_PX * 2;
+    const usable = KNOB_TRACK_W - KNOB_PAD_PX * 2;
     let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
     frac = Math.min(1, Math.max(0, frac));
     let val = min + frac * (max - min);
@@ -726,7 +736,7 @@ const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%
       <div
         className="annot_size_knob_track"
         ref={trackRef}
-        style={{ width: KNOB_TRACK_W }}
+        style={{ width: KNOB_TOTAL_W }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -737,21 +747,45 @@ const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%
           className="annot_size_knob_dot annot_size_knob_dot--percent"
           style={{ width: 14, height: 14, left: centerX }}
         />
+        <span className="annot_size_label">{value}{label}</span>
       </div>
-      <span className="annot_size_label">{value}{label}</span>
     </div>
   );
 };
 
-const LabeledPercentKnob = ({ title, subtitle, ...props }) => (
-  <div className="annot_control">
-    <div className="annot_control_head">
-      <span className="annot_control_title">{title}</span>
-      {subtitle ? <span className="annot_control_subtitle">{subtitle}</span> : null}
+const LabeledPercentKnob = ({ title, subtitle, ...props }) => {
+  const [infoOpen, setInfoOpen] = useState(false);
+  const infoRef = useRef(null);
+  useEffect(() => {
+    if (!infoOpen) return;
+    const onDocDown = (e) => { if (infoRef.current && !infoRef.current.contains(e.target)) setInfoOpen(false); };
+    document.addEventListener("mousedown", onDocDown);
+    return () => document.removeEventListener("mousedown", onDocDown);
+  }, [infoOpen]);
+
+  return (
+    <div className="annot_control">
+      <div className="annot_control_head annot_control_head--info">
+        <span className="annot_control_title">{title}</span>
+        {subtitle && (
+          <div className="annot_control_info_wrap" ref={infoRef}>
+            <button
+              type="button"
+              className="annot_control_info_btn"
+              onClick={() => setInfoOpen((o) => !o)}
+              title={subtitle}
+              aria-label="More info"
+            >
+              <InfoIcon />
+            </button>
+            {infoOpen && <div className="annot_control_info_popup">{subtitle}</div>}
+          </div>
+        )}
+      </div>
+      <PercentKnob {...props} />
     </div>
-    <PercentKnob {...props} />
-  </div>
-);
+  );
+};
 
 // Draw a single annotation onto a 2d canvas context.
 // Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
@@ -1238,7 +1272,6 @@ const PDFPage = forwardRef(({
     setToolbarDragging(true);
     setShapesMenuOpen(false);
     setColorMenuOpen(false);
-    setPenMenuOpen(false);
     setHighlightMenuOpen(false);
   }, []);
 
@@ -1249,6 +1282,13 @@ const PDFPage = forwardRef(({
       setToolbarTouchLabel((current) => (current?.key === key ? null : current));
       toolbarTouchLabelTimerRef.current = 0;
     }, 1000);
+  }, []);
+
+  const toggleAnnotTool = useCallback((key) => {
+    setAnnotTool((current) => (current === key ? null : key));
+    setShapesMenuOpen(false);
+    setColorMenuOpen(false);
+    setHighlightMenuOpen(false);
   }, []);
 
   useEffect(() => (
@@ -1291,16 +1331,23 @@ const PDFPage = forwardRef(({
   const [highlightAutoWidth, setHighlightAutoWidth] = useState(true);
   const [highlightTaperEnds, setHighlightTaperEnds] = useState(true);
   const [annotOpacity,      setAnnotOpacity]      = useState(35);    // % — highlight fill opacity
+  const [textFontFamily, setTextFontFamily] = useState("Georgia");
+  const [textFontSize, setTextFontSize] = useState(16);
+  const [textAlign, setTextAlign] = useState("left");
+  const [textBold, setTextBold] = useState(false);
+  const [textItalic, setTextItalic] = useState(false);
+  const [textUnderline, setTextUnderline] = useState(false);
+  const [textBordered, setTextBordered] = useState(false);
   const [drawTextBusy, setDrawTextBusy] = useState(false);
   const [drawTextStatus, setDrawTextStatus] = useState("");
   const [drawTextProgress, setDrawTextProgress] = useState(0);
   const [shapesMenuOpen,  setShapesMenuOpen]  = useState(false); // floating Shapes sub-toolbar (line/arrow/rect/circle)
   const [colorMenuOpen,  setColorMenuOpen]  = useState(false); // floating color dropdown
-  const [penMenuOpen,    setPenMenuOpen]    = useState(false); // floating pen controls dropdown
+  const [textMenuOpen, setTextMenuOpen] = useState(false); // floating text controls dropdown
   const [highlightMenuOpen, setHighlightMenuOpen] = useState(false); // floating highlight controls dropdown
   const shapesMenuRef = useRef(null);
   const colorMenuRef = useRef(null);
-  const penMenuRef = useRef(null);
+  const textMenuRef = useRef(null);
   const highlightMenuRef = useRef(null);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
@@ -1313,18 +1360,6 @@ const PDFPage = forwardRef(({
       return { ...prev, [annotTool]: nextColor };
     });
   }, [annotTool]);
-  const applyPenTheme = useCallback((theme) => {
-    if (!theme) return;
-    setPenType(theme.penType);
-    setPenStabilization(theme.settings.stabilization);
-    setPenPressureAssist(theme.settings.pressureAssist);
-    setPenTaper(theme.settings.taper);
-    setPenFlow(theme.settings.flow);
-    setPenBorder(theme.settings.border);
-    setPenNibAngle(theme.settings.nibAngle);
-    setPenNibSpread(theme.settings.nibSpread);
-  }, []);
-
   const getOcrWorker = useCallback(async () => {
     if (ocrWorkerRef.current) return ocrWorkerRef.current;
     if (ocrWorkerPromiseRef.current) return ocrWorkerPromiseRef.current;
@@ -1354,6 +1389,45 @@ const PDFPage = forwardRef(({
     }
   }, []);
 
+  const getTextAnnotationBounds = useCallback((ann, scale) => {
+    const ctx = annotCanvasRef.current?.getContext?.("2d");
+    const fontSize = (ann.fontSize || 16) * scale;
+    const fontWeight = ann.fontBold ? "700" : "400";
+    const fontStyle = ann.fontItalic ? "italic" : "normal";
+    const fontFamily = ann.fontFamily || "sans-serif";
+    const font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily.includes(" ") ? `"${fontFamily}"` : fontFamily}`;
+    const x = ann.x * scale;
+    const y = ann.y * scale;
+    const textWidth = ctx ? (() => {
+      ctx.save();
+      ctx.font = font;
+      const width = ctx.measureText(ann.text || "").width;
+      ctx.restore();
+      return width;
+    })() : Math.max(1, (ann.text || "").length * fontSize * 0.5);
+    const align = ann.textAlign || "left";
+    const left = align === "center" ? x - textWidth / 2 : align === "right" ? x - textWidth : x;
+    const top = ann.textBaseline === "top" ? y : y - fontSize * 0.8;
+    return {
+      left: left - fontSize * 0.15,
+      right: left + textWidth + fontSize * 0.15,
+      top: top - fontSize * 0.2,
+      bottom: top + fontSize * 1.2,
+    };
+  }, []);
+
+  const findTextAnnotationAt = useCallback((x, y) => {
+    const scale = fitScaleRef.current * zoomRef.current;
+    const anns = annotations[pageNum] || [];
+    for (let i = anns.length - 1; i >= 0; i--) {
+      const ann = anns[i];
+      if (ann.type !== "text") continue;
+      const box = getTextAnnotationBounds(ann, scale);
+      if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return ann;
+    }
+    return null;
+  }, [annotations, getTextAnnotationBounds, pageNum]);
+
   useEffect(() => () => {
     drawTextJobRef.current = 0;
     const worker = ocrWorkerRef.current;
@@ -1379,25 +1453,94 @@ const PDFPage = forwardRef(({
     return () => clearTimeout(timer);
   }, [annotations]);
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
+  const [textActionMenu, setTextActionMenu] = useState(null); // { vx, vy, width, editingId }
   const [annotTextVal,   setAnnotTextVal]   = useState("");
+  const annotTextInputRef = useRef(null);
+  const textActionMenuRef = useRef(null);
   const annotCanvasRef  = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
   const ocrWorkerRef = useRef(null);
   const ocrWorkerPromiseRef = useRef(null);
   const drawTextJobRef = useRef(0);
 
-  // Close the floating tools/color/pen/highlight dropdowns on an outside click
+  // Close the floating tools/color/highlight dropdowns on an outside click
   useEffect(() => {
-    if (!shapesMenuOpen && !colorMenuOpen && !penMenuOpen && !highlightMenuOpen) return;
+    if (!shapesMenuOpen && !colorMenuOpen && !textActionMenu && !highlightMenuOpen) return;
     const onDocPointerDown = (e) => {
       if (shapesMenuOpen && shapesMenuRef.current && !shapesMenuRef.current.contains(e.target)) setShapesMenuOpen(false);
       if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
-      if (penMenuOpen && penMenuRef.current && !penMenuRef.current.contains(e.target)) setPenMenuOpen(false);
+      if (textActionMenu && textActionMenuRef.current && !textActionMenuRef.current.contains(e.target)) setTextActionMenu(null);
       if (highlightMenuOpen && highlightMenuRef.current && !highlightMenuRef.current.contains(e.target)) setHighlightMenuOpen(false);
     };
     document.addEventListener("mousedown", onDocPointerDown);
     return () => document.removeEventListener("mousedown", onDocPointerDown);
-  }, [shapesMenuOpen, colorMenuOpen, penMenuOpen, highlightMenuOpen]);
+  }, [shapesMenuOpen, colorMenuOpen, textActionMenu, highlightMenuOpen]);
+
+  useEffect(() => {
+    if (annotTool !== "text") setTextActionMenu(null);
+  }, [annotTool]);
+
+  useEffect(() => {
+    setHighlightMenuOpen(annotTool === "highlight");
+  }, [annotTool]);
+
+  useEffect(() => {
+    if (!annotTextInput) return;
+    requestAnimationFrame(() => {
+      annotTextInputRef.current?.focus?.();
+      annotTextInputRef.current?.select?.();
+    });
+  }, [annotTextInput]);
+
+  const primeTextStyleFromAnnotation = useCallback((hit) => {
+    setTextFontFamily(hit.fontFamily || "Georgia");
+    setTextFontSize(Math.max(10, Math.round(hit.fontSize || 16)));
+    setTextAlign(hit.textAlign || "left");
+    setTextBold(Boolean(hit.fontBold));
+    setTextItalic(Boolean(hit.fontItalic));
+    setTextUnderline(Boolean(hit.textUnderline));
+    setTextBordered(Boolean(hit.textBordered));
+  }, []);
+
+  const openTextEditorForHit = useCallback((hit) => {
+    const scale = fitScaleRef.current * zoomRef.current;
+    const box = getTextAnnotationBounds(hit, scale);
+    setAnnotTextInput({
+      vx: annotCanvasRef.current.getBoundingClientRect().left + box.left,
+      vy: annotCanvasRef.current.getBoundingClientRect().top + box.top,
+      cx: hit.x * scale,
+      cy: hit.y * scale,
+      width: Math.max(120, box.right - box.left + 12),
+      editingId: hit.id,
+    });
+    setAnnotTextVal(hit.text || "");
+    primeTextStyleFromAnnotation(hit);
+    setTextActionMenu(null);
+  }, [getTextAnnotationBounds, primeTextStyleFromAnnotation]);
+
+  const handleTextAction = useCallback((action) => {
+    if (!textActionMenu) return;
+    const hit = (annotations[pageNum] || []).find((ann) => ann.id === textActionMenu.editingId);
+    if (!hit) {
+      setTextActionMenu(null);
+      return;
+    }
+
+    if (action === "delete") {
+      setAnnotations((prev) => ({
+        ...prev,
+        [pageNum]: (prev[pageNum] || []).filter((ann) => ann.id !== hit.id),
+      }));
+      setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+      logAnnotHistory({ action: "delete", type: "text", page: pageNum });
+      setAnnotTextInput(null);
+      setAnnotTextVal("");
+      setTextActionMenu(null);
+      return;
+    }
+
+    openTextEditorForHit(hit);
+  }, [textActionMenu, annotations, pageNum, logAnnotHistory, openTextEditorForHit]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -2052,7 +2195,29 @@ const PDFPage = forwardRef(({
       if (drawTextBusy) return;
       if (annotTool === "text") {
         const p = toCanvas(e);
-        setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y });
+        const hit = findTextAnnotationAt(p.x, p.y);
+        if (hit) {
+          const scale = fitScaleRef.current * zoomRef.current;
+          const box = getTextAnnotationBounds(hit, scale);
+          setAnnotTextInput({
+            vx: annotCanvasRef.current.getBoundingClientRect().left + box.left,
+            vy: annotCanvasRef.current.getBoundingClientRect().top + box.top,
+            cx: hit.x * scale,
+            cy: hit.y * scale,
+            width: Math.max(120, box.right - box.left + 12),
+            editingId: hit.id,
+          });
+          setAnnotTextVal(hit.text || "");
+          setTextFontFamily(hit.fontFamily || "Georgia");
+          setTextFontSize(Math.max(10, Math.round((hit.fontSize || 16) * scale)));
+          setTextAlign(hit.textAlign || "left");
+          setTextBold(Boolean(hit.fontBold));
+          setTextItalic(Boolean(hit.fontItalic));
+          setTextUnderline(Boolean(hit.textUnderline));
+          setTextBordered(Boolean(hit.textBordered));
+          return;
+        }
+        setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y, width: undefined, editingId: null });
         setAnnotTextVal("");
         return;
       }
@@ -2238,18 +2403,31 @@ const PDFPage = forwardRef(({
   const commitAnnotText = useCallback(() => {
     if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
     const scale = fitScaleRef.current * zoomRef.current;
+    const nextText = {
+      type: "text",
+      color: annotColor,
+      x: annotTextInput.cx / scale,
+      y: annotTextInput.cy / scale,
+      text: annotTextVal,
+      fontSize: textFontSize / scale,
+      fontFamily: textFontFamily,
+      textAlign,
+      fontBold: textBold,
+      fontItalic: textItalic,
+      textUnderline,
+      textBordered,
+      textBaseline: "top",
+    };
     setAnnotations((prev) => ({
       ...prev,
-      [pageNum]: [...(prev[pageNum] || []), {
-        id: Date.now(), type: "text", color: annotColor,
-        x: annotTextInput.cx / scale, y: annotTextInput.cy / scale,
-        text: annotTextVal, fontSize: 16 / scale,
-      }],
+      [pageNum]: annotTextInput.editingId
+        ? (prev[pageNum] || []).map((ann) => (ann.id === annotTextInput.editingId ? { ...ann, ...nextText } : ann))
+        : [...(prev[pageNum] || []), { id: Date.now(), ...nextText }],
     }));
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-    logAnnotHistory({ action: "add", type: "text", page: pageNum, color: annotColor });
+    logAnnotHistory({ action: annotTextInput.editingId ? "edit" : "add", type: "text", page: pageNum, color: annotColor });
     setAnnotTextInput(null); setAnnotTextVal("");
-  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory]);
+  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBordered]);
 
   const handleAnnotUndo = useCallback(() => {
     const arr = annotations[pageNum] || [];
@@ -2846,18 +3024,18 @@ const PDFPage = forwardRef(({
           // actually moving with them.
           const originX = startSL + startMidX;
           const originY = startST + startMidY;
-          const driftX = lastMidX - startMidX;
-          const driftY = lastMidY - startMidY;
           // originX/Y are in el's (previewEl's) content-space frame; the
           // transform is applied to wrap, whose own box sits offset from
           // el's padding edge by wrap.offsetLeft/Top (el's padding, plus
           // wrap's margin:auto centering when the page is narrower than the
           // viewer). Without subtracting that out, the live pinch preview
-          // scales around a point down-and-right of the real fingers, which
-          // visibly drags the shown page up-and-left as the pinch spreads.
+          // scales around a point down-and-right of the real fingers. The
+          // live preview intentionally stays anchored in place now instead of
+          // following the fingers with an extra translate, so pinch zoom feels
+          // like pure zoom rather than zoom-plus-pan.
           wrap.style.willChange      = "transform";
           wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
-          wrap.style.transform       = `translate(${driftX}px, ${driftY}px) scale(${newZoom / startZoom})`;
+          wrap.style.transform       = `scale(${newZoom / startZoom})`;
           pinchTransformApplied = true;
         }
         if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(newZoom * 100)}%`;
@@ -4146,6 +4324,11 @@ const PDFPage = forwardRef(({
           onMouseDown={handleToolbarDragStart}
           title="Drag to move the tools bar to any edge of the canvas"
         />
+        {/* Wraps everything except the drag handle above — at left/right
+            dock this is what actually scrolls (see .pdf_toolbar_scroll in
+            pdfPage.css), so #pdf_toolbar's own overflow can stay visible
+            and not clip the handle's outward bulge. */}
+        <div className="pdf_toolbar_scroll">
         <div id="pdf_toolbar_topbar">
           {pdfDoc && !selectionOnly && (
             <div id="pdf_toolbar_topbar_controls">
@@ -4198,7 +4381,7 @@ const PDFPage = forwardRef(({
                       <button
                         type="button"
                         className={`annot_trigger annot_tool_btn${(shapesActive || shapesMenuOpen) ? " annot_trigger--active" : ""}`}
-                        onClick={() => { setShapesMenuOpen((o) => !o); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                        onClick={() => { setShapesMenuOpen((o) => !o); setColorMenuOpen(false); setHighlightMenuOpen(false); }}
                         title="Shapes"
                         aria-label="Shapes"
                       >
@@ -4216,7 +4399,12 @@ const PDFPage = forwardRef(({
                                 onPointerDown={(event) => {
                                   if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(shapeKey, shapeTool.label);
                                 }}
-                                onClick={() => { setAnnotTool(shapeKey); setShapesMenuOpen(false); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                        onClick={() => {
+                          setAnnotTool((current) => (current === shapeKey ? null : shapeKey));
+                          setShapesMenuOpen(false);
+                          setColorMenuOpen(false);
+                          setHighlightMenuOpen(false);
+                        }}
                                 title={shapeTool.label}
                                 aria-label={shapeTool.label}
                               >
@@ -4241,12 +4429,12 @@ const PDFPage = forwardRef(({
                       onPointerDown={(event) => {
                         if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(key, tool.label);
                       }}
-                      onClick={() => { setAnnotTool(key); setColorMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                      onClick={() => toggleAnnotTool(key)}
                       title={tool.label}
                       aria-label={tool.label}
                     >
                       {toolbarTouchLabel?.key === key && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
-                      {key === "pen" ? <PenToolIcon /> : <i className={tool.icon} />}
+                      {key === "pen" ? <PenToolIcon /> : tool.iconSvg || <i className={tool.icon} />}
                     </button>
                   </React.Fragment>
                 );
@@ -4271,7 +4459,7 @@ const PDFPage = forwardRef(({
                 <button
                   type="button"
                   className="annot_trigger annot_trigger--color"
-                  onClick={() => { setColorMenuOpen((o) => !o); setShapesMenuOpen(false); setPenMenuOpen(false); setHighlightMenuOpen(false); }}
+                  onClick={() => { setColorMenuOpen((o) => !o); setShapesMenuOpen(false); setHighlightMenuOpen(false); }}
                   title="Color"
                 >
                   <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
@@ -4321,121 +4509,192 @@ const PDFPage = forwardRef(({
               />
             )}
 
+            {annotTool === "text" && <span className="annot_text_separator" aria-hidden="true" />}
+
+            {annotTool === "text" && (
+              <div className="annot_text_panel">
+                <div className="annot_mode_toggle annot_mode_toggle--pen">
+                  <button
+                    type="button"
+                    className={`annot_mode_btn${textAlign === "left" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setTextAlign("left")}
+                    title="Align left"
+                    aria-label="Align left"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                      <path d="M3 7h12v2H3zm0-4h18v2H3zm0 8h18v2H3zm0 4h12v2H3zm0 4h18v2H3z" />
+                    </svg>
+                  </button>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn${textAlign === "center" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => setTextAlign("center")}
+                      title="Align center"
+                      aria-label="Align center"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                        <path d="M6 7h12v2H6zM3 3h18v2H3zm0 8h18v2H3zm3 4h12v2H6zm-3 4h18v2H3z" />
+                      </svg>
+                    </button>
+                  <button
+                    type="button"
+                    className={`annot_mode_btn${textAlign === "right" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setTextAlign("right")}
+                    title="Align right"
+                    aria-label="Align right"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                      <path d="M9 7h12v2H9zM3 3h18v2H3zm0 8h18v2H3zm6 4h12v2H9zm-6 4h18v2H3z" />
+                    </svg>
+                  </button>
+                </div>
+                <span className="annot_text_separator" aria-hidden="true" />
+
+                <div className="annot_mode_toggle annot_mode_toggle--pen">
+                    <button
+                      type="button"
+                      className={`annot_mode_btn${textBold ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => setTextBold((value) => !value)}
+                      title="Bold"
+                      aria-label="Bold"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                        <path d="M13 4.5H7c-.83 0-1.5.67-1.5 1.5v12c0 .83.67 1.5 1.5 1.5h6.5c2.48 0 4.5-2.02 4.5-4.5 0-1.3-.56-2.46-1.44-3.28.58-.76.94-1.69.94-2.72 0-2.48-2.02-4.5-4.5-4.5m0 3c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5H8.5v-3zm.5 9h-5v-3h5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5" />
+                      </svg>
+                    </button>
+                  <button
+                    type="button"
+                    className={`annot_mode_btn${textItalic ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setTextItalic((value) => !value)}
+                    title="Italic"
+                    aria-label="Italic"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                      <path d="M19 4H9v2h3.67L9.25 18H5v2h10v-2h-3.67l3.42-12H19z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className={`annot_mode_btn${textUnderline ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setTextUnderline((value) => !value)}
+                    title="Underline"
+                    aria-label="Underline"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                      <path d="M5 18h14v2H5zM6 4v6c0 3.31 2.69 6 6 6s6-2.69 6-6V4h-2v6c0 2.21-1.79 4-4 4s-4-1.79-4-4V4z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className={`annot_mode_btn${textBordered ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setTextBordered((value) => !value)}
+                    title="Bordered"
+                    aria-label="Bordered"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                      <path d="M11 7h2v2h-2zm0 8h2v2h-2zm-4-4h2v2H7zm8 0h2v2h-2zm-4 0h2v2h-2z" />
+                      <path d="M17 3H3v18h18V3zm2 4v12H5V5h14z" />
+                    </svg>
+                  </button>
+                </div>
+                <span className="annot_text_separator" aria-hidden="true" />
+
+                <div className="annot_text_font_row">
+                  <label className="annot_text_font_label" htmlFor="pdf_text_font_family">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                      <path d="M10.44 6.67C10.3 6.27 9.92 6 9.5 6h-1c-.43 0-.81.27-.94.67L3.64 18h2.12l1.04-3h4.42l1.04 3h2.12L10.46 6.67ZM7.48 13 9 8.61 10.52 13zM13 6h8v2h-8zm2 4h6v2h-6zm2 4h4v2h-4z" />
+                    </svg>
+                  </label>
+                  <select
+                    id="pdf_text_font_family"
+                    className="annot_text_select"
+                    value={textFontFamily}
+                    onChange={(e) => setTextFontFamily(e.target.value)}
+                    aria-label="Font type"
+                  >
+                    {TEXT_FONT_FAMILIES.map(({ key, label }) => (
+                      <option key={key} value={key}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <span className="annot_text_separator annot_text_separator--wide" aria-hidden="true" />
+
+                <SizeKnob
+                  min={10}
+                  max={48}
+                  step={1}
+                  value={textFontSize}
+                  onChange={setTextFontSize}
+                  color={annotColor}
+                  dashed={false}
+                />
+              </div>
+            )}
+
             {annotTool === "pen" && (
-              <div className="annot_dd_wrap" ref={penMenuRef}>
-                <button
-                  type="button"
-                  className={`annot_trigger${penMenuOpen ? " annot_trigger--active" : ""}`}
-                  onClick={() => { setPenMenuOpen((o) => !o); setShapesMenuOpen(false); setColorMenuOpen(false); setHighlightMenuOpen(false); }}
-                  title="Pen settings"
-                >
-                  <i className="bx bx-slider-alt" />
-                  <span className="annot_trigger_label">Stroke shaping</span>
-                  <i className="bx bx-chevron-down annot_trigger_chevron" />
-                </button>
-                {penMenuOpen && (
-                  <div className="annot_dd annot_dd--pen">
-                    <div className="annot_pen_panel">
-                      <div className="annot_pen_group">
-                        <div className="annot_pen_group_title">Themes</div>
-                        <div className="annot_mode_toggle annot_mode_toggle--pen">
-                          {PEN_THEMES.map((theme) => (
-                            <button
-                              key={theme.key}
-                              type="button"
-                              className="annot_mode_btn"
-                              onClick={() => applyPenTheme(theme)}
-                            >
-                              {theme.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
+              <div className="annot_pen_panel">
+                <div className="annot_mode_toggle annot_mode_toggle--pen">
+                  <button
+                    type="button"
+                    className={`annot_mode_btn${penBorder ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setPenBorder((value) => !value)}
+                    title="Stroke border"
+                    aria-label="Stroke border"
+                  >
+                    <StrokeBorderIcon />
+                  </button>
+                </div>
+                <div className="annot_pen_controls annot_pen_controls--column">
+                  <LabeledPercentKnob
+                    title="Smoothing"
+                    subtitle="Reduce hand jitter"
+                    value={penStabilization}
+                    onChange={setPenStabilization}
+                    label="%"
+                  />
+                  <LabeledPercentKnob
+                    title="Pressure assist"
+                    subtitle="Shape width without stylus pressure"
+                    value={penPressureAssist}
+                    onChange={setPenPressureAssist}
+                    label="%"
+                  />
+                  <LabeledPercentKnob
+                    title="Tip taper"
+                    subtitle="Sharper start and end"
+                    value={penTaper}
+                    onChange={setPenTaper}
+                    label="%"
+                  />
+                  <LabeledPercentKnob
+                    title="Ink flow"
+                    subtitle="Extra body and softness"
+                    value={penFlow}
+                    onChange={setPenFlow}
+                    label="%"
+                  />
+                </div>
 
-                      <div className="annot_pen_group">
-                        <div className="annot_pen_group_title">Pen type</div>
-                        <div className="annot_mode_toggle annot_mode_toggle--pen">
-                          {PEN_TYPES.map(({ key, label }) => (
-                            <button
-                              key={key}
-                              type="button"
-                              className={`annot_mode_btn${penType === key ? " annot_mode_btn--active" : ""}`}
-                              onClick={() => setPenType(key)}
-                            >
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="annot_pen_group annot_pen_group--full">
-                        <div className="annot_pen_group_title">Stroke shaping</div>
-                        <div className="annot_mode_toggle annot_mode_toggle--pen">
-                          <button
-                            type="button"
-                            className={`annot_mode_btn${penBorder ? " annot_mode_btn--active" : ""}`}
-                            onClick={() => setPenBorder((value) => !value)}
-                          >
-                            Stroke border
-                          </button>
-                        </div>
-                        <div className="annot_pen_controls annot_pen_controls--column">
-                          <LabeledPercentKnob
-                            title="Smoothing"
-                            subtitle="Reduce hand jitter"
-                            value={penStabilization}
-                            onChange={setPenStabilization}
-                            label="%"
-                          />
-                          <LabeledPercentKnob
-                            title="Pressure assist"
-                            subtitle="Shape width without stylus pressure"
-                            value={penPressureAssist}
-                            onChange={setPenPressureAssist}
-                            label="%"
-                          />
-                          <LabeledPercentKnob
-                            title="Tip taper"
-                            subtitle="Sharper start and end"
-                            value={penTaper}
-                            onChange={setPenTaper}
-                            label="%"
-                          />
-                          <LabeledPercentKnob
-                            title="Ink flow"
-                            subtitle="Extra body and softness"
-                            value={penFlow}
-                            onChange={setPenFlow}
-                            label="%"
-                          />
-                        </div>
-                      </div>
-
-                      {penType === "fountain" && (
-                        <div className="annot_pen_group">
-                          <div className="annot_pen_group_title">Fountain nib</div>
-                          <div className="annot_pen_controls">
-                            <LabeledPercentKnob
-                              title="Nib angle"
-                              subtitle="Direction of the broad edge"
-                              value={penNibAngle}
-                              onChange={setPenNibAngle}
-                              min={0}
-                              max={180}
-                              step={5}
-                              label="°"
-                            />
-                            <LabeledPercentKnob
-                              title="Nib spread"
-                              subtitle="Broad-stroke contrast"
-                              value={penNibSpread}
-                              onChange={setPenNibSpread}
-                              label="%"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                {penType === "fountain" && (
+                  <div className="annot_pen_controls">
+                    <LabeledPercentKnob
+                      title="Nib angle"
+                      subtitle="Direction of the broad edge"
+                      value={penNibAngle}
+                      onChange={setPenNibAngle}
+                      min={0}
+                      max={180}
+                      step={5}
+                      label="°"
+                    />
+                    <LabeledPercentKnob
+                      title="Nib spread"
+                      subtitle="Broad-stroke contrast"
+                      value={penNibSpread}
+                      onChange={setPenNibSpread}
+                      label="%"
+                    />
                   </div>
                 )}
               </div>
@@ -4446,7 +4705,7 @@ const PDFPage = forwardRef(({
                 <button
                   type="button"
                   className={`annot_trigger${highlightMenuOpen ? " annot_trigger--active" : ""}`}
-                  onClick={() => { setHighlightMenuOpen((o) => !o); setShapesMenuOpen(false); setColorMenuOpen(false); setPenMenuOpen(false); }}
+                  onClick={() => { setHighlightMenuOpen((o) => !o); setShapesMenuOpen(false); setColorMenuOpen(false); }}
                   title="Highlight settings"
                 >
                   <i className="bx bx-highlight" />
@@ -4456,66 +4715,60 @@ const PDFPage = forwardRef(({
                 {highlightMenuOpen && (
                   <div className="annot_dd annot_dd--highlight">
                     <div className="annot_pen_panel annot_pen_panel--highlight">
-                      <div className="annot_pen_group">
-                        <div className="annot_pen_group_title">Shape</div>
+                      <div className="annot_mode_toggle annot_mode_toggle--pen">
+                        <button
+                          type="button"
+                          className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
+                          onClick={() => setHighlightMode("freehand")}
+                        >Freehand</button>
+                        <button
+                          type="button"
+                          className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
+                          onClick={() => setHighlightMode("line")}
+                        >Straight line</button>
+                      </div>
+                      {highlightMode === "line" && (
                         <div className="annot_mode_toggle annot_mode_toggle--pen">
                           <button
                             type="button"
-                            className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
-                            onClick={() => setHighlightMode("freehand")}
-                          >Freehand</button>
+                            className={`annot_mode_btn annot_mode_btn--toggle${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
+                            onClick={() => setHighlightAutoWidth((value) => !value)}
+                            title="Auto width: click text to match that text span's width automatically"
+                          >
+                            Auto width
+                          </button>
                           <button
                             type="button"
-                            className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
-                            onClick={() => setHighlightMode("line")}
-                          >Straight line</button>
+                            className={`annot_mode_btn annot_mode_btn--toggle${highlightTaperEnds ? " annot_mode_btn--active" : ""}`}
+                            onClick={() => setHighlightTaperEnds((value) => !value)}
+                            title="Taper ends: rounded marker caps; off uses blunt ends"
+                          >
+                            {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
+                          </button>
                         </div>
-                        {highlightMode === "line" && (
-                          <div className="annot_mode_toggle annot_mode_toggle--pen">
-                            <button
-                              type="button"
-                              className={`annot_mode_btn annot_mode_btn--toggle${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
-                              onClick={() => setHighlightAutoWidth((value) => !value)}
-                              title="Auto width: click text to match that text span's width automatically"
-                            >
-                              Auto width
-                            </button>
-                            <button
-                              type="button"
-                              className={`annot_mode_btn annot_mode_btn--toggle${highlightTaperEnds ? " annot_mode_btn--active" : ""}`}
-                              onClick={() => setHighlightTaperEnds((value) => !value)}
-                              title="Taper ends: rounded marker caps; off uses blunt ends"
-                            >
-                              {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      )}
 
-                      <div className="annot_pen_group">
-                        <div className="annot_pen_group_title">Coverage</div>
-                        <div className="annot_pen_controls">
-                          <div className="annot_control">
-                            <div className="annot_control_head">
-                              <span className="annot_control_title">Width</span>
-                              <span className="annot_control_subtitle">How wide the marker lays down ink</span>
-                            </div>
-                            <SizeKnob
-                              min={4}
-                              max={64}
-                              step={2}
-                              value={annotSize}
-                              onChange={setAnnotSize}
-                              color={annotColor}
-                            />
+                      <div className="annot_pen_controls">
+                        <div className="annot_control">
+                          <div className="annot_control_head">
+                            <span className="annot_control_title">Width</span>
+                            <span className="annot_control_subtitle">How wide the marker lays down ink</span>
                           </div>
-                          <div className="annot_control">
-                            <div className="annot_control_head">
-                              <span className="annot_control_title">Opacity</span>
-                              <span className="annot_control_subtitle">Transparency of the highlight layer</span>
-                            </div>
-                            <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
+                          <SizeKnob
+                            min={4}
+                            max={64}
+                            step={2}
+                            value={annotSize}
+                            onChange={setAnnotSize}
+                            color={annotColor}
+                          />
+                        </div>
+                        <div className="annot_control">
+                          <div className="annot_control_head">
+                            <span className="annot_control_title">Opacity</span>
+                            <span className="annot_control_subtitle">Transparency of the highlight layer</span>
                           </div>
+                          <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
                         </div>
                       </div>
                     </div>
@@ -4567,6 +4820,7 @@ const PDFPage = forwardRef(({
               {PDF_TYPE_LABEL[pdfType]}
             </span>
           )}
+        </div>
         </div>
         </div>
 
@@ -4825,6 +5079,7 @@ const PDFPage = forwardRef(({
                       {annotTextInput && (
                         <input
                           id="annot_text_input"
+                          ref={annotTextInputRef}
                           autoFocus
                           value={annotTextVal}
                           spellCheck
@@ -4837,6 +5092,14 @@ const PDFPage = forwardRef(({
                             left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left,
                             top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top,
                             width: annotTextInput.width || undefined,
+                            fontFamily: textFontFamily,
+                            fontSize: `${textFontSize}px`,
+                            fontWeight: textBold ? 700 : 400,
+                            fontStyle: textItalic ? "italic" : "normal",
+                            textDecoration: textUnderline ? "underline" : "none",
+                            textAlign,
+                            border: textBordered ? "1px solid var(--color-border)" : "none",
+                            boxShadow: textBordered ? "0 2px 14px rgba(0, 0, 0, 0.18)" : "0 2px 16px rgba(0, 0, 0, 0.35)",
                           }}
                         />
                       )}

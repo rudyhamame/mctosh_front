@@ -382,6 +382,14 @@
   justify-content: center;
   gap: 0.3rem;
 }
+/* Align center uses a raw SVG (see DraftPage.jsx) instead of this row's
+   usual fi-rr-* icon font glyphs — sized down to match their ~0.75rem
+   visual weight instead of rendering at the SVG's own native 24x24. */
+.draft_tool_btn svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
 .draft_tool_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
 .draft_tool_btn:disabled { opacity: 0.45; cursor: default; }
 .draft_tool_btn--active {

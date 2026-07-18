@@ -1593,7 +1593,11 @@ const DraftEditor = ({ id }) => {
             <button type="button" className="draft_tool_btn" title="Underline" onMouseDown={(e) => e.preventDefault()} onClick={() => execFormat("underline")}><u>U</u></button>
 
             <button type="button" className="draft_tool_btn" title="Align left" onMouseDown={(e) => e.preventDefault()} onClick={() => execFormat("justifyLeft")}><i className="fi fi-rr-align-left" /></button>
-            <button type="button" className="draft_tool_btn" title="Align center" onMouseDown={(e) => e.preventDefault()} onClick={() => execFormat("justifyCenter")}><i className="fi fi-rr-align-center" /></button>
+            <button type="button" className="draft_tool_btn" title="Align center" onMouseDown={(e) => e.preventDefault()} onClick={() => execFormat("justifyCenter")}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
+                <path d="M6 7h12v2H6zM3 3h18v2H3zm0 8h18v2H3zm3 4h12v2H6zm-3 4h18v2H3z" />
+              </svg>
+            </button>
             <button type="button" className="draft_tool_btn" title="Align right" onMouseDown={(e) => e.preventDefault()} onClick={() => execFormat("justifyRight")}><i className="fi fi-rr-align-left draft_icon_flip" /></button>
             <button type="button" className="draft_tool_btn" title="Indent paragraph" onMouseDown={(e) => e.preventDefault()} onClick={indentCurrentBlock}>
               <i className="fi fi-rr-indent" />
