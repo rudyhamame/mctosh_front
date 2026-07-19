@@ -1,11 +1,12 @@
 export const THEME_STORAGE_KEY = "mctosh_theme";
+export const DEFAULT_THEME = "light";
 
 export const normalizeThemeId = (themeId) => (
-  ["original", "light", "dark"].includes(themeId) ? themeId : "original"
+  ["original", "light", "dark"].includes(themeId) ? themeId : DEFAULT_THEME
 );
 
 export const readStoredTheme = () => {
-  if (typeof localStorage === "undefined") return "original";
+  if (typeof localStorage === "undefined") return DEFAULT_THEME;
   return normalizeThemeId(localStorage.getItem(THEME_STORAGE_KEY));
 };
 

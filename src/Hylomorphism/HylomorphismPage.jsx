@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { apiUrl } from "../config/api";
+import { applyTheme, readStoredTheme } from "../utils/theme";
 import MCTOSHPromptModal from "./MCTOSHPromptModal";
 import "./hylomorphismPage.css";
 
@@ -30,6 +31,11 @@ const HylomorphismPage = () => {
   const [loading,      setLoading]      = useState(true);
   const [sourceType,   setSourceType]   = useState("pdf");
   const [showPrompt,   setShowPrompt]   = useState(false);
+
+  useEffect(() => {
+    applyTheme("light", { persist: false });
+    return () => applyTheme(readStoredTheme(), { persist: false });
+  }, []);
 
   useEffect(() => {
     fetch(apiUrl("/api/sources/"), { headers: authHeader() })

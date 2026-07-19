@@ -143,7 +143,7 @@ html.theme-light #ms_word {
 }
 
 html.theme-light #login_scene_text {
-  color: #555;
+  color: #333;
 }
 
 html.theme-light .login_scene_ring {
@@ -304,13 +304,14 @@ html.theme-light .login_scene_schema_chip {
    rather than pushing the rest of the panel around. ── */
 #anim_footer {
   flex-shrink: 0;
-  width: 100%;
+  width: calc(100% + 2.4rem);
   max-height: 34vh;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  padding: 0.6rem 0;
+  padding: 0.9rem 1.2rem 1.1rem;
+  margin: 0 -1.2rem;
   border-top: 1px solid rgba(255,255,255,0.07);
 }
 #anim_footer_row {
@@ -517,6 +518,34 @@ html.theme-light .login_scene_schema_chip {
   border: none;
 }
 
+html.theme-light #travel_slider,
+html.theme-light #cutaway_slider {
+  background: linear-gradient(
+    to right,
+    #111 0%,
+    #111 var(--slider-fill, 0%),
+    #d7d7d7 var(--slider-fill, 0%)
+  );
+}
+
+html.theme-light #travel_slider::-webkit-slider-thumb,
+html.theme-light #cutaway_slider::-webkit-slider-thumb {
+  background: #fff;
+  border-color: #111;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+}
+
+html.theme-light #travel_slider::-moz-range-thumb,
+html.theme-light #cutaway_slider::-moz-range-thumb {
+  background: #fff;
+  border: 2px solid #111;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+}
+
+html.theme-light .slider_label {
+  color: #222;
+}
+
 /* ── The identity stack: precomputed identities layered along Z ──
    No rotation of its own — #login_stage carries that for the whole object.
    Just preserve-3d so translateZ actually separates the slices in depth
@@ -596,6 +625,31 @@ html.theme-light .login_scene_schema_chip {
   border-width: 3px;
   border-color: rgba(180,160,225,0.75);
   box-shadow: 0 0 10px rgba(150,130,210,0.3);
+}
+
+html.theme-light .identity_shell_ring {
+  border-color: rgba(0,0,0,0.28);
+  opacity: 0.42;
+}
+
+html.theme-light .identity_slice--recovery .identity_shell_ring {
+  opacity: 0.24;
+  border-style: dashed;
+}
+
+html.theme-light .identity_slice--current .identity_shell_ring {
+  border-color: #111;
+  opacity: 0.86;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.8), 0 0 18px rgba(0,0,0,0.18);
+}
+
+html.theme-light .identity_rope_svg line {
+  stroke: #111;
+  opacity: 0.42;
+}
+
+html.theme-light .identity_items--recovery {
+  opacity: 0.62;
 }
 
 #login_svg {
@@ -770,7 +824,7 @@ html.theme-light .mn_step {
 }
 
 html.theme-light .mn_label {
-  color: #555;
+  color: #222;
 }
 
 /* ══════════════════════════════════════
@@ -1095,7 +1149,7 @@ html.theme-light .mn_label {
   background: rgba(4,6,15,0.6);
   border: 1px solid rgba(255,255,255,0.07);
   border-radius: 7px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 #ds_head {
@@ -1165,6 +1219,7 @@ html.theme-light .mn_label {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  border-radius: 0 0 7px 7px;
 }
 
 .ds_item {
@@ -1288,7 +1343,16 @@ html.theme-light #pr_sphere {
 html.theme-light #pr_zone_physio,
 html.theme-light #pr_zone_comp,
 html.theme-light #pr_zone_detr {
-  color: rgba(0,0,0,0.48);
+  color: #111;
+  background: rgba(255,255,255,0.78);
+  border: 1px solid rgba(0,0,0,0.10);
+  border-radius: 999px;
+  padding: 0.16rem 0.36rem;
+  text-shadow: 0 1px 0 #fff;
+}
+
+html.theme-light #pr_zone_svg line {
+  stroke: rgba(0,0,0,0.18);
 }
 
 html.theme-light #labels_card_head {
@@ -1297,7 +1361,7 @@ html.theme-light #labels_card_head {
 
 html.theme-light #labels_card_mctoshs,
 html.theme-light #labels_card_pr {
-  color: #222;
+  color: #111;
 }
 
 html.theme-light .labels_card_dot {
@@ -1306,11 +1370,11 @@ html.theme-light .labels_card_dot {
 }
 
 html.theme-light .labels_card_name {
-  color: #333;
+  color: #111;
 }
 
 html.theme-light .labels_card_letter {
-  color: #777;
+  color: #444;
 }
 
 html.theme-light #mctosh_sphere {
@@ -1342,20 +1406,29 @@ html.theme-light #ms_rim {
 
 html.theme-light #disease_selector,
 html.theme-light #object_info {
-  background: rgba(255,255,255,0.86);
-  border-color: rgba(0,0,0,0.12);
-  box-shadow: 0 16px 38px rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.94);
+  border-color: rgba(0,0,0,0.18);
+  box-shadow: 0 16px 38px rgba(0,0,0,0.13);
+}
+
+html.theme-light .object_info_label {
+  color: #444;
+}
+
+html.theme-light .object_info_value,
+html.theme-light .object_info_sub {
+  color: #111;
 }
 
 html.theme-light #ds_head {
   border-bottom-color: rgba(0,0,0,0.10);
-  color: #777;
+  color: #333;
 }
 
 html.theme-light #ds_stack_toggle {
   background: #f5f5f5;
-  border-color: #d7d7d7;
-  color: #555;
+  border-color: #bdbdbd;
+  color: #111;
 }
 
 html.theme-light #ds_stack_toggle:hover,
@@ -1367,7 +1440,7 @@ html.theme-light #ds_collapse_btn:hover {
 html.theme-light #ds_collapse_btn,
 html.theme-light #ds_disease_select,
 html.theme-light .ds_desc {
-  color: #555;
+  color: #222;
 }
 
 html.theme-light #ds_disease_select option {
@@ -1399,7 +1472,23 @@ html.theme-light .ds_badge {
 }
 
 html.theme-light #login_tagline {
-  color: #777;
+  color: #333;
+}
+
+html.theme-light #anim_footer {
+  border-top-color: rgba(0,0,0,0.12);
+}
+
+html.theme-light .footer_section_title {
+  color: #111;
+}
+
+html.theme-light .footer_section_sub {
+  color: #444;
+}
+
+html.theme-light #anim_footer_items {
+  border-top-color: rgba(0,0,0,0.12);
 }
 
 /* ══════════════════════════════════════
@@ -1588,7 +1677,7 @@ html.theme-light #login_panel_toggle:hover {
   border-left: 1px solid var(--login-panel-border, rgba(255,255,255,0.06));
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
-  overflow: hidden;
+  overflow: visible;
   position: relative;
   z-index: 1;
   animation: panel_enter 0.6s cubic-bezier(0.22,1,0.36,1) both;
@@ -1615,6 +1704,7 @@ html.theme-light #login_panel {
   gap: 1.1rem;
   padding: 2rem 3rem 5rem;
   overflow-y: auto;
+  overflow-x: visible;
 }
 
 @keyframes panel_enter {
@@ -1673,7 +1763,7 @@ html.theme-light #login_form_bar {
 html.theme-light #login_demo_note {
   border-color: #d7d7d7;
   background: #f5f5f5;
-  color: #555;
+  color: #333;
 }
 
 /* Fields */
@@ -1878,7 +1968,7 @@ html.theme-light #login_toggle:hover {
     min-height: 260px;
     flex: none;
     padding: 1.5rem 1rem 1rem;
-    overflow: hidden;
+    overflow: visible;
   }
   #login_stage_wrap {
     min-height: 0;
@@ -1906,7 +1996,7 @@ html.theme-light #login_toggle:hover {
     border-top: 1px solid rgba(255,255,255,0.06);
     padding: 2rem 2rem 4rem;
     backdrop-filter: none;
-    overflow: hidden;
+    overflow: visible;
   }
   #login_footer {
     position: static;

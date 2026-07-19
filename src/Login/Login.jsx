@@ -994,7 +994,7 @@ export default function Login({ onLogin }) {
             <div id="login_demo_note">
               <span>To try my app you can use the credentials:</span>
               <strong>username: test</strong>
-              <strong>password: text123</strong>
+              <strong>password: test123</strong>
             </div>
           )}
 

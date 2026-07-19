@@ -32,8 +32,8 @@ const authHeader = () => {
 };
 
 const THEMES = [
-  { id: "original", label: "Original", desc: "Deep blue-navy — the AMCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
-  { id: "light",    label: "Light",    desc: "Clean white with soft contrast",       bg: "#f8f8fc", surface: "#ffffff",  text: "#111122", border: "#d0d0e0" },
+  { id: "original", label: "Original", desc: "Deep blue-navy classic theme",          bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
+  { id: "light",    label: "Light",    desc: "Clean white default with soft contrast", bg: "#f8f8fc", surface: "#ffffff",  text: "#111122", border: "#d0d0e0" },
   { id: "dark",     label: "Dark",     desc: "Pure black — minimal ink",             bg: "#000000", surface: "#0f0f0f",  text: "#f0f0f0", border: "#222222" },
 ];
 
