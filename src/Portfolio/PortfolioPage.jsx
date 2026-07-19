@@ -132,7 +132,7 @@ const PortfolioPage = () => (
         <h2 className="pf_section_title">Projects</h2>
         <div className="pf_project_card">
           <div className="pf_project_header">
-            <span className="pf_project_name">MCTOSHS</span>
+            <span className="pf_project_name">AMCTOSHS</span>
             <span className="pf_project_date">2020 – Present</span>
           </div>
           <p className="pf_body">

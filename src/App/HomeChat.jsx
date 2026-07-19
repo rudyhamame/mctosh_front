@@ -6,7 +6,6 @@ import { AI_PROVIDERS, useAIProvider } from "../hooks/useAIProvider";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { AVATAR_GREETING, speakableText } from "./AnamAvatar";
 import AvatarContainer from "../Avatar/AvatarContainer";
-import AvatarProviderSelector from "../Avatar/AvatarProviderSelector";
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -29,7 +28,7 @@ const replaceLast = (msgs, text) => {
 // independently. `currentPage` (the route the user is actually looking at
 // right now, see useLocation() in HomeChat below) is sent with every turn
 // so the AI's own reply can be aware of it.
-const useContextChat = (userId, provider, model, withCodebase, withDb, avatarRef, currentPage) => {
+const useContextChat = (userId, provider, model, avatarRef, currentPage) => {
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);
@@ -50,7 +49,7 @@ const useContextChat = (userId, provider, model, withCodebase, withDb, avatarRef
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: nextMessages, provider, model, userId, withCodebase, withDb, currentPage,
+          messages: nextMessages, provider, model, userId, currentPage,
         }),
         signal: controller.signal,
       });
@@ -286,7 +285,10 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
 // ── Main panel ────────────────────────────────────────────────────────────────
 
 const HomeChat = () => {
-  const { provider, setProvider }  = useAIProvider();
+  // Provider is chosen in Settings now (same mctosh_ai_provider localStorage
+  // key useAIProvider reads on mount) — Dev AI no longer has its own
+  // selector, just uses whatever's currently set.
+  const { provider } = useAIProvider();
   const userId = readStoredSession()?.my_id;
   // Rendered once, app-wide (see AppRouter.js), outside of <Routes> — but
   // useLocation() still tracks navigation from anywhere inside the Router,
@@ -294,17 +296,6 @@ const HomeChat = () => {
   // the user moves between pages.
   const location = useLocation();
   const currentPage = location.pathname + location.search;
-  const [withCodebase, setWithCodebase] = useState(
-    () => localStorage.getItem("mctosh_ai_codebase") === "true"
-  );
-  // Database context defaults ON (unlike codebase context, opt-in above) —
-  // Dev AI should have access to your data from the moment you open it,
-  // without needing to remember to flip the DB toggle on first. Still
-  // respects an explicit "off" from the toggle button, persisted the same
-  // way as before.
-  const [withDb, setWithDb] = useState(
-    () => localStorage.getItem("mctosh_ai_db") !== "false"
-  );
 
   // Same provider/model list as the AI Providers settings page (same
   // endpoint, same env-var + saved-override resolution) — falls back to the
@@ -325,9 +316,10 @@ const HomeChat = () => {
 
   const selectedModel = providerOptions.find(p => p.id === provider)?.model || "";
   const avatarRef = useRef(null);
-  const { messages, streaming, send, stop, reset } = useContextChat(userId, provider, selectedModel, withCodebase, withDb, avatarRef, currentPage);
+  const { messages, streaming, send, stop, reset } = useContextChat(userId, provider, selectedModel, avatarRef, currentPage);
   const [isOpen, setIsOpen]        = useState(false);
   const [input, setInput]         = useState("");
+  const [showInput, setShowInput] = useState(false);
   const [ttsOn, setTtsOn]         = useState(false);
   const [inCall, setInCall]       = useState(false);
 
@@ -401,31 +393,6 @@ const HomeChat = () => {
           )}
 
           <div id="home_voice_ctrls">
-            <AvatarProviderSelector compact />
-            <select
-              id="home_chat_provider"
-              value={provider}
-              onChange={e => setProvider(e.target.value)}
-              disabled={streaming}
-            >
-              {providerOptions.map(({ id, label, model }) => (
-                <option key={id} value={id}>{label} · {model}</option>
-              ))}
-            </select>
-            <button
-              className={`home_chat_ctrl${withCodebase ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
-              onClick={() => setWithCodebase(v => { localStorage.setItem("mctosh_ai_codebase", String(!v)); return !v; })}
-              title={withCodebase ? "Codebase ON" : "Codebase OFF"}
-            >
-              <i className="fi fi-rr-terminal" />
-            </button>
-            <button
-              className={`home_chat_ctrl${withDb ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
-              onClick={() => setWithDb(v => { localStorage.setItem("mctosh_ai_db", String(!v)); return !v; })}
-              title={withDb ? "DB context ON" : "DB context OFF"}
-            >
-              <i className="fi fi-rr-database" />
-            </button>
             {SR && (
               <button
                 className={`home_chat_ctrl${inCall ? " home_chat_ctrl--call" : ""}`}
@@ -442,6 +409,17 @@ const HomeChat = () => {
             >
               <i className={`fi ${ttsOn ? "fi-rr-volume" : "fi-rr-volume-mute"}`} />
             </button>
+            <button
+              className={`home_chat_ctrl${showInput ? " home_chat_ctrl--on" : ""}`}
+              onClick={() => setShowInput(v => {
+                const next = !v;
+                if (!next) setInput("");
+                return next;
+              })}
+              title={showInput ? "Hide text input" : "Show text input"}
+            >
+              <i className={`fi ${showInput ? "fi-rr-keyboard" : "fi-rr-comment-alt"}`} />
+            </button>
             {messages.length > 0 && !streaming && (
               <button className="home_chat_ctrl" onClick={() => { window.speechSynthesis.cancel(); reset(); }} title="Clear conversation">
                 <i className="fi fi-rr-trash" />
@@ -449,24 +427,26 @@ const HomeChat = () => {
             )}
           </div>
 
-          <form id="home_voice_input_form" onSubmit={handleSubmit}>
-            <input
-              type="text"
-              placeholder="Or type instead…"
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              disabled={streaming}
-            />
-            {streaming ? (
-              <button type="button" className="home_chat_send" onClick={stop}>
-                <i className="fi fi-rr-stop-circle" />
-              </button>
-            ) : (
-              <button type="submit" className="home_chat_send" disabled={!input.trim()}>
-                <i className="fi fi-rr-paper-plane-top" />
-              </button>
-            )}
-          </form>
+          {showInput && (
+            <form id="home_voice_input_form" onSubmit={handleSubmit}>
+              <input
+                type="text"
+                placeholder="Or type instead…"
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                disabled={streaming}
+              />
+              {streaming ? (
+                <button type="button" className="home_chat_send" onClick={stop}>
+                  <i className="fi fi-rr-stop-circle" />
+                </button>
+              ) : (
+                <button type="submit" className="home_chat_send" disabled={!input.trim()}>
+                  <i className="fi fi-rr-paper-plane-top" />
+                </button>
+              )}
+            </form>
+          )}
         </div>
       )}
 

@@ -86,31 +86,6 @@
   color: var(--color-text);
 }
 
-#home_chat_provider {
-  padding: 0.18rem 1.5rem 0.18rem 0.45rem;
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  background: var(--color-surface);
-  color: var(--color-text);
-  min-width: 10rem;
-  font-size: 0.7rem;
-  font-family: inherit;
-  cursor: pointer;
-  appearance: none;
-  color-scheme: light dark;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 0.4rem center;
-}
-
-#home_chat_provider:focus { outline: none; border-color: var(--color-highlight); }
-#home_chat_provider:disabled { opacity: 0.4; cursor: default; }
-
-#home_chat_provider option {
-  background: var(--color-surface);
-  color: var(--color-text);
-}
-
 #home_voice_ctrls {
   display: flex;
   align-items: center;

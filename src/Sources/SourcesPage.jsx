@@ -66,7 +66,6 @@ const SourcesPage = () => {
   const [ytUrl,    setYtUrl]    = useState("");
   const [compressionPrompt, setCompressionPrompt] = useState(null);
   const [compressionBusy, setCompressionBusy] = useState(false);
-  const [clearingMarkdownId, setClearingMarkdownId] = useState(null);
 
   /* ── Load sources ── */
   useEffect(() => {
@@ -261,6 +260,18 @@ const SourcesPage = () => {
     }
   }, []);
 
+  /* ── Open ── same destination the old separate "Open" column used to
+     link to, now reached by clicking the name itself. */
+  const isSourceOpenable = (s) => (s.type === "youtube" ? Boolean(s.url) : Boolean(s.key || s.parts?.length));
+  const openSource = useCallback((s) => {
+    if (!isSourceOpenable(s)) return;
+    if (s.type === "youtube") {
+      navigate("/youtube", { state: { sourceId: s._id, sourceName: s.name, sourceUrl: s.url } });
+    } else {
+      navigate("/pdf-reader", { state: { sourceId: s._id, pdfName: s.name } });
+    }
+  }, [navigate]);
+
   /* ── Delete ── */
   const deleteSource = useCallback(async (id) => {
     try {
@@ -269,31 +280,46 @@ const SourcesPage = () => {
     } catch {}
   }, []);
 
-  const deleteMarkdownExtraction = useCallback(async (source) => {
-    if (!source?._id || !source.hasMarkdown || clearingMarkdownId === source._id) return;
-    if (!window.confirm(`Delete the cached text extraction for "${source.name}"? The source file will stay in Sources.`)) return;
+  /* ── Rename ── inline edit in the Name column, not a modal — one field,
+     no reason to interrupt with a dialog. renamingId tracks which row (if
+     any) is currently in edit mode; renameValue is that row's own draft
+     text, reset fresh every time a new row starts editing. */
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
 
+  const startRename = useCallback((source) => {
     setError(null);
-    setInfo(null);
-    setClearingMarkdownId(source._id);
+    setRenamingId(source._id);
+    setRenameValue(source.name);
+  }, []);
+
+  const cancelRename = useCallback(() => {
+    setRenamingId(null);
+    setRenameValue("");
+  }, []);
+
+  const submitRename = useCallback(async (id) => {
+    const name = renameValue.trim();
+    if (!name) { setError("Name is required."); return; }
+    setRenameBusy(true);
     try {
-      const res = await fetch(apiUrl(`/api/sources/${source._id}/markdown?all=1`), {
-        method: "DELETE",
-        headers: authHeader(),
+      const res = await fetch(apiUrl(`/api/sources/${id}`), {
+        method: "PATCH",
+        headers: { ...authHeader(), "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
       });
       const data = await readResponsePayload(res);
-      if (!res.ok) throw new Error(data.error || "Failed to delete the text extraction.");
-
-      setSources((prev) => prev.map((item) => (
-        item._id === source._id ? { ...item, hasMarkdown: false } : item
-      )));
-      setInfo(`Deleted text extraction for "${source.name}".`);
+      if (!res.ok) throw new Error(data.error || "Failed to rename.");
+      setSources((prev) => prev.map((s) => (s._id === id ? { ...s, name: data.name || name } : s)));
+      setRenamingId(null);
+      setRenameValue("");
     } catch (e) {
-      setError(e.message || "Failed to delete the text extraction.");
+      setError(e.message || "Failed to rename.");
     } finally {
-      setClearingMarkdownId(null);
+      setRenameBusy(false);
     }
-  }, [clearingMarkdownId]);
+  }, [renameValue]);
 
   /* ── File picker ── */
   const handleFile = (e, type) => {
@@ -504,16 +530,14 @@ const SourcesPage = () => {
               <th>Type</th>
               <th>Format</th>
               <th>Name</th>
-              <th>Open</th>
-              <th>Text Extraction</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={6} className="sources_td_status">Loading…</td></tr>
+              <tr><td colSpan={4} className="sources_td_status">Loading…</td></tr>
             ) : sources.length === 0 ? (
-              <tr><td colSpan={6} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
+              <tr><td colSpan={4} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
             ) : sources.map((s) => (
               <tr key={s._id}>
                 <td>
@@ -522,42 +546,56 @@ const SourcesPage = () => {
                   </span>
                 </td>
                 <td className="sources_td_format">{s.format || "—"}</td>
-                <td className="sources_td_name">{s.name}</td>
-                <td className="sources_td_url">
-                  {s.type === "youtube"
-                    ? s.url
-                      ? <button className="sources_url_link"
-                          onClick={() => navigate("/youtube", { state: { sourceId: s._id, sourceName: s.name, sourceUrl: s.url } })}>
-                          {s.name}
-                        </button>
-                      : <span className="sources_url_none">—</span>
-                    : (s.key || s.parts?.length)
-                      ? <button className="sources_url_link"
-                          onClick={() => navigate("/pdf-reader", { state: { sourceId: s._id, pdfName: s.name } })}>
-                          {s.name}
-                        </button>
-                      : <span className="sources_url_none">—</span>}
-                </td>
-                <td className="sources_td_markdown">
-                  {s.format === "youtube" ? (
-                    <span className="sources_url_none">—</span>
-                  ) : (
-                    <span className="sources_extract_group">
-                      <span
-                        className={`sources_extract_dot${s.hasMarkdown ? " sources_extract_dot--done" : " sources_extract_dot--pending"}`}
-                        title={s.hasMarkdown ? "Text extracted" : "Not extracted yet — use Actions → Text Extraction in the PDF Reader"}
+                <td className="sources_td_name">
+                  {renamingId === s._id ? (
+                    <span className="sources_rename_group">
+                      <input
+                        type="text"
+                        className="sources_rename_input"
+                        value={renameValue}
+                        autoFocus
+                        disabled={renameBusy}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") submitRename(s._id);
+                          if (e.key === "Escape") cancelRename();
+                        }}
                       />
-                      {s.hasMarkdown ? (
-                        <button
-                          type="button"
-                          className="sources_extract_delete"
-                          onClick={() => deleteMarkdownExtraction(s)}
-                          disabled={clearingMarkdownId === s._id}
-                          title={clearingMarkdownId === s._id ? "Deleting cached text extraction…" : "Delete cached text extraction"}
-                        >
-                          {clearingMarkdownId === s._id ? "…" : "×"}
+                      <button
+                        type="button"
+                        className="sources_rename_confirm"
+                        onClick={() => submitRename(s._id)}
+                        disabled={renameBusy}
+                        title="Save"
+                      >{renameBusy ? "…" : "✓"}</button>
+                      <button
+                        type="button"
+                        className="sources_rename_cancel"
+                        onClick={cancelRename}
+                        disabled={renameBusy}
+                        title="Cancel"
+                      >✕</button>
+                    </span>
+                  ) : (
+                    <span className="sources_rename_group">
+                      {isSourceOpenable(s) ? (
+                        <button type="button" className="sources_name_text sources_name_text--link" onClick={() => openSource(s)} title={`Open ${s.name}`}>
+                          {s.name}
                         </button>
-                      ) : null}
+                      ) : (
+                        <span className="sources_name_text" title={s.name}>{s.name}</span>
+                      )}
+                      <button
+                        type="button"
+                        className="sources_rename_btn"
+                        onClick={() => startRename(s)}
+                        title="Rename"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M5 21h14c1.1 0 2-.9 2-2v-7h-2v7H5V5h7V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2" />
+                          <path d="M7 13v3c0 .55.45 1 1 1h3c.27 0 .52-.11.71-.29l9-9a.996.996 0 0 0 0-1.41l-3-3a.996.996 0 0 0-1.41 0l-9.01 8.99A1 1 0 0 0 7 13m10-7.59L18.59 7 17.5 8.09 15.91 6.5zm-8 8 5.5-5.5 1.59 1.59-5.5 5.5H9z" />
+                        </svg>
+                      </button>
                     </span>
                   )}
                 </td>

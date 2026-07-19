@@ -63,7 +63,7 @@ const PatientSignupPage = ({ onLogin }) => {
         <div className="pa_card">
           <h1 className="pa_title">Save your patient ID</h1>
           <p className="pa_subtitle">
-            You'll need this exact ID every time you start a call — it's how MCTOSHS knows exactly which patient
+            You'll need this exact ID every time you start a call — it's how AMCTOSHS knows exactly which patient
             it's talking to. You can always find it again by logging back in, but it's worth saving now too.
           </p>
           <div className="pa_patient_code">{pendingSession.patientId}</div>
@@ -81,7 +81,7 @@ const PatientSignupPage = ({ onLogin }) => {
   return (
     <div className="pa_page">
       <div className="pa_card">
-        <h1 className="pa_title">MCTOSHS</h1>
+        <h1 className="pa_title">AMCTOSHS</h1>
         <p className="pa_subtitle">Create your account to get started.</p>
         <form onSubmit={handleSubmit}>
           <div className="pa_field">

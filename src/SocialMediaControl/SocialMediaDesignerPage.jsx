@@ -151,7 +151,7 @@ const createDesignFromPost = (post, presetKey) => {
       x: 86,
       y: Math.max(210, Math.round(preset.height * 0.48)),
       width: preset.width - 172,
-      text: post?.title || "MCTOSHS post",
+      text: post?.title || "AMCTOSHS post",
       fontSize: presetKey === "story" ? 92 : 74,
       fontStyle: "bold",
       fill: "#ffffff",

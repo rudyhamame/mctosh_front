@@ -154,6 +154,17 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
     }
     ctx.restore();
   };
+  const drawSimplePen = (points, baseWidth) => {
+    if (!points || points.length < 2) return;
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = Math.max(0.6, baseWidth * s);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    drawPolyline(points);
+    ctx.stroke();
+    ctx.restore();
+  };
   const drawHighlightPath = (points, mode) => {
     if (!points || points.length < 2) return false;
     ctx.beginPath();
@@ -184,7 +195,6 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
     if (!ann.points || ann.points.length < 2) return;
     const width = visibleWidth((ann.lineWidth || 16) * s, 3.25);
     const opacity = ann.opacity ?? 0.35;
-    const softness = clamp((ann.highlightSettings?.softness ?? 72) / 100, 0, 1);
     const body = clamp((ann.highlightSettings?.body ?? 58) / 100, 0, 1);
     const lowZoomBoost = clamp((1 - s) * 0.4, 0, 0.22);
     const previousLineCap = ctx.lineCap;
@@ -193,31 +203,10 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
     ctx.lineJoin = "round";
     ctx.globalCompositeOperation = "multiply";
 
-    // Outer feather: broad and airy so the mark feels soaked into the page.
-    if (drawHighlightPath(ann.points, ann.mode)) {
-      ctx.globalAlpha = Math.min(0.92, opacity * (0.22 + softness * 0.16 + lowZoomBoost * 0.7));
-      ctx.lineWidth = visibleWidth(width * (1.18 + softness * 0.24), 4.4);
-      ctx.stroke();
-    }
-
-    // Main body: the visual marker stroke.
+    // Single main highlight body only.
     if (drawHighlightPath(ann.points, ann.mode)) {
       ctx.globalAlpha = Math.min(0.96, opacity * (0.68 + body * 0.22 + lowZoomBoost));
-      ctx.lineWidth = visibleWidth(width * (0.88 + softness * 0.08), 3.6);
-      ctx.stroke();
-    }
-
-    // Center density: gives that richer Goodnotes-like middle band.
-    if (drawHighlightPath(ann.points, ann.mode)) {
-      ctx.globalAlpha = Math.min(0.82, opacity * (0.18 + body * 0.12 + lowZoomBoost * 0.45));
-      ctx.lineWidth = visibleWidth(width * (0.52 + body * 0.08), 2.1);
-      ctx.stroke();
-    }
-
-    // Gentle edge wobble on freehand marks keeps them from looking too vector-perfect.
-    if (ann.mode !== "line" && ann.points.length > 2 && drawHighlightPath(ann.points, ann.mode)) {
-      ctx.globalAlpha = opacity * 0.07;
-      ctx.lineWidth = width * (0.96 + softness * 0.12);
+      ctx.lineWidth = visibleWidth(width, 3.6);
       ctx.stroke();
     }
 
@@ -251,12 +240,17 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       break;
     case "pen":
       if (!ann.points || ann.points.length < 2) break;
-      drawExpressivePen(ann.points, ann.lineWidth || 2, ann.penType || "ball", ann.penSettings);
+      if (ann.penSettings?.dynamic === true) {
+        drawExpressivePen(ann.points, ann.lineWidth || 2, ann.penType || "ball", ann.penSettings);
+      } else {
+        drawSimplePen(ann.points, ann.lineWidth || 2);
+      }
       break;
     case "line":
       ctx.beginPath(); ctx.moveTo(p(ann.x1), p(ann.y1)); ctx.lineTo(p(ann.x2), p(ann.y2)); ctx.stroke();
       break;
     case "drawTextSelection":
+    case "smartVideoCapture":
       ctx.save();
       ctx.setLineDash([8, 6]);
       ctx.lineWidth = Math.max(1.5, 2 * s);
@@ -313,6 +307,24 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
         const padX = Math.max(3, fontSize * 0.18);
         const padY = Math.max(2, fontSize * 0.16);
         ctx.fillStyle = ann.color;
+        if (ann.textBackground) {
+          // Same low-alpha wash of the annotation's own color as the live
+          // editor preview (~0x40/255 ≈ 25%) — a highlight-style wash
+          // behind the text, not a solid block, so the text drawn on top
+          // (still ann.color, full opacity) stays readable.
+          ctx.save();
+          ctx.globalAlpha = 0.25;
+          ctx.fillStyle = ann.color;
+          if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(left - padX, textTop - padY, textWidth + padX * 2, textHeight + padY * 2, [Math.max(3, fontSize * 0.12)]);
+            ctx.fill();
+          } else {
+            ctx.fillRect(left - padX, textTop - padY, textWidth + padX * 2, textHeight + padY * 2);
+          }
+          ctx.restore();
+          ctx.fillStyle = ann.color;
+        }
         if (ann.textBordered) {
           ctx.save();
           ctx.lineWidth = Math.max(1, fontSize * 0.08);

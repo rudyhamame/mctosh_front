@@ -4,17 +4,24 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import "./threadPyramidLogo.css";
 
 // ── Rebuild, from scratch ────────────────────────────────────────────────
-// The ground is ONE thread, not many. It covers the field by going back
-// and forth — runs a stretch, turns, runs back the other way one row
-// over, turns again, and so on — a single unbroken, continuous path the
-// whole time. Every one of those internal turns is close enough to see —
-// that's the whole point, it's what actually shows this is one thread
-// weaving back and forth rather than a field of separate parallel ones.
-// Only the very first and very last row keep going instead of turning —
-// see the free-end bends further down, where those two true open ends
-// (per floor) bend vertically instead of receding into the horizontal
-// distance. Flat otherwise, nothing else rises out of it — just the
-// ground threads themselves.
+// Each STRUCTURED floor (Atoms through Societies — see FLOOR_COUNT below)
+// is ONE thread, not many. It covers the field by going back and forth —
+// runs a stretch, turns, runs back the other way one row over, turns
+// again, and so on — a single unbroken, continuous path the whole time.
+// Every one of those internal turns is close enough to see — that's the
+// whole point, it's what actually shows this is one thread weaving back
+// and forth rather than a field of separate parallel ones. Only the very
+// first and very last row keep going instead of turning — see the
+// free-end bends further down, where those two true open ends (per floor)
+// bend vertically instead of receding into the horizontal distance. Flat
+// otherwise, nothing else rises out of it — just the thread itself.
+//
+// The Hyle floor (floor 0, see buildHyleFloor below) is deliberately NOT
+// one of these — it's the raw material of all eight structured floors
+// combined, before any of it has resolved into a flat, weave-structured
+// plane: a single continuous thread whose own length is calculated (not
+// guessed) from the other eight floors' real combined length, wandering
+// freely in 3D rather than confined to a flat weave.
 
 const GROUND_Y = 0;
 const ROW_COUNT = 40; // how many back-and-forth passes the one thread makes
@@ -35,10 +42,10 @@ const lateralForRow = (r) => -FIELD_HALF_WIDTH + r * ROW_STEP;
 
 // One floor per level of App.js's own scroll (LEVELS): Hyle, Atoms,
 // Molecules, Cells, Tissues, Organs, Organ Systems, Humans, Societies —
-// nine identical copies of the same weave, stacked directly above one
-// another like floors of a building — each one its own complete, separate
-// thread (not one thread climbing between floors), spaced evenly apart
-// vertically.
+// stacked directly above one another like floors of a building, spaced
+// evenly apart vertically. Floors 1-8 (the lettered/structured ones) are
+// eight identical copies of the same weave; floor 0 (Hyle) is a distinct
+// kind of thread entirely — see buildHyleFloor above buildGroundThread.
 const FLOOR_COUNT = 9;
 const FLOOR_SPACING = 200;
 // Which floor is Atoms and which is Molecules, matching App.js's own
@@ -47,38 +54,43 @@ const FLOOR_SPACING = 200;
 const ATOMIC_FLOOR_INDEX = 1;
 const MOLECULAR_FLOOR_INDEX = 2;
 
-// Every floor's own thread has two true open ends — row 0's own start (the
-// PROXIMAL one, closest to where the whole thread's own path structurally
-// begins) and the last row's own end (the DISTAL one). Rather than every
-// floor's own pair receding flat into the horizontal distance, each end
-// bends vertically — a quarter-turn (sin/cos easing, so the tangent is
-// purely horizontal at the join, purely vertical at the tip) from the same
-// INNER_HALF_LENGTH join every ordinary internal turn already uses — and
-// alternates direction floor to floor:
-//   floor 0: proximal down, distal up
+// Every STRUCTURED floor's own thread (floors 1..FLOOR_COUNT-1 — Hyle,
+// floor 0, isn't part of this scheme at all, see buildHyleFloor above) has
+// two true open ends — row 0's own start (the PROXIMAL one, closest to
+// where the whole thread's own path structurally begins) and the last
+// row's own end (the DISTAL one). Rather than every floor's own pair
+// receding flat into the horizontal distance, each end bends vertically —
+// a quarter-turn (sin/cos easing, so the tangent is purely horizontal at
+// the join, purely vertical at the tip) from the same INNER_HALF_LENGTH
+// join every ordinary internal turn already uses — and alternates
+// direction floor to floor:
 //   floor 1: proximal up,   distal down
 //   floor 2: proximal down, distal up
-//   ...and so on, even floors matching floor 0, odd floors matching floor 1.
-// Two neighboring floors' facing ends (floor 0's distal-up meeting floor
-// 1's distal-down; floor 1's proximal-up meeting floor 2's proximal-down;
+//   floor 3: proximal up,   distal down
+//   ...and so on, odd floors matching floor 1, even floors matching floor 2.
+// Two neighboring floors' facing ends (floor 1's proximal-up meeting floor
+// 2's proximal-down; floor 2's distal-up meeting floor 3's distal-down;
 // and so on) bend the identical horizontal distance and exactly half of
 // FLOOR_SPACING vertically each, so their tips land on the exact same
 // point in space — blending into one continuous connector rather than two
 // separate stubs. Only the two ends with nothing to meet stay true open
-// ends, hanging past the whole stack instead: whichever end (proximal or
-// distal — which one it is depends on FLOOR_COUNT's own parity) points
-// down at floor 0, and whichever end points up at the very last floor.
+// ends, hanging past the whole structured stack instead: whichever end
+// (proximal or distal — which one it is depends on floor parity) points
+// down at floor 1 (the bottom of the structured stack, fed by the Hyle
+// floor's peripheral endpoint), and whichever end points up at the very
+// last floor.
 const FREE_END_BEND_ALONG = -INNER_HALF_LENGTH; // where every bend starts
 const FREE_END_BEND_RUN = 140; // horizontal distance every bend covers
 const FREE_END_BEND_SAMPLES = 20;
 const HALF_FLOOR_SPACING = FLOOR_SPACING / 2; // internal floor-to-floor bends each cover exactly this much, so they meet in the middle
-const OPEN_FREE_END_DROP = 260; // the stack's own two true open ends (bottom of floor 0, top of the last floor) hang this far past it
+const OPEN_FREE_END_DROP = 260; // the structured stack's own two true open ends (bottom of floor 1, top of the last floor) hang this far past it
 // sign: +1 (bends up) is only ever open at the very last floor (nothing
-// above it); -1 (bends down) is only ever open at floor 0 (nothing below
-// it) — true regardless of FLOOR_COUNT's own parity, unlike a hardcoded
-// "floor 0 or last floor" check on one specific end alone would be.
+// above it); -1 (bends down) is only ever open at floor 1, the bottom of
+// the structured stack (nothing below it meets it — see above) — true
+// regardless of FLOOR_COUNT's own parity, unlike a hardcoded "floor 1 or
+// last floor" check on one specific end alone would be.
 const isOpenFreeEnd = (sign, floorIndex) =>
-  (sign === -1 && floorIndex === 0) || (sign === 1 && floorIndex === FLOOR_COUNT - 1);
+  (sign === -1 && floorIndex === 1) || (sign === 1 && floorIndex === FLOOR_COUNT - 1);
 
 // Evenly-lit identical floors are hard to tell apart from a distance —
 // each one now gets its own hue (evenly spread around the color wheel, so
@@ -88,87 +100,248 @@ const isOpenFreeEnd = (sign, floorIndex) =>
 const FLOOR_GLOW_EMISSIVE_INTENSITY = 1.0;
 const colorForFloor = (floorIndex) => new THREE.Color().setHSL(floorIndex / FLOOR_COUNT, 0.85, 0.6);
 
+// The ordered list of point-arrays that make up one STRUCTURED floor's
+// thread (floors 1..FLOOR_COUNT-1, i.e. Atoms through Societies) — each
+// array becomes one tube segment. Pulled out of buildFloor so the exact
+// same point data can also be measured (floorThreadLength below) rather
+// than only ever turned into a mesh — the Hyle floor's own length has to
+// come from the real geometry, not a hand-derived estimate that could
+// silently drift out of sync with it.
+const floorSegments = (floorIndex) => {
+  const segments = [];
+
+  // sign: +1 bends up, -1 bends down. drop: how far, in local (this
+  // floor's own) coordinates — HALF_FLOOR_SPACING for an internal bend
+  // that meets its neighbor exactly halfway, OPEN_FREE_END_DROP for a
+  // true open end with no neighbor to meet.
+  const addFreeEndBendPoints = (lateral, sign, drop) => {
+    const bendPoints = [];
+    for (let s = 0; s <= FREE_END_BEND_SAMPLES; s++) {
+      const u = s / FREE_END_BEND_SAMPLES;
+      const alongOffset = -FREE_END_BEND_RUN * Math.sin((u * Math.PI) / 2);
+      const rise = sign * drop * (1 - Math.cos((u * Math.PI) / 2));
+      bendPoints.push(
+        new THREE.Vector3(0, rise, 0)
+          .addScaledVector(AXIS, FREE_END_BEND_ALONG + alongOffset)
+          .addScaledVector(PERP, lateral)
+      );
+    }
+    segments.push(bendPoints);
+  };
+
+  const isEven = floorIndex % 2 === 0;
+  const proximalSign = isEven ? -1 : 1;
+  const distalSign = isEven ? 1 : -1;
+  const proximalDrop = isOpenFreeEnd(proximalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
+  const distalDrop = isOpenFreeEnd(distalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
+
+  for (let r = 0; r < ROW_COUNT; r++) {
+    const lateral = lateralForRow(r);
+    const forward = r % 2 === 0; // alternating direction each pass — what makes it one continuous back-and-forth thread
+    const startAlong = forward ? -INNER_HALF_LENGTH : INNER_HALF_LENGTH;
+    const endAlong = forward ? INNER_HALF_LENGTH : -INNER_HALF_LENGTH;
+
+    if (r === 0) {
+      addFreeEndBendPoints(lateral, proximalSign, proximalDrop);
+      segments.push([point(FREE_END_BEND_ALONG, lateral), point(endAlong, lateral)]);
+    } else if (r === ROW_COUNT - 1) {
+      segments.push([point(startAlong, lateral), point(FREE_END_BEND_ALONG, lateral)]);
+      addFreeEndBendPoints(lateral, distalSign, distalDrop);
+    } else {
+      segments.push([point(startAlong, lateral), point(endAlong, lateral)]);
+    }
+
+    // The turn — a short connector from the end of this pass to the start
+    // of the next, at the next row's lateral position. Still the same one
+    // continuous thread, just changing rows.
+    if (r < ROW_COUNT - 1) {
+      const nextLateral = lateralForRow(r + 1);
+      segments.push([point(endAlong, lateral), point(endAlong, nextLateral)]);
+    }
+  }
+
+  // Build every structured floor from its downward end toward its upward
+  // end. Odd floors have their downward end at the distal/peripheral side,
+  // so they reverse; even floors already start at their downward proximal
+  // connector. That keeps the sewing continuous from Hyle -> Atoms -> ...
+  // -> Societies.
+  return isEven ? segments : segments.reverse().map((points) => [...points].reverse());
+};
+
+// Real arc length of one structured floor's thread, measured from the exact
+// same point data its mesh is built from (via THREE's own curve sampling,
+// not a hand-derived formula) — summed across floors 1..FLOOR_COUNT-1 in
+// buildGroundThread below to get the Hyle floor's own length budget.
+const floorThreadLength = (floorIndex) => {
+  let total = 0;
+  for (const points of floorSegments(floorIndex)) {
+    total += new THREE.CatmullRomCurve3(points).getLength();
+  }
+  return total;
+};
+
+// Builds one structured floor AND tags every one of its segment meshes with
+// its own running cumulativeLength (in thread-path order, since
+// floorSegments already returns segments in the order the thread actually
+// runs through them) — read by the component's own progress effect to
+// "sew" this floor in gradually as it's scrolled into, one segment at a
+// time, rather than popping fully-formed into view. floor.userData.
+// totalLength is the same number floorThreadLength(floorIndex) would
+// return, just captured here instead of recomputed a second time.
+const buildFloor = (floorIndex) => {
+  const floor = new THREE.Group();
+  const floorColor = colorForFloor(floorIndex);
+  const threadMaterial = new THREE.MeshStandardMaterial({
+    color: floorColor,
+    emissive: floorColor,
+    emissiveIntensity: FLOOR_GLOW_EMISSIVE_INTENSITY,
+    roughness: 0.5,
+    metalness: 0.05,
+  });
+  let cumulativeLength = 0;
+  for (const points of floorSegments(floorIndex)) {
+    const curve = new THREE.CatmullRomCurve3(points);
+    // Bends carry FREE_END_BEND_SAMPLES+1 points and need that many tubular
+    // segments to read as a smooth curve; every other segment here is a
+    // straight 2-point run, which only ever needs 2.
+    const tubularSegments = points.length > 2 ? points.length - 1 : 2;
+    const geometry = new THREE.TubeGeometry(curve, tubularSegments, THREAD_RADIUS, 10, false); // more radial segments than before — THREAD_RADIUS is thick enough now that a hexagonal cross-section would show
+    const mesh = new THREE.Mesh(geometry, threadMaterial);
+    cumulativeLength += curve.getLength();
+    mesh.userData.cumulativeLength = cumulativeLength;
+    floor.add(mesh);
+  }
+  floor.userData.totalLength = cumulativeLength;
+  return floor;
+};
+
+const HYLE_STEP_LENGTH = 90; // one sampling step's own length — small enough to read as genuine wandering, not a handful of long straight jumps
+const HYLE_SEED = 1337; // fixed — the same "unformed" shape every load, not a different one on every reload
+const HYLE_MIN_CLEARANCE = THREAD_RADIUS * 2 + 1.2; // rendered tubes must stay at least this far apart, centerline to centerline, to never visually touch or cross
+const HYLE_CENTER_CLEARANCE_RADIUS = 120; // avoids the first spiral turns folding across the origin and visually intersecting
+// The Hyle thread's footprint radius is derived from totalLength: how much
+// flat area the thread's own footprint (length × clearance "lane" width)
+// needs, divided by a conservative fill fraction, solved for the disk
+// radius that contains that area.
+const HYLE_TARGET_FILL_FRACTION = 0.22;
+const hyleWanderRadiusFor = (totalLength) => {
+  const footprintArea = totalLength * HYLE_MIN_CLEARANCE;
+  return Math.sqrt(footprintArea / (Math.PI * HYLE_TARGET_FILL_FRACTION));
+};
+
+// The Hyle floor's own thread: not floor 0 of the same repeated weave every
+// structured floor above it uses, but the raw material of all eight of
+// them combined. It must actually contain the same length budget as those
+// eight structured floors combined. A previous greedy random walk could
+// box itself in and stop after only a small fraction of that budget, which
+// made the HUD show impossible-looking numbers (e.g. Hyle ~9,440 while
+// each structured floor was ~28,000). This deterministic expanding spiral
+// keeps the "unformed" look without any dead-end state, so it always reaches
+// the requested length.
+const buildHyleThreadPoints = (totalLength) => {
+  const wanderRadius = hyleWanderRadiusFor(totalLength);
+  const spacingFromBudget = (Math.PI * wanderRadius * wanderRadius * HYLE_TARGET_FILL_FRACTION) / Math.max(totalLength, 1);
+  const spacing = Math.max(HYLE_MIN_CLEARANCE * 3.4, spacingFromBudget);
+  const spiralB = (spacing * 1.6) / (Math.PI * 2);
+  const points = [];
+  let theta = 0.01;
+  let travelled = 0;
+
+  const pointAtTheta = (t) => {
+    const radius = HYLE_CENTER_CLEARANCE_RADIUS + spiralB * t;
+    const wobbleFade = Math.min(1, (radius - HYLE_CENTER_CLEARANCE_RADIUS) / (spacing * 6));
+    const wobble = Math.sin(t * 0.73 + HYLE_SEED) * spacing * 0.1 * wobbleFade;
+    return new THREE.Vector3(
+      (radius + wobble) * Math.cos(t),
+      GROUND_Y,
+      (radius - wobble) * Math.sin(t)
+    );
+  };
+
+  points.push(pointAtTheta(theta));
+  while (travelled < totalLength) {
+    const current = points[points.length - 1];
+    const localRadius = Math.max(spacing, spiralB * theta);
+    const dTheta = Math.min(0.22, HYLE_STEP_LENGTH / Math.hypot(localRadius, spiralB));
+    theta += dTheta;
+    let next = pointAtTheta(theta);
+    const stepLength = current.distanceTo(next);
+    const remaining = totalLength - travelled;
+    if (stepLength > remaining) {
+      next = current.clone().lerp(next, remaining / stepLength);
+      points.push(next);
+      travelled = totalLength;
+      break;
+    }
+    points.push(next);
+    travelled += stepLength;
+  }
+  return points;
+};
+
+// Single continuous tube (unlike the structured floors' many small
+// per-segment meshes) — its own reveal doesn't toggle whole segments on
+// gradually the way a structured floor's does, it shrinks via
+// geometry.setDrawRange (see the component's own progress effect), so
+// tubularSegments/radialSegments are stashed in userData to convert a
+// visible-length fraction into an index count later without recomputing
+// anything about the geometry itself.
+const buildHyleFloor = (totalLength) => {
+  const floor = new THREE.Group();
+  const floorColor = colorForFloor(0);
+  const threadMaterial = new THREE.MeshStandardMaterial({
+    color: floorColor,
+    emissive: floorColor,
+    emissiveIntensity: FLOOR_GLOW_EMISSIVE_INTENSITY,
+    roughness: 0.5,
+    metalness: 0.05,
+  });
+  let points = buildHyleThreadPoints(totalLength);
+  let curve = new THREE.CatmullRomCurve3(points, false, "centripetal");
+  const builtLength = curve.getLength();
+  if (builtLength > 0) {
+    const lengthScale = totalLength / builtLength;
+    points = points.map((p) => new THREE.Vector3(p.x * lengthScale, p.y, p.z * lengthScale));
+    curve = new THREE.CatmullRomCurve3(points, false, "centripetal");
+  }
+  const radialSegments = 10;
+  const tubularSegments = points.length - 1;
+  const geometry = new THREE.TubeGeometry(curve, tubularSegments, THREAD_RADIUS, radialSegments, false);
+  const mesh = new THREE.Mesh(geometry, threadMaterial);
+  mesh.userData.tubularSegments = tubularSegments;
+  mesh.userData.radialSegments = radialSegments;
+  floor.add(mesh);
+  // The path generator is constructed to hit the requested length budget;
+  // read back the built curve length anyway so the HUD/consumption math
+  // reflects the real geometry after curve interpolation.
+  floor.userData.totalLength = curve.getLength();
+  return floor;
+};
+
 const buildGroundThread = () => {
   const group = new THREE.Group();
 
-  const buildFloor = (floorIndex) => {
-    const floor = new THREE.Group();
-    const floorColor = colorForFloor(floorIndex);
-    const threadMaterial = new THREE.MeshStandardMaterial({
-      color: floorColor,
-      emissive: floorColor,
-      emissiveIntensity: FLOOR_GLOW_EMISSIVE_INTENSITY,
-      roughness: 0.5,
-      metalness: 0.05,
-    });
-    const addTube = (points, segments) => {
-      const curve = new THREE.CatmullRomCurve3(points);
-      const geometry = new THREE.TubeGeometry(curve, segments, THREAD_RADIUS, 10, false); // more radial segments than before — THREAD_RADIUS is thick enough now that a hexagonal cross-section would show
-      floor.add(new THREE.Mesh(geometry, threadMaterial));
-    };
-
-    // sign: +1 bends up, -1 bends down. drop: how far, in local (this
-    // floor's own) coordinates — HALF_FLOOR_SPACING for an internal bend
-    // that meets its neighbor exactly halfway, OPEN_FREE_END_DROP for a
-    // true open end with no neighbor to meet.
-    const addFreeEndBend = (lateral, sign, drop) => {
-      const bendPoints = [];
-      for (let s = 0; s <= FREE_END_BEND_SAMPLES; s++) {
-        const u = s / FREE_END_BEND_SAMPLES;
-        const alongOffset = -FREE_END_BEND_RUN * Math.sin((u * Math.PI) / 2);
-        const rise = sign * drop * (1 - Math.cos((u * Math.PI) / 2));
-        bendPoints.push(
-          new THREE.Vector3(0, rise, 0)
-            .addScaledVector(AXIS, FREE_END_BEND_ALONG + alongOffset)
-            .addScaledVector(PERP, lateral)
-        );
-      }
-      addTube(bendPoints, FREE_END_BEND_SAMPLES);
-    };
-
-    const isEven = floorIndex % 2 === 0;
-    const proximalSign = isEven ? -1 : 1;
-    const distalSign = isEven ? 1 : -1;
-    const proximalDrop = isOpenFreeEnd(proximalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
-    const distalDrop = isOpenFreeEnd(distalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
-
-    for (let r = 0; r < ROW_COUNT; r++) {
-      const lateral = lateralForRow(r);
-      const forward = r % 2 === 0; // alternating direction each pass — what makes it one continuous back-and-forth thread
-      const startAlong = forward ? -INNER_HALF_LENGTH : INNER_HALF_LENGTH;
-      const endAlong = forward ? INNER_HALF_LENGTH : -INNER_HALF_LENGTH;
-
-      if (r === 0) {
-        addFreeEndBend(lateral, proximalSign, proximalDrop);
-        addTube([point(FREE_END_BEND_ALONG, lateral), point(endAlong, lateral)], 2);
-      } else if (r === ROW_COUNT - 1) {
-        addTube([point(startAlong, lateral), point(FREE_END_BEND_ALONG, lateral)], 2);
-        addFreeEndBend(lateral, distalSign, distalDrop);
-      } else {
-        addTube([point(startAlong, lateral), point(endAlong, lateral)], 2);
-      }
-
-      // The turn — a short connector from the end of this pass to the start
-      // of the next, at the next row's lateral position. Still the same one
-      // continuous thread, just changing rows.
-      if (r < ROW_COUNT - 1) {
-        const nextLateral = lateralForRow(r + 1);
-        addTube([point(endAlong, lateral), point(endAlong, nextLateral)], 2);
-      }
-    }
-
-    return floor;
-  };
+  // The 8 lettered floors' own combined thread length — this is the Hyle
+  // floor's entire length budget (see buildHyleFloor above), not an
+  // arbitrary or matched-by-eye number.
+  const floorLengths = new Array(FLOOR_COUNT).fill(0);
+  let structuredFloorsLength = 0;
+  for (let f = 1; f < FLOOR_COUNT; f++) {
+    const len = floorThreadLength(f);
+    floorLengths[f] = len;
+    structuredFloorsLength += len;
+  }
 
   const floorGroups = []; // indexed by floor — read by the component to show only the active level's own floor
   for (let f = 0; f < FLOOR_COUNT; f++) {
-    const floor = buildFloor(f);
+    const floor = f === 0 ? buildHyleFloor(structuredFloorsLength) : buildFloor(f);
     floor.position.y = f * FLOOR_SPACING;
     group.add(floor);
     floorGroups.push(floor);
+    if (f === 0) floorLengths[0] = floor.userData.totalLength; // the actually-built length, see buildHyleFloor's own note
   }
 
-  return { group, floorGroups };
+  return { group, floorGroups, floorLengths };
 };
 
 const disposeGroundThread = (group) => {
@@ -251,7 +424,7 @@ const buildCargo = () => {
   const group = new THREE.Group();
   const items = []; // { mesh, lateral, offset } — read every frame by updateCargo below
 
-  const cargoMaterial = new THREE.MeshStandardMaterial({
+  const cargoMaterialTemplate = new THREE.MeshStandardMaterial({
     color: CARGO_COLOR,
     emissive: new THREE.Color(CARGO_COLOR),
     emissiveIntensity: CARGO_EMISSIVE_INTENSITY,
@@ -260,16 +433,19 @@ const buildCargo = () => {
     flatShading: true, // facets catch the light unevenly, so the gem shape reads as 3D even from a distance
   });
   const cargoGeometry = new THREE.IcosahedronGeometry(CARGO_RADIUS, 0); // detail 0 = the plain 20-face icosahedron, not a smoothed sphere
-  const outlineMaterial = new THREE.MeshBasicMaterial({ color: CARGO_OUTLINE_COLOR, side: THREE.BackSide });
+  const outlineMaterialTemplate = new THREE.MeshBasicMaterial({ color: CARGO_OUTLINE_COLOR, side: THREE.BackSide });
   const outlineGeometry = new THREE.IcosahedronGeometry(CARGO_RADIUS * CARGO_OUTLINE_SCALE, 0);
 
   const floorGroups = {}; // floorIndex -> its own cargo group, for the floors that have cargo — read by the component to show only the active level's own floor
 
   const addCargoForFloor = (floorIndex, labels) => {
     const floorGroup = new THREE.Group();
+    floorGroup.userData.isCargoFloor = true;
     floorGroup.position.y = floorIndex * FLOOR_SPACING;
     group.add(floorGroup);
     floorGroups[floorIndex] = floorGroup;
+    const cargoMaterial = cargoMaterialTemplate.clone();
+    const outlineMaterial = outlineMaterialTemplate.clone();
 
     labels.forEach((label, i) => {
       // Spread across the rows between the two free-end bends (row 0 and
@@ -360,17 +536,137 @@ const INITIAL_CAMERA_DISTANCE = 1400;
 // a robotic slide.
 const CAMERA_TRANSITION_MS = 1200;
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const FLOOR_MOUNT_SLIDE_LERP = 0.14;
+const OBJECT_AUTO_ROTATION_SPEED = 0.035; // radians per second — deliberately slow, just enough to keep the form alive
+const LIGHT_THEME_OBJECT_COLOR = new THREE.Color("#000000");
+const clamp01 = (value) => Math.max(0, Math.min(1, value));
+const floorSewFractionFor = (floorIndex, climbProgress) => {
+  if (floorIndex <= 0) return 1;
+  const perFloorSpan = 1 / (FLOOR_COUNT - 1);
+  return clamp01(climbProgress / perFloorSpan - (floorIndex - 1));
+};
 
-const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
+const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
   const controlsRef = useRef(null);
+  const previousActiveLevelRef = useRef(activeLevel);
+  const activeLevelRef = useRef(activeLevel);
   const groundThreadRef = useRef(null);
+  const cargoGroupRef = useRef(null);
   const cargoItemsRef = useRef([]); // read fresh every animation frame by the mount effect's own animate() loop below
   const floorVisibilityGroupsRef = useRef({}); // floorIndex -> [groups] — every ground/cargo group that floor owns, toggled by the activeLevel effect below
+  const hyleMeshRef = useRef(null); // the Hyle floor's single tube mesh — shrunk via geometry.setDrawRange as the climb consumes it, see the progress effect below
   const [cameraPresets, setCameraPresets] = useState(loadCameraPresets);
   const [presetPanelOpen, setPresetPanelOpen] = useState(false);
+  const [objectAutoRotationEnabled, setObjectAutoRotationEnabled] = useState(true);
+  const [showThreadLengthHud, setShowThreadLengthHud] = useState(false);
+  const [floorLengths, setFloorLengths] = useState([]); // index 0 = Hyle's total, 1..8 = each lettered floor's own — set once after the ground thread is built
+  const [hyleRemaining, setHyleRemaining] = useState(0); // live — how much of Hyle's own length is still unconsumed, updates every scroll tick
+  const [isLightTheme, setIsLightTheme] = useState(
+    () => typeof document !== "undefined" && document.documentElement.classList.contains("theme-light")
+  );
+  const isLightThemeRef = useRef(isLightTheme);
+  const objectAutoRotationEnabledRef = useRef(objectAutoRotationEnabled);
+  const progressRef = useRef(progress);
+
+  activeLevelRef.current = activeLevel;
+  isLightThemeRef.current = isLightTheme;
+  objectAutoRotationEnabledRef.current = objectAutoRotationEnabled;
+  progressRef.current = progress;
+
+  useEffect(() => {
+    if (typeof document === "undefined") return undefined;
+    const root = document.documentElement;
+    const syncTheme = () => setIsLightTheme(root.classList.contains("theme-light"));
+    syncTheme();
+
+    const observer = new MutationObserver(syncTheme);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+
+  const applyFloorVisualState = (group, floorIndex, visible) => {
+    const currentIsLightTheme = isLightThemeRef.current;
+
+    group.traverse((obj) => {
+      if (!obj.material) return;
+      const materials = Array.isArray(obj.material) ? obj.material : [obj.material];
+      materials.forEach((material) => {
+        if (material.color && material.userData.baseColor === undefined) {
+          material.userData.baseColor = material.color.clone();
+        }
+        if (material.emissiveIntensity !== undefined && material.userData.baseEmissiveIntensity === undefined) {
+          material.userData.baseEmissiveIntensity = material.emissiveIntensity;
+        }
+        if (material.emissive && material.userData.baseEmissive === undefined) {
+          material.userData.baseEmissive = material.emissive.clone();
+        }
+
+        if (obj.isSprite) {
+          material.transparent = true;
+          material.depthWrite = false;
+          if (material.color) {
+            material.color.copy(
+              currentIsLightTheme
+                ? LIGHT_THEME_OBJECT_COLOR
+                : new THREE.Color("#ffffff")
+            );
+          }
+          return;
+        }
+
+        material.opacity = 1;
+        material.transparent = false;
+        material.depthWrite = true;
+        material.depthTest = true;
+        if (material.color) {
+          material.color.copy(
+            currentIsLightTheme
+              ? LIGHT_THEME_OBJECT_COLOR
+              : material.userData.baseColor
+          );
+        }
+
+        if (material.emissiveIntensity !== undefined) {
+          material.emissiveIntensity = currentIsLightTheme
+            ? 0
+            : material.userData.baseEmissiveIntensity;
+        }
+        if (material.emissive) {
+          material.emissive.copy(
+            currentIsLightTheme
+              ? LIGHT_THEME_OBJECT_COLOR
+              : material.userData.baseEmissive
+          );
+        }
+      });
+    });
+  };
+
+  const applyFloorMountLayout = (isImmediate = false) => {
+    const currentActiveLevel = activeLevelRef.current;
+    Object.entries(floorVisibilityGroupsRef.current).forEach(([floorIndex, groups]) => {
+      const idx = Number(floorIndex);
+      const sewFraction = floorSewFractionFor(idx, progressRef.current);
+      const visible = idx === 0 || sewFraction > 0 || idx < currentActiveLevel;
+      const targetOffset = visible ? -currentActiveLevel * FLOOR_SPACING : 0;
+
+      groups.forEach((group) => {
+        if (group.userData.baseY === undefined) group.userData.baseY = group.position.y;
+        if (group.userData.currentYOffset === undefined) group.userData.currentYOffset = 0;
+        group.userData.targetYOffset = targetOffset;
+        group.renderOrder = 0;
+        group.visible = group.userData.isCargoFloor ? sewFraction >= 0.999 : visible;
+        applyFloorVisualState(group, idx, visible);
+        if (isImmediate) {
+          group.userData.currentYOffset = targetOffset;
+          group.position.y = group.userData.baseY + targetOffset;
+        }
+      });
+    });
+  };
 
   const saveCurrentViewAsPreset = (levelIndex) => {
     const camera = cameraRef.current;
@@ -515,6 +811,7 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
     // drops back below 3.
     const MOVE_PER_PIXEL = 0.6;
     let moveDragStart = null; // { x, y } in screen space
+    let threeFingerPanActive = false;
     const averageTouchClient = (touches) => {
       let x = 0, y = 0;
       for (let i = 0; i < touches.length; i++) { x += touches[i].clientX; y += touches[i].clientY; }
@@ -522,13 +819,18 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
     };
     const onThreeFingerTouchStart = (event) => {
       if (event.touches.length === 3) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        threeFingerPanActive = true;
         controls.enabled = false;
         moveDragStart = averageTouchClient(event.touches);
       }
     };
     const onThreeFingerTouchMove = (event) => {
-      if (event.touches.length !== 3 || moveDragStart === null) return;
+      if (!threeFingerPanActive) return;
       event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.touches.length !== 3 || moveDragStart === null) return;
       const current = averageTouchClient(event.touches);
       const heightDelta = (moveDragStart.y - current.y) * MOVE_PER_PIXEL; // fingers dragging up raises the camera
       const rightDelta = (current.x - moveDragStart.x) * MOVE_PER_PIXEL; // fingers dragging right moves it right
@@ -542,15 +844,23 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
       moveDragStart = current;
     };
     const onThreeFingerTouchEnd = (event) => {
-      if (event.touches.length < 3) {
+      if (!threeFingerPanActive) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.touches.length === 3) {
+        moveDragStart = averageTouchClient(event.touches);
+        return;
+      }
+      moveDragStart = null;
+      if (event.touches.length === 0) {
+        threeFingerPanActive = false;
         controls.enabled = true;
-        moveDragStart = null;
       }
     };
-    renderer.domElement.addEventListener("touchstart", onThreeFingerTouchStart, { passive: true });
-    renderer.domElement.addEventListener("touchmove", onThreeFingerTouchMove, { passive: false });
-    renderer.domElement.addEventListener("touchend", onThreeFingerTouchEnd, { passive: true });
-    renderer.domElement.addEventListener("touchcancel", onThreeFingerTouchEnd, { passive: true });
+    renderer.domElement.addEventListener("touchstart", onThreeFingerTouchStart, { passive: false, capture: true });
+    renderer.domElement.addEventListener("touchmove", onThreeFingerTouchMove, { passive: false, capture: true });
+    renderer.domElement.addEventListener("touchend", onThreeFingerTouchEnd, { passive: false, capture: true });
+    renderer.domElement.addEventListener("touchcancel", onThreeFingerTouchEnd, { passive: false, capture: true });
 
     const onWheel = (event) => {
       event.preventDefault();
@@ -580,10 +890,32 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
     mount.addEventListener("wheel", onWheel, { passive: false, capture: true });
 
     let raf;
+    let previousFrameTime = performance.now();
     const cargoStartTime = performance.now();
-    const animate = () => {
+    const animate = (now = performance.now()) => {
       raf = requestAnimationFrame(animate);
+      const deltaSeconds = Math.min(0.05, Math.max(0, (now - previousFrameTime) / 1000));
+      previousFrameTime = now;
+
+      if (objectAutoRotationEnabledRef.current) {
+        const rotationDelta = OBJECT_AUTO_ROTATION_SPEED * deltaSeconds;
+        if (groundThreadRef.current) groundThreadRef.current.rotation.y += rotationDelta;
+        if (cargoGroupRef.current) cargoGroupRef.current.rotation.y += rotationDelta;
+      }
+
       updateCargo(cargoItemsRef.current, (performance.now() - cargoStartTime) / 1000);
+      Object.values(floorVisibilityGroupsRef.current).forEach((groups) => {
+        groups.forEach((group) => {
+          if (group.userData.baseY === undefined) return;
+          const target = group.userData.targetYOffset ?? 0;
+          const current = group.userData.currentYOffset ?? 0;
+          const next = Math.abs(target - current) < 0.01
+            ? target
+            : current + (target - current) * FLOOR_MOUNT_SLIDE_LERP;
+          group.userData.currentYOffset = next;
+          group.position.y = group.userData.baseY + next;
+        });
+      });
       controls.update();
       renderer.render(scene, camera);
     };
@@ -606,10 +938,10 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
       renderer.domElement.removeEventListener("touchend", updateTouchAction);
       renderer.domElement.removeEventListener("touchcancel", updateTouchAction);
       renderer.domElement.removeEventListener("touchmove", preventMultiTouchScroll);
-      renderer.domElement.removeEventListener("touchstart", onThreeFingerTouchStart);
-      renderer.domElement.removeEventListener("touchmove", onThreeFingerTouchMove);
-      renderer.domElement.removeEventListener("touchend", onThreeFingerTouchEnd);
-      renderer.domElement.removeEventListener("touchcancel", onThreeFingerTouchEnd);
+      renderer.domElement.removeEventListener("touchstart", onThreeFingerTouchStart, { capture: true });
+      renderer.domElement.removeEventListener("touchmove", onThreeFingerTouchMove, { capture: true });
+      renderer.domElement.removeEventListener("touchend", onThreeFingerTouchEnd, { capture: true });
+      renderer.domElement.removeEventListener("touchcancel", onThreeFingerTouchEnd, { capture: true });
       controls.dispose();
       renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
@@ -619,28 +951,35 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
     };
   }, []);
 
-  // Builds the ground-thread group once, on mount — it's flat and static,
-  // nothing about it depends on scroll progress anymore, so there's no
-  // reason to rebuild it on every scroll tick the way the old atom/molecule
-  // geometry once needed to.
+  // Builds the ground-thread group once, on mount — the geometry itself is
+  // static (built once, never rebuilt on scroll); what DOES change on
+  // scroll is which portion of it is currently visible, handled by the
+  // progress effect further down via per-segment .visible flags (structured
+  // floors) and geometry.setDrawRange (Hyle), not by touching the geometry
+  // built here.
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    const { group: groundThread, floorGroups } = buildGroundThread();
+    const { group: groundThread, floorGroups, floorLengths } = buildGroundThread();
     scene.add(groundThread);
     groundThreadRef.current = groundThread;
+    setFloorLengths(floorLengths);
+    setHyleRemaining(floorLengths[0] || 0);
 
     const visibilityGroups = floorVisibilityGroupsRef.current;
     floorGroups.forEach((floorGroup, floorIndex) => {
       if (!visibilityGroups[floorIndex]) visibilityGroups[floorIndex] = [];
       visibilityGroups[floorIndex].push(floorGroup);
+      if (floorIndex === 0) hyleMeshRef.current = floorGroup.children[0] || null;
     });
+    applyFloorMountLayout(true);
 
     return () => {
       scene.remove(groundThread);
       disposeGroundThread(groundThread);
       groundThreadRef.current = null;
+      hyleMeshRef.current = null;
     };
   }, []);
 
@@ -654,6 +993,7 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
 
     const { group: cargoGroup, items, floorGroups } = buildCargo();
     scene.add(cargoGroup);
+    cargoGroupRef.current = cargoGroup;
     cargoItemsRef.current = items;
 
     const visibilityGroups = floorVisibilityGroupsRef.current;
@@ -662,23 +1002,65 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
       if (!visibilityGroups[idx]) visibilityGroups[idx] = [];
       visibilityGroups[idx].push(floorGroup);
     });
+    applyFloorMountLayout(true);
 
     return () => {
       scene.remove(cargoGroup);
       disposeCargo(cargoGroup);
+      cargoGroupRef.current = null;
       cargoItemsRef.current = [];
     };
   }, []);
 
-  // Shows only the active level's own floor — every other floor's ground
-  // thread (and cargo, on the floors that have any) hidden rather than
-  // removed/rebuilt, so switching back to a previous level is instant.
+  // Every previously reached floor remains mounted, and the whole mounted
+  // stack slides downward so the newly active floor lands at the same
+  // viewing level instead of replacing the old one.
   useEffect(() => {
-    Object.entries(floorVisibilityGroupsRef.current).forEach(([floorIndex, groups]) => {
-      const visible = Number(floorIndex) === activeLevel;
-      groups.forEach((g) => { g.visible = visible; });
+    applyFloorMountLayout(false);
+  }, [activeLevel, isLightTheme]);
+
+  // "Sewing" — the floor currently being climbed into builds itself in
+  // gradually, one segment at a time in the thread's own path order. The
+  // Home scroll has eight intervals, so each interval sews the next
+  // structured floor: Hyle->Atoms sews Atoms, Atoms->Molecules sews
+  // Molecules, and so on. At the same time, and
+  // driven by that exact same `progress` value, the Hyle floor's own thread
+  // visibly shrinks from its outer/peripheral endpoint inward — that outer
+  // endpoint is the feed end closest to the Atomic floor's downward open
+  // end. Hyle's total length WAS the other eight floors' combined length to
+  // begin with (see buildGroundThread): building them is depicted as
+  // consuming it, not as two unrelated things happening to share a number.
+  useEffect(() => {
+    const hyleTotal = floorLengths[0] || 0;
+    const hyleVisibleFraction = clamp01(1 - progress);
+    const hyleMesh = hyleMeshRef.current;
+    if (hyleMesh && hyleMesh.userData.tubularSegments) {
+      const { tubularSegments, radialSegments } = hyleMesh.userData;
+      const indicesPerStep = radialSegments * 6;
+      const visibleSteps = Math.floor(tubularSegments * hyleVisibleFraction);
+      hyleMesh.geometry.setDrawRange(0, Math.max(0, visibleSteps * indicesPerStep));
+    }
+    setHyleRemaining(hyleTotal * hyleVisibleFraction);
+
+    Object.entries(floorVisibilityGroupsRef.current).forEach(([floorIndexStr, groups]) => {
+      const idx = Number(floorIndexStr);
+      if (idx === 0) return; // Hyle handled above — it isn't sewn segment-by-segment, it's consumed
+      const fraction = floorSewFractionFor(idx, progress);
+      groups.forEach((group) => {
+        if (group.userData.isCargoFloor) {
+          group.visible = fraction >= 0.999;
+          return;
+        }
+        const totalLength = group.userData.totalLength;
+        if (!totalLength) return;
+        group.visible = fraction > 0 || idx < activeLevel;
+        const revealLength = fraction * totalLength;
+        group.children.forEach((mesh) => {
+          mesh.visible = (mesh.userData.cumulativeLength || 0) <= revealLength;
+        });
+      });
     });
-  }, [activeLevel]);
+  }, [progress, activeLevel, floorLengths]);
 
   // Frames the camera for whichever level is currently active — no built-in
   // default framing anymore, only a saved preset (the control panel below)
@@ -695,6 +1077,10 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
+
+    const levelChanged = previousActiveLevelRef.current !== activeLevel;
+    previousActiveLevelRef.current = activeLevel;
+    if (levelChanged) return;
 
     const preset = cameraPresets[activeLevel];
     if (!preset) return;
@@ -733,6 +1119,28 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
             <p id="camera_preset_panel_hint">
               Scroll to a level, drag/pinch to the shot you want, then save it.
             </p>
+            <label id="camera_rotation_toggle" className="camera_preset_control_row">
+              <span>
+                <strong>Object rotation</strong>
+                <small>Slow vertical-axis spin</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={objectAutoRotationEnabled}
+                onChange={(event) => setObjectAutoRotationEnabled(event.target.checked)}
+              />
+            </label>
+            <label id="camera_thread_length_toggle" className="camera_preset_control_row">
+              <span>
+                <strong>Thread length</strong>
+                <small>Show floor length HUD</small>
+              </span>
+              <input
+                type="checkbox"
+                checked={showThreadLengthHud}
+                onChange={(event) => setShowThreadLengthHud(event.target.checked)}
+              />
+            </label>
             {levelLabels.map((label, i) => (
               <div
                 key={label}
@@ -761,6 +1169,24 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [] }) => {
           </div>
         )}
       </div>
+      {showThreadLengthHud && (
+        <div id="thread_length_hud">
+          <div id="thread_length_hud_title">Thread length</div>
+          {levelLabels.map((label, i) => (
+            <div
+              key={label}
+              className={`thread_length_hud_row${i === activeLevel ? " thread_length_hud_row--active" : ""}${i === 0 ? " thread_length_hud_row--hyle" : ""}`}
+            >
+              <span className="thread_length_hud_label">{label}</span>
+              <span className="thread_length_hud_value">
+                {i === 0
+                  ? `${Math.round(hyleRemaining).toLocaleString()} / ${Math.round(floorLengths[0] || 0).toLocaleString()}`
+                  : Math.round(floorLengths[i] || 0).toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </>
   );
 };

@@ -12,6 +12,7 @@ import { AvatarProviderContextProvider } from "./Avatar/AvatarProviderContext";
 import AppFooter from "./App/AppFooter";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 import { clearStoredPatientSession, readStoredPatientSession } from "./utils/patientSessionCleanup";
+import { applyStoredTheme } from "./utils/theme";
 
 const App = lazy(() => import("./App/App"));
 const Login = lazy(() => import("./Login/Login"));
@@ -111,10 +112,7 @@ const AppRouter = () => {
     const savedScale = localStorage.getItem("appScale");
     if (savedScale) document.body.style.zoom = savedScale;
 
-    const savedTheme = localStorage.getItem("mctosh_theme") || "original";
-    document.documentElement.classList.remove("theme-light", "theme-dark");
-    if (savedTheme === "light") document.documentElement.classList.add("theme-light");
-    if (savedTheme === "dark")  document.documentElement.classList.add("theme-dark");
+    applyStoredTheme();
 
     const rootElement = document.documentElement;
     const setVh = () =>
@@ -144,7 +142,7 @@ const AppRouter = () => {
   );
 
   return (
-    // MCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
+    // AMCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
     // /cvs/ instead of the domain root, so mctoshs.ca/cvs/login is the main page.
     <Router basename="/cvs" future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AvatarProviderContextProvider>

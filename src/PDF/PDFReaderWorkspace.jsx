@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
-import PDFPage, { PDF_TYPE_ICON } from "./PDFPage";
+import PDFPage from "./PDFPage";
+import { PDF_TYPE_ICON } from "./pdfTypeIcon";
 import "./pdfReaderWorkspace.css";
 
 const BackArrowIcon = () => (

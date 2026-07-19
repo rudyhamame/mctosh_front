@@ -9,11 +9,11 @@ const CAMPAIGNS = [
     id: "feature-drop",
     label: "Feature Drop",
     accent: "#ff7a59",
-    hook: "Show one sharp MCTOSHS capability with a concrete workflow payoff.",
+    hook: "Show one sharp AMCTOSHS capability with a concrete workflow payoff.",
     cta: "Invite viewers to try the feature or book a demo.",
     formats: ["Carousel", "Reel", "Story"],
-    defaultTitle: "New MCTOSHS feature drop",
-    defaultObjective: "Show the workflow value of one concrete MCTOSHS feature.",
+    defaultTitle: "New AMCTOSHS feature drop",
+    defaultObjective: "Show the workflow value of one concrete AMCTOSHS feature.",
     defaultSlides: ["Hook", "Problem", "Workflow", "Result", "CTA"],
   },
   {
@@ -23,7 +23,7 @@ const CAMPAIGNS = [
     hook: "Translate a clinical concept into structured, memorable slides.",
     cta: "Drive saves and shares from medical learners.",
     formats: ["Carousel", "Story"],
-    defaultTitle: "Clinical concept through MCTOSHS",
+    defaultTitle: "Clinical concept through AMCTOSHS",
     defaultObjective: "Teach a clinical idea through clear, structured visual steps.",
     defaultSlides: ["Hook", "Concept", "Structure", "Why it matters", "CTA"],
   },
@@ -31,10 +31,10 @@ const CAMPAIGNS = [
     id: "product-philosophy",
     label: "Product Philosophy",
     accent: "#9c6bff",
-    hook: "Explain the MCTOSHS worldview and why representation matters.",
+    hook: "Explain the AMCTOSHS worldview and why representation matters.",
     cta: "Build brand depth and thoughtful engagement.",
     formats: ["Carousel", "Quote Post"],
-    defaultTitle: "Why MCTOSHS exists",
+    defaultTitle: "Why AMCTOSHS exists",
     defaultObjective: "Express the philosophical core of the product in a shareable form.",
     defaultSlides: ["Question", "Thesis", "Implication", "Product view", "CTA"],
   },
@@ -45,7 +45,7 @@ const CAMPAIGNS = [
     hook: "Announce a shipping update with clear before/after value.",
     cta: "Push existing followers back into the product.",
     formats: ["Single Image", "Carousel", "Story"],
-    defaultTitle: "MCTOSHS release update",
+    defaultTitle: "AMCTOSHS release update",
     defaultObjective: "Announce a new capability with a before/after framing.",
     defaultSlides: ["Release", "Before", "After", "Use case", "CTA"],
   },
@@ -80,9 +80,9 @@ const createPostPayload = (campaign) => ({
   mediaAssets: [],
   mediaUrlsText: "",
   slides: campaign.defaultSlides,
-  hashtags: ["#MCTOSHS", "#DigitalHealth", "#MedicalEducation"],
+  hashtags: ["#AMCTOSHS", "#DigitalHealth", "#MedicalEducation"],
   slidesText: campaign.defaultSlides.join("\n"),
-  hashtagsText: ["#MCTOSHS", "#DigitalHealth", "#MedicalEducation"].join("\n"),
+  hashtagsText: ["#AMCTOSHS", "#DigitalHealth", "#MedicalEducation"].join("\n"),
   scheduledFor: "",
 });
 
@@ -155,7 +155,7 @@ const SocialMediaControlPage = () => {
 
   const generatedOutline = useMemo(() => ([
     `Hook for ${editor.audience}: make the pain visible in one sentence.`,
-    `Demonstrate the ${selectedCampaign.label.toLowerCase()} workflow inside MCTOSHS.`,
+    `Demonstrate the ${selectedCampaign.label.toLowerCase()} workflow inside AMCTOSHS.`,
     "Show the result in a compact before/after frame.",
     `Close with a ${editor.tone.toLowerCase()} CTA that invites saves, shares, or a product visit.`,
   ]), [editor.audience, editor.tone, selectedCampaign.label]);
@@ -587,7 +587,7 @@ const SocialMediaControlPage = () => {
         <div id="smc_header_left">
           <button id="smc_back_btn" onClick={() => navigate("/home")}>←</button>
           <div>
-            <div id="smc_kicker">MCTOSHS Growth Surface</div>
+            <div id="smc_kicker">AMCTOSHS Growth Surface</div>
             <h1 id="smc_title">Social Media Control</h1>
           </div>
         </div>
@@ -611,7 +611,7 @@ const SocialMediaControlPage = () => {
         <section id="smc_hero">
           <div id="smc_hero_copy">
             <p className="smc_section_eyebrow">Campaign Engine</p>
-            <h2>Generate, store, review, and prepare MCTOSHS posts from one control room.</h2>
+            <h2>Generate, store, review, and prepare AMCTOSHS posts from one control room.</h2>
             <p>
               This page is now connected to a real backend draft store. Social posts
               live in MongoDB, autosave as you edit, and the Instagram readiness box

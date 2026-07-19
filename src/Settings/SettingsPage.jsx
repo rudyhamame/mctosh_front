@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { API_BASE_URL, apiUrl } from "../config/api";
-import { readStoredSession } from "../utils/sessionCleanup";
+import { readStoredSession, writeStoredSession } from "../utils/sessionCleanup";
 import { MCTOSH_PROMPT_TEXT } from "../Hylomorphism/mctoshPrompt";
 import { getPredictionPools, setPredictionPoolEnabled, rebuildPredictionPool, ingestPredictionPool } from "../utils/predictionApi";
 import objectivesEn from "../MCC/mccqeObjectivesData.json";
@@ -11,6 +11,7 @@ import {
   readVoiceSettings, writeVoiceSettings,
   TTS_PROVIDERS, readTtsProviderId, writeTtsProviderId,
 } from "../Avatar/local3d/ttsProviderSettings";
+import { applyTheme, readStoredTheme } from "../utils/theme";
 import "./settingsPage.css";
 
 const TTS_PROVIDER_OPTIONS = [
@@ -21,18 +22,23 @@ const TTS_PROVIDER_OPTIONS = [
 
 const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
 
+const readApiError = (data, fallback) => (
+  typeof data?.error === "string" ? data.error : data?.error?.message || fallback
+);
+
 const authHeader = () => {
   const token = readStoredSession()?.token || "";
   return token ? { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } : { "Content-Type": "application/json" };
 };
 
 const THEMES = [
-  { id: "original", label: "Original", desc: "Deep blue-navy — the MCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
+  { id: "original", label: "Original", desc: "Deep blue-navy — the AMCTOSHS default", bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
   { id: "light",    label: "Light",    desc: "Clean white with soft contrast",       bg: "#f8f8fc", surface: "#ffffff",  text: "#111122", border: "#d0d0e0" },
   { id: "dark",     label: "Dark",     desc: "Pure black — minimal ink",             bg: "#000000", surface: "#0f0f0f",  text: "#f0f0f0", border: "#222222" },
 ];
 
 const SECTIONS = [
+  { id: "personal",   label: "Personal Information", icon: "fi fi-rr-user" },
   { id: "prompts",    label: "Prompts",         icon: "fi fi-rr-document" },
   { id: "ai",         label: "AI Providers",    icon: "fi fi-rr-microchip-ai" },
   { id: "ai_access",  label: "AI Access",       icon: "fi fi-rr-shield-check" },
@@ -48,13 +54,6 @@ const TRANSLATE_LANGUAGES = [
   "English", "Spanish", "French", "German", "Portuguese", "Italian",
   "Arabic", "Hindi", "Mandarin Chinese", "Japanese", "Korean", "Russian",
 ];
-
-const applyTheme = (id) => {
-  document.documentElement.classList.remove("theme-light", "theme-dark");
-  if (id === "light") document.documentElement.classList.add("theme-light");
-  if (id === "dark")  document.documentElement.classList.add("theme-dark");
-  localStorage.setItem("mctosh_theme", id);
-};
 
 // ── Prompt editor sub-component ───────────────────────────────────────────────
 const PromptEditor = ({ label, desc, fetchUrl, saveUrl, method = "PATCH", field = "systemMessage", defaultText }) => {
@@ -127,17 +126,17 @@ const PromptEditor = ({ label, desc, fetchUrl, saveUrl, method = "PATCH", field 
 const SettingsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [section,   setSection]   = useState(() => new URLSearchParams(location.search).get("section") || "prompts");
-  const [theme,     setTheme]     = useState(() => localStorage.getItem("mctosh_theme") || "original");
+  const [section,   setSection]   = useState(() => new URLSearchParams(location.search).get("section") || "personal");
+  const [theme,     setTheme]     = useState(() => readStoredTheme());
   const [pdfTranslateLang, setPdfTranslateLang] = useState(() => localStorage.getItem("mctosh_pdf_translate_lang") || "English");
-  const [aiCodebase, setAiCodebase] = useState(() => localStorage.getItem("mctosh_ai_codebase") === "true");
-  const [aiDb,       setAiDb]       = useState(() => localStorage.getItem("mctosh_ai_db")       === "true");
   const [providers, setProviders] = useState([]);
   const [aiLoading, setAiLoading] = useState(true);
   const [aiRefreshing, setAiRefreshing] = useState(false);
   const [anamUsage, setAnamUsage] = useState(null);
   const [anamUsageLoading, setAnamUsageLoading] = useState(true);
   const [anamUsageError, setAnamUsageError] = useState("");
+  const [anamTrial, setAnamTrial] = useState(null);
+  const [anamTrialLoading, setAnamTrialLoading] = useState(true);
   const [ttsProviderId, setTtsProviderId] = useState(() => readTtsProviderId());
   const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState(() => readVoiceSettings().voiceProfileId);
   const [voiceProfiles, setVoiceProfiles] = useState([]);
@@ -165,6 +164,134 @@ const SettingsPage = () => {
   const [socialTesting, setSocialTesting] = useState(false);
   const [socialConnecting, setSocialConnecting] = useState(false);
   const [socialTestResult, setSocialTestResult] = useState(null);
+
+  const [personalName,     setPersonalName]     = useState("");
+  const [personalOrigName, setPersonalOrigName] = useState("");
+  const [personalUsername, setPersonalUsername] = useState("");
+  const [personalPhoto, setPersonalPhoto] = useState("");
+  const [personalOrigPhoto, setPersonalOrigPhoto] = useState("");
+  const [personalLoading,  setPersonalLoading]  = useState(true);
+  const [personalSaving,   setPersonalSaving]   = useState(false);
+  const [personalStatus,   setPersonalStatus]   = useState("");
+  const profilePhotoInputRef = useRef(null);
+  const [passwordForm, setPasswordForm] = useState({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordStatus, setPasswordStatus] = useState("");
+
+  useEffect(() => {
+    fetch(apiUrl("/api/user/me"), { headers: authHeader() })
+      .then((r) => r.json())
+      .then((d) => {
+        setPersonalName(d.name || "");
+        setPersonalOrigName(d.name || "");
+        setPersonalUsername(d.username || "");
+        setPersonalPhoto(d.profilePhoto || "");
+        setPersonalOrigPhoto(d.profilePhoto || "");
+      })
+      .catch(() => {})
+      .finally(() => setPersonalLoading(false));
+  }, []);
+
+  const handleSavePersonal = async () => {
+    const name = personalName.trim();
+    if (!name) { setPersonalStatus("Error"); setTimeout(() => setPersonalStatus(""), 1800); return; }
+    setPersonalSaving(true);
+    try {
+      const res = await fetch(apiUrl("/api/user/me"), {
+        method: "PATCH",
+        headers: authHeader(),
+        body: JSON.stringify({ name, profilePhoto: personalPhoto }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(readApiError(data, "Save failed"));
+      setPersonalName(data.name || name);
+      setPersonalOrigName(data.name || name);
+      setPersonalPhoto(data.profilePhoto || "");
+      setPersonalOrigPhoto(data.profilePhoto || "");
+      // Keep the profile menu / anywhere else reading the cached session's
+      // name (App.js's displayName) in sync immediately, not just on next
+      // login — same read/write pair sessionCleanup.js already exposes.
+      const session = readStoredSession();
+      if (session) writeStoredSession({ ...session, name: data.name || name, profilePhoto: data.profilePhoto || "" });
+      setPersonalStatus("Saved");
+    } catch {
+      setPersonalStatus("Error");
+    } finally {
+      setPersonalSaving(false);
+      setTimeout(() => setPersonalStatus(""), 1800);
+    }
+  };
+
+  const handleProfilePhotoFile = (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setPersonalStatus("Image only");
+      setTimeout(() => setPersonalStatus(""), 1800);
+      return;
+    }
+    if (file.size > 1_000_000) {
+      setPersonalStatus("Too large");
+      setTimeout(() => setPersonalStatus(""), 1800);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setPersonalPhoto(String(reader.result || ""));
+    reader.onerror = () => {
+      setPersonalStatus("Error");
+      setTimeout(() => setPersonalStatus(""), 1800);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handlePasswordChange = (field, value) => {
+    setPasswordStatus("");
+    setPasswordForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleSavePassword = async () => {
+    const currentPassword = passwordForm.currentPassword.trim();
+    const newPassword = passwordForm.newPassword;
+    const confirmPassword = passwordForm.confirmPassword;
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPasswordStatus("Fill all fields");
+      setTimeout(() => setPasswordStatus(""), 2200);
+      return;
+    }
+    if (newPassword.length < 6) {
+      setPasswordStatus("Min 6 chars");
+      setTimeout(() => setPasswordStatus(""), 2200);
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordStatus("Mismatch");
+      setTimeout(() => setPasswordStatus(""), 2200);
+      return;
+    }
+
+    setPasswordSaving(true);
+    try {
+      const res = await fetch(apiUrl("/api/user/me/password"), {
+        method: "PATCH",
+        headers: authHeader(),
+        body: JSON.stringify({ currentPassword, newPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(readApiError(data, "Password update failed"));
+      setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+      setPasswordStatus("Saved");
+    } catch (error) {
+      setPasswordStatus(error.message || "Error");
+    } finally {
+      setPasswordSaving(false);
+      setTimeout(() => setPasswordStatus(""), 2400);
+    }
+  };
 
   const loadSocialConfig = async (statusMessage = "") => {
     setSocialLoading(true);
@@ -235,6 +362,16 @@ const SettingsPage = () => {
       })
       .catch((e) => setAnamUsageError(e.message))
       .finally(() => setAnamUsageLoading(false));
+  }, []);
+
+  // This user's own one-minute Anam trial (separate from the org-wide
+  // usage above) — see GET /api/anam/trial in back/routes/AnamAPI.js.
+  useEffect(() => {
+    fetch(apiUrl("/api/anam/trial"), { headers: authHeader() })
+      .then((r) => r.json())
+      .then((d) => setAnamTrial(d))
+      .catch(() => {})
+      .finally(() => setAnamTrialLoading(false));
   }, []);
 
   useEffect(() => {
@@ -339,8 +476,7 @@ const SettingsPage = () => {
   }, [socialConfig.graphApiVersion]);
 
   const handleTheme = (id) => {
-    setTheme(id);
-    applyTheme(id);
+    setTheme(applyTheme(id));
   };
 
   const handleTogglePredictPool = async (key, enabled) => {
@@ -636,15 +772,176 @@ const SettingsPage = () => {
         {/* ── Content ── */}
         <div id="sett_content">
 
+          {/* ═══ PERSONAL INFORMATION ═══ */}
+          {section === "personal" && (
+            <div className="sett_section">
+              <h2 className="sett_section_title">Personal Information</h2>
+              <p className="sett_section_desc">Your account's basic identity — shown across AMCTOSHS wherever your name appears.</p>
+
+              {personalLoading ? (
+                <div className="sett_prompt_loading">Loading…</div>
+              ) : (
+                <>
+                <div className="sett_prompt_block">
+                  <div className="sett_prompt_header">
+                    <div>
+                      <div className="sett_prompt_label">Profile pic</div>
+                      <div className="sett_prompt_desc">Shown in the Home page profile button and account menu.</div>
+                    </div>
+                    <div className="sett_prompt_actions">
+                      <button
+                        className="sett_btn sett_btn--ghost"
+                        onClick={() => profilePhotoInputRef.current?.click()}
+                        disabled={personalSaving}
+                      >
+                        Choose image
+                      </button>
+                      <button
+                        className="sett_btn sett_btn--ghost"
+                        onClick={() => setPersonalPhoto("")}
+                        disabled={!personalPhoto || personalSaving}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                  <div className="sett_profile_photo_row">
+                    <div className="sett_profile_photo_preview">
+                      {personalPhoto ? (
+                        <img src={personalPhoto} alt="Profile preview" />
+                      ) : (
+                        <span>{(personalName || personalUsername || "P").trim().slice(0, 2).toUpperCase()}</span>
+                      )}
+                    </div>
+                    <div className="sett_profile_photo_hint">
+                      Use a square PNG, JPG, WebP, or GIF under 1 MB.
+                    </div>
+                    <input
+                      ref={profilePhotoInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
+                      hidden
+                      onChange={handleProfilePhotoFile}
+                    />
+                  </div>
+
+                  <div className="sett_prompt_header">
+                    <div>
+                      <div className="sett_prompt_label">Display name</div>
+                      <div className="sett_prompt_desc">Shown in the profile menu, and anywhere else your name appears in the app.</div>
+                    </div>
+                    <div className="sett_prompt_actions">
+                      {personalStatus && (
+                        <span className={`sett_save_status${personalStatus === "Error" ? " sett_save_status--err" : ""}`}>
+                          {personalStatus}
+                        </span>
+                      )}
+                      <button
+                        className="sett_btn sett_btn--ghost"
+                        onClick={() => {
+                          setPersonalName(personalOrigName);
+                          setPersonalPhoto(personalOrigPhoto);
+                        }}
+                        disabled={(personalName === personalOrigName && personalPhoto === personalOrigPhoto) || personalSaving}
+                      >
+                        Reset
+                      </button>
+                      <button
+                        className="sett_btn sett_btn--primary"
+                        onClick={handleSavePersonal}
+                        disabled={(personalName === personalOrigName && personalPhoto === personalOrigPhoto) || personalSaving}
+                      >
+                        {personalSaving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="text"
+                    className="sett_text_input"
+                    value={personalName}
+                    onChange={(e) => setPersonalName(e.target.value)}
+                    maxLength={100}
+                    placeholder="Your name"
+                  />
+
+                  <div className="sett_prompt_header" style={{ marginTop: "1.1rem" }}>
+                    <div>
+                      <div className="sett_prompt_label">Username</div>
+                      <div className="sett_prompt_desc">Used to sign in — not editable here.</div>
+                    </div>
+                  </div>
+                  <input type="text" className="sett_text_input" value={personalUsername} disabled readOnly />
+                </div>
+
+                <div className="sett_prompt_block">
+                  <div className="sett_prompt_header">
+                    <div>
+                      <div className="sett_prompt_label">Change password</div>
+                      <div className="sett_prompt_desc">Enter your current password, then choose a new one.</div>
+                    </div>
+                    <div className="sett_prompt_actions">
+                      {passwordStatus && (
+                        <span className={`sett_save_status${passwordStatus !== "Saved" ? " sett_save_status--err" : ""}`}>
+                          {passwordStatus}
+                        </span>
+                      )}
+                      <button
+                        className="sett_btn sett_btn--primary"
+                        onClick={handleSavePassword}
+                        disabled={passwordSaving}
+                      >
+                        {passwordSaving ? "Saving…" : "Change password"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="sett_password_grid">
+                    <label className="sett_password_field">
+                      <span>Current password</span>
+                      <input
+                        type="password"
+                        className="sett_text_input"
+                        value={passwordForm.currentPassword}
+                        onChange={(e) => handlePasswordChange("currentPassword", e.target.value)}
+                        autoComplete="current-password"
+                      />
+                    </label>
+                    <label className="sett_password_field">
+                      <span>New password</span>
+                      <input
+                        type="password"
+                        className="sett_text_input"
+                        value={passwordForm.newPassword}
+                        onChange={(e) => handlePasswordChange("newPassword", e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                    <label className="sett_password_field">
+                      <span>Confirm new password</span>
+                      <input
+                        type="password"
+                        className="sett_text_input"
+                        value={passwordForm.confirmPassword}
+                        onChange={(e) => handlePasswordChange("confirmPassword", e.target.value)}
+                        autoComplete="new-password"
+                      />
+                    </label>
+                  </div>
+                </div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* ═══ PROMPTS ═══ */}
           {section === "prompts" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Prompts</h2>
-              <p className="sett_section_desc">Edit the AI prompts used across MCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
+              <p className="sett_section_desc">Edit the AI prompts used across AMCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
 
               <PromptEditor
                 label="Hyle Extraction"
-                desc="Used when extracting hyles from PDF, Word, or image sources — the core MCTOSHS classification engine."
+                desc="Used when extracting hyles from PDF, Word, or image sources — the core AMCTOSHS classification engine."
                 fetchUrl="/api/pdf/system-message"
                 saveUrl="/api/pdf/system-message"
                 method="PATCH"
@@ -659,7 +956,7 @@ const SettingsPage = () => {
                 field="prompt"
               />
               <PromptEditor
-                label="MCTOSHS Classification Prompt"
+                label="AMCTOSHS Classification Prompt"
                 desc="The formal 12-section classification prompt accessible from the Hyle-to-Meaning page. Stored locally in your browser."
                 fetchUrl={null}
                 saveUrl={null}
@@ -676,7 +973,7 @@ const SettingsPage = () => {
                 <div>
                   <h2 className="sett_section_title">AI Providers</h2>
                   <p className="sett_section_desc">
-                    Select the default AI provider used across MCTOSHS. The provider is sent with every extraction and classification request.
+                    Select the default AI provider used across AMCTOSHS. The provider is sent with every extraction and classification request.
                     Configure API keys in your backend environment variables.
                   </p>
                 </div>
@@ -713,6 +1010,30 @@ const SettingsPage = () => {
                       {anamUsage.sessionCount.toLocaleString()} session{anamUsage.sessionCount === 1 ? "" : "s"}
                     </span>
                   </div>
+                )}
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Your Anam Trial</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.6rem" }}>
+                  Every account gets one minute of the cloud Anam avatar to try — once it's used up, Dev AI
+                  automatically switches to the Local 3D avatar for you.
+                </p>
+                {anamTrialLoading ? (
+                  <div className="sett_ai_loading">Loading trial status…</div>
+                ) : anamTrial ? (
+                  <div className="sett_usage_card_body">
+                    <span className="sett_usage_minutes">
+                      {anamTrial.secondsUsed}<span className="sett_usage_unit" style={{ marginLeft: "0.3rem" }}>/ {anamTrial.totalSeconds}s used</span>
+                    </span>
+                    <span className="sett_usage_sessions">
+                      {anamTrial.exhausted ? "Trial used up — now on Local 3D" : `${anamTrial.secondsRemaining}s remaining`}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="sett_usage_card_error">Could not load trial status.</div>
                 )}
               </div>
 
@@ -997,7 +1318,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">AI Access</h2>
               <p className="sett_section_desc">
-                A complete breakdown of what MCTOSHS AI can and cannot access during a conversation. Toggles for codebase and DB are available inside the Dev AI chat panel.
+                A complete breakdown of what AMCTOSHS AI can and cannot access during a conversation.
               </p>
 
               <div className="sett_access_group">
@@ -1005,19 +1326,15 @@ const SettingsPage = () => {
                   <i className="fi fi-rr-check-circle" /> Always available
                 </div>
                 <ul className="sett_access_list">
-                  <li><strong>MCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
+                  <li><strong>AMCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
                   <li><strong>Conversation history</strong> — all messages exchanged in the current session are included with each request, giving the AI full context of the ongoing conversation.</li>
                   <li><strong>Selected AI provider &amp; model</strong> — the provider you choose in the chat dropdown determines which backend inference engine processes the request.</li>
                 </ul>
               </div>
 
               <div className="sett_access_group">
-                <div className="sett_access_group_header sett_access_group_header--toggle">
+                <div className="sett_access_group_header sett_access_group_header--off">
                   <i className="fi fi-rr-terminal" /> Codebase context
-                  <button
-                    className={`sett_access_toggle${aiCodebase ? " sett_access_toggle--on" : ""}`}
-                    onClick={() => setAiCodebase(v => { localStorage.setItem("mctosh_ai_codebase", String(!v)); return !v; })}
-                  >{aiCodebase ? "ON" : "OFF"}</button>
                 </div>
                 <ul className="sett_access_list">
                   <li><strong>Backend source files</strong> — all <code>.js</code> files inside <code>back/</code>: Express routes, Mongoose models, middleware, utilities, AI API handlers.</li>
@@ -1029,12 +1346,8 @@ const SettingsPage = () => {
               </div>
 
               <div className="sett_access_group">
-                <div className="sett_access_group_header sett_access_group_header--toggle">
+                <div className="sett_access_group_header sett_access_group_header--off">
                   <i className="fi fi-rr-database" /> DB context
-                  <button
-                    className={`sett_access_toggle${aiDb ? " sett_access_toggle--on" : ""}`}
-                    onClick={() => setAiDb(v => { localStorage.setItem("mctosh_ai_db", String(!v)); return !v; })}
-                  >{aiDb ? "ON" : "OFF"}</button>
                 </div>
                 <ul className="sett_access_list">
                   <li><strong>Sources</strong> — name, type, and creation date for every source document belonging to your account (<code>Source.find(&#123; userId &#125;)</code>).</li>
@@ -1065,7 +1378,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">Predictive Text</h2>
               <p className="sett_section_desc">
-                Word suggestions appear while typing in any text field across MCTOSHS. Check which text pools feed the
+                Word suggestions appear while typing in any text field across AMCTOSHS. Check which text pools feed the
                 suggestion list below — each pool's word frequencies are combined, so you can mix and match. Turning
                 everything off disables suggestions entirely.
               </p>
@@ -1136,7 +1449,7 @@ const SettingsPage = () => {
           {section === "theme" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Theme</h2>
-              <p className="sett_section_desc">Choose the visual style for MCTOSHS. Applied immediately and remembered across sessions.</p>
+              <p className="sett_section_desc">Choose the visual style for AMCTOSHS. Applied immediately and remembered across sessions.</p>
 
               <div id="sett_theme_grid">
                 {THEMES.map(t => (

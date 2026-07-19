@@ -1,6 +1,7 @@
-/* The 3D object fills the whole pinned stage (see #app_scroll_stage in
-   App.css) — no fixed height, no card border/background of its own, and
-   critically no narrowed/cropped width either: an earlier attempt to make
+/* The 3D object fills the pinned stage below the intro clearance zone (see
+   --app-intro-object-clearance in App.css) — no fixed card
+   border/background of its own, and critically no narrowed/cropped width
+   either: an earlier attempt to make
    room for the left-side level cards by shrinking this canvas to a right-
    hand column literally clipped the object at that hard edge whenever
    orbiting swung part of it past the boundary. The object now reads as
@@ -11,9 +12,11 @@
    whatever's underneath on the left. */
 #thread_logo_canvas {
   position: absolute;
-  inset: 0;
+  left: 0;
+  right: 0;
+  top: var(--app-intro-object-clearance, 10rem);
+  bottom: 0;
   width: 100%;
-  height: 100%;
   background: transparent;
 }
 
@@ -79,6 +82,39 @@
   line-height: 1.4;
 }
 
+.camera_preset_control_row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
+  color: var(--color-text);
+}
+
+.camera_preset_control_row span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.camera_preset_control_row strong {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.camera_preset_control_row small {
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+}
+
+.camera_preset_control_row input {
+  flex-shrink: 0;
+  accent-color: var(--color-text);
+}
+
 .camera_preset_row {
   display: flex;
   align-items: center;
@@ -92,6 +128,69 @@
 .camera_preset_row--active {
   border-color: var(--color-border);
   background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+/* ── Thread length HUD ── mirrors the camera panel's own placement/style but
+   pinned top-right instead, so the two never overlap. Shows each floor's
+   own computed thread length (static once the scene is built) plus a live
+   "remaining / total" readout for Hyle, which counts down as the climb
+   consumes it — see the progress effect in ThreadPyramidLogo.jsx. */
+#thread_length_hud {
+  position: fixed;
+  top: 1rem;
+  right: 1.25rem;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-width: min(240px, calc(100vw - 2.5rem));
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+
+#thread_length_hud_title {
+  margin-bottom: 0.15rem;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.thread_length_hud_row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.15rem 0.3rem;
+  border-radius: 6px;
+}
+
+.thread_length_hud_row--active {
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+
+.thread_length_hud_row--hyle {
+  margin-bottom: 0.2rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.thread_length_hud_label {
+  color: var(--color-text-muted);
+}
+.thread_length_hud_row--active .thread_length_hud_label { color: var(--color-text); }
+
+.thread_length_hud_value {
+  flex-shrink: 0;
+  color: var(--color-text);
+  font-weight: 600;
 }
 
 .camera_preset_row_label {

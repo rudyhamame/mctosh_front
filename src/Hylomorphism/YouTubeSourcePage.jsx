@@ -74,6 +74,8 @@ const YouTubeSourcePage = () => {
     loadYTApi(() => {
       if (!playerDivRef.current || playerRef.current) return;
       playerRef.current = new window.YT.Player(playerDivRef.current, {
+        width: "100%",
+        height: "100%",
         videoId,
         playerVars: { rel: 0, modestbranding: 1 },
       });

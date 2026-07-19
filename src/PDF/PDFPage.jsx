@@ -1,4 +1,5 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { useAIProvider } from "../hooks/useAIProvider";
 import * as pdfjsLib from "pdfjs-dist";
@@ -9,7 +10,11 @@ import { useLongPressSelect } from "../utils/longPressSelect";
 import DraftTextViewer, { cleanMarkdownToPlainText } from "../components/DraftTextViewer";
 import HyleCards from "./HyleCards";
 import SystemMessageModal from "./SystemMessageModal";
+import SmartVideoPanel from "./SmartVideoPanel";
+import NarrativeModePanel from "./NarrativeModePanel";
 import { drawAnnotation } from "./annotationDraw";
+import { PDF_TYPE_ICON } from "./pdfTypeIcon";
+import { InfoPopupButton } from "./InfoPopupButton";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -17,12 +22,6 @@ const PDF_TYPE_LABEL = {
   "text-based": "Text-based",
   "mixed":      "Mixed",
   "scanned":    "Scanned",
-};
-
-export const PDF_TYPE_ICON = {
-  "text-based": "bx bx-check-circle",
-  "mixed":      "bx bx-error",
-  "scanned":    "bx bx-image",
 };
 
 const CARDS = [
@@ -114,11 +113,26 @@ const ANNOT_TOOLS = [
   },
   { key: "drawText",      icon: "bx bx-magic-wand",      label: "Draw to Text",  hasSize: false },
   { key: "eraser",        icon: "bx bx-eraser",          label: "Eraser",        hasSize: true  },
+  {
+    key: "smartVideo",
+    // Duplicated inline rather than referencing the standalone SmartVideoIcon
+    // component further down (used elsewhere for the sub-toolbar's own
+    // "Find Videos" button) — this array is evaluated at module load, before
+    // that component's own `const` binding exists, matching the same
+    // already-established pattern for "text"/"underline" above.
+    iconSvg: (
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
+        <path d="M20 3H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h7v3H8v2h8v-2h-3v-3h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M4 15V5h16v10z" />
+        <path d="m10 13 5-3-5-3z" />
+      </svg>
+    ),
+    label: "Extract Eidos and Find Videos",
+    hasSize: false,
+  },
 ];
-// "shapes" is not a real annotTool value — it's a placeholder in the main
-// strip that opens a sub-toolbar (see shapesMenuOpen) containing the four
-// SHAPE_TOOL_KEYS below, so they don't each take their own slot in the
-// primary row.
+// "shapes" is a placeholder in the main strip that opens the shared
+// sub-toolbar containing the four SHAPE_TOOL_KEYS below, so they don't each
+// take their own slot in the primary row.
 const SHAPE_TOOL_KEYS = ["line", "arrow", "rect", "circle"];
 const DRAWING_TOOL_ORDER = [
   "pen",
@@ -129,6 +143,7 @@ const DRAWING_TOOL_ORDER = [
   "text",
   "drawText",
   "eraser",
+  "smartVideo",
 ];
 
 // Open Color (yeun.github.io/open-color) — the standard "professional" web
@@ -214,15 +229,22 @@ const StrokeBorderIcon = () => (
   </svg>
 );
 
-const InfoIcon = () => (
+// "smartVideo" tool-strip icon (Extract Eidos and Find Videos) — see the
+// Smart Video Search state/handlers further down, the smartVideoCapture
+// branch in the annotation-drawing effect, and <SmartVideoPanel> in the render.
+const SmartVideoIcon = () => (
   <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
-    <path d="M11 11h2v6h-2zm0-4h2v2h-2z" />
-    <path d="M16.71 2.29A1 1 0 0 0 16 2H8c-.27 0-.52.11-.71.29l-5 5A1 1 0 0 0 2 8v8c0 .27.11.52.29.71l5 5c.19.19.44.29.71.29h8c.27 0 .52-.11.71-.29l5-5A1 1 0 0 0 22 16V8c0-.27-.11-.52-.29-.71zM20 15.58l-4.41 4.41H8.42l-4.41-4.41V8.41L8.42 4h7.17L20 8.41z" />
+    <path d="M20 3H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h7v3H8v2h8v-2h-3v-3h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M4 15V5h16v10z" />
+    <path d="m10 13 5-3-5-3z" />
   </svg>
 );
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+// Matches the backend's ConceptExtractRequestSchema surfaceText.max(2000) —
+// truncated client-side too so an overly ambitious multi-screenshot capture
+// fails softly (a shorter search) instead of a 400 from the API.
+const SMART_VIDEO_MAX_SURFACE_TEXT = 2000;
 // Pinch-to-zoom (touch, and trackpad pinch which browsers deliver as ctrl+wheel)
 // is intentionally unbounded above MIN_ZOOM/MAX_ZOOM — this floor only exists so
 // the zoom value can never hit 0 or go negative, which would divide-by-zero the
@@ -399,6 +421,17 @@ const normalizeOcrText = (text) => (
     .replace(/\s+/g, " ")
     .trim()
 );
+// Backend error responses put validation specifics in a top-level
+// `details` array (e.g. { error: "Invalid request.", details: [...] }) —
+// both a plain `error` string and an { message } object shape exist across
+// routes (see ConceptsAPI.js/YouTubeAPI.js vs. AIAPI.js's own convention),
+// so this handles both instead of silently dropping `details` the way a
+// bare `error.message` fallback would.
+const describeApiError = (data, fallback) => {
+  const base = typeof data?.error === "string" ? data.error : data?.error?.message || fallback;
+  const details = Array.isArray(data?.details) ? data.details : null;
+  return details?.length ? `${base} ${details.join("; ")}` : base;
+};
 const MAX_RENDER_CANVAS_DIMENSION = 8192;
 const MAX_RENDER_CANVAS_PIXELS = 16777216;
 const getSafeCanvasOutputScale = (width, height, deviceScale = window.devicePixelRatio || 1) => {
@@ -414,6 +447,7 @@ const getSafeCanvasOutputScale = (width, height, deviceScale = window.devicePixe
   return Math.max(0.1, Math.min(deviceScale, dimLimitedScale, areaLimitedScale));
 };
 const DEFAULT_PEN_SETTINGS = {
+  dynamic: false,
   stabilization: 45,
   pressureAssist: 55,
   taper: 72,
@@ -425,6 +459,158 @@ const DEFAULT_PEN_SETTINGS = {
 const DEFAULT_HIGHLIGHT_SETTINGS = {
   softness: 72,
   body: 58,
+};
+const ERASER_MODES = [
+  { key: "standard", label: "Standard" },
+  { key: "precise", label: "Precise" },
+  { key: "stroke", label: "Stroke" },
+];
+const distancePointToSegment = (px, py, x1, y1, x2, y2) => {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (dx === 0 && dy === 0) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+};
+const annotationHitByEraser = (ann, x, y, radius) => {
+  if ((ann.type === "pen" || ann.type === "highlight") && Array.isArray(ann.points)) {
+    return ann.points.some((pt, index, points) => {
+      if (Math.hypot(pt.x - x, pt.y - y) <= radius) return true;
+      if (index === 0) return false;
+      const prev = points[index - 1];
+      return distancePointToSegment(x, y, prev.x, prev.y, pt.x, pt.y) <= radius;
+    });
+  }
+  if (ann.type === "line" || ann.type === "arrow") {
+    return distancePointToSegment(x, y, ann.x1 ?? 0, ann.y1 ?? 0, ann.x2 ?? 0, ann.y2 ?? 0) <= radius;
+  }
+  if (["rect", "circle", "underline", "strikethrough", "drawTextSelection", "smartVideoCapture"].includes(ann.type)) {
+    const left = ann.x ?? 0;
+    const top = ann.y ?? 0;
+    const right = left + (ann.w ?? 0);
+    const bottom = top + (ann.h ?? 0);
+    const clampedX = clamp(x, Math.min(left, right), Math.max(left, right));
+    const clampedY = clamp(y, Math.min(top, bottom), Math.max(top, bottom));
+    return Math.hypot(clampedX - x, clampedY - y) <= radius;
+  }
+  return Math.hypot((ann.x ?? ann.x1 ?? 0) - x, (ann.y ?? ann.y1 ?? 0) - y) <= radius;
+};
+const eraseAnnotationsAtPoint = (annotations, x, y, radius, mode) => {
+  const hitRadius = mode === "precise" ? radius * 0.45 : radius;
+  const kept = [];
+  let erasedCount = 0;
+
+  annotations.forEach((ann) => {
+    if (mode === "precise" && (ann.type === "pen" || ann.type === "highlight") && Array.isArray(ann.points)) {
+      const nextPoints = ann.points.filter((pt, index, points) => {
+        const nearPoint = Math.hypot(pt.x - x, pt.y - y) <= hitRadius;
+        const prev = points[index - 1];
+        const next = points[index + 1];
+        const nearPrevSegment = prev && distancePointToSegment(x, y, prev.x, prev.y, pt.x, pt.y) <= hitRadius;
+        const nearNextSegment = next && distancePointToSegment(x, y, pt.x, pt.y, next.x, next.y) <= hitRadius;
+        return !(nearPoint || nearPrevSegment || nearNextSegment);
+      });
+      if (nextPoints.length >= 2) {
+        kept.push({ ...ann, points: nextPoints });
+      } else {
+        erasedCount += 1;
+      }
+      return;
+    }
+
+    if (annotationHitByEraser(ann, x, y, hitRadius)) {
+      erasedCount += 1;
+    } else {
+      kept.push(ann);
+    }
+  });
+
+  return { kept, erasedCount };
+};
+const PDF_TOOLBAR_SETTINGS_STORAGE_KEY = "mctoshs_pdf_toolbar_tool_settings";
+const DEFAULT_PDF_TOOLBAR_SETTINGS = {
+  annotToolColors: DEFAULT_ANNOT_TOOL_COLORS,
+  annotSize: 16,
+  penSize: 2,
+  penDynamic: DEFAULT_PEN_SETTINGS.dynamic,
+  arrowSize: 3,
+  penStabilization: DEFAULT_PEN_SETTINGS.stabilization,
+  penPressureAssist: DEFAULT_PEN_SETTINGS.pressureAssist,
+  penTaper: DEFAULT_PEN_SETTINGS.taper,
+  penFlow: DEFAULT_PEN_SETTINGS.flow,
+  penBorder: DEFAULT_PEN_SETTINGS.border,
+  penNibAngle: DEFAULT_PEN_SETTINGS.nibAngle,
+  penNibSpread: DEFAULT_PEN_SETTINGS.nibSpread,
+  penType: "ball",
+  eraserSize: 18,
+  eraserMode: "standard",
+  highlightMode: "freehand",
+  highlightAutoWidth: true,
+  highlightTaperEnds: true,
+  annotOpacity: 35,
+  textFontFamily: "Georgia",
+  textFontSize: 16,
+  textAlign: "left",
+  textBold: false,
+  textItalic: false,
+  textUnderline: false,
+  textBordered: false,
+  textBackground: false,
+};
+const isHexColor = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+const readNumberSetting = (value, fallback, min, max) => (
+  Number.isFinite(Number(value))
+    ? Math.min(max, Math.max(min, Number(value)))
+    : fallback
+);
+const readBooleanSetting = (value, fallback) => (typeof value === "boolean" ? value : fallback);
+const loadPdfToolbarSettings = () => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PDF_TOOLBAR_SETTINGS_STORAGE_KEY) || "null");
+    if (!parsed || typeof parsed !== "object") return DEFAULT_PDF_TOOLBAR_SETTINGS;
+    const colors = { ...DEFAULT_ANNOT_TOOL_COLORS };
+    if (parsed.annotToolColors && typeof parsed.annotToolColors === "object") {
+      Object.keys(DEFAULT_ANNOT_TOOL_COLORS).forEach((key) => {
+        if (isHexColor(parsed.annotToolColors[key])) colors[key] = parsed.annotToolColors[key];
+      });
+    }
+    return {
+      annotToolColors: colors,
+      annotSize: readNumberSetting(parsed.annotSize, DEFAULT_PDF_TOOLBAR_SETTINGS.annotSize, 4, 96),
+      penSize: readNumberSetting(parsed.penSize, DEFAULT_PDF_TOOLBAR_SETTINGS.penSize, 1, 36),
+      penDynamic: readBooleanSetting(parsed.penDynamic, DEFAULT_PDF_TOOLBAR_SETTINGS.penDynamic),
+      arrowSize: readNumberSetting(parsed.arrowSize, DEFAULT_PDF_TOOLBAR_SETTINGS.arrowSize, 1, 20),
+      penStabilization: readNumberSetting(parsed.penStabilization, DEFAULT_PDF_TOOLBAR_SETTINGS.penStabilization, 0, 100),
+      penPressureAssist: readNumberSetting(parsed.penPressureAssist, DEFAULT_PDF_TOOLBAR_SETTINGS.penPressureAssist, 0, 100),
+      penTaper: readNumberSetting(parsed.penTaper, DEFAULT_PDF_TOOLBAR_SETTINGS.penTaper, 0, 100),
+      penFlow: readNumberSetting(parsed.penFlow, DEFAULT_PDF_TOOLBAR_SETTINGS.penFlow, 0, 100),
+      penBorder: readBooleanSetting(parsed.penBorder, DEFAULT_PDF_TOOLBAR_SETTINGS.penBorder),
+      penNibAngle: readNumberSetting(parsed.penNibAngle, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibAngle, 0, 180),
+      penNibSpread: readNumberSetting(parsed.penNibSpread, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibSpread, 0, 100),
+      penType: ["ball", "fountain"].includes(parsed.penType) ? parsed.penType : DEFAULT_PDF_TOOLBAR_SETTINGS.penType,
+      eraserSize: readNumberSetting(parsed.eraserSize, DEFAULT_PDF_TOOLBAR_SETTINGS.eraserSize, 6, 72),
+      eraserMode: ERASER_MODES.some(({ key }) => key === parsed.eraserMode) ? parsed.eraserMode : DEFAULT_PDF_TOOLBAR_SETTINGS.eraserMode,
+      highlightMode: ["freehand", "line"].includes(parsed.highlightMode) ? parsed.highlightMode : DEFAULT_PDF_TOOLBAR_SETTINGS.highlightMode,
+      highlightAutoWidth: readBooleanSetting(parsed.highlightAutoWidth, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoWidth),
+      highlightTaperEnds: readBooleanSetting(parsed.highlightTaperEnds, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightTaperEnds),
+      annotOpacity: readNumberSetting(parsed.annotOpacity, DEFAULT_PDF_TOOLBAR_SETTINGS.annotOpacity, OPACITY_MIN_PCT, OPACITY_MAX_PCT),
+      textFontFamily: TEXT_FONT_FAMILIES.some(({ key }) => key === parsed.textFontFamily) ? parsed.textFontFamily : DEFAULT_PDF_TOOLBAR_SETTINGS.textFontFamily,
+      textFontSize: readNumberSetting(parsed.textFontSize, DEFAULT_PDF_TOOLBAR_SETTINGS.textFontSize, 10, 48),
+      textAlign: ["left", "center", "right"].includes(parsed.textAlign) ? parsed.textAlign : DEFAULT_PDF_TOOLBAR_SETTINGS.textAlign,
+      textBold: readBooleanSetting(parsed.textBold, DEFAULT_PDF_TOOLBAR_SETTINGS.textBold),
+      textItalic: readBooleanSetting(parsed.textItalic, DEFAULT_PDF_TOOLBAR_SETTINGS.textItalic),
+      textUnderline: readBooleanSetting(parsed.textUnderline, DEFAULT_PDF_TOOLBAR_SETTINGS.textUnderline),
+      textBordered: readBooleanSetting(parsed.textBordered, DEFAULT_PDF_TOOLBAR_SETTINGS.textBordered),
+      textBackground: readBooleanSetting(parsed.textBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.textBackground),
+    };
+  } catch {
+    return DEFAULT_PDF_TOOLBAR_SETTINGS;
+  }
+};
+const savePdfToolbarSettings = (settings) => {
+  try {
+    localStorage.setItem(PDF_TOOLBAR_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+  } catch {}
 };
 const smoothStrokePoint = (points, nextPoint, stabilization, scale = 1) => {
   if (!points.length) return nextPoint;
@@ -563,6 +749,7 @@ const applySyntheticStrokePressure = (points, penType, pressureAssist = DEFAULT_
 
 const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType = "ball", scale = 1) => {
   if (!Array.isArray(points) || points.length < 2) return points || [];
+  const dynamic = penSettings?.dynamic === true;
   const stabilization = penSettings?.stabilization ?? DEFAULT_PEN_SETTINGS.stabilization;
   const pressureAssist = penSettings?.pressureAssist ?? DEFAULT_PEN_SETTINGS.pressureAssist;
   const normalized = clamp(stabilization / 100, 0, 1);
@@ -571,13 +758,13 @@ const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType =
   if (deduped.length < 2) return deduped;
   const resampled = resampleStrokePoints(deduped, Math.max(0.08, (0.9 - normalized * 0.45) / scaleFactor));
   const smoothed = smoothStrokePath(resampled, 0.2 + normalized * 0.75, scaleFactor);
+  if (!dynamic) return smoothed.map((point) => ({ ...point, pressure: 0.5 }));
   return applySyntheticStrokePressure(smoothed, penType, pressureAssist, scaleFactor);
 };
 
 // Compact draggable "knob" that replaces a native <input type="range"> for
-// annotation size — the knob's own diameter grows/shrinks live with the
-// value, so it previews the stroke/highlight/eraser size instead of just
-// pointing at a number on a track.
+// annotation size — the preview grows/shrinks live with the value, so it
+// previews the active tool size instead of just pointing at a number.
 const KNOB_MIN_PX  = 8;
 const KNOB_MAX_PX  = 22;
 const KNOB_PAD_PX  = 12;
@@ -585,9 +772,15 @@ const KNOB_TRACK_W = 64;
 const KNOB_LABEL_W  = 44;
 const KNOB_TOTAL_W  = KNOB_TRACK_W + KNOB_LABEL_W;
 
-const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
+const SizeKnob = ({ min, max, step, value, onChange, color, dashed, variant = "dot" }) => {
   const trackRef = useRef(null);
   const draggingRef = useRef(false);
+
+  const nudgeSize = useCallback((direction) => {
+    const precision = String(step).includes(".") ? String(step).split(".")[1].length : 0;
+    const next = clamp(value + (direction * step), min, max);
+    onChange(Number(next.toFixed(precision)));
+  }, [max, min, onChange, step, value]);
 
   const updateFromClientX = useCallback((clientX) => {
     const rect = trackRef.current.getBoundingClientRect();
@@ -616,10 +809,32 @@ const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
 
   const frac     = Math.min(1, Math.max(0, (value - min) / (max - min)));
   const knobSize = KNOB_MIN_PX + frac * (KNOB_MAX_PX - KNOB_MIN_PX);
+  const highlightPreviewHeight = clamp(value * 0.65, 5, 26);
+  const highlightPreviewWidth = clamp(22 + value * 0.55, 28, 54);
   const centerX  = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
 
   return (
     <div className="annot_size_knob">
+      <div className="annot_size_stepper" aria-label="Adjust tool size">
+        <button
+          type="button"
+          className="annot_size_stepper_btn"
+          onClick={() => nudgeSize(1)}
+          disabled={value >= max}
+          title="Increase size"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          className="annot_size_stepper_btn"
+          onClick={() => nudgeSize(-1)}
+          disabled={value <= min}
+          title="Decrease size"
+        >
+          -
+        </button>
+      </div>
       <div
         className="annot_size_knob_track"
         ref={trackRef}
@@ -630,15 +845,28 @@ const SizeKnob = ({ min, max, step, value, onChange, color, dashed }) => {
         title="Size"
       >
         <div className="annot_size_knob_fill" style={{ width: centerX }} />
-        <div
-          className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}`}
-          style={{
-            width: knobSize,
-            height: knobSize,
-            left: centerX,
-            background: dashed ? "transparent" : color,
-          }}
-        />
+        {variant === "highlight" ? (
+          <div
+            className="annot_size_highlight_preview"
+            style={{
+              width: highlightPreviewWidth,
+              height: highlightPreviewHeight,
+              left: centerX,
+              color,
+              background: color,
+            }}
+          />
+        ) : (
+          <div
+            className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}`}
+            style={{
+              width: knobSize,
+              height: knobSize,
+              left: centerX,
+              background: dashed ? "transparent" : color,
+            }}
+          />
+        )}
         <span className="annot_size_label">{Number.isInteger(value) ? value : value.toFixed(1)}pt</span>
       </div>
     </div>
@@ -753,39 +981,30 @@ const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%
   );
 };
 
-const LabeledPercentKnob = ({ title, subtitle, ...props }) => {
-  const [infoOpen, setInfoOpen] = useState(false);
-  const infoRef = useRef(null);
-  useEffect(() => {
-    if (!infoOpen) return;
-    const onDocDown = (e) => { if (infoRef.current && !infoRef.current.contains(e.target)) setInfoOpen(false); };
-    document.addEventListener("mousedown", onDocDown);
-    return () => document.removeEventListener("mousedown", onDocDown);
-  }, [infoOpen]);
-
-  return (
-    <div className="annot_control">
-      <div className="annot_control_head annot_control_head--info">
-        <span className="annot_control_title">{title}</span>
-        {subtitle && (
-          <div className="annot_control_info_wrap" ref={infoRef}>
-            <button
-              type="button"
-              className="annot_control_info_btn"
-              onClick={() => setInfoOpen((o) => !o)}
-              title={subtitle}
-              aria-label="More info"
-            >
-              <InfoIcon />
-            </button>
-            {infoOpen && <div className="annot_control_info_popup">{subtitle}</div>}
-          </div>
-        )}
-      </div>
-      <PercentKnob {...props} />
+const LabeledPercentKnob = ({ title, subtitle, ...props }) => (
+  <div className="annot_control">
+    <div className="annot_control_head annot_control_head--info">
+      <span className="annot_control_title">{title}</span>
+      {subtitle && (
+        <div className="annot_control_info_wrap">
+          <InfoPopupButton info={subtitle} label="More info" />
+        </div>
+      )}
     </div>
-  );
-};
+    <PercentKnob {...props} />
+  </div>
+);
+
+const AnnotControlHeaderInfo = ({ title, info }) => (
+  <div className="annot_control_head annot_control_head--info">
+    <span className="annot_control_title">{title}</span>
+    {info && (
+      <div className="annot_control_info_wrap">
+        <InfoPopupButton info={info} label={`${title} info`} />
+      </div>
+    )}
+  </div>
+);
 
 // Draw a single annotation onto a 2d canvas context.
 // Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
@@ -926,28 +1145,10 @@ const PDFPage = forwardRef(({
   // selected.
   // Declared here (ahead of most other state) because textSelectable below
   // reads it immediately.
-  const [annotTool,      setAnnotTool]      = useState("pen");
-  const navigationBlocked = Boolean(annotTool); // true only when a real drawing tool is selected
+  const [annotTool,      setAnnotTool]      = useState(null);
+  const navigationBlocked = Boolean(annotTool && annotTool !== "shapes"); // true only when a real drawing tool is selected
   const toolActive = navigationBlocked;
   const annotToolRef = useRef(null); // mirrors navigationBlocked ? annotTool : null — read inside the pan-gesture effect, whose deps are just [pdfDoc], so annotTool itself would be stale there
-
-  // Left/right-docked flyout (.annot_tool_options in pdfPage.css) should
-  // emerge level with the tool button that was actually clicked, not just
-  // pinned to the top of the toolbar — the active tool can be anywhere
-  // along the vertical strip. Measured relative to the toolbar's own box
-  // (its containing block for position:absolute, see pdfPage.css) so it's
-  // a plain top offset, not a full-page coordinate.
-  const [toolOptionsTop, setToolOptionsTop] = useState(0);
-  useLayoutEffect(() => {
-    if (toolbarDock.edge !== "left" && toolbarDock.edge !== "right") return;
-    const toolbarEl = toolbarRef.current;
-    if (!toolbarEl) return;
-    const activeBtn = toolbarEl.querySelector(".annot_tool_btn.annot_trigger--active");
-    if (!activeBtn) return;
-    const toolbarRect = toolbarEl.getBoundingClientRect();
-    const btnRect = activeBtn.getBoundingClientRect();
-    setToolOptionsTop(btnRect.top - toolbarRect.top);
-  }, [annotTool, toolbarDock.edge]);
 
   // AI vs Manual toggle
   const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
@@ -975,11 +1176,24 @@ const PDFPage = forwardRef(({
   // Selection bar — shown before popup; always exactly the double-clicked/
   // double-tapped word, never an expandable range.
   const [manualSelection, setManualSelection] = useState(null); // { startIdx, endIdx, text, x, y }
+  // A drag's window-level pointermove listener is only ever (re)attached
+  // from a handle's own pointerdown — it does NOT get re-armed just
+  // because manualSelection changed and the whole drawing effect below
+  // reran (rebuilding the handle elements fresh doesn't retrigger a
+  // mousedown). So the onWindowPointerMove closure actively handling an
+  // in-progress drag can be "stale" — bound to whatever manualSelection
+  // was when the drag started — for the drag's entire duration. This ref
+  // is what that stale closure reads instead, so it always sees the real
+  // current selection (needed for nearestSpanIndex's locality window, see
+  // below) regardless of which render's closure is the one still live.
+  const manualSelectionRef = useRef(null);
+  useEffect(() => { manualSelectionRef.current = manualSelection; }, [manualSelection]);
   // Thin selection-bar action state (Translate to / Definition / Linguistic
   // Structure Check) — hideHyleControls reading context only.
   const [selectionToolBusy,   setSelectionToolBusy]   = useState(null); // which action key is in flight, or null
   const [selectionToolResult, setSelectionToolResult] = useState(null); // { label, text }
   const [selectionToolError,  setSelectionToolError]  = useState("");
+  const [selectionVerifyBusy, setSelectionVerifyBusy] = useState(false); // AMCTOSHS builder source verification
 
   const [history, setHistory]               = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1270,9 +1484,7 @@ const PDFPage = forwardRef(({
     };
     if (event.pointerId != null) toolbarEl.setPointerCapture?.(event.pointerId);
     setToolbarDragging(true);
-    setShapesMenuOpen(false);
     setColorMenuOpen(false);
-    setHighlightMenuOpen(false);
   }, []);
 
   const showToolbarTouchLabel = useCallback((key, label) => {
@@ -1285,11 +1497,15 @@ const PDFPage = forwardRef(({
   }, []);
 
   const toggleAnnotTool = useCallback((key) => {
+    // Smart Video's aside is only ever closed by re-pressing this same
+    // button while it's already the active tool (see the annotTool effect
+    // near the smartVideo* state — it opens smartVideoOpen but never closes
+    // it, precisely so switching to a different tool, e.g. Pen, leaves the
+    // aside's results/screenshots visible instead of yanking them away).
+    if (key === "smartVideo" && annotTool === "smartVideo") setSmartVideoOpen(false);
     setAnnotTool((current) => (current === key ? null : key));
-    setShapesMenuOpen(false);
     setColorMenuOpen(false);
-    setHighlightMenuOpen(false);
-  }, []);
+  }, [annotTool]);
 
   useEffect(() => (
     () => {
@@ -1309,46 +1525,229 @@ const PDFPage = forwardRef(({
     setAnnotHistory((prev) => [...prev, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300));
   }, []);
 
+  // ── Smart Video Search ("Extract Eidos and Find Videos") ────────────────────
+  // A tool-strip tool (annotTool === "smartVideo", next to eraser). Selecting
+  // it mounts the far-left <SmartVideoPanel> aside immediately (see the
+  // effect below) — the same slot pattern as #pdf_annot_history_panel/
+  // #pdf_md_panel — but dragging on the page does NOT start capturing until
+  // the aside's own "Start selecting" button is pressed (smartVideoSelecting),
+  // so opening the tool/aside to review past results never risks an
+  // accidental capture. While armed, dragging captures a screenshot of that
+  // area instead of drawing an annotation (see the smartVideoCapture branch
+  // in the annotation-drawing effect below); each capture is OCR'd
+  // (captureSmartVideoScreenshot) and collected into smartVideoScreenshots,
+  // previewed as thumbnails in the aside — multiple captures are expected
+  // before "Find Videos" is pressed. handleSmartVideoSearch then
+  // concatenates their recognized text, calls POST /api/concepts/extract,
+  // then POST /api/youtube/concept-search, and shows the result in the same aside.
+  const [smartVideoOpen,   setSmartVideoOpen]   = useState(false);
+  const [smartVideoSelecting, setSmartVideoSelecting] = useState(false);
+  const [smartVideoStage,  setSmartVideoStage]  = useState(""); // "" | "extracting" | "searching" | "done"
+  const [smartVideoError,  setSmartVideoError]  = useState("");
+  const [smartVideoEidos,  setSmartVideoEidos]  = useState(null);
+  const [smartVideoVideos, setSmartVideoVideos] = useState([]);
+  const [smartVideoActiveVideoId, setSmartVideoActiveVideoId] = useState(null);
+  const [smartVideoDifficulty, setSmartVideoDifficulty] = useState(
+    () => localStorage.getItem("mctosh_smart_video_difficulty") || "intermediate",
+  );
+  useEffect(() => { localStorage.setItem("mctosh_smart_video_difficulty", smartVideoDifficulty); }, [smartVideoDifficulty]);
+  // Video Preferences panel (hard filters exclude, ranking preferences only
+  // reorder — see back/helpers/videoFilters.js vs back/helpers/
+  // videoScoring.js). Shape matches HardFiltersSchema/RankingPreferencesSchema
+  // in back/validation/conceptSchemas.js exactly, so it can be spread
+  // straight into the concept-search request body with no translation layer.
+  const DEFAULT_SMART_VIDEO_PREFERENCES = {
+    hardFilters: { language: [], maxDurationMinutes: null, minDurationMinutes: null, captionsRequired: false },
+    rankingPreferences: { preferredStyles: [], learningGoal: undefined, preferAcademicSources: false, clinicalFocus: undefined, recencyWeight: 0, popularityWeight: 0.5, strictRelevance: false },
+    maxResults: 6,
+  };
+  const [smartVideoPreferences, setSmartVideoPreferences] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("mctosh_smart_video_preferences") || "null");
+      return saved ? { ...DEFAULT_SMART_VIDEO_PREFERENCES, ...saved } : DEFAULT_SMART_VIDEO_PREFERENCES;
+    } catch { return DEFAULT_SMART_VIDEO_PREFERENCES; }
+  });
+  useEffect(() => { localStorage.setItem("mctosh_smart_video_preferences", JSON.stringify(smartVideoPreferences)); }, [smartVideoPreferences]);
+  const [smartVideoPreferencesOpen, setSmartVideoPreferencesOpen] = useState(false);
+  // { id, dataUrl, text, pageNum, status: "reading"|"done"|"empty"|"error" }[]
+  const [smartVideoScreenshots, setSmartVideoScreenshots] = useState([]);
+  const [smartVideoCaptureBusy, setSmartVideoCaptureBusy] = useState(false);
+  // providerId -> model, from the SAME /api/settings/ai-status the Settings
+  // page's AI Providers section already uses (DB override, else env var,
+  // else its own defaultModel — one source of truth, instead of yet another
+  // hardcoded provider->model map going stale here the way aiClient.js's did).
+  // Lets the footer show a model name even before any search has run.
+  const [smartVideoProviderModels, setSmartVideoProviderModels] = useState({});
+  // Mount the aside the moment the tool is picked; leaving the tool disarms
+  // capture mode so switching away and back always requires an explicit
+  // "Start selecting" press again, never a silently-still-armed drag.
+  useEffect(() => {
+    if (annotTool !== "smartVideo") { setSmartVideoSelecting(false); return; }
+    setSmartVideoOpen(true);
+    if (Object.keys(smartVideoProviderModels).length) return;
+    authFetch(apiUrl("/api/settings/ai-status"))
+      .then((res) => res.json())
+      .then((data) => {
+        const byId = {};
+        for (const p of data.providers || []) byId[p.id] = p.model;
+        setSmartVideoProviderModels(byId);
+      })
+      .catch(() => {}); // footer just falls back to provider-only if this fails
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annotTool]);
+
+  // "Saved" view (see the bookmark toggle in SmartVideoPanel's header) —
+  // POST/GET/DELETE /api/concepts/saved, a snapshot of eidos+videos so a
+  // saved entry reopens exactly as it looked when saved, not a live re-query.
+  const [smartVideoSavedOpen, setSmartVideoSavedOpen] = useState(false);
+  const [smartVideoSaved, setSmartVideoSaved] = useState([]);
+  const [smartVideoSavedLoading, setSmartVideoSavedLoading] = useState(false);
+  const [smartVideoSaveBusy, setSmartVideoSaveBusy] = useState(false);
+  const [smartVideoSavedId, setSmartVideoSavedId] = useState(null); // id of the currently-shown eidos, once saved
+
+  const fetchSmartVideoSaved = useCallback(async () => {
+    setSmartVideoSavedLoading(true);
+    try {
+      const res = await authFetch(apiUrl("/api/concepts/saved"));
+      const data = await res.json();
+      if (data.error) throw new Error(describeApiError(data, "Failed to load saved concepts."));
+      setSmartVideoSaved(data.saved || []);
+    } catch (e) {
+      setSmartVideoError(e.message || "Failed to load saved concepts.");
+    } finally {
+      setSmartVideoSavedLoading(false);
+    }
+  }, []);
+
+  const toggleSmartVideoSaved = useCallback(() => {
+    setSmartVideoPreferencesOpen(false); // mutually exclusive with Preferences — see SmartVideoPanel.jsx's body ternary
+    setSmartVideoSavedOpen((open) => {
+      const next = !open;
+      if (next) fetchSmartVideoSaved();
+      return next;
+    });
+  }, [fetchSmartVideoSaved]);
+
+  const toggleSmartVideoPreferences = useCallback(() => {
+    setSmartVideoSavedOpen(false);
+    setSmartVideoPreferencesOpen((open) => !open);
+  }, []);
+
+  const saveSmartVideoConcept = useCallback(async () => {
+    if (!smartVideoEidos || smartVideoSaveBusy) return;
+    setSmartVideoSaveBusy(true);
+    try {
+      // Explicit field list, not a `...smartVideoEidos` spread — the eidos
+      // object also carries searchQueries/negativeTerms (only meaningful as
+      // search INPUT, not as something worth persisting on a saved
+      // concept), which SaveConceptRequestSchema's .strict() rejects
+      // outright as unrecognized keys.
+      const res = await authFetch(apiUrl("/api/concepts/saved"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          surfaceText: smartVideoEidos.surfaceText,
+          eidos: smartVideoEidos.eidos,
+          canonicalConcept: smartVideoEidos.canonicalConcept,
+          concepts: smartVideoEidos.concepts,
+          domain: smartVideoEidos.domain,
+          summary: smartVideoEidos.summary,
+          prerequisites: smartVideoEidos.prerequisites,
+          relatedConcepts: smartVideoEidos.relatedConcepts,
+          ambiguities: smartVideoEidos.ambiguities,
+          language: smartVideoEidos.language,
+          difficulty: smartVideoEidos.difficulty,
+          learningIntent: smartVideoEidos.learningIntent,
+          provider: smartVideoEidos.provider,
+          model: smartVideoEidos.model,
+          documentTitle: filename || "",
+          videos: smartVideoVideos,
+        }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(describeApiError(data, "Failed to save concept."));
+      setSmartVideoSavedId(data.id);
+    } catch (e) {
+      setSmartVideoError(e.message || "Failed to save concept.");
+    } finally {
+      setSmartVideoSaveBusy(false);
+    }
+  }, [smartVideoEidos, smartVideoVideos, smartVideoSaveBusy, filename]);
+
+  const loadSmartVideoSaved = useCallback((saved) => {
+    setSmartVideoSavedOpen(false);
+    setSmartVideoError("");
+    setSmartVideoStage("done");
+    setSmartVideoEidos(saved);
+    setSmartVideoVideos(saved.videos || []);
+    setSmartVideoActiveVideoId(null);
+    setSmartVideoSavedId(saved.id);
+  }, []);
+
+  const deleteSmartVideoSaved = useCallback(async (id) => {
+    setSmartVideoSaved((prev) => prev.filter((s) => s.id !== id)); // optimistic
+    try {
+      const res = await authFetch(apiUrl(`/api/concepts/saved/${id}`), { method: "DELETE" });
+      const data = await res.json();
+      if (data.error) throw new Error(describeApiError(data, "Failed to delete saved concept."));
+      if (smartVideoSavedId === id) setSmartVideoSavedId(null);
+    } catch (e) {
+      setSmartVideoError(e.message || "Failed to delete saved concept.");
+      fetchSmartVideoSaved(); // undo the optimistic removal by re-syncing with the server
+    }
+  }, [smartVideoSavedId, fetchSmartVideoSaved]);
+
+  // ── AMCTOSHS Entities Builder ────────────────────────────────────────────
+  // Independent of the annotTool tool-strip. It only builds from explicit
+  // user-provided text: the latest manual text selection or text typed into
+  // the panel. It intentionally does not read the current page text.
+  const [narrativeModeOpen, setNarrativeModeOpen] = useState(false);
+  const [entityBuilderSelectedText, setEntityBuilderSelectedText] = useState("");
+
+  const toggleNarrativeMode = useCallback(() => {
+    setNarrativeModeOpen((open) => !open);
+  }, []);
+
   // ── Selection action (selectionOnly mode) ──────────────────────────────────
   const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
   const [selectionActionError, setSelectionActionError] = useState("");
 
   // ── Annotation state ──────────────────────────────────────────────────────
-  const [annotToolColors, setAnnotToolColors] = useState(DEFAULT_ANNOT_TOOL_COLORS);
-  const [annotSize,      setAnnotSize]      = useState(16);  // highlight lineWidth
-  const [penSize,        setPenSize]        = useState(2);   // pen lineWidth
-  const [arrowSize,      setArrowSize]      = useState(3);   // arrow lineWidth
-  const [penStabilization, setPenStabilization] = useState(DEFAULT_PEN_SETTINGS.stabilization);
-  const [penPressureAssist, setPenPressureAssist] = useState(DEFAULT_PEN_SETTINGS.pressureAssist);
-  const [penTaper, setPenTaper] = useState(DEFAULT_PEN_SETTINGS.taper);
-  const [penFlow, setPenFlow] = useState(DEFAULT_PEN_SETTINGS.flow);
-  const [penBorder, setPenBorder] = useState(DEFAULT_PEN_SETTINGS.border);
-  const [penNibAngle, setPenNibAngle] = useState(DEFAULT_PEN_SETTINGS.nibAngle);
-  const [penNibSpread, setPenNibSpread] = useState(DEFAULT_PEN_SETTINGS.nibSpread);
-  const [penType,          setPenType]          = useState("ball");
-  const [eraserSize,     setEraserSize]     = useState(18);  // eraser radius
-  const [highlightMode,  setHighlightMode]  = useState("freehand"); // "freehand" | "line"
-  const [highlightAutoWidth, setHighlightAutoWidth] = useState(true);
-  const [highlightTaperEnds, setHighlightTaperEnds] = useState(true);
-  const [annotOpacity,      setAnnotOpacity]      = useState(35);    // % — highlight fill opacity
-  const [textFontFamily, setTextFontFamily] = useState("Georgia");
-  const [textFontSize, setTextFontSize] = useState(16);
-  const [textAlign, setTextAlign] = useState("left");
-  const [textBold, setTextBold] = useState(false);
-  const [textItalic, setTextItalic] = useState(false);
-  const [textUnderline, setTextUnderline] = useState(false);
-  const [textBordered, setTextBordered] = useState(false);
+  const [savedToolbarSettings] = useState(loadPdfToolbarSettings);
+  const [annotToolColors, setAnnotToolColors] = useState(savedToolbarSettings.annotToolColors);
+  const [annotSize,      setAnnotSize]      = useState(savedToolbarSettings.annotSize);  // highlight lineWidth
+  const [penSize,        setPenSize]        = useState(savedToolbarSettings.penSize);   // pen lineWidth
+  const [penDynamic, setPenDynamic] = useState(savedToolbarSettings.penDynamic);
+  const [arrowSize,      setArrowSize]      = useState(savedToolbarSettings.arrowSize);   // arrow lineWidth
+  const [penStabilization, setPenStabilization] = useState(savedToolbarSettings.penStabilization);
+  const [penPressureAssist, setPenPressureAssist] = useState(savedToolbarSettings.penPressureAssist);
+  const [penTaper, setPenTaper] = useState(savedToolbarSettings.penTaper);
+  const [penFlow, setPenFlow] = useState(savedToolbarSettings.penFlow);
+  const [penBorder, setPenBorder] = useState(savedToolbarSettings.penBorder);
+  const [penNibAngle, setPenNibAngle] = useState(savedToolbarSettings.penNibAngle);
+  const [penNibSpread, setPenNibSpread] = useState(savedToolbarSettings.penNibSpread);
+  const [penType,          setPenType]          = useState(savedToolbarSettings.penType);
+  const [eraserSize,     setEraserSize]     = useState(savedToolbarSettings.eraserSize);  // eraser radius
+  const [eraserMode,     setEraserMode]     = useState(savedToolbarSettings.eraserMode);
+  const [highlightMode,  setHighlightMode]  = useState(savedToolbarSettings.highlightMode); // "freehand" | "line"
+  const [highlightAutoWidth, setHighlightAutoWidth] = useState(savedToolbarSettings.highlightAutoWidth);
+  const [highlightTaperEnds, setHighlightTaperEnds] = useState(savedToolbarSettings.highlightTaperEnds);
+  const [annotOpacity,      setAnnotOpacity]      = useState(savedToolbarSettings.annotOpacity);    // % — highlight fill opacity
+  const [textFontFamily, setTextFontFamily] = useState(savedToolbarSettings.textFontFamily);
+  const [textFontSize, setTextFontSize] = useState(savedToolbarSettings.textFontSize);
+  const [textAlign, setTextAlign] = useState(savedToolbarSettings.textAlign);
+  const [textBold, setTextBold] = useState(savedToolbarSettings.textBold);
+  const [textItalic, setTextItalic] = useState(savedToolbarSettings.textItalic);
+  const [textUnderline, setTextUnderline] = useState(savedToolbarSettings.textUnderline);
+  const [textBordered, setTextBordered] = useState(savedToolbarSettings.textBordered);
+  const [textBackground, setTextBackground] = useState(savedToolbarSettings.textBackground);
   const [drawTextBusy, setDrawTextBusy] = useState(false);
   const [drawTextStatus, setDrawTextStatus] = useState("");
   const [drawTextProgress, setDrawTextProgress] = useState(0);
-  const [shapesMenuOpen,  setShapesMenuOpen]  = useState(false); // floating Shapes sub-toolbar (line/arrow/rect/circle)
   const [colorMenuOpen,  setColorMenuOpen]  = useState(false); // floating color dropdown
   const [textMenuOpen, setTextMenuOpen] = useState(false); // floating text controls dropdown
-  const [highlightMenuOpen, setHighlightMenuOpen] = useState(false); // floating highlight controls dropdown
-  const shapesMenuRef = useRef(null);
   const colorMenuRef = useRef(null);
   const textMenuRef = useRef(null);
-  const highlightMenuRef = useRef(null);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
   const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
@@ -1360,6 +1759,65 @@ const PDFPage = forwardRef(({
       return { ...prev, [annotTool]: nextColor };
     });
   }, [annotTool]);
+  useEffect(() => {
+    savePdfToolbarSettings({
+      annotToolColors,
+      annotSize,
+      penSize,
+      penDynamic,
+      arrowSize,
+      penStabilization,
+      penPressureAssist,
+      penTaper,
+      penFlow,
+      penBorder,
+      penNibAngle,
+      penNibSpread,
+      penType,
+      eraserSize,
+      eraserMode,
+      highlightMode,
+      highlightAutoWidth,
+      highlightTaperEnds,
+      annotOpacity,
+      textFontFamily,
+      textFontSize,
+      textAlign,
+      textBold,
+      textItalic,
+      textUnderline,
+      textBordered,
+      textBackground,
+    });
+  }, [
+    annotToolColors,
+    annotSize,
+    penSize,
+    penDynamic,
+    arrowSize,
+    penStabilization,
+    penPressureAssist,
+    penTaper,
+    penFlow,
+    penBorder,
+    penNibAngle,
+    penNibSpread,
+    penType,
+    eraserSize,
+    eraserMode,
+    highlightMode,
+    highlightAutoWidth,
+    highlightTaperEnds,
+    annotOpacity,
+    textFontFamily,
+    textFontSize,
+    textAlign,
+    textBold,
+    textItalic,
+    textUnderline,
+    textBordered,
+    textBackground,
+  ]);
   const getOcrWorker = useCallback(async () => {
     if (ocrWorkerRef.current) return ocrWorkerRef.current;
     if (ocrWorkerPromiseRef.current) return ocrWorkerPromiseRef.current;
@@ -1454,34 +1912,31 @@ const PDFPage = forwardRef(({
   }, [annotations]);
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
   const [textActionMenu, setTextActionMenu] = useState(null); // { vx, vy, width, editingId }
+  const [textStyleTargetId, setTextStyleTargetId] = useState(null); // id of an existing text annotation being style-edited
   const [annotTextVal,   setAnnotTextVal]   = useState("");
   const annotTextInputRef = useRef(null);
   const textActionMenuRef = useRef(null);
   const annotCanvasRef  = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
+  const eraserCursorRef = useRef(null);  // eraser-size preview circle, see the effect below
   const ocrWorkerRef = useRef(null);
   const ocrWorkerPromiseRef = useRef(null);
   const drawTextJobRef = useRef(0);
 
-  // Close the floating tools/color/highlight dropdowns on an outside click
+  // Close the floating color/text action dropdowns on an outside click
   useEffect(() => {
-    if (!shapesMenuOpen && !colorMenuOpen && !textActionMenu && !highlightMenuOpen) return;
+    if (!colorMenuOpen && !textActionMenu) return;
     const onDocPointerDown = (e) => {
-      if (shapesMenuOpen && shapesMenuRef.current && !shapesMenuRef.current.contains(e.target)) setShapesMenuOpen(false);
       if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
       if (textActionMenu && textActionMenuRef.current && !textActionMenuRef.current.contains(e.target)) setTextActionMenu(null);
-      if (highlightMenuOpen && highlightMenuRef.current && !highlightMenuRef.current.contains(e.target)) setHighlightMenuOpen(false);
     };
     document.addEventListener("mousedown", onDocPointerDown);
     return () => document.removeEventListener("mousedown", onDocPointerDown);
-  }, [shapesMenuOpen, colorMenuOpen, textActionMenu, highlightMenuOpen]);
+  }, [colorMenuOpen, textActionMenu]);
 
   useEffect(() => {
     if (annotTool !== "text") setTextActionMenu(null);
-  }, [annotTool]);
-
-  useEffect(() => {
-    setHighlightMenuOpen(annotTool === "highlight");
+    if (annotTool !== "text") setTextStyleTargetId(null);
   }, [annotTool]);
 
   useEffect(() => {
@@ -1492,14 +1947,15 @@ const PDFPage = forwardRef(({
     });
   }, [annotTextInput]);
 
-  const primeTextStyleFromAnnotation = useCallback((hit) => {
+  const primeTextStyleFromAnnotation = useCallback((hit, scale = 1) => {
     setTextFontFamily(hit.fontFamily || "Georgia");
-    setTextFontSize(Math.max(10, Math.round(hit.fontSize || 16)));
+    setTextFontSize(Math.max(10, Math.round((hit.fontSize || 16) * scale)));
     setTextAlign(hit.textAlign || "left");
     setTextBold(Boolean(hit.fontBold));
     setTextItalic(Boolean(hit.fontItalic));
     setTextUnderline(Boolean(hit.textUnderline));
     setTextBordered(Boolean(hit.textBordered));
+    setTextBackground(Boolean(hit.textBackground));
   }, []);
 
   const openTextEditorForHit = useCallback((hit) => {
@@ -1514,9 +1970,20 @@ const PDFPage = forwardRef(({
       editingId: hit.id,
     });
     setAnnotTextVal(hit.text || "");
-    primeTextStyleFromAnnotation(hit);
+    primeTextStyleFromAnnotation(hit, scale);
+    setTextStyleTargetId(null);
     setTextActionMenu(null);
   }, [getTextAnnotationBounds, primeTextStyleFromAnnotation]);
+
+  const updateStyledTextTarget = useCallback((patch) => {
+    if (!textStyleTargetId) return;
+    setAnnotations((prev) => ({
+      ...prev,
+      [pageNum]: (prev[pageNum] || []).map((ann) => (ann.id === textStyleTargetId ? { ...ann, ...patch } : ann)),
+    }));
+    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+    logAnnotHistory({ action: "edit", type: "text", page: pageNum });
+  }, [textStyleTargetId, pageNum, logAnnotHistory]);
 
   const handleTextAction = useCallback((action) => {
     if (!textActionMenu) return;
@@ -1535,12 +2002,22 @@ const PDFPage = forwardRef(({
       logAnnotHistory({ action: "delete", type: "text", page: pageNum });
       setAnnotTextInput(null);
       setAnnotTextVal("");
+      setTextStyleTargetId(null);
+      setTextActionMenu(null);
+      return;
+    }
+
+    if (action === "edit-style") {
+      setTextStyleTargetId(hit.id);
+      primeTextStyleFromAnnotation(hit);
+      setAnnotTextInput(null);
+      setAnnotTextVal("");
       setTextActionMenu(null);
       return;
     }
 
     openTextEditorForHit(hit);
-  }, [textActionMenu, annotations, pageNum, logAnnotHistory, openTextEditorForHit]);
+  }, [textActionMenu, annotations, pageNum, logAnnotHistory, primeTextStyleFromAnnotation]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -1593,6 +2070,8 @@ const PDFPage = forwardRef(({
   const zoomHoldIntervalRef = useRef(null);
   const selBarRef          = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
+  const selectionDraggingEdgeRef = useRef(null); // "start" | "end" | null — which manual-selection handle (if any) is actively being dragged, see the manualSelection highlight effect below
+  const selectionHandleDragRef = useRef(null); // { edge, startX, startY, active } — taps on handles must not alter selection, only real drags
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
   const lastLoadedSourceKeyRef = useRef("");
   const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
@@ -1803,6 +2282,43 @@ const PDFPage = forwardRef(({
   // Keep refs in sync so event handlers always read the latest values
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => { annotToolRef.current = navigationBlocked ? annotTool : null; }, [annotTool, navigationBlocked]);
+
+  useEffect(() => {
+    if (annotTool !== "highlight") return undefined;
+    const isInPreview = (event) => {
+      const preview = previewRef.current;
+      return Boolean(preview && event.target && preview.contains(event.target));
+    };
+    const suppressSafariHighlightLongTouch = (event) => {
+      if (!isInPreview(event)) return;
+      if (event.cancelable) event.preventDefault();
+      window.getSelection?.()?.removeAllRanges();
+      setManualSelection(null);
+      setManualPopup(null);
+    };
+    const clearSafariSelection = () => {
+      const selection = window.getSelection?.();
+      if (!selection?.rangeCount) return;
+      const preview = previewRef.current;
+      const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE
+        ? selection.anchorNode
+        : selection.anchorNode?.parentElement;
+      if (preview && anchor && preview.contains(anchor)) selection.removeAllRanges();
+    };
+
+    document.addEventListener("touchstart", suppressSafariHighlightLongTouch, { capture: true, passive: false });
+    document.addEventListener("touchmove", suppressSafariHighlightLongTouch, { capture: true, passive: false });
+    document.addEventListener("contextmenu", suppressSafariHighlightLongTouch, { capture: true });
+    document.addEventListener("selectstart", suppressSafariHighlightLongTouch, { capture: true });
+    document.addEventListener("selectionchange", clearSafariSelection);
+    return () => {
+      document.removeEventListener("touchstart", suppressSafariHighlightLongTouch, { capture: true });
+      document.removeEventListener("touchmove", suppressSafariHighlightLongTouch, { capture: true });
+      document.removeEventListener("contextmenu", suppressSafariHighlightLongTouch, { capture: true });
+      document.removeEventListener("selectstart", suppressSafariHighlightLongTouch, { capture: true });
+      document.removeEventListener("selectionchange", clearSafariSelection);
+    };
+  }, [annotTool]);
 
   useEffect(() => () => {
     const state = wheelZoomStateRef.current;
@@ -2092,6 +2608,74 @@ const PDFPage = forwardRef(({
     }
   }, [getOcrWorker, pageNum, pageViewport]);
 
+  // Screenshot capture for the "smartVideo" tool — drag a rectangle on the
+  // page (handled in the annotation-drawing effect's smartVideoCapture
+  // branch below), crop it out of the rendered page canvas, and OCR it with
+  // the same lazy-singleton Tesseract worker the Draw-to-Text tool already
+  // uses (see getOcrWorker/runDrawToTextRecognition above) — reused, not
+  // reimplemented. Unlike Draw-to-Text, this never touches the annotation
+  // canvas or opens a text-annotation input; it only records the crop +
+  // recognized text into smartVideoScreenshots. The thumbnail appears
+  // immediately (status "reading") and updates once OCR resolves, so
+  // capturing a second area doesn't have to wait on the first one's OCR.
+  // Declared here (before the annotation-drawing effect below, which
+  // references it in its dependency array) rather than near the other
+  // Smart Video handlers further down — that array is evaluated as part of
+  // the useEffect() call itself, at this point in render order, so a
+  // forward reference to a later-declared const would throw a TDZ
+  // ReferenceError ("Cannot access before initialization").
+  const captureSmartVideoScreenshot = useCallback(async (selection) => {
+    const pageCanvas = canvasRef.current;
+    const viewport = pageViewportsRef.current[pageNum - 1] || pageViewport;
+    if (!pageCanvas || !viewport) return;
+
+    const scale = fitScaleRef.current * zoomRef.current;
+    const pageCssWidth = Math.max(1, viewport.width);
+    const pageCssHeight = Math.max(1, viewport.height);
+    const pageScaleX = pageCanvas.width / pageCssWidth;
+    const pageScaleY = pageCanvas.height / pageCssHeight;
+    const cropLeftCss = clamp(selection.x * scale, 0, pageCssWidth);
+    const cropTopCss = clamp(selection.y * scale, 0, pageCssHeight);
+    const cropWidthCss = clamp(selection.w * scale, 1, pageCssWidth - cropLeftCss);
+    const cropHeightCss = clamp(selection.h * scale, 1, pageCssHeight - cropTopCss);
+    if (cropWidthCss < 12 || cropHeightCss < 12) return;
+
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = Math.max(1, Math.round(cropWidthCss * pageScaleX));
+    cropCanvas.height = Math.max(1, Math.round(cropHeightCss * pageScaleY));
+    const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+    cropCtx.fillStyle = "#ffffff";
+    cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+    cropCtx.drawImage(
+      pageCanvas,
+      cropLeftCss * pageScaleX, cropTopCss * pageScaleY, cropWidthCss * pageScaleX, cropHeightCss * pageScaleY,
+      0, 0, cropCanvas.width, cropCanvas.height,
+    );
+
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    const dataUrl = cropCanvas.toDataURL("image/jpeg", 0.82);
+    setSmartVideoScreenshots((prev) => [...prev, { id, dataUrl, text: "", pageNum, status: "reading" }]);
+    setSmartVideoCaptureBusy(true);
+    try {
+      const worker = await getOcrWorker();
+      const { data: { text } } = await worker.recognize(cropCanvas);
+      const recognizedText = normalizeOcrText(text);
+      setSmartVideoScreenshots((prev) => prev.map((s) => (
+        s.id === id ? { ...s, text: recognizedText, status: recognizedText ? "done" : "empty" } : s
+      )));
+    } catch (err) {
+      console.error(err);
+      setSmartVideoScreenshots((prev) => prev.map((s) => (s.id === id ? { ...s, status: "error" } : s)));
+    } finally {
+      setSmartVideoCaptureBusy(false);
+    }
+  }, [pageNum, pageViewport, getOcrWorker]);
+
+  const removeSmartVideoScreenshot = useCallback((id) => {
+    setSmartVideoScreenshots((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+  const clearSmartVideoScreenshots = useCallback(() => setSmartVideoScreenshots([]), []);
+
   // ── Annotation drawing events ──────────────────────────────────────────────
   useEffect(() => {
     const ac = annotCanvasRef.current;
@@ -2124,30 +2708,41 @@ const PDFPage = forwardRef(({
       };
     };
 
+    const findHighlightSpanAt = (clientX, clientY) => {
+      // Live-measured (getBoundingClientRect), not stored left/top/width/
+      // height fields — since word spans now lay out via normal inline
+      // text flow (see the text-layer build effect), their real position
+      // only exists on the live DOM, not as a precomputed number.
+      const found = spansRef.current.find((span) => {
+        const r = span.el?.getBoundingClientRect();
+        if (!r) return false;
+        return clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom;
+      });
+      if (!found) return null;
+      const canvasRect = ac.getBoundingClientRect();
+      const scale = getScale();
+      const r = found.el.getBoundingClientRect();
+      return {
+        left: (r.left - canvasRect.left) / scale,
+        top: (r.top - canvasRect.top) / scale,
+        width: r.width / scale,
+        height: r.height / scale,
+      };
+    };
+
     const getTextAlignedHighlightPoint = (e, lockedY = null) => {
       const basePoint = toCanvas(e);
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      const target = document.elementFromPoint(clientX, clientY);
-      const layer = textLayerRef.current;
-      if (!target || !layer || !layer.contains(target)) {
-        return lockedY == null
-          ? { ...basePoint, lineWidth: null, textAligned: false }
-          : { ...basePoint, y: lockedY, lineWidth: null, textAligned: false };
-      }
-
-      const span = target.closest?.("[data-span-idx]");
+      const span = findHighlightSpanAt(clientX, clientY);
       if (!span) {
         return lockedY == null
           ? { ...basePoint, lineWidth: null, textAligned: false }
           : { ...basePoint, y: lockedY, lineWidth: null, textAligned: false };
       }
 
-      const canvasRect = ac.getBoundingClientRect();
-      const scale = getScale();
-      const spanRect = span.getBoundingClientRect();
-      const centerY = ((spanRect.top + spanRect.height / 2) - canvasRect.top) / scale;
-      const textHeight = Math.max(8, (spanRect.height / scale) * 0.82);
+      const centerY = span.top + span.height / 2;
+      const textHeight = Math.max(8, span.height * 0.82);
       return {
         ...basePoint,
         y: lockedY ?? centerY,
@@ -2161,16 +2756,12 @@ const PDFPage = forwardRef(({
       if (!alignedPoint.textAligned) return null;
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      const target = document.elementFromPoint(clientX, clientY);
-      const span = target?.closest?.("[data-span-idx]");
+      const span = findHighlightSpanAt(clientX, clientY);
       if (!span) return null;
-      const canvasRect = ac.getBoundingClientRect();
-      const scale = getScale();
-      const spanRect = span.getBoundingClientRect();
       return {
         ...alignedPoint,
-        startX: (spanRect.left - canvasRect.left) / scale,
-        endX: (spanRect.right - canvasRect.left) / scale,
+        startX: span.left,
+        endX: span.left + Math.max(1, span.width || 0),
       };
     };
 
@@ -2187,7 +2778,17 @@ const PDFPage = forwardRef(({
       if (extra) drawAnnotation(ctx, extra, scale);
     };
 
+    const preventNativeTouchDrawingGesture = (e) => {
+      if (e.cancelable && (e.touches || e.type === "contextmenu")) e.preventDefault();
+      if (annotTool === "highlight") {
+        window.getSelection?.()?.removeAllRanges();
+        setManualSelection(null);
+        setManualPopup(null);
+      }
+    };
+
     const onDown = (e) => {
+      preventNativeTouchDrawingGesture(e);
       if (e.touches && e.touches.length >= 2) {
         activeAnnotRef.current = null; // cancel any in-progress stroke
         return;
@@ -2199,24 +2800,18 @@ const PDFPage = forwardRef(({
         if (hit) {
           const scale = fitScaleRef.current * zoomRef.current;
           const box = getTextAnnotationBounds(hit, scale);
-          setAnnotTextInput({
+          primeTextStyleFromAnnotation(hit, scale);
+          setTextActionMenu({
             vx: annotCanvasRef.current.getBoundingClientRect().left + box.left,
             vy: annotCanvasRef.current.getBoundingClientRect().top + box.top,
-            cx: hit.x * scale,
-            cy: hit.y * scale,
-            width: Math.max(120, box.right - box.left + 12),
+            width: Math.max(180, box.right - box.left + 18),
             editingId: hit.id,
           });
-          setAnnotTextVal(hit.text || "");
-          setTextFontFamily(hit.fontFamily || "Georgia");
-          setTextFontSize(Math.max(10, Math.round((hit.fontSize || 16) * scale)));
-          setTextAlign(hit.textAlign || "left");
-          setTextBold(Boolean(hit.fontBold));
-          setTextItalic(Boolean(hit.fontItalic));
-          setTextUnderline(Boolean(hit.textUnderline));
-          setTextBordered(Boolean(hit.textBordered));
+          setAnnotTextInput(null);
           return;
         }
+        setTextActionMenu(null);
+        setTextStyleTargetId(null);
         setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y, width: undefined, editingId: null });
         setAnnotTextVal("");
         return;
@@ -2231,7 +2826,7 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = {
           type: "highlight",
           color: strokeColor,
-          lineWidth: (firstPoint.lineWidth || annotSize / getScale()),
+          lineWidth: (firstPoint.lineWidth || annotSize),
           mode: highlightMode,
           opacity: annotOpacity / 100,
           highlightSettings: DEFAULT_HIGHLIGHT_SETTINGS,
@@ -2249,6 +2844,8 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = { type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (annotTool === "drawText") {
         activeAnnotRef.current = { type: "drawTextSelection", color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
+      } else if (annotTool === "smartVideo" && smartVideoSelecting && !smartVideoCaptureBusy) {
+        activeAnnotRef.current = { type: "smartVideoCapture", color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (["line","arrow"].includes(annotTool)) {
         activeAnnotRef.current = {
           type: annotTool, color: strokeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y,
@@ -2258,9 +2855,10 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = {
           type: "pen",
           color: strokeColor,
-          lineWidth: penSize / getScale(),
+          lineWidth: penSize,
           penType,
           penSettings: {
+            dynamic: penDynamic,
             stabilization: penStabilization,
             pressureAssist: penPressureAssist,
             taper: penTaper,
@@ -2276,12 +2874,8 @@ const PDFPage = forwardRef(({
         const er = eraserSize / getScale();
         setAnnotations((prev) => {
           const pts = [...(prev[pageNum] || [])];
-          const kept = pts.filter((a) => {
-            if (a.type === "pen" || a.type === "highlight") return !a.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < er);
-            const cx2 = (a.x ?? a.x1 ?? 0), cy2 = (a.y ?? a.y1 ?? 0);
-            return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
-          });
-          activeAnnotRef.current.erasedCount += pts.length - kept.length;
+          const { kept, erasedCount } = eraseAnnotationsAtPoint(pts, p.x, p.y, er, eraserMode);
+          activeAnnotRef.current.erasedCount += erasedCount;
           return { ...prev, [pageNum]: kept };
         });
         setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
@@ -2289,6 +2883,7 @@ const PDFPage = forwardRef(({
     };
 
     const onMove = (e) => {
+      preventNativeTouchDrawingGesture(e);
       if (e.touches && e.touches.length >= 2) {
         activeAnnotRef.current = null;
         return;
@@ -2323,7 +2918,7 @@ const PDFPage = forwardRef(({
           ann.points.push(nextPoint);
         }
         redraw(ann);
-      } else if (["underline","strikethrough","rect","circle","drawTextSelection"].includes(ann.type)) {
+      } else if (["underline","strikethrough","rect","circle","drawTextSelection","smartVideoCapture"].includes(ann.type)) {
         ann.x = Math.min(ann._sx, p.x); ann.y = Math.min(ann._sy, p.y);
         ann.w = Math.abs(p.x - ann._sx); ann.h = Math.abs(p.y - ann._sy);
         redraw(ann);
@@ -2334,19 +2929,16 @@ const PDFPage = forwardRef(({
         const er = eraserSize / getScale();
         setAnnotations((prev) => {
           const pts = [...(prev[pageNum] || [])];
-          const kept = pts.filter((a) => {
-            if (a.type === "pen" || a.type === "highlight") return !a.points.some((pt) => Math.hypot(pt.x - p.x, pt.y - p.y) < er);
-            const cx2 = (a.x ?? a.x1 ?? 0), cy2 = (a.y ?? a.y1 ?? 0);
-            return Math.hypot(cx2 - p.x, cy2 - p.y) > er;
-          });
-          ann.erasedCount = (ann.erasedCount || 0) + (pts.length - kept.length);
+          const { kept, erasedCount } = eraseAnnotationsAtPoint(pts, p.x, p.y, er, eraserMode);
+          ann.erasedCount = (ann.erasedCount || 0) + erasedCount;
           return { ...prev, [pageNum]: kept };
         });
         setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       }
     };
 
-    const onUp = () => {
+    const onUp = (e) => {
+      preventNativeTouchDrawingGesture(e);
       const ann = activeAnnotRef.current;
       activeAnnotRef.current = null;
       if (!ann) return;
@@ -2369,6 +2961,13 @@ const PDFPage = forwardRef(({
         redraw();
         return;
       }
+      if (ann.type === "smartVideoCapture") {
+        if (ann.w < 8 || ann.h < 8) return;
+        const { _sx, _sy, ...selection } = ann;
+        void captureSmartVideoScreenshot(selection);
+        redraw();
+        return;
+      }
       const tinyDocThreshold = 3 / Math.max(1, fitScaleRef.current * zoomRef.current);
       // ignore accidental tiny marks
       const tiny = ann.type === "pen"
@@ -2380,15 +2979,39 @@ const PDFPage = forwardRef(({
       const { _sx, _sy, ...clean } = ann;
       setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), { ...clean, id: Date.now() }] }));
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-      logAnnotHistory({ action: "add", type: clean.type, page: pageNum, color: clean.color, size: clean.lineWidth ? Math.round(clean.lineWidth * (fitScaleRef.current * zoomRef.current)) : null });
+      logAnnotHistory({
+        action: "add",
+        type: clean.type,
+        page: pageNum,
+        color: clean.color,
+        size: clean.lineWidth
+          ? Math.round(clean.type === "pen" ? clean.lineWidth : clean.lineWidth * (fitScaleRef.current * zoomRef.current))
+          : null,
+      });
+    };
+
+    const onTouchCancel = (e) => {
+      preventNativeTouchDrawingGesture(e);
+      const ann = activeAnnotRef.current;
+      activeAnnotRef.current = null;
+      if (ann?.type === "highlight") {
+        redraw();
+        return;
+      }
+      if (ann) {
+        activeAnnotRef.current = ann;
+        onUp(e);
+      }
     };
 
     ac.addEventListener("mousedown",  onDown, { passive: true });
     ac.addEventListener("mousemove",  onMove, { passive: true });
     ac.addEventListener("mouseup",    onUp);
-    ac.addEventListener("touchstart", onDown, { passive: true });
-    ac.addEventListener("touchmove",  onMove, { passive: true });
-    ac.addEventListener("touchend",   onUp);
+    ac.addEventListener("touchstart", onDown, { passive: false });
+    ac.addEventListener("touchmove",  onMove, { passive: false });
+    ac.addEventListener("touchend",   onUp, { passive: false });
+    ac.addEventListener("touchcancel", onTouchCancel, { passive: false });
+    ac.addEventListener("contextmenu", preventNativeTouchDrawingGesture);
     return () => {
       ac.removeEventListener("mousedown",  onDown);
       ac.removeEventListener("mousemove",  onMove);
@@ -2396,9 +3019,47 @@ const PDFPage = forwardRef(({
       ac.removeEventListener("touchstart", onDown);
       ac.removeEventListener("touchmove",  onMove);
       ac.removeEventListener("touchend",   onUp);
+      ac.removeEventListener("touchcancel", onTouchCancel);
+      ac.removeEventListener("contextmenu", preventNativeTouchDrawingGesture);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition]);
+  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penDynamic, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot]);
+
+  // Eraser-size cursor circle — a real hit-test-radius preview, not just a
+  // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
+  // erase hit-test itself divides it by getScale() to reach doc-space, see
+  // the "eraser" branches in onDown/onMove above), so the on-screen circle
+  // diameter is simply eraserSize * 2 — no extra scale conversion needed.
+  // Mutates the DOM node directly via a ref rather than React state, since
+  // this fires on every mousemove; matches the same performance pattern the
+  // manual-selection-handle drag code above already uses.
+  useEffect(() => {
+    const ac = annotCanvasRef.current;
+    const cursorEl = eraserCursorRef.current;
+    if (!ac || !cursorEl) return;
+    if (annotTool !== "eraser") {
+      cursorEl.style.display = "none";
+      return;
+    }
+    const diameter = eraserSize * 2;
+    cursorEl.style.width  = `${diameter}px`;
+    cursorEl.style.height = `${diameter}px`;
+
+    const onMove = (e) => {
+      cursorEl.style.display = "block";
+      cursorEl.style.left = `${e.clientX}px`;
+      cursorEl.style.top  = `${e.clientY}px`;
+    };
+    const onLeave = () => { cursorEl.style.display = "none"; };
+
+    ac.addEventListener("mousemove", onMove);
+    ac.addEventListener("mouseleave", onLeave);
+    return () => {
+      ac.removeEventListener("mousemove", onMove);
+      ac.removeEventListener("mouseleave", onLeave);
+      cursorEl.style.display = "none";
+    };
+  }, [annotTool, eraserSize, pageNum]);
 
   const commitAnnotText = useCallback(() => {
     if (!annotTextInput || !annotTextVal.trim()) { setAnnotTextInput(null); return; }
@@ -2416,6 +3077,7 @@ const PDFPage = forwardRef(({
       fontItalic: textItalic,
       textUnderline,
       textBordered,
+      textBackground,
       textBaseline: "top",
     };
     setAnnotations((prev) => ({
@@ -2426,8 +3088,74 @@ const PDFPage = forwardRef(({
     }));
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
     logAnnotHistory({ action: annotTextInput.editingId ? "edit" : "add", type: "text", page: pageNum, color: annotColor });
-    setAnnotTextInput(null); setAnnotTextVal("");
-  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBordered]);
+    setAnnotTextInput(null);
+    setTextActionMenu(null);
+    setTextStyleTargetId(null);
+    setAnnotTextVal("");
+  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBordered, textBackground]);
+
+  // Full 8-point resize (corners + edges) on the text-annotation editor
+  // box, matching the standard text-box handle set of PowerPoint/Figma/
+  // Google Docs rather than a single edge grip. Dragging from the top or
+  // left moves the box's own anchor point (vx/vy) by the same amount the
+  // edge moved, so the OPPOSITE edge stays fixed in place — the way a real
+  // resize handle behaves — instead of the whole box sliding.
+  const beginTextInputResize = useCallback((dir, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.touches ? e.touches[0].clientX : e.clientX;
+    const startY = e.touches ? e.touches[0].clientY : e.clientY;
+    const rect = annotTextInputRef.current?.getBoundingClientRect();
+    const startWidth = rect?.width || 160;
+    const startHeight = rect?.height || 28;
+    const startVx = annotTextInput?.vx || 0;
+    const startVy = annotTextInput?.vy || 0;
+    const onMove = (ev) => {
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+      const patch = {};
+      if (dir.includes("e")) {
+        patch.width = Math.max(60, startWidth + dx);
+      } else if (dir.includes("w")) {
+        const nextWidth = Math.max(60, startWidth - dx);
+        patch.width = nextWidth;
+        patch.vx = startVx + (startWidth - nextWidth);
+      }
+      if (dir.includes("s")) {
+        patch.height = Math.max(28, startHeight + dy);
+      } else if (dir.includes("n")) {
+        const nextHeight = Math.max(28, startHeight - dy);
+        patch.height = nextHeight;
+        patch.vy = startVy + (startHeight - nextHeight);
+      }
+      setAnnotTextInput((cur) => (cur ? { ...cur, ...patch } : cur));
+    };
+    const onEnd = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onEnd);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onEnd);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onEnd);
+  }, [annotTextInput?.vx, annotTextInput?.vy]);
+
+  // n/s/e/w edges resize one axis; corners resize both — same convention
+  // as every other professional text-box resize UI.
+  const TEXT_RESIZE_HANDLES = [
+    { dir: "nw", cursor: "nwse-resize" },
+    { dir: "n",  cursor: "ns-resize" },
+    { dir: "ne", cursor: "nesw-resize" },
+    { dir: "e",  cursor: "ew-resize" },
+    { dir: "se", cursor: "nwse-resize" },
+    { dir: "s",  cursor: "ns-resize" },
+    { dir: "sw", cursor: "nesw-resize" },
+    { dir: "w",  cursor: "ew-resize" },
+  ];
 
   const handleAnnotUndo = useCallback(() => {
     const arr = annotations[pageNum] || [];
@@ -2823,6 +3551,21 @@ const PDFPage = forwardRef(({
       pinchTransformApplied = false;
     };
 
+    // Drops an in-progress pinch entirely — no setZoom, unlike
+    // commitPinchZoom above. Used when a third finger lands mid-pinch (see
+    // onTouchStart's 3-finger branch): three-finger touches are pan-only, so
+    // whatever zoom ratio the pinch happened to be at the instant the third
+    // finger touched down must never be applied, not even the ratio itself.
+    const cancelPinchZoom = () => {
+      const wrap = canvasWrapRef.current;
+      if (wrap) {
+        wrap.style.transform       = "";
+        wrap.style.transformOrigin = "";
+        wrap.style.willChange      = "";
+      }
+      pinchTransformApplied = false;
+    };
+
     const selectWordAt = (cx, cy) => {
       const target = document.elementFromPoint(cx, cy);
       const layer  = textLayerRef.current;
@@ -2845,22 +3588,33 @@ const PDFPage = forwardRef(({
       if (s === e) return null;
 
       const spans = spansRef.current;
-      // PDF.js text items rarely carry a trailing/leading space at a line
-      // break, so the whitespace check alone can't tell "end of line" from
-      // "just a normal word gap" — it was merging the last word of one line
-      // with the first word of the next into a single selection. Adjacent
-      // spans only get merged if they're also vertically on the same line.
-      const sameLine = (a, b) => {
-        if (!a || !b) return false;
-        const h = Math.max(a.height || 0, b.height || 0, 1);
-        return Math.abs((a.top ?? 0) - (b.top ?? 0)) < h * 0.5;
+      // Only merge neighboring spans when they are visually connected. Some
+      // PDFs split normal spaced words into separate text items without an
+      // actual whitespace token, so "no literal space" is not enough proof
+      // that two spans belong to one word.
+      const visuallyConnected = (a, b) => {
+        const ar = a?.el?.getBoundingClientRect?.();
+        const br = b?.el?.getBoundingClientRect?.();
+        if (!ar || !br) return false;
+        const h = Math.max(ar.height, br.height, 1);
+        const sameLine = Math.abs(ar.top - br.top) < h * 0.5;
+        const gap = br.left - ar.right;
+        return sameLine && gap <= Math.max(1.5, h * 0.12);
       };
       let loIdx = spanIdx, hiIdx = spanIdx;
       if (s === 0) {
-        while (loIdx > 0 && sameLine(spans[loIdx], spans[loIdx - 1]) && !/\s$/.test(spans[loIdx - 1]?.el.textContent || " ")) loIdx--;
+        while (
+          loIdx > 0
+          && visuallyConnected(spans[loIdx - 1], spans[loIdx])
+          && !/\s$/.test(spans[loIdx - 1]?.el.textContent || " ")
+        ) loIdx--;
       }
       if (e === text.length) {
-        while (hiIdx < spans.length - 1 && sameLine(spans[hiIdx], spans[hiIdx + 1]) && !/^\s/.test(spans[hiIdx + 1]?.el.textContent || " ")) hiIdx++;
+        while (
+          hiIdx < spans.length - 1
+          && visuallyConnected(spans[hiIdx], spans[hiIdx + 1])
+          && !/^\s/.test(spans[hiIdx + 1]?.el.textContent || " ")
+        ) hiIdx++;
       }
 
       const parts = [
@@ -2868,12 +3622,23 @@ const PDFPage = forwardRef(({
         text.substring(s, e),
         ...spans.slice(spanIdx + 1, hiIdx + 1).map((sp) => sp.el.textContent),
       ];
-      const word = sanitizeSelectedText(parts.join(""));
+      const word = sanitizeSelectedText(parts.join(" "));
       if (!word) return null;
       window.getSelection()?.removeAllRanges();
 
-      const bx = parseFloat(target.style.left || "0") + (parseFloat(target.style.width || "0") || target.offsetWidth || 0) / 2;
-      const by = parseFloat(target.style.top || "0") + parseFloat(target.style.height || "0") + 8;
+      // Centered on the FULL merged word (loIdx..hiIdx), not just the one
+      // sub-span the click happened to land on — a word split across
+      // several PDF text items (common with kerned/stylized text) has
+      // `target` be only its first/middle/last fragment, and centering on
+      // that alone shifted the popup left or right of the word's real
+      // center depending on which fragment got clicked.
+      const firstEl = spans[loIdx]?.el;
+      const lastEl  = spans[hiIdx]?.el;
+      const firstLeft = parseFloat(firstEl?.style.left || "0");
+      const lastLeft  = parseFloat(lastEl?.style.left || "0");
+      const lastWidth = parseFloat(lastEl?.style.width || "0") || lastEl?.offsetWidth || 0;
+      const bx = (firstLeft + lastLeft + lastWidth) / 2;
+      const by = parseFloat(lastEl?.style.top || "0") + (parseFloat(lastEl?.style.height || "0") || lastEl?.offsetHeight || 0) + 8;
       return { text: word, spanIdx: loIdx, endIdx: hiIdx, x: bx, y: by };
     };
 
@@ -2883,7 +3648,20 @@ const PDFPage = forwardRef(({
       const exact = selectWordAt(cx, cy);
       if (!exact) return;
       if (hideHyleControls || onSelectionActionRef.current) {
-        setManualSelection({ startIdx: exact.spanIdx, endIdx: exact.endIdx, text: exact.text, x: exact.x, y: exact.y });
+        // startCharOffset/endCharOffset default to the FULL word (0 →
+        // length) — a fresh double-click always selects the whole word;
+        // dragging a handle afterward is what narrows/widens character by
+        // character (see updateSelectionEdge below).
+        const endSpanText = spansRef.current[exact.endIdx]?.text ?? spansRef.current[exact.endIdx]?.el?.textContent ?? "";
+        setManualSelection({
+          startIdx: exact.spanIdx,
+          endIdx: exact.endIdx,
+          startCharOffset: 0,
+          endCharOffset: endSpanText.length,
+          text: exact.text,
+          x: exact.x,
+          y: exact.y,
+        });
       } else {
         const noun = exact.text.toLowerCase().replace(/[.,;:]+$/, "").replace(/\s+/g, " ").trim();
         setManualHyle(noun);
@@ -2898,6 +3676,12 @@ const PDFPage = forwardRef(({
       stopLivePan(livePanRef);
       stopMomentumScroll(momentumFrameRef); // grabbing the page always catches it mid-coast
       pinchJustEnded = false; // a brand new touch sequence starting — any earlier pinch's tail is over
+
+      if (annotToolRef.current && e.touches.length === 1) {
+        touchInteractionActive = true;
+        hasMoved = true;
+        return;
+      }
 
       if (e.touches.length === 2) {
         touchInteractionActive = true; // wasn't being set for the 2-finger case at all — left text selection unblocked during a pinch
@@ -2932,6 +3716,28 @@ const PDFPage = forwardRef(({
         // no longer tied to a "Navigator" tool at all (deleted; see
         // ANNOT_TOOLS). Reuses the same pan/panVelocityTracker/livePanRef
         // machinery a single-finger pan used to drive.
+        //
+        // Real fingers almost never land as one clean 3-touch event — a
+        // pinch (2 fingers) is already in progress on most real gestures by
+        // the time a third finger touches down. Removing a finger fires
+        // touchend, but ADDING one fires a fresh touchstart with all 3
+        // touches, landing right here — with no cleanup, the pinch's live
+        // CSS preview transform (see onTouchMove's 2-finger branch) stayed
+        // frozen on screen while panning scrolled underneath it, i.e.
+        // three-finger touch visibly zoomed. Three-finger touches are
+        // pan-only, so any in-progress pinch is dropped outright here
+        // (cancelPinchZoom, not commitPinchZoom — the zoom ratio mid-pinch
+        // is never applied, not even the ratio it was at).
+        if (startDist !== null) {
+          cancelPinchZoom();
+          startDist = null;
+          pinchPrimed = false;
+          setPinchActive(false);
+          if (twoFingerUndoCandidate) {
+            if (twoFingerUndoCandidate.timer) clearTimeout(twoFingerUndoCandidate.timer);
+            twoFingerUndoCandidate = null;
+          }
+        }
         touchInteractionActive = true;
         const c = touchCentroid(e.touches);
         panX = c.x;
@@ -3063,6 +3869,10 @@ const PDFPage = forwardRef(({
       }
 
       if (e.touches.length !== 1) return;
+      if (annotToolRef.current) {
+        hasMoved = true;
+        return;
+      }
       // No longer a pan trigger — see the matching branch in onTouchStart.
       // Only tracks hasMoved so onTouchEnd can still tell a tap from a drag
       // for double-tap-to-select; never calls preventDefault() or touches
@@ -3099,6 +3909,11 @@ const PDFPage = forwardRef(({
 
       if (e.touches.length === 0) {
         touchInteractionActive = false;
+        if (annotToolRef.current) {
+          hasMoved = false;
+          lastTapTime = 0;
+          return;
+        }
         if (pinchJustEnded) {
           // The pinch's OTHER finger already committed the zoom above (or
           // on the touchend just before this one) — this is only the
@@ -3150,6 +3965,7 @@ const PDFPage = forwardRef(({
     };
 
     const onDblClick = (e) => {
+      if (annotToolRef.current) return;
       if (!textSelectableRef.current) return;
       e.preventDefault();
       selectWordAtPoint(e.clientX, e.clientY);
@@ -3157,7 +3973,7 @@ const PDFPage = forwardRef(({
 
     const onContextMenu = (e) => e.preventDefault();
     const onSelectStart = (e) => {
-      if (touchInteractionActive || navigationBlocked) e.preventDefault();
+      if (touchInteractionActive || annotToolRef.current) e.preventDefault();
     };
 
     el.addEventListener("touchstart",  onTouchStart,  { passive: true });
@@ -3298,6 +4114,24 @@ const PDFPage = forwardRef(({
           vt[1] * e2 + vt[3] * f2 + vt[5],
         ];
 
+        // Text metrics only — this canvas is never drawn to or attached to
+        // the page, just used for ctx.measureText's real per-character
+        // proportional widths. Two earlier attempts both broke word
+        // selection: (1) a uniform charWidth = itemWidth/str.length average
+        // ignored that real fonts are proportional, drifting out of
+        // alignment across a multi-word item; (2) switching to the
+        // browser's live inline text-flow layout (measuring actual rendered
+        // elements) turned out unreliable in practice — items' measured
+        // natural width didn't reliably match their real PDF advance width,
+        // so token boxes still overflowed into neighboring items and
+        // clicks resolved to the wrong word. A canvas measureText call has
+        // no live-layout/attachment dependency at all — it's a pure,
+        // synchronous, deterministic font-metrics query — so this combines
+        // real proportional widths with the same "scale the whole item to
+        // its true PDF width" correction, but computed a way that can't be
+        // thrown off by DOM timing.
+        const measureCtx = document.createElement("canvas").getContext("2d");
+
         for (const item of content.items) {
           if (!item.str) continue;
           const tx       = mul(item.transform);
@@ -3306,38 +4140,74 @@ const PDFPage = forwardRef(({
 
           const angle      = Math.atan2(tx[1], tx[0]);
           const itemWidth  = item.width * scale; // PDF advance width → canvas pixels
+          const dirX = Math.cos(angle);
+          const dirY = Math.sin(angle);
 
-	          const span = document.createElement("span");
-	          span.dataset.spanIdx    = String(spansRef.current.length);
-	          spansRef.current.push({
-	            text: item.str,
-	            el: span,
-	            left: tx[4],
-	            top: tx[5] - fontSize * 0.8,
-	            height: fontSize,
-	            width: itemWidth,
-	          });
-	          span.textContent        = item.str;
-          span.style.position     = "absolute";
-          span.style.left         = `${tx[4]}px`;
-          span.style.top          = `${tx[5] - fontSize * 0.8}px`;
-          span.style.height       = `${fontSize}px`;
-          span.style.fontSize     = `${fontSize}px`;
-          span.style.whiteSpace   = "pre";
-          span.style.color        = "transparent";
-          span.style.transformOrigin = "0% 0%";
-          // Selection is handled entirely by our own dblclick/double-tap
-          // logic (see selectWordAtPoint) with a custom highlight overlay —
-          // native browser text selection is switched off so it can't drag-
-          // select a range or fight that custom highlight.
-          span.style.userSelect   = "none";
-          span.style.webkitUserSelect = "none";
-          if (itemWidth > 0)
-            span.style.width = `${itemWidth}px`;
-          if (Math.abs(angle) > 0.01)
-            span.style.transform = `rotate(${angle}rad)`;
-          div.appendChild(span);
+          measureCtx.font = `${fontSize}px sans-serif`;
+          const fullNaturalWidth = measureCtx.measureText(item.str).width;
+          // Corrects for the measurement font not being the PDF's real
+          // (often embedded/subset) font — every token's measured width is
+          // scaled by this same ratio, so relative proportions between
+          // tokens stay accurate even though the absolute font differs.
+          const scaleX = fullNaturalWidth > 0 ? itemWidth / fullNaturalWidth : 1;
+
+          // One span per WORD (or per whitespace run), not one per PDF text
+          // item — a single item routinely covers a whole run of same-font
+          // text ("cardiac output equals" as one item, not three). The
+          // drag-handle logic (nearestSpanIndex/updateSelectionEdge) moves
+          // the selection boundary one span at a time; without this split,
+          // crossing into a neighboring multi-word item added every word in
+          // it in one step ("selecting one word but highlighting many").
+          const tokens = item.str.match(/\S+|\s+/g) || [item.str];
+          let cursorNatural = 0; // cumulative unscaled width so far, in measureCtx's font
+          for (const token of tokens) {
+            const tokenNaturalWidth = measureCtx.measureText(token).width;
+            const tokenWidth = tokenNaturalWidth * scaleX;
+            const originX = tx[4] + cursorNatural * scaleX * dirX;
+            const originY = tx[5] + cursorNatural * scaleX * dirY;
+
+            const span = document.createElement("span");
+            span.dataset.spanIdx = String(spansRef.current.length);
+            spansRef.current.push({ text: token, el: span });
+            span.textContent        = token;
+            span.style.position     = "absolute";
+            span.style.left         = `${originX}px`;
+            span.style.top          = `${originY - fontSize * 0.8}px`;
+            span.style.height       = `${fontSize}px`;
+            span.style.fontSize     = `${fontSize}px`;
+            span.style.whiteSpace   = "pre";
+            span.style.color        = "transparent";
+            span.style.transformOrigin = "0% 0%";
+            // Selection is handled entirely by our own dblclick/double-tap
+            // logic (see selectWordAtPoint) with a custom highlight overlay —
+            // native browser text selection is switched off so it can't drag-
+            // select a range or fight that custom highlight.
+            span.style.userSelect   = "none";
+            span.style.webkitUserSelect = "none";
+            if (tokenWidth > 0) span.style.width = `${tokenWidth}px`;
+            if (Math.abs(angle) > 0.01) span.style.transform = `rotate(${angle}rad)`;
+            div.appendChild(span);
+
+            cursorNatural += tokenNaturalWidth;
+          }
         }
+
+        // PDF content streams are not guaranteed to match visual reading
+        // order. Selection ranges are index-based, so normalize the span
+        // index to what the user actually sees on the page: top-to-bottom,
+        // then left-to-right within each line.
+        const visualLineToleranceFor = (rect) => Math.max(4, rect.height * 0.55);
+        spansRef.current.sort((a, b) => {
+          const ar = a.el.getBoundingClientRect();
+          const br = b.el.getBoundingClientRect();
+          if (Math.abs(ar.top - br.top) > Math.max(visualLineToleranceFor(ar), visualLineToleranceFor(br))) {
+            return ar.top - br.top;
+          }
+          return ar.left - br.left;
+        });
+        spansRef.current.forEach((span, index) => {
+          span.el.dataset.spanIdx = String(index);
+        });
       })
     );
 
@@ -3350,12 +4220,34 @@ const PDFPage = forwardRef(({
     const spans = spansRef.current;
     const layer = textLayerRef.current;
 
-    layer?.querySelectorAll(".sel_highlight").forEach((el) => el.remove());
+    layer?.querySelectorAll(".sel_highlight, .sel_selection_handle").forEach((el) => el.remove());
     spans.forEach(({ el }) => el.classList.remove("span_selected"));
 
-    if (!manualSelection || !layer) return;
+    if (!manualSelection || !layer) {
+      selectionDraggingEdgeRef.current = null;
+      selectionHandleDragRef.current = null;
+      return;
+    }
     const lo = Math.min(manualSelection.startIdx, manualSelection.endIdx);
     const hi = Math.max(manualSelection.startIdx, manualSelection.endIdx);
+
+    // Which char-offset crops the lo-index span vs. the hi-index span —
+    // NOT simply startCharOffset/endCharOffset, since start can be either
+    // side depending on which direction the selection was dragged.
+    const hasCharOffsets = manualSelection.startCharOffset != null && manualSelection.endCharOffset != null;
+    let loOffset = null, hiOffset = null;
+    if (hasCharOffsets) {
+      if (manualSelection.startIdx === manualSelection.endIdx) {
+        loOffset = Math.min(manualSelection.startCharOffset, manualSelection.endCharOffset);
+        hiOffset = Math.max(manualSelection.startCharOffset, manualSelection.endCharOffset);
+      } else if (manualSelection.startIdx < manualSelection.endIdx) {
+        loOffset = manualSelection.startCharOffset;
+        hiOffset = manualSelection.endCharOffset;
+      } else {
+        loOffset = manualSelection.endCharOffset;
+        hiOffset = manualSelection.startCharOffset;
+      }
+    }
 
     for (let i = lo; i <= hi; i++) spans[i]?.el?.classList.add("span_selected");
 
@@ -3369,10 +4261,25 @@ const PDFPage = forwardRef(({
 
       // Canvas-local bounds from the span's explicit CSS geometry
       const r      = el.getBoundingClientRect();
-      const left   = (r.left   - layerRect.left) / bodyZoom;
+      let   left   = (r.left   - layerRect.left) / bodyZoom;
       const top    = (r.top    - layerRect.top)  / bodyZoom;
-      const right  = (r.right  - layerRect.left) / bodyZoom;
+      let   right  = (r.right  - layerRect.left) / bodyZoom;
       const bottom = (r.bottom - layerRect.top)  / bodyZoom;
+      const fullWidth = right - left;
+
+      // Crop the boundary span(s) to the exact dragged character, instead
+      // of highlighting/selecting the whole word the handle is currently
+      // nearest to — this is what makes the handle drag feel character-by-
+      // character rather than jumping a whole word at a time.
+      if (hasCharOffsets) {
+        const text = spans[i]?.text ?? el.textContent ?? "";
+        if (text.length > 0) {
+          if (i === lo) left  += fullWidth * (loOffset / text.length);
+          if (i === hi) right = (right - fullWidth) + fullWidth * (hiOffset / text.length);
+        }
+      }
+      if (right <= left) continue; // fully cropped away — nothing of this span is actually selected
+
       const h      = bottom - top;
 
       // PDF glyphs have ascenders/descenders that extend beyond the em-box.
@@ -3403,7 +4310,362 @@ const PDFPage = forwardRef(({
       layer.insertBefore(rect, layer.firstChild);
     }
 
-    return () => { layer?.querySelectorAll(".sel_highlight").forEach((el) => el.remove()); };
+    const cleanSelectionText = (text) => (
+      String(text || "")
+        .replace(/(^|\n)[ \t]*([.\-_=*~]{4,})+(?=\s|[\p{L}\p{N}]|$)/gu, "$1")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n[ \t]+/g, "\n")
+        .replace(/[ \t]{2,}/g, " ")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim()
+    );
+
+    // startOffset/endOffset are optional — omitted, the whole startIdx/
+    // endIdx span range is used (word granularity, the original
+    // behavior); passed, the boundary spans are cropped to that exact
+    // character (see the lo/hi crop math above, same convention: whichever
+    // of startOffset/endOffset lands on the lower index crops from the
+    // left, the other crops from the right).
+    const selectionTextFor = (startIdx, endIdx, startOffset = null, endOffset = null) => {
+      const rangeLo = Math.min(startIdx, endIdx);
+      const rangeHi = Math.max(startIdx, endIdx);
+      const hasOffsets = startOffset != null && endOffset != null;
+      let loOffset = null, hiOffset = null;
+      if (hasOffsets) {
+        if (startIdx === endIdx) { loOffset = Math.min(startOffset, endOffset); hiOffset = Math.max(startOffset, endOffset); }
+        else if (startIdx < endIdx) { loOffset = startOffset; hiOffset = endOffset; }
+        else { loOffset = endOffset; hiOffset = startOffset; }
+      }
+      let text = "";
+      let previous = null;
+      for (let i = rangeLo; i <= rangeHi; i++) {
+        const span = spans[i];
+        let token = span?.text ?? span?.el?.textContent ?? "";
+        if (hasOffsets && token) {
+          if (i === rangeLo && i === rangeHi) token = token.slice(loOffset, hiOffset);
+          else if (i === rangeLo) token = token.slice(loOffset);
+          else if (i === rangeHi) token = token.slice(0, hiOffset);
+        }
+        if (!token) continue;
+        const rect = span?.el?.getBoundingClientRect?.();
+        if (text && previous?.rect && rect) {
+          const h = Math.max(previous.rect.height, rect.height, 1);
+          const sameLine = Math.abs(previous.rect.top - rect.top) < h * 0.55;
+          const gap = rect.left - previous.rect.right;
+          const needsSpace = sameLine
+            && gap > Math.max(2, h * 0.16)
+            && !/\s$/.test(previous.token)
+            && !/^\s/.test(token);
+          if (!sameLine) text += "\n";
+          else if (needsSpace) text += " ";
+        }
+        text += token;
+        previous = { token, rect };
+      }
+      return cleanSelectionText(text);
+    };
+
+    // nearIndex bounds the search to a window of spans around it (reading
+    // order, not screen position) instead of scanning every span on the
+    // page. Without this, if ANY span anywhere ends up mispositioned —
+    // e.g. accumulated floating-point drift in the canvas-measureText/
+    // scaleX correction on a long multi-word PDF item, which a single
+    // global per-item scale factor can't fully correct for uneven
+    // justification/kerning — a drag could "snap" to that distant span the
+    // instant it's even slightly closer on screen than the real neighbor,
+    // ballooning the selection to wherever that span happens to sit (up to
+    // a whole sentence away) in one step. Bounding the search keeps a drag
+    // from ever moving the boundary further than SEARCH_WINDOW spans from
+    // where it already was, regardless of what positioning bug might exist
+    // elsewhere on the page.
+    const SEARCH_WINDOW = 80;
+    const nearestSpanIndex = (clientX, clientY, nearIndex = null) => {
+      let bestIdx = -1;
+      let bestDistance = Infinity;
+      const lo = nearIndex != null ? Math.max(0, nearIndex - SEARCH_WINDOW) : 0;
+      const hi = nearIndex != null ? Math.min(spans.length - 1, nearIndex + SEARCH_WINDOW) : spans.length - 1;
+      for (let index = lo; index <= hi; index++) {
+        const span = spans[index];
+        const r = span?.el?.getBoundingClientRect?.();
+        if (!r) continue;
+        const cx = Math.max(r.left, Math.min(clientX, r.right));
+        const cy = Math.max(r.top, Math.min(clientY, r.bottom));
+        const distance = Math.hypot(clientX - cx, clientY - cy);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIdx = index;
+        }
+      }
+      return bestIdx;
+    };
+
+    const textLengthForSpan = (index) => {
+      const span = spans[index];
+      return (span?.text ?? span?.el?.textContent ?? "").length;
+    };
+
+    const charOffsetForSpanPoint = (spanIdx, clientX) => {
+      const span = spans[spanIdx];
+      const text = span?.text ?? span?.el?.textContent ?? "";
+      const r = span?.el?.getBoundingClientRect?.();
+      if (!r || !text) return 0;
+      if (clientX >= r.right - EDGE_SNAP_PX) return text.length;
+      if (clientX <= r.left + EDGE_SNAP_PX) return 0;
+      const ratio = r.width > 0 ? (clientX - r.left) / r.width : 0;
+      return Math.max(0, Math.min(text.length, Math.round(ratio * text.length)));
+    };
+
+    // Same as nearestSpanIndex, but also resolves exactly which character
+    // within that span the point is nearest to. Prefer the visual line being
+    // dragged over a broad nearest-neighbor search: PDF spans can have very
+    // uneven boxes, and a nearby long text run can otherwise swallow the
+    // whole sentence after a tiny handle movement.
+    // Within EDGE_SNAP_PX of either edge of the span, always snap fully to
+    // that edge (offset 0 or text.length) rather than rounding to whatever
+    // character ratio the raw pixel happens to land on — without this, a
+    // drag that visually reaches the end of a word but lands a couple
+    // pixels short of its exact right edge rounded DOWN to one character
+    // short ("Within" → "Withi"). Character-level precision still applies
+    // in the middle of a word; only the boundary itself gets forgiving.
+    const EDGE_SNAP_PX = 6;
+    const nearestCharPosition = (clientX, clientY, nearIndex = null, edge = "end") => {
+      if (!spans.length) return { spanIdx: -1, charOffset: 0 };
+
+      const seededIndex = nearIndex != null ? Math.max(0, Math.min(spans.length - 1, nearIndex)) : nearestSpanIndex(clientX, clientY);
+      const seedRect = spans[seededIndex]?.el?.getBoundingClientRect?.();
+      const seedHeight = seedRect?.height || 16;
+      const lineTolerance = Math.max(8, seedHeight * 0.7);
+      const allRects = spans
+        .map((span, index) => ({ span, index, rect: span?.el?.getBoundingClientRect?.() }))
+        .filter(({ span, rect }) => span && rect);
+      const seedLine = allRects
+        .filter(({ rect }) => Math.abs(rect.top - (seedRect?.top ?? rect.top)) <= lineTolerance)
+        .sort((a, b) => a.rect.left - b.rect.left);
+      const seedLineTop = Math.min(...seedLine.map(({ rect }) => rect.top));
+      const seedLineBottom = Math.max(...seedLine.map(({ rect }) => rect.bottom));
+      const pointerStillOnSeedLine = seedLine.length
+        && clientY >= seedLineTop - seedHeight
+        && clientY <= seedLineBottom + seedHeight;
+
+      let candidates = seedLine;
+      if (!pointerStillOnSeedLine) {
+        const nearestLineTop = allRects.reduce((best, { rect }) => {
+          const distance = Math.abs(((rect.top + rect.bottom) / 2) - clientY);
+          return !best || distance < best.distance ? { top: rect.top, distance } : best;
+        }, null)?.top;
+        candidates = allRects
+          .filter(({ rect }) => Math.abs(rect.top - nearestLineTop) <= lineTolerance)
+          .sort((a, b) => a.rect.left - b.rect.left);
+      }
+
+      if (!candidates.length) candidates = allRects.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
+
+      for (const candidate of candidates) {
+        const { index, rect } = candidate;
+        if (clientX >= rect.left && clientX <= rect.right) {
+          return { spanIdx: index, charOffset: charOffsetForSpanPoint(index, clientX) };
+        }
+      }
+
+      let previous = null;
+      let next = null;
+      for (const candidate of candidates) {
+        if (candidate.rect.right < clientX) previous = candidate;
+        if (candidate.rect.left > clientX) {
+          next = candidate;
+          break;
+        }
+      }
+
+      if (previous && next) {
+        if (edge === "start") return { spanIdx: next.index, charOffset: 0 };
+        return { spanIdx: previous.index, charOffset: textLengthForSpan(previous.index) };
+      }
+      if (previous) return { spanIdx: previous.index, charOffset: textLengthForSpan(previous.index) };
+      if (next) return { spanIdx: next.index, charOffset: 0 };
+      return { spanIdx: seededIndex, charOffset: charOffsetForSpanPoint(seededIndex, clientX) };
+    };
+
+    // startOffset/endOffset optional, same convention as selectionTextFor —
+    // when given, anchors at the exact dragged character inside the edge
+    // span instead of that span's horizontal center.
+    const selectionAnchorFor = (startIdx, endIdx, startOffset = null, endOffset = null) => {
+      const edgeIdx = Math.max(startIdx, endIdx);
+      const edgeEl = spans[edgeIdx]?.el;
+      if (!edgeEl) return { x: manualSelection.x, y: manualSelection.y };
+      const left = parseFloat(edgeEl.style.left || "0");
+      const top = parseFloat(edgeEl.style.top || "0");
+      const width = parseFloat(edgeEl.style.width || "0") || edgeEl.offsetWidth || 0;
+      const height = parseFloat(edgeEl.style.height || "0") || edgeEl.offsetHeight || 0;
+      if (startOffset != null && endOffset != null) {
+        const edgeOffset = startIdx === endIdx
+          ? Math.max(startOffset, endOffset)
+          : (startIdx > endIdx ? startOffset : endOffset);
+        const text = spans[edgeIdx]?.text ?? edgeEl.textContent ?? "";
+        const xOffset = text.length > 0 ? width * (edgeOffset / text.length) : width;
+        return { x: left + xOffset, y: top + height + 8 };
+      }
+      return { x: left + width / 2, y: top + height + 8 };
+    };
+
+    // Skips the state update (and the DOM rebuild every state update
+    // triggers, via this whole effect re-running) when the nearest
+    // character hasn't actually changed — a slow/careful drag spends most
+    // of its pointermove events still over the same character, and
+    // updating unrelated handle DOM elements this hard is exactly what a
+    // real logical change needs before ever committing anything.
+    const updateSelectionEdge = (edge, clientX, clientY) => {
+      // manualSelectionRef, not the manualSelection closure variable — see
+      // its declaration for why this closure can be stale for a drag's
+      // whole duration, and why that matters for nearIndex specifically.
+      const currentSel = manualSelectionRef.current;
+      const nearIndex = edge === "start" ? currentSel?.startIdx : currentSel?.endIdx;
+      const next = nearestCharPosition(clientX, clientY, nearIndex ?? null, edge);
+      if (next.spanIdx < 0) return;
+      setManualSelection((current) => {
+        if (!current) return current;
+        const nextStartIdx = edge === "start" ? next.spanIdx : current.startIdx;
+        const nextEndIdx   = edge === "end"   ? next.spanIdx : current.endIdx;
+        const nextStartOffset = edge === "start" ? next.charOffset : (current.startCharOffset ?? 0);
+        const nextEndOffset   = edge === "end"   ? next.charOffset : (current.endCharOffset ?? (spans[current.endIdx]?.text?.length ?? 0));
+        if (
+          nextStartIdx === current.startIdx && nextEndIdx === current.endIdx
+          && nextStartOffset === (current.startCharOffset ?? 0)
+          && nextEndOffset === (current.endCharOffset ?? (spans[current.endIdx]?.text?.length ?? 0))
+        ) return current;
+        const text = selectionTextFor(nextStartIdx, nextEndIdx, nextStartOffset, nextEndOffset);
+        if (!text) return current;
+        const anchor = selectionAnchorFor(nextStartIdx, nextEndIdx, nextStartOffset, nextEndOffset);
+        return {
+          ...current,
+          startIdx: nextStartIdx, endIdx: nextEndIdx,
+          startCharOffset: nextStartOffset, endCharOffset: nextEndOffset,
+          text, ...anchor,
+        };
+      });
+    };
+
+    // The handle's own on-screen position tracks the raw pointer every
+    // pixel (continuous), independent of updateSelectionEdge's snapped,
+    // per-span logical selection — X follows the finger directly; Y snaps
+    // to the nearest line's own baseline so it doesn't jitter vertically as
+    // the finger wobbles within one line. Looked up by class each call
+    // (not a captured element reference) because manualSelection changing
+    // reruns this WHOLE effect, which removes and recreates every handle
+    // element from scratch — the element this closure was originally
+    // attached to may no longer even be in the DOM by the time a later
+    // pointermove fires.
+    const positionHandleContinuous = (edge, clientX, clientY) => {
+      const handleEl = layer.querySelector(`.sel_selection_handle--${edge}`);
+      if (!handleEl) return;
+      const currentSel = manualSelectionRef.current;
+      const nearIndex = edge === "start" ? currentSel?.startIdx : currentSel?.endIdx;
+      const nextIdx = nearestSpanIndex(clientX, clientY, nearIndex ?? null);
+      const spanEl = spans[nextIdx]?.el;
+      if (spanEl) {
+        const r = spanEl.getBoundingClientRect();
+        handleEl.style.top = `${(r.bottom - layerRect.top) / bodyZoom}px`;
+      }
+      handleEl.style.left = `${(clientX - layerRect.left) / bodyZoom}px`;
+    };
+
+    // Window-level, not per-handle pointer capture — the actively-dragged
+    // handle's own DOM element gets destroyed and recreated mid-drag (see
+    // above), which would silently release element-level pointer capture
+    // and stall the drag after the first span crossing. A ref survives
+    // that rebuild; window listeners don't depend on any specific element
+    // still existing at all.
+    const HANDLE_DRAG_THRESHOLD_PX = 8;
+    const onWindowPointerMove = (event) => {
+      const edge = selectionDraggingEdgeRef.current;
+      if (!edge) return;
+      event.preventDefault();
+      const drag = selectionHandleDragRef.current;
+      if (!drag?.active) {
+        if (!drag) return;
+        const moved = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+        if (moved < HANDLE_DRAG_THRESHOLD_PX) return;
+        drag.active = true;
+      }
+      positionHandleContinuous(edge, event.clientX, event.clientY);
+      updateSelectionEdge(edge, event.clientX, event.clientY);
+    };
+    const onWindowPointerEnd = () => {
+      selectionDraggingEdgeRef.current = null;
+      selectionHandleDragRef.current = null;
+      window.removeEventListener("pointermove", onWindowPointerMove);
+      window.removeEventListener("pointerup", onWindowPointerEnd);
+      window.removeEventListener("pointercancel", onWindowPointerEnd);
+    };
+    const attachActiveSelectionDragListeners = () => {
+      window.addEventListener("pointermove", onWindowPointerMove, { passive: false });
+      window.addEventListener("pointerup", onWindowPointerEnd);
+      window.addEventListener("pointercancel", onWindowPointerEnd);
+    };
+
+    const addHandle = (edge, spanIdx, charOffset = null) => {
+      const spanEl = spans[spanIdx]?.el;
+      if (!spanEl) return;
+      const r = spanEl.getBoundingClientRect();
+      // charOffset positions the handle at that exact character inside the
+      // span instead of its full left/right edge — without this, every
+      // re-render after a mid-word drag (any state update reruns this
+      // whole effect, rebuilding every handle from scratch) would snap the
+      // handle straight back out to the whole word's edge, undoing the
+      // character-level crop visually even though the highlight/text
+      // stayed correctly cropped.
+      const left = charOffset != null
+        ? (r.left + r.width * (spans[spanIdx]?.text?.length > 0 ? charOffset / spans[spanIdx].text.length : (edge === "start" ? 0 : 1)) - layerRect.left) / bodyZoom
+        : ((edge === "start" ? r.left : r.right) - layerRect.left) / bodyZoom;
+      const top = (r.bottom - layerRect.top) / bodyZoom;
+      const handle = document.createElement("button");
+      handle.type = "button";
+      handle.className = `sel_selection_handle sel_selection_handle--${edge}`;
+      handle.dataset.selectionHandle = edge;
+      handle.setAttribute("aria-label", `${edge === "start" ? "Start" : "End"} selection handle`);
+      handle.style.left = `${left}px`;
+      handle.style.top = `${top}px`;
+      const onPointerDown = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        // Deliberately does NOT call updateSelectionEdge here — a touch
+        // rarely lands exactly on the handle's own anchor point, and
+        // nearestSpanIndex would happily snap to whatever span is actually
+        // closest to that slightly-off touch, jumping the selection before
+        // any real dragging happened. Just arm the drag; the first real
+        // pointermove past HANDLE_DRAG_THRESHOLD_PX is what starts
+        // adjusting the selection.
+        selectionDraggingEdgeRef.current = edge;
+        selectionHandleDragRef.current = {
+          edge,
+          startX: event.clientX,
+          startY: event.clientY,
+          active: false,
+        };
+        attachActiveSelectionDragListeners();
+      };
+      handle.addEventListener("pointerdown", onPointerDown);
+      layer.appendChild(handle);
+    };
+
+    addHandle("start", manualSelection.startIdx, manualSelection.startCharOffset);
+    addHandle("end", manualSelection.endIdx, manualSelection.endCharOffset);
+    if (selectionDraggingEdgeRef.current && selectionHandleDragRef.current) {
+      attachActiveSelectionDragListeners();
+    }
+
+    return () => {
+      layer?.querySelectorAll(".sel_highlight, .sel_selection_handle").forEach((el) => el.remove());
+      // A live drag intentionally survives this cleanup: every character
+      // update re-runs this effect and rebuilds the handles, so ending the
+      // ref here would stop selection until the user lifted and grabbed the
+      // handle again. The next effect instance immediately attaches fresh
+      // window listeners for the same still-held drag.
+      if (!selectionDraggingEdgeRef.current) selectionHandleDragRef.current = null;
+      window.removeEventListener("pointermove", onWindowPointerMove);
+      window.removeEventListener("pointerup", onWindowPointerEnd);
+      window.removeEventListener("pointercancel", onWindowPointerEnd);
+    };
   }, [manualSelection]);
 
   // ── Clear results on page change ───────────────────────────────────────────
@@ -3592,7 +4854,7 @@ const PDFPage = forwardRef(({
     finally { setSaving(false); }
   }, [hyleData, saving, filename, pageCount, pdfType, hylePage, pageNum, provider, extractMode]);
 
-  // Prefers the server-side LlamaParse Markdown for this page (better structure —
+  // Prefers the server-side Mistral OCR Markdown for this page (better structure —
   // real headings/lists/tables) when the doc came from a saved Source; falls back
   // to raw client-side pdf.js text (local uploads, or if the markdown service is
   // unavailable/unconfigured/out of quota) so extraction never breaks.
@@ -3647,7 +4909,7 @@ const PDFPage = forwardRef(({
   }, [pageCount]);
 
   // Actions -> Text Extraction: instead of the inline pageMdOpen panel, spins
-  // up a real MCTOSHS Draft document containing the WHOLE document's text
+  // up a real AMCTOSHS Draft document containing the WHOLE document's text
   // (every page, in order — not just the one currently open), and navigates
   // there. Each PDF page's text lands as its own run of literal-text blocks
   // (escaped, one line per <div> — not parsed into rich formatting), preceded
@@ -4021,35 +5283,131 @@ const PDFPage = forwardRef(({
     }
   }, [manualSelection, selectionToolBusy, provider]);
 
-  // Add as Entity Schema (EnS) / Entity Schema Trace (EnST) / Entity Schema
-  // Trace Value (EnSTV) — same underlying entities/traces Hyle cards as the
-  // standard manual-add flow, just one click instead of picking a card from
-  // a dropdown. EnSTV is a value nested under the traces card, tagged
-  // `kind: "value"` so it can be told apart from a plain trace later.
-  const addSelectionAsHyle = useCallback((card, extra = {}) => {
-    const word = manualSelection?.text;
-    if (!word) return;
-    const noun = word.trim().toLowerCase().replace(/\s+/g, " ").replace(/[.,;:]+$/, "");
-    if (!noun) return;
-    setHyleData((prev) => {
-      const base = prev || EMPTY_HYLES();
-      const all  = ["entities","traces","phenomena","concept","models"].flatMap((c) => ALL_MODES.flatMap((m) => base[c][m].map((it) => it.noun)));
-      if (all.includes(noun)) return base;
-      const mode = manualMode;
-      const num  = (base[card][mode]?.length || 0) + 1;
-      return {
-        ...base,
-        [card]: {
-          ...base[card],
-          [mode]: [...base[card][mode], { id: `${card}_${mode}_${num}`, num, noun, reason: "manual", status: initStatus(), ...extra }],
-        },
-        _total: (base._total || 0) + 1,
-      };
-    });
-    if (!hylePage) setHylePage(pageNum);
-    setManualSelection(null);
-    window.getSelection()?.removeAllRanges();
-  }, [manualSelection, manualMode, hylePage, pageNum]);
+  // Cross-check builder source text against the current page text via AI
+  // and return a corrected value. The selection bar no longer owns this
+  // action; AMCTOSHS Entities Builder does.
+  const verifyEntityBuilderSource = useCallback(async (text) => {
+    const word = String(text || "").trim();
+    if (!word || selectionVerifyBusy) return word;
+    setSelectionVerifyBusy(true);
+    setSelectionToolError("");
+    try {
+      const context = await getPageText(pageNum);
+      const res = await authFetch(apiUrl("/api/ai/text-tool"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: word, action: "verify_selection", context, provider }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || "Request failed.");
+      const corrected = String(data.result || "").trim();
+      return corrected || word;
+    } catch (e) {
+      throw new Error(e.message || "Verification failed.");
+    } finally {
+      setSelectionVerifyBusy(false);
+    }
+  }, [selectionVerifyBusy, getPageText, pageNum, provider]);
+
+  // "Extract Eidos and Find Videos" — the captured screenshots' OCR'd text
+  // (concatenated, in capture order) stands in for the old single-word
+  // manualSelection.text as surfaceText -> POST /api/concepts/extract ->
+  // eidos JSON -> POST /api/youtube/concept-search -> ranked videos.
+  // Context/heading come from the FIRST screenshot's page via the same
+  // getPageText() this file already uses for AI extraction (prefers the
+  // server-side Markdown conversion, which has real headings) — a plain
+  // page-level context rather than an exact before/after splice, since
+  // OCR'd text can't be reliably substring-matched back into that page text
+  // the way an exact DOM selection could. No document-language signal
+  // exists anywhere in this file yet (mctosh_pdf_translate_lang is a
+  // *target* translate-to language, not the document's own) — left blank,
+  // which the backend already treats as "no preference" throughout.
+  const handleSmartVideoSearch = useCallback(async () => {
+    if (smartVideoStage === "extracting" || smartVideoStage === "searching") return;
+    const readyShots = smartVideoScreenshots.filter((s) => s.text && s.text.trim());
+    if (!readyShots.length) {
+      setSmartVideoOpen(true);
+      setSmartVideoError(
+        smartVideoScreenshots.length
+          ? "No readable text was found in the captured area(s) — try a clearer, more zoomed-in capture."
+          : "Drag a rectangle around a paragraph on the page to capture it first.",
+      );
+      return;
+    }
+
+    let surfaceText = readyShots.map((s) => s.text.trim()).join("\n\n");
+    if (surfaceText.length > SMART_VIDEO_MAX_SURFACE_TEXT) surfaceText = surfaceText.slice(0, SMART_VIDEO_MAX_SURFACE_TEXT);
+    const capturePageNum = readyShots[0].pageNum || pageNum;
+
+    setSmartVideoOpen(true);
+    setSmartVideoError("");
+    setSmartVideoEidos(null);
+    setSmartVideoVideos([]);
+    setSmartVideoActiveVideoId(null);
+    setSmartVideoSavedId(null);
+    setSmartVideoStage("extracting");
+
+    let contextBefore = "", sectionHeading = "";
+    try {
+      const pageText = await getPageText(capturePageNum);
+      contextBefore = pageText.slice(0, 1200).trim();
+      const headingMatches = [...pageText.matchAll(/^#{1,6}\s+(.+)$/gm)];
+      sectionHeading = headingMatches[0]?.[1]?.trim() || "";
+    } catch {
+      // No source markdown / page text available (e.g. scanned PDF with no
+      // OCR text at the page level) — extraction still proceeds on the
+      // captured screenshots' own OCR'd text alone.
+    }
+
+    try {
+      const extractRes = await authFetch(apiUrl("/api/concepts/extract"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          surfaceText,
+          contextBefore,
+          contextAfter: "",
+          sectionHeading,
+          documentTitle: filename || "",
+          pageNumber: capturePageNum,
+          difficulty: smartVideoDifficulty,
+          provider,
+        }),
+      });
+      const eidos = await extractRes.json();
+      if (eidos.error) throw new Error(describeApiError(eidos, "Concept extraction failed."));
+      setSmartVideoEidos(eidos);
+      setSmartVideoStage("searching");
+
+      const searchRes = await authFetch(apiUrl("/api/youtube/concept-search"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          canonicalConcept: eidos.canonicalConcept,
+          eidos: eidos.eidos,
+          concepts: eidos.concepts,
+          summary: eidos.summary,
+          searchQueries: eidos.searchQueries,
+          negativeTerms: eidos.negativeTerms,
+          language: eidos.language,
+          difficulty: eidos.difficulty,
+          learningIntent: eidos.learningIntent,
+          maxResults: smartVideoPreferences.maxResults,
+          hardFilters: smartVideoPreferences.hardFilters,
+          rankingPreferences: smartVideoPreferences.rankingPreferences,
+          provider,
+        }),
+      });
+      const searchData = await searchRes.json();
+      if (searchData.error) throw new Error(describeApiError(searchData, "Video search failed."));
+      setSmartVideoVideos(searchData.videos || []);
+      if (!searchData.videos?.length && searchData.message) setSmartVideoError(searchData.message);
+    } catch (e) {
+      setSmartVideoError(e.message || "Something went wrong.");
+    } finally {
+      setSmartVideoStage("done");
+    }
+  }, [smartVideoScreenshots, smartVideoStage, smartVideoDifficulty, smartVideoPreferences, pageNum, filename, provider, getPageText]);
 
   const sanitizeSelectedText = useCallback((text) => (
     String(text || "")
@@ -4105,12 +5463,14 @@ const PDFPage = forwardRef(({
     setSelectionToolResult(null);
     setSelectionToolError("");
     setSelectionToolBusy(null);
+    if (manualSelection?.text?.trim()) setEntityBuilderSelectedText(manualSelection.text.trim());
   }, [manualSelection]);
 
   // Dismiss selection bar when clicking outside
   useEffect(() => {
     if (!manualSelection) return;
     const handler = (e) => {
+      if (e.target.closest?.(".sel_selection_handle")) return;
       if (selBarRef.current && !selBarRef.current.contains(e.target)) {
         setManualSelection(null);
         window.getSelection()?.removeAllRanges();
@@ -4252,6 +5612,7 @@ const PDFPage = forwardRef(({
   // (right group) in the toolbar below — computed once here instead of
   // inside either group so the two can live in separate containers.
   const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
+  const shapeToolbarOpen = annotTool === "shapes";
   const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser" || annotTool === "arrow";
   const sizeProps =
     annotTool === "pen"     ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
@@ -4377,45 +5738,19 @@ const PDFPage = forwardRef(({
                 if (key === "shapes") {
                   const shapesActive = SHAPE_TOOL_KEYS.includes(annotTool);
                   return (
-                    <div className="annot_dd_wrap" key="shapes" ref={shapesMenuRef}>
-                      <button
-                        type="button"
-                        className={`annot_trigger annot_tool_btn${(shapesActive || shapesMenuOpen) ? " annot_trigger--active" : ""}`}
-                        onClick={() => { setShapesMenuOpen((o) => !o); setColorMenuOpen(false); setHighlightMenuOpen(false); }}
-                        title="Shapes"
-                        aria-label="Shapes"
-                      >
-                        <ShapesToolIcon />
-                      </button>
-                      {shapesMenuOpen && (
-                        <div className="annot_dd annot_dd--shapes">
-                          {SHAPE_TOOL_KEYS.map((shapeKey) => {
-                            const shapeTool = ANNOT_TOOLS.find((item) => item.key === shapeKey);
-                            return (
-                              <button
-                                key={shapeKey}
-                                type="button"
-                                className={`annot_trigger annot_tool_btn${annotTool === shapeKey ? " annot_trigger--active" : ""}`}
-                                onPointerDown={(event) => {
-                                  if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(shapeKey, shapeTool.label);
-                                }}
-                        onClick={() => {
-                          setAnnotTool((current) => (current === shapeKey ? null : shapeKey));
-                          setShapesMenuOpen(false);
-                          setColorMenuOpen(false);
-                          setHighlightMenuOpen(false);
-                        }}
-                                title={shapeTool.label}
-                                aria-label={shapeTool.label}
-                              >
-                                {toolbarTouchLabel?.key === shapeKey && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
-                                {shapeKey === "arrow" ? <ArrowToolIcon /> : <i className={shapeTool.icon} />}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
+                    <button
+                      key="shapes"
+                      type="button"
+                      className={`annot_trigger annot_tool_btn${(shapesActive || annotTool === "shapes") ? " annot_trigger--active" : ""}`}
+                      onClick={() => {
+                        setAnnotTool((current) => (current === "shapes" ? null : "shapes"));
+                        setColorMenuOpen(false);
+                      }}
+                      title="Shapes"
+                      aria-label="Shapes"
+                    >
+                      <ShapesToolIcon />
+                    </button>
                   );
                 }
                 const tool = ANNOT_TOOLS.find((item) => item.key === key);
@@ -4439,27 +5774,64 @@ const PDFPage = forwardRef(({
                   </React.Fragment>
                 );
               })}
+              {/* AMCTOSHS Entities Builder — not a real annotTool and not
+                  page-driven. It only uses selected or entered text. */}
+              {pdfDoc && (
+                <button
+                  type="button"
+                  className={`annot_trigger annot_tool_btn${narrativeModeOpen ? " annot_trigger--active" : ""}`}
+                  onClick={toggleNarrativeMode}
+                  title="AMCTOSHS Entities Builder"
+                  aria-label="AMCTOSHS Entities Builder"
+                >
+                  <i className="bx bx-network-chart" />
+                </button>
+              )}
             </div>
 
             {/* Color/size/tool-settings for whichever tool is currently
                 active — grouped in their own row so they stay a row
                 regardless of toolbar dock edge (see .annot_tool_options in
                 pdfPage.css): at top/bottom it sits inline in the toolbar's
-                own horizontal flow like normal; at left/right (where the
-                toolbar itself is a narrow vertical column, see
-                #pdf_toolbar_left's own --left/--right flex-direction:
-                column) it instead pops out sideways as a flyout row
-                instead of being squeezed into that same narrow column. */}
+                own horizontal flow like normal; at left/right it remains
+                inside the toolbar container as a second column separated by
+                a vertical divider. */}
             <div
               className="annot_tool_options"
-              style={(toolbarDock.edge === "left" || toolbarDock.edge === "right") ? { top: toolOptionsTop } : undefined}
             >
-            {toolActive && annotTool !== "eraser" && (
+            {shapeToolbarOpen && (
+              <div className="annot_shape_subtoolbar" aria-label="Shape tools">
+                {SHAPE_TOOL_KEYS.map((shapeKey) => {
+                  const shapeTool = ANNOT_TOOLS.find((item) => item.key === shapeKey);
+                  return (
+                    <button
+                      key={shapeKey}
+                      type="button"
+                      className={`annot_trigger annot_tool_btn${annotTool === shapeKey ? " annot_trigger--active" : ""}`}
+                      onPointerDown={(event) => {
+                        if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(shapeKey, shapeTool.label);
+                      }}
+                      onClick={() => {
+                        setAnnotTool(shapeKey);
+                        setColorMenuOpen(false);
+                      }}
+                      title={shapeTool.label}
+                      aria-label={shapeTool.label}
+                    >
+                      {toolbarTouchLabel?.key === shapeKey && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
+                      {shapeKey === "arrow" ? <ArrowToolIcon /> : <i className={shapeTool.icon} />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {toolActive && annotTool !== "eraser" && annotTool !== "smartVideo" && (
               <div className="annot_dd_wrap" ref={colorMenuRef}>
                 <button
                   type="button"
                   className="annot_trigger annot_trigger--color"
-                  onClick={() => { setColorMenuOpen((o) => !o); setShapesMenuOpen(false); setHighlightMenuOpen(false); }}
+                  onClick={() => setColorMenuOpen((o) => !o)}
                   title="Color"
                 >
                   <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
@@ -4506,7 +5878,25 @@ const PDFPage = forwardRef(({
                 onChange={sizeProps.onChange}
                 color={annotColor}
                 dashed={annotTool === "eraser"}
+                variant={annotTool === "highlight" ? "highlight" : "dot"}
               />
+            )}
+
+            {annotTool === "eraser" && (
+              <div className="annot_mode_toggle annot_mode_toggle--pen" aria-label="Eraser mode">
+                {ERASER_MODES.map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`annot_mode_btn${eraserMode === key ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setEraserMode(key)}
+                    title={`${label} eraser`}
+                    aria-label={`${label} eraser`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             )}
 
             {annotTool === "text" && <span className="annot_text_separator" aria-hidden="true" />}
@@ -4517,7 +5907,7 @@ const PDFPage = forwardRef(({
                   <button
                     type="button"
                     className={`annot_mode_btn${textAlign === "left" ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setTextAlign("left")}
+                    onClick={() => { setTextAlign("left"); updateStyledTextTarget({ textAlign: "left" }); }}
                     title="Align left"
                     aria-label="Align left"
                   >
@@ -4528,7 +5918,7 @@ const PDFPage = forwardRef(({
                     <button
                       type="button"
                       className={`annot_mode_btn${textAlign === "center" ? " annot_mode_btn--active" : ""}`}
-                      onClick={() => setTextAlign("center")}
+                      onClick={() => { setTextAlign("center"); updateStyledTextTarget({ textAlign: "center" }); }}
                       title="Align center"
                       aria-label="Align center"
                     >
@@ -4539,7 +5929,7 @@ const PDFPage = forwardRef(({
                   <button
                     type="button"
                     className={`annot_mode_btn${textAlign === "right" ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setTextAlign("right")}
+                    onClick={() => { setTextAlign("right"); updateStyledTextTarget({ textAlign: "right" }); }}
                     title="Align right"
                     aria-label="Align right"
                   >
@@ -4554,7 +5944,13 @@ const PDFPage = forwardRef(({
                     <button
                       type="button"
                       className={`annot_mode_btn${textBold ? " annot_mode_btn--active" : ""}`}
-                      onClick={() => setTextBold((value) => !value)}
+                      onClick={() => {
+                        setTextBold((value) => {
+                          const next = !value;
+                          updateStyledTextTarget({ fontBold: next });
+                          return next;
+                        });
+                      }}
                       title="Bold"
                       aria-label="Bold"
                     >
@@ -4565,7 +5961,13 @@ const PDFPage = forwardRef(({
                   <button
                     type="button"
                     className={`annot_mode_btn${textItalic ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setTextItalic((value) => !value)}
+                    onClick={() => {
+                      setTextItalic((value) => {
+                        const next = !value;
+                        updateStyledTextTarget({ fontItalic: next });
+                        return next;
+                      });
+                    }}
                     title="Italic"
                     aria-label="Italic"
                   >
@@ -4576,7 +5978,13 @@ const PDFPage = forwardRef(({
                   <button
                     type="button"
                     className={`annot_mode_btn${textUnderline ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setTextUnderline((value) => !value)}
+                    onClick={() => {
+                      setTextUnderline((value) => {
+                        const next = !value;
+                        updateStyledTextTarget({ textUnderline: next });
+                        return next;
+                      });
+                    }}
                     title="Underline"
                     aria-label="Underline"
                   >
@@ -4587,13 +5995,36 @@ const PDFPage = forwardRef(({
                   <button
                     type="button"
                     className={`annot_mode_btn${textBordered ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setTextBordered((value) => !value)}
+                    onClick={() => {
+                      setTextBordered((value) => {
+                        const next = !value;
+                        updateStyledTextTarget({ textBordered: next });
+                        return next;
+                      });
+                    }}
                     title="Bordered"
                     aria-label="Bordered"
                   >
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
                       <path d="M11 7h2v2h-2zm0 8h2v2h-2zm-4-4h2v2H7zm8 0h2v2h-2zm-4 0h2v2h-2z" />
                       <path d="M17 3H3v18h18V3zm2 4v12H5V5h14z" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    className={`annot_mode_btn${textBackground ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => {
+                      setTextBackground((value) => {
+                        const next = !value;
+                        updateStyledTextTarget({ textBackground: next });
+                        return next;
+                      });
+                    }}
+                    title="Background"
+                    aria-label="Text background"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
+                      <path d="M3 3h18v18H3z" />
                     </svg>
                   </button>
                 </div>
@@ -4609,7 +6040,11 @@ const PDFPage = forwardRef(({
                     id="pdf_text_font_family"
                     className="annot_text_select"
                     value={textFontFamily}
-                    onChange={(e) => setTextFontFamily(e.target.value)}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setTextFontFamily(next);
+                      updateStyledTextTarget({ fontFamily: next });
+                    }}
                     aria-label="Font type"
                   >
                     {TEXT_FONT_FAMILIES.map(({ key, label }) => (
@@ -4625,7 +6060,10 @@ const PDFPage = forwardRef(({
                   max={48}
                   step={1}
                   value={textFontSize}
-                  onChange={setTextFontSize}
+                  onChange={(next) => {
+                    setTextFontSize(next);
+                    updateStyledTextTarget({ fontSize: next / (fitScaleRef.current * zoomRef.current) });
+                  }}
                   color={annotColor}
                   dashed={false}
                 />
@@ -4634,17 +6072,6 @@ const PDFPage = forwardRef(({
 
             {annotTool === "pen" && (
               <div className="annot_pen_panel">
-                <div className="annot_mode_toggle annot_mode_toggle--pen">
-                  <button
-                    type="button"
-                    className={`annot_mode_btn${penBorder ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setPenBorder((value) => !value)}
-                    title="Stroke border"
-                    aria-label="Stroke border"
-                  >
-                    <StrokeBorderIcon />
-                  </button>
-                </div>
                 <div className="annot_pen_controls annot_pen_controls--column">
                   <LabeledPercentKnob
                     title="Smoothing"
@@ -4653,30 +6080,56 @@ const PDFPage = forwardRef(({
                     onChange={setPenStabilization}
                     label="%"
                   />
-                  <LabeledPercentKnob
-                    title="Pressure assist"
-                    subtitle="Shape width without stylus pressure"
-                    value={penPressureAssist}
-                    onChange={setPenPressureAssist}
-                    label="%"
-                  />
-                  <LabeledPercentKnob
-                    title="Tip taper"
-                    subtitle="Sharper start and end"
-                    value={penTaper}
-                    onChange={setPenTaper}
-                    label="%"
-                  />
-                  <LabeledPercentKnob
-                    title="Ink flow"
-                    subtitle="Extra body and softness"
-                    value={penFlow}
-                    onChange={setPenFlow}
-                    label="%"
-                  />
+                  <div className="annot_mode_toggle annot_mode_toggle--pen">
+                    <button
+                      type="button"
+                      className={`annot_mode_btn${penDynamic ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => setPenDynamic((value) => !value)}
+                      title="Dynamic ink: vary thickness with pressure and motion"
+                      aria-label="Dynamic ink"
+                    >
+                      Dynamic ink
+                    </button>
+                    {penDynamic && (
+                      <button
+                        type="button"
+                        className={`annot_mode_btn${penBorder ? " annot_mode_btn--active" : ""}`}
+                        onClick={() => setPenBorder((value) => !value)}
+                        title="Stroke border"
+                        aria-label="Stroke border"
+                      >
+                        <StrokeBorderIcon />
+                      </button>
+                    )}
+                  </div>
+                  {penDynamic && (
+                    <>
+                      <LabeledPercentKnob
+                        title="Pressure assist"
+                        subtitle="Shape width without stylus pressure"
+                        value={penPressureAssist}
+                        onChange={setPenPressureAssist}
+                        label="%"
+                      />
+                      <LabeledPercentKnob
+                        title="Tip taper"
+                        subtitle="Sharper start and end"
+                        value={penTaper}
+                        onChange={setPenTaper}
+                        label="%"
+                      />
+                      <LabeledPercentKnob
+                        title="Ink flow"
+                        subtitle="Extra body and softness"
+                        value={penFlow}
+                        onChange={setPenFlow}
+                        label="%"
+                      />
+                    </>
+                  )}
                 </div>
 
-                {penType === "fountain" && (
+                {penDynamic && penType === "fountain" && (
                   <div className="annot_pen_controls">
                     <LabeledPercentKnob
                       title="Nib angle"
@@ -4701,79 +6154,43 @@ const PDFPage = forwardRef(({
             )}
 
             {annotTool === "highlight" && (
-              <div className="annot_dd_wrap" ref={highlightMenuRef}>
+              <div className="annot_mode_toggle annot_mode_toggle--pen">
                 <button
                   type="button"
-                  className={`annot_trigger${highlightMenuOpen ? " annot_trigger--active" : ""}`}
-                  onClick={() => { setHighlightMenuOpen((o) => !o); setShapesMenuOpen(false); setColorMenuOpen(false); }}
-                  title="Highlight settings"
+                  className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
+                  onClick={() => setHighlightMode("freehand")}
+                >Freehand</button>
+                <button
+                  type="button"
+                  className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
+                  onClick={() => setHighlightMode("line")}
+                >Straight line</button>
+              </div>
+            )}
+            {annotTool === "highlight" && highlightMode === "line" && (
+              <div className="annot_mode_toggle annot_mode_toggle--pen">
+                <button
+                  type="button"
+                  className={`annot_mode_btn annot_mode_btn--toggle${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
+                  onClick={() => setHighlightAutoWidth((value) => !value)}
+                  title="Auto width: click text to match that text span's width automatically"
                 >
-                  <i className="bx bx-highlight" />
-                  <span className="annot_trigger_label">Highlight</span>
-                  <i className="bx bx-chevron-down annot_trigger_chevron" />
+                  Auto width
                 </button>
-                {highlightMenuOpen && (
-                  <div className="annot_dd annot_dd--highlight">
-                    <div className="annot_pen_panel annot_pen_panel--highlight">
-                      <div className="annot_mode_toggle annot_mode_toggle--pen">
-                        <button
-                          type="button"
-                          className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
-                          onClick={() => setHighlightMode("freehand")}
-                        >Freehand</button>
-                        <button
-                          type="button"
-                          className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
-                          onClick={() => setHighlightMode("line")}
-                        >Straight line</button>
-                      </div>
-                      {highlightMode === "line" && (
-                        <div className="annot_mode_toggle annot_mode_toggle--pen">
-                          <button
-                            type="button"
-                            className={`annot_mode_btn annot_mode_btn--toggle${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
-                            onClick={() => setHighlightAutoWidth((value) => !value)}
-                            title="Auto width: click text to match that text span's width automatically"
-                          >
-                            Auto width
-                          </button>
-                          <button
-                            type="button"
-                            className={`annot_mode_btn annot_mode_btn--toggle${highlightTaperEnds ? " annot_mode_btn--active" : ""}`}
-                            onClick={() => setHighlightTaperEnds((value) => !value)}
-                            title="Taper ends: rounded marker caps; off uses blunt ends"
-                          >
-                            {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
-                          </button>
-                        </div>
-                      )}
-
-                      <div className="annot_pen_controls">
-                        <div className="annot_control">
-                          <div className="annot_control_head">
-                            <span className="annot_control_title">Width</span>
-                            <span className="annot_control_subtitle">How wide the marker lays down ink</span>
-                          </div>
-                          <SizeKnob
-                            min={4}
-                            max={64}
-                            step={2}
-                            value={annotSize}
-                            onChange={setAnnotSize}
-                            color={annotColor}
-                          />
-                        </div>
-                        <div className="annot_control">
-                          <div className="annot_control_head">
-                            <span className="annot_control_title">Opacity</span>
-                            <span className="annot_control_subtitle">Transparency of the highlight layer</span>
-                          </div>
-                          <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                <button
+                  type="button"
+                  className={`annot_mode_btn annot_mode_btn--toggle${highlightTaperEnds ? " annot_mode_btn--active" : ""}`}
+                  onClick={() => setHighlightTaperEnds((value) => !value)}
+                  title="Taper ends: rounded marker caps; off uses blunt ends"
+                >
+                  {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
+                </button>
+              </div>
+            )}
+            {annotTool === "highlight" && (
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Opacity" info="Transparency of the highlight layer" />
+                <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
               </div>
             )}
             </div>
@@ -4833,7 +6250,6 @@ const PDFPage = forwardRef(({
       {hideHyleControls && !onSelectionAction && manualSelection && (
         <div ref={selBarRef} id="pdf_selection_bar">
           <div id="pdf_selection_bar_row">
-            <span id="pdf_selection_bar_word" title={manualSelection.text}>{manualSelection.text}</span>
             <div id="pdf_selection_bar_actions">
               <button type="button" onClick={() => runSelectionTool("translate")} disabled={Boolean(selectionToolBusy)}>
                 <i className={selectionToolBusy === "translate" ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-globe"} />
@@ -4846,16 +6262,6 @@ const PDFPage = forwardRef(({
               <button type="button" onClick={() => runSelectionTool("linguistic_check")} disabled={Boolean(selectionToolBusy)}>
                 <i className={selectionToolBusy === "linguistic_check" ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-git-branch"} />
                 Linguistic Structure Check
-              </button>
-              <span id="pdf_selection_bar_sep" />
-              <button type="button" onClick={() => addSelectionAsHyle("entities")} title="Add as Entity Schema">
-                <i className="bx bx-plus" /> EnS
-              </button>
-              <button type="button" onClick={() => addSelectionAsHyle("traces")} title="Add as Entity Schema Trace">
-                <i className="bx bx-plus" /> EnST
-              </button>
-              <button type="button" onClick={() => addSelectionAsHyle("traces", { kind: "value" })} title="Add as Entity Schema Trace Value">
-                <i className="bx bx-plus" /> EnSTV
               </button>
             </div>
             <button type="button" id="pdf_selection_bar_close" onClick={() => setManualSelection(null)} title="Dismiss">
@@ -5041,15 +6447,66 @@ const PDFPage = forwardRef(({
           </div>
         )}
 
+        {/* Far left — Smart Video Search results, opened by the toolbar
+            "Extract Eidos and Find Videos" button. Same far-left-column
+            convention as the Markdown/Annotation-History panels above. */}
+        {smartVideoOpen && (
+          <SmartVideoPanel
+            selecting={smartVideoSelecting}
+            onToggleSelecting={() => setSmartVideoSelecting((v) => !v)}
+            screenshots={smartVideoScreenshots}
+            captureBusy={smartVideoCaptureBusy}
+            onRemoveScreenshot={removeSmartVideoScreenshot}
+            onClearScreenshots={clearSmartVideoScreenshots}
+            difficulty={smartVideoDifficulty}
+            onDifficultyChange={setSmartVideoDifficulty}
+            onSearch={handleSmartVideoSearch}
+            stage={smartVideoStage}
+            error={smartVideoError}
+            eidos={smartVideoEidos}
+            videos={smartVideoVideos}
+            activeVideoId={smartVideoActiveVideoId}
+            onWatch={setSmartVideoActiveVideoId}
+            onCloseVideo={() => setSmartVideoActiveVideoId(null)}
+            provider={provider}
+            providerModels={smartVideoProviderModels}
+            savedOpen={smartVideoSavedOpen}
+            onToggleSaved={toggleSmartVideoSaved}
+            saved={smartVideoSaved}
+            savedLoading={smartVideoSavedLoading}
+            onLoadSaved={loadSmartVideoSaved}
+            onDeleteSaved={deleteSmartVideoSaved}
+            onSave={saveSmartVideoConcept}
+            saveBusy={smartVideoSaveBusy}
+            savedId={smartVideoSavedId}
+            preferences={smartVideoPreferences}
+            onPreferencesChange={setSmartVideoPreferences}
+            preferencesOpen={smartVideoPreferencesOpen}
+            onTogglePreferences={toggleSmartVideoPreferences}
+          />
+        )}
+
+        {/* Far left — AMCTOSHS Entities Builder. Same far-left-column
+            convention as the other panels above — unlike them, it has its
+            own close button since it isn't tied to re-pressing an annotTool. */}
+        {narrativeModeOpen && (
+          <NarrativeModePanel
+            onClose={toggleNarrativeMode}
+            selectedText={entityBuilderSelectedText}
+            verifyBusy={selectionVerifyBusy}
+            onVerifySource={verifyEntityBuilderSource}
+          />
+        )}
+
         {/* Left — PDF viewer or upload zone */}
         <div
           id="pdf_preview"
           style={{
             width: splitRatio === 0
               ? "0"
-              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0)}px)`,
+              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (narrativeModeOpen ? 360 : 0)}px)`,
           }}
-          className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
+          className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${annotTool === "highlight" ? " pdf_preview--highlight-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
         >
           <div id="pdf_preview_scroll" ref={previewRef}>
           {pdfDoc ? (
@@ -5074,34 +6531,120 @@ const PDFPage = forwardRef(({
                       <canvas
                         id="pdf_annot_canvas"
                         ref={annotCanvasRef}
-                        style={{ pointerEvents: toolActive ? "auto" : "none", cursor: annotTool === "eraser" ? "cell" : toolActive ? "crosshair" : "default" }}
+                        style={{ pointerEvents: toolActive ? "auto" : "none", cursor: annotTool === "eraser" ? "none" : toolActive ? "crosshair" : "default" }}
                       />
+                      {createPortal(
+                        <div ref={eraserCursorRef} className="eraser_cursor_circle" />,
+                        document.body,
+                      )}
                       {annotTextInput && (
-                        <input
-                          id="annot_text_input"
-                          ref={annotTextInputRef}
-                          autoFocus
-                          value={annotTextVal}
-                          spellCheck
-                          autoCorrect="on"
-                          autoCapitalize="sentences"
-                          onChange={(e) => setAnnotTextVal(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
-                          onBlur={commitAnnotText}
+                        <div
+                          className="annot_text_input_wrap"
                           style={{
                             left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left,
                             top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top,
-                            width: annotTextInput.width || undefined,
-                            fontFamily: textFontFamily,
-                            fontSize: `${textFontSize}px`,
-                            fontWeight: textBold ? 700 : 400,
-                            fontStyle: textItalic ? "italic" : "normal",
-                            textDecoration: textUnderline ? "underline" : "none",
-                            textAlign,
-                            border: textBordered ? "1px solid var(--color-border)" : "none",
-                            boxShadow: textBordered ? "0 2px 14px rgba(0, 0, 0, 0.18)" : "0 2px 16px rgba(0, 0, 0, 0.35)",
                           }}
-                        />
+                        >
+                          <input
+                            id="annot_text_input"
+                            ref={annotTextInputRef}
+                            autoFocus
+                            value={annotTextVal}
+                            spellCheck
+                            autoCorrect="on"
+                            autoCapitalize="sentences"
+                            onChange={(e) => setAnnotTextVal(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
+                            // Clicking elsewhere (toolbar controls, the
+                            // resize handle, the page itself) blurs the
+                            // input — only auto-close then if there's
+                            // nothing worth keeping. With text typed, stay
+                            // mounted and wait for an explicit confirm/
+                            // cancel/Enter/Escape instead of silently
+                            // discarding or committing on a stray blur.
+                            onBlur={() => { if (!annotTextVal.trim()) setAnnotTextInput(null); }}
+                            style={{
+                              width: annotTextInput.width || undefined,
+                              height: annotTextInput.height || undefined,
+                              fontFamily: textFontFamily,
+                              fontSize: `${textFontSize}px`,
+                              fontWeight: textBold ? 700 : 400,
+                              fontStyle: textItalic ? "italic" : "normal",
+                              textDecoration: textUnderline ? "underline" : "none",
+                              textAlign,
+                              // Dashed while editing marks this as the live
+                              // preview box, not the final annotation —
+                              // switches to the solid style once textBordered
+                              // is on, previewing what will actually render.
+                              border: textBordered ? "1px solid var(--color-border)" : "1px dashed var(--color-border)",
+                              // Same fill annotationDraw.js uses for the
+                              // committed annotation (see the "text" case) —
+                              // a low-alpha wash of the annotation's own
+                              // color, not a solid block, so typed text
+                              // stays readable on top of it.
+                              background: textBackground ? `${annotColor}40` : undefined,
+                            }}
+                          />
+                          {TEXT_RESIZE_HANDLES.map(({ dir, cursor }) => (
+                            <div
+                              key={dir}
+                              className={`annot_text_input_resize_handle annot_text_input_resize_handle--${dir}`}
+                              style={{ cursor }}
+                              onMouseDown={(e) => beginTextInputResize(dir, e)}
+                              onTouchStart={(e) => beginTextInputResize(dir, e)}
+                              title="Drag to resize"
+                            />
+                          ))}
+                          <div className="annot_text_input_actions">
+                            <button
+                              type="button"
+                              className="annot_text_confirm_btn"
+                              // preventDefault on mousedown stops the input
+                              // from blurring before this click fires — the
+                              // input's onBlur already commits, so without
+                              // this the click would land after the value
+                              // was already committed (and cancel's click
+                              // would arrive too late to matter).
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={commitAnnotText}
+                              title="Confirm"
+                              aria-label="Confirm text"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M9 15.59 4.71 11.3 3.3 12.71l5 5c.2.2.45.29.71.29s.51-.1.71-.29l11-11-1.41-1.41L9.02 15.59Z" />
+                              </svg>
+                            </button>
+                            <button
+                              type="button"
+                              className="annot_text_cancel_btn"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => setAnnotTextInput(null)}
+                              title="Cancel"
+                              aria-label="Cancel"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="m7.76 14.83-2.83 2.83 1.41 1.41 2.83-2.83 2.12-2.12.71-.71.71.71 1.41 1.42 3.54 3.53 1.41-1.41-3.53-3.54-1.42-1.41-.71-.71 5.66-5.66-1.41-1.41L12 10.59 6.34 4.93 4.93 6.34 10.59 12l-.71.71z" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {textActionMenu && (
+                        <div
+                          ref={textActionMenuRef}
+                          className="annot_text_action_menu"
+                          style={{
+                            left: textActionMenu.vx - annotCanvasRef.current?.getBoundingClientRect().left,
+                            top: Math.max(8, textActionMenu.vy - annotCanvasRef.current?.getBoundingClientRect().top - 46),
+                            width: textActionMenu.width,
+                          }}
+                        >
+                          <button type="button" className="annot_text_action_btn" onClick={() => handleTextAction("edit-text")}>Edit text</button>
+                          <span className="annot_text_action_sep" aria-hidden="true" />
+                          <button type="button" className="annot_text_action_btn" onClick={() => handleTextAction("edit-style")}>Edit Style</button>
+                          <span className="annot_text_action_sep" aria-hidden="true" />
+                          <button type="button" className="annot_text_action_btn annot_text_action_btn--danger" onClick={() => handleTextAction("delete")}>Delete</button>
+                        </div>
                       )}
                       {drawTextBusy && (
                         <div id="pdf_draw_text_status">
@@ -5210,6 +6753,12 @@ const PDFPage = forwardRef(({
           )}
           <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleInputChange} />
           </div>
+          {manualSelection && !manualPopup && (
+            <div id="pdf_selected_text_preview" title={manualSelection.text}>
+              <span id="pdf_selected_text_preview_label">Selected text</span>
+              <span id="pdf_selected_text_preview_body">{manualSelection.text}</span>
+            </div>
+          )}
           {pdfDoc && pageMinimap.length > 0 && (
             <div id="pdf_page_minimap" aria-label="Page navigator">
               {pageMinimap.map((mini) => {

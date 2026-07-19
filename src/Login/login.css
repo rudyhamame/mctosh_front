@@ -1,5 +1,5 @@
 /* ════════════════════════════════════════════════════════════════
-   MCTOSHS LOGIN — 3D Rotatable Animation (Three.js)
+   AMCTOSHS LOGIN — 3D Rotatable Animation (Three.js)
    ════════════════════════════════════════════════════════════════ */
 
 /* ── Page shell ── */
@@ -8,12 +8,36 @@
   max-height: 100dvh;
   display: flex;
   flex-direction: row;
-  background: #04060f;
-  color: #dde3ef;
+  background: var(--login-bg, #04060f);
+  color: var(--login-text, #dde3ef);
   overflow: hidden;
   position: relative;
   font-family: inherit;
   touch-action: manipulation; /* block browser pinch-zoom on the page */
+}
+
+html.theme-light #login_page {
+  --login-bg: #f5f5f5;
+  --login-text: #111;
+  --login-panel-bg: rgba(255, 255, 255, 0.94);
+  --login-panel-border: #d7d7d7;
+  --login-soft-surface: rgba(245, 245, 245, 0.92);
+  --login-soft-border: #cfcfcf;
+  --login-field-bg: #fff;
+  --login-muted: #555;
+  --login-faint: #8a8a8a;
+}
+
+html.theme-dark #login_page {
+  --login-bg: var(--color-bg);
+  --login-text: var(--color-text);
+  --login-panel-bg: color-mix(in srgb, var(--color-surface) 80%, transparent);
+  --login-panel-border: color-mix(in srgb, var(--color-border) 82%, transparent);
+  --login-soft-surface: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  --login-soft-border: color-mix(in srgb, var(--color-border) 86%, transparent);
+  --login-field-bg: color-mix(in srgb, var(--color-surface) 88%, transparent);
+  --login-muted: var(--color-text-muted);
+  --login-faint: color-mix(in srgb, var(--color-text-muted) 56%, transparent);
 }
 
 
@@ -27,6 +51,13 @@
     radial-gradient(ellipse 45% 40% at 80% 90%, rgba(206,147,216,0.03) 0%, transparent 60%);
   pointer-events: none;
   z-index: 0;
+}
+
+html.theme-light #login_page::before {
+  background:
+    radial-gradient(ellipse 62% 58% at 36% 45%, rgba(255,255,255,0.86) 0%, transparent 72%),
+    radial-gradient(ellipse 38% 42% at 8% 8%, rgba(0,0,0,0.055) 0%, transparent 68%),
+    radial-gradient(ellipse 40% 38% at 82% 92%, rgba(0,0,0,0.045) 0%, transparent 62%);
 }
 
 /* ══════════════════════════════════════
@@ -90,6 +121,53 @@
   -webkit-text-fill-color: transparent;
   background-clip: text;
   animation: wordmark_shimmer 6s ease-in-out infinite alternate;
+}
+
+html.theme-light #login_sigil {
+  background: linear-gradient(135deg, #111, #555);
+  box-shadow: 0 10px 28px rgba(0,0,0,0.16);
+}
+
+html.theme-light #login_wordmark {
+  background: linear-gradient(130deg, #111 0%, #333 45%, #777 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: none;
+}
+
+html.theme-light #login_platform_label,
+html.theme-light #login_scene_title,
+html.theme-light #ms_word {
+  color: #333;
+}
+
+html.theme-light #login_scene_text {
+  color: #555;
+}
+
+html.theme-light .login_scene_ring {
+  border-color: rgba(0,0,0,0.14);
+  box-shadow: 0 18px 50px rgba(0,0,0,0.05);
+}
+
+html.theme-light #login_scene_pulse {
+  background:
+    radial-gradient(circle, #fff 0%, #eee 28%, rgba(180,180,180,0.45) 58%, transparent 100%);
+  box-shadow: 0 0 54px rgba(0,0,0,0.12);
+}
+
+html.theme-light #login_scene_mark {
+  color: #fff;
+  background: linear-gradient(145deg, #111, #666);
+  box-shadow: 0 18px 46px rgba(0,0,0,0.16);
+}
+
+html.theme-light .login_scene_schema_chip {
+  border-color: #d4d4d4;
+  background: rgba(255,255,255,0.82);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.16);
+  color: #111;
 }
 
 @keyframes wordmark_shimmer {
@@ -598,7 +676,7 @@
 }
 
 /* ══════════════════════════════════════
-   MCTOSHS Pipeline Nodes
+   AMCTOSHS Pipeline Nodes
    ══════════════════════════════════════ */
 .mctosh_node {
   position: absolute;
@@ -681,6 +759,18 @@
   text-align: center;
   max-width: 124px;
   line-height: 1.3;
+}
+
+html.theme-light .mn_ring {
+  border-color: rgba(0,0,0,0.12);
+}
+
+html.theme-light .mn_step {
+  color: #111;
+}
+
+html.theme-light .mn_label {
+  color: #555;
 }
 
 /* ══════════════════════════════════════
@@ -818,7 +908,7 @@
 
 #pr_rim { display: none; }
 
-/* ── Labels card — MCTOSHS / Patient Reality naming + item legend ──
+/* ── Labels card — AMCTOSHS / Patient Reality naming + item legend ──
    Flat, outside #login_stage like #object_info, so it never rotates,
    curves, or tilts with the 3D object and stays legible at all times. */
 #labels_card_head {
@@ -886,9 +976,9 @@
 }
 
 /* ══════════════════════════════════════
-   MCTOSHS — inner 3D solid sphere
+   AMCTOSHS — inner 3D solid sphere
    ══════════════════════════════════════ */
-/* MCTOSHS sphere — glass orb containing all 7 orbital modes inside it */
+/* AMCTOSHS sphere — glass orb containing all 7 orbital modes inside it */
 #mctosh_sphere {
   position: absolute;
   top: 50%; left: 50%;
@@ -920,7 +1010,7 @@
   z-index: 3;
 }
 
-/* Void center — inside M orbit, not part of MCTOSHS; matches Patient Reality color */
+/* Void center — inside M orbit, not part of AMCTOSHS; matches Patient Reality color */
 #ms_void {
   position: absolute;
   top: 50%;
@@ -935,7 +1025,7 @@
   z-index: 2;
 }
 
-/* Inner M-orbit ring — marks the hollow void boundary inside MCTOSHS */
+/* Inner M-orbit ring — marks the hollow void boundary inside AMCTOSHS */
 #ms_m_ring {
   position: absolute;
   top: 50%;
@@ -976,7 +1066,7 @@
   }
 }
 
-/* MCTOSHS label — shown at center of the glass sphere */
+/* AMCTOSHS label — shown at center of the glass sphere */
 #ms_label {
   position: absolute;
   top: 50%; left: 50%;
@@ -1146,6 +1236,172 @@
   text-align: center;
 }
 
+html.theme-light #login_center_glow {
+  background: radial-gradient(circle,
+    rgba(255,255,255,0.86) 0%,
+    rgba(160,160,160,0.18) 48%,
+    transparent 78%
+  );
+}
+
+html.theme-light .orb_ring {
+  border-color: rgba(0,0,0,0.22);
+  box-shadow: 0 0 12px rgba(0,0,0,0.08);
+}
+
+html.theme-light .orb_dot {
+  background: #111;
+  box-shadow: 0 8px 18px rgba(0,0,0,0.22);
+}
+
+html.theme-light .orb_dot_letter {
+  color: #fff;
+}
+
+html.theme-light .mctosh_node {
+  background: rgba(255,255,255,0.88);
+  border-color: rgba(0,0,0,0.24);
+  box-shadow:
+    0 22px 48px rgba(0,0,0,0.12),
+    inset 0 0 18px rgba(255,255,255,0.72);
+  animation: none;
+}
+
+html.theme-light .mctosh_node::before {
+  border-color: rgba(0,0,0,0.10);
+}
+
+html.theme-light #pr_sphere {
+  background: radial-gradient(ellipse at 38% 35%,
+    rgba(255,255,255,0.98) 0%,
+    rgba(238,238,238,0.98) 56%,
+    rgba(188,188,188,0.98) 100%
+  );
+  border-color: rgba(0,0,0,0.28);
+  box-shadow:
+    inset 0 0 190px rgba(255,255,255,0.36),
+    inset 0 -44px 100px rgba(0,0,0,0.13),
+    0 34px 90px rgba(0,0,0,0.18);
+  animation: none;
+}
+
+html.theme-light #pr_zone_physio,
+html.theme-light #pr_zone_comp,
+html.theme-light #pr_zone_detr {
+  color: rgba(0,0,0,0.48);
+}
+
+html.theme-light #labels_card_head {
+  border-bottom-color: rgba(0,0,0,0.12);
+}
+
+html.theme-light #labels_card_mctoshs,
+html.theme-light #labels_card_pr {
+  color: #222;
+}
+
+html.theme-light .labels_card_dot {
+  background: #111;
+  box-shadow: 0 0 5px rgba(0,0,0,0.28);
+}
+
+html.theme-light .labels_card_name {
+  color: #333;
+}
+
+html.theme-light .labels_card_letter {
+  color: #777;
+}
+
+html.theme-light #mctosh_sphere {
+  background:
+    radial-gradient(ellipse 46% 28% at 28% 22%,
+      rgba(255,255,255,0.86) 0%,
+      rgba(220,220,220,0.34) 44%,
+      transparent 100%
+    ),
+    radial-gradient(circle at 50% 50%,
+      transparent 52%,
+      rgba(140,140,140,0.12) 66%,
+      rgba(80,80,80,0.30) 82%,
+      rgba(20,20,20,0.52) 100%
+    );
+  box-shadow:
+    inset 0 0 150px rgba(255,255,255,0.26),
+    0 22px 70px rgba(0,0,0,0.16);
+  animation: none;
+}
+
+html.theme-light #ms_m_ring {
+  border-color: rgba(0,0,0,0.28);
+}
+
+html.theme-light #ms_rim {
+  background: radial-gradient(ellipse, rgba(0,0,0,0.10) 0%, transparent 100%);
+}
+
+html.theme-light #disease_selector,
+html.theme-light #object_info {
+  background: rgba(255,255,255,0.86);
+  border-color: rgba(0,0,0,0.12);
+  box-shadow: 0 16px 38px rgba(0,0,0,0.10);
+}
+
+html.theme-light #ds_head {
+  border-bottom-color: rgba(0,0,0,0.10);
+  color: #777;
+}
+
+html.theme-light #ds_stack_toggle {
+  background: #f5f5f5;
+  border-color: #d7d7d7;
+  color: #555;
+}
+
+html.theme-light #ds_stack_toggle:hover,
+html.theme-light #ds_collapse_btn:hover {
+  color: #111;
+  border-color: #999;
+}
+
+html.theme-light #ds_collapse_btn,
+html.theme-light #ds_disease_select,
+html.theme-light .ds_desc {
+  color: #555;
+}
+
+html.theme-light #ds_disease_select option {
+  background: #fff;
+  color: #111;
+}
+
+html.theme-light .ds_item {
+  border-bottom-color: rgba(0,0,0,0.06);
+}
+
+html.theme-light .ds_item:hover,
+html.theme-light .ds_item--active {
+  background: #f5f5f5 !important;
+}
+
+html.theme-light .ds_dot,
+html.theme-light .ds_badge {
+  background: #111;
+}
+
+html.theme-light .ds_abbr {
+  color: #111;
+}
+
+html.theme-light .ds_badge {
+  color: #fff;
+  border-color: #111;
+}
+
+html.theme-light #login_tagline {
+  color: #777;
+}
+
 /* ══════════════════════════════════════
    RIGHT — Glassmorphism Form Panel
    ══════════════════════════════════════ */
@@ -1157,8 +1413,8 @@
   gap: 0.4rem;
   margin: 1.4rem 1.25rem 0;
   padding: 0.25rem;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.07);
+  background: var(--login-soft-surface, rgba(255,255,255,0.03));
+  border: 1px solid var(--login-soft-border, rgba(255,255,255,0.07));
   border-radius: 9px;
   flex-shrink: 0;
 }
@@ -1169,7 +1425,7 @@
   border: none;
   border-radius: 6px;
   padding: 0.55rem 0.75rem;
-  color: rgba(221,227,239,0.5);
+  color: var(--login-muted, rgba(221,227,239,0.5));
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -1178,12 +1434,18 @@
   font-family: inherit;
 }
 
-.login_role_tab:hover { color: rgba(221,227,239,0.85); }
+.login_role_tab:hover { color: var(--login-text, rgba(221,227,239,0.85)); }
 
 .login_role_tab--active {
   background: linear-gradient(135deg, rgba(0,229,255,0.18), rgba(38,166,154,0.18));
-  color: #fff;
+  color: var(--login-text, #fff);
   box-shadow: inset 0 0 0 1px rgba(0,229,255,0.35);
+}
+
+html.theme-light .login_role_tab--active {
+  background: #111;
+  color: #fff;
+  box-shadow: none;
 }
 
 #login_video_toggle {
@@ -1209,10 +1471,20 @@
   background: rgba(0,229,255,0.06);
 }
 
+html.theme-light #login_video_toggle {
+  border-color: #cfcfcf;
+  color: #444;
+}
+html.theme-light #login_video_toggle:hover {
+  color: #111;
+  border-color: #999;
+  background: #f5f5f5;
+}
+
 #login_video_container {
   padding: 1.25rem 1.25rem 0.75rem;
   flex-shrink: 0;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid var(--login-panel-border, rgba(255,255,255,0.06));
   position: relative;
 }
 
@@ -1224,7 +1496,7 @@
   height: 30px;
   border-radius: 50%;
   border: 1px solid rgba(0,229,255,0.30);
-  background: rgba(4,6,15,0.65);
+  background: var(--login-soft-surface, rgba(4,6,15,0.65));
   backdrop-filter: blur(6px);
   color: rgba(0,229,255,0.85);
   display: flex;
@@ -1241,6 +1513,17 @@
   color: #fff;
 }
 
+html.theme-light #login_video_btn {
+  border-color: #cfcfcf;
+  color: #333;
+  box-shadow: 0 8px 22px rgba(0,0,0,0.10);
+}
+html.theme-light #login_video_btn:hover {
+  background: #111;
+  border-color: #111;
+  color: #fff;
+}
+
 #login_intro_video {
   width: 100%;
   height: 190px;
@@ -1251,6 +1534,11 @@
   box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
 }
 
+html.theme-light #login_intro_video {
+  border-color: #d7d7d7;
+  box-shadow: 0 16px 42px rgba(0,0,0,0.12), 0 0 0 1px #fff;
+}
+
 /* ── Panel collapse toggle ── */
 #login_panel_toggle {
   position: absolute;
@@ -1258,10 +1546,10 @@
   top: 50%;
   transform: translateY(-50%);
   z-index: 20;
-  background: rgba(10,14,30,0.82);
-  border: 1px solid rgba(255,255,255,0.10);
+  background: var(--login-soft-surface, rgba(10,14,30,0.82));
+  border: 1px solid var(--login-soft-border, rgba(255,255,255,0.10));
   border-right: none;
-  color: rgba(255,255,255,0.45);
+  color: var(--login-faint, rgba(255,255,255,0.45));
   width: 22px;
   height: 52px;
   border-radius: 7px 0 0 7px;
@@ -1274,6 +1562,14 @@
   backdrop-filter: blur(8px);
 }
 #login_panel_toggle:hover { color: rgba(255,255,255,0.85); background: rgba(20,28,55,0.90); }
+
+html.theme-light #login_panel_toggle {
+  box-shadow: -8px 0 24px rgba(0,0,0,0.08);
+}
+html.theme-light #login_panel_toggle:hover {
+  color: #111;
+  background: #fff;
+}
 
 #login_panel_toggle.login_panel_toggle--collapsed {
   right: 0;
@@ -1288,8 +1584,8 @@
   flex-direction: column;
   justify-content: flex-start;
   padding: 0;
-  background: rgba(255,255,255,0.022);
-  border-left: 1px solid rgba(255,255,255,0.06);
+  background: var(--login-panel-bg, rgba(255,255,255,0.022));
+  border-left: 1px solid var(--login-panel-border, rgba(255,255,255,0.06));
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   overflow: hidden;
@@ -1298,6 +1594,10 @@
   animation: panel_enter 0.6s cubic-bezier(0.22,1,0.36,1) both;
   transition: width 0.35s cubic-bezier(0.22,1,0.36,1),
               opacity 0.25s ease;
+}
+
+html.theme-light #login_panel {
+  box-shadow: -28px 0 70px rgba(0,0,0,0.10);
 }
 
 .login_panel_hidden {
@@ -1338,11 +1638,42 @@
   box-shadow: 0 0 14px rgba(0,229,255,0.55);
 }
 
+html.theme-light #login_form_bar {
+  background: linear-gradient(to bottom, #111, #777);
+  box-shadow: none;
+}
+
 #login_form_title {
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.06em;
-  color: #c5cfe0;
+  color: var(--login-text, #c5cfe0);
+}
+
+#login_demo_note {
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid rgba(0,229,255,0.16);
+  background: rgba(0,229,255,0.045);
+  color: rgba(221,227,239,0.72);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  margin-top: -0.85rem;
+}
+
+#login_demo_note strong {
+  color: var(--login-text, #fff);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+html.theme-light #login_demo_note {
+  border-color: #d7d7d7;
+  background: #f5f5f5;
+  color: #555;
 }
 
 /* Fields */
@@ -1357,7 +1688,7 @@
   font-weight: 700;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: #37474f;
+  color: var(--login-muted, #37474f);
 }
 
 #login_form input {
@@ -1366,9 +1697,9 @@
   padding: 0.78rem 1rem;
   min-height: 44px;
   border-radius: 7px;
-  border: 1px solid rgba(255,255,255,0.07);
-  background: rgba(255,255,255,0.035);
-  color: #dde3ef;
+  border: 1px solid var(--login-soft-border, rgba(255,255,255,0.07));
+  background: var(--login-field-bg, rgba(255,255,255,0.035));
+  color: var(--login-text, #dde3ef);
   font-size: 0.875rem;
   font-family: inherit;
   outline: none;
@@ -1383,7 +1714,15 @@
     inset 0 0 0 1px rgba(0,229,255,0.1);
 }
 
-#login_form input::placeholder { color: #1e3038; }
+html.theme-light #login_form input:focus {
+  border-color: #111;
+  background: #fff;
+  box-shadow:
+    0 0 0 3px rgba(0,0,0,0.08),
+    inset 0 0 0 1px rgba(0,0,0,0.08);
+}
+
+#login_form input::placeholder { color: var(--login-faint, #1e3038); }
 
 /* Error */
 #login_error {
@@ -1419,6 +1758,14 @@
   overflow: hidden;
 }
 
+html.theme-light #login_submit {
+  background: #111;
+  color: #fff;
+  box-shadow:
+    0 14px 32px rgba(0,0,0,0.18),
+    inset 0 1px 0 rgba(255,255,255,0.18);
+}
+
 #login_submit::after {
   content: "";
   position: absolute;
@@ -1433,6 +1780,12 @@
     0 8px 28px rgba(0,229,255,0.35),
     inset 0 1px 0 rgba(255,255,255,0.2);
 }
+
+html.theme-light #login_submit:hover:not(:disabled) {
+  box-shadow:
+    0 18px 42px rgba(0,0,0,0.24),
+    inset 0 1px 0 rgba(255,255,255,0.2);
+}
 #login_submit:active:not(:disabled) { transform: translateY(0); }
 #login_submit:disabled { opacity: 0.45; cursor: default; }
 
@@ -1440,7 +1793,7 @@
 #login_toggle {
   background: none;
   border: none;
-  color: #37474f;
+  color: var(--login-muted, #37474f);
   font-size: 0.72rem;
   cursor: pointer;
   text-align: center;
@@ -1450,6 +1803,10 @@
   font-family: inherit;
 }
 #login_toggle:hover { color: #00e5ff; }
+
+html.theme-light #login_toggle:hover {
+  color: #111;
+}
 
 /* Links */
 #login_links {
@@ -1463,7 +1820,7 @@
 .login_link {
   background: none;
   border: none;
-  color: #263238;
+  color: var(--login-muted, #263238);
   font-size: 0.62rem;
   cursor: pointer;
   letter-spacing: 0.1em;
@@ -1472,8 +1829,8 @@
   transition: color 0.15s;
   font-family: inherit;
 }
-.login_link:hover { color: #546e7a; }
-.login_link_sep { color: #1a2730; font-size: 0.6rem; }
+.login_link:hover { color: var(--color-highlight); }
+.login_link_sep { color: var(--login-faint, #1a2730); font-size: 0.6rem; }
 
 /* Footer */
 #login_footer {
@@ -1486,7 +1843,7 @@
   align-items: center;
   gap: 0.15rem;
   font-size: 0.58rem;
-  color: #1e2e32;
+  color: var(--login-faint, #1e2e32);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }

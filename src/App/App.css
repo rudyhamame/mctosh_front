@@ -13,26 +13,114 @@
   color: var(--color-text);
 }
 
-/* ── Logout — floats inside the canvas itself now that the old top toolbar
-   is gone, styled as the same translucent glass chip as the level cards so
-   it reads as part of the scene rather than a bar laid over it. ── */
-#app_logout_btn {
+/* ── Profile menu — replaces the old Logout chip with the signed-in user's
+   avatar and a small glass dropdown of account actions. ── */
+#app_profile_menu {
   position: absolute;
   top: 1rem;
   right: 1.25rem;
   z-index: 3;
-  padding: 0.35rem 0.85rem;
+}
+
+#app_profile_trigger {
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: 50%;
   background: color-mix(in srgb, var(--color-surface) 55%, transparent);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: 0.78rem;
+  font-weight: 700;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.15s, border-color 0.15s, transform 0.15s;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-#app_logout_btn:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+
+#app_profile_trigger:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+  transform: translateY(-1px);
+}
+
+#app_profile_trigger img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+#app_profile_dropdown {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  right: 0;
+  min-width: 220px;
+  padding: 0.4rem;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+#app_profile_summary {
+  padding: 0.65rem 0.75rem 0.55rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
+  margin-bottom: 0.2rem;
+}
+
+#app_profile_summary_name {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+#app_profile_summary_handle {
+  margin-top: 0.18rem;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+
+.app_profile_dropdown_item {
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  border-radius: 12px;
+  padding: 0.7rem 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  text-align: left;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app_profile_dropdown_item:hover {
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  color: var(--color-text);
+}
+
+.app_profile_dropdown_item i {
+  font-size: 0.82rem;
+  width: 0.9rem;
+  text-align: center;
+}
+
+.app_profile_dropdown_item--danger:hover {
+  color: #ff8a80;
+  background: rgba(229, 57, 53, 0.12);
+}
 
 /* ── Dev AI — docked in the canvas's opposite corner from Logout, now that
    the app-wide footer (its usual home, see homeChat.css) is hidden on this
@@ -85,11 +173,12 @@
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
+  scroll-snap-type: y mandatory;
+  scroll-behavior: smooth;
 }
 
-/* Tall track so there's real scroll travel behind the pinned stage — height
-   is set inline per LEVELS.length (see App.js), one viewport-height of
-   travel per biological level. */
+/* One viewport-height section per floor gives the scroll container real snap
+   boundaries, so each floor transition takes one full scroll step. */
 #app_scroll_track {
   position: relative;
   width: 100%;
@@ -99,26 +188,81 @@
    the whole scroll track's height, so the 3D object and the card overlay
    stay fixed on screen while the page scrolls "through" them. */
 #app_scroll_stage {
+  --app-intro-top-offset: 0;
+  --app-intro-object-clearance: clamp(10.5rem, 24vh, 14.5rem);
   position: sticky;
   top: 0;
   height: calc(var(--vh, 1vh) * 100);
   overflow: hidden;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.app_floor_scroll_step {
+  height: calc(var(--vh, 1vh) * 100);
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+  pointer-events: none;
 }
 
 /* ── Scroll hint — fades out the instant the user starts scrolling ── */
 #app_scroll_hint {
   position: absolute;
-  left: 50%;
-  bottom: 8%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  top: var(--app-intro-top-offset);
+  transform: none;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.4rem;
+  width: 100%;
+  padding: 1rem max(1.25rem, 4vw) 0.95rem;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom: none;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(30, 42, 54, 0.035) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 76% 34%, rgba(30, 42, 54, 0.028) 0 1px, transparent 1.5px),
+    linear-gradient(100deg, rgba(255, 255, 255, 0.96), rgba(247, 248, 250, 0.94));
+  box-shadow:
+    0 18px 45px rgba(0, 0, 0, 0.18),
+    inset 0 0 30px rgba(120, 87, 41, 0.08);
   text-align: center;
   pointer-events: none;
   transition: opacity 0.4s ease;
   z-index: 2;
+}
+
+#app_scroll_hint::before,
+#app_scroll_hint::after {
+  content: "";
+  position: absolute;
+  left: -1px;
+  right: -1px;
+  height: 16px;
+  background:
+    linear-gradient(100deg, rgba(255, 255, 255, 0.96), rgba(247, 248, 250, 0.94));
+  filter: drop-shadow(0 2px 1px rgba(80, 54, 25, 0.12));
+}
+
+#app_scroll_hint::before {
+  top: -15px;
+  clip-path: polygon(
+    0 100%, 0 44%, 5% 66%, 11% 32%, 18% 58%, 25% 28%,
+    33% 64%, 42% 34%, 50% 54%, 59% 26%, 67% 63%, 76% 36%,
+    84% 59%, 92% 31%, 100% 50%, 100% 100%
+  );
+}
+
+#app_scroll_hint::after {
+  bottom: -15px;
+  clip-path: polygon(
+    0 0, 0 52%, 6% 29%, 14% 63%, 22% 38%, 31% 70%,
+    39% 35%, 48% 62%, 57% 31%, 66% 67%, 74% 40%, 83% 70%,
+    91% 36%, 100% 58%, 100% 0
+  );
 }
 
 #app_scroll_hint.app_scroll_hint--hidden {
@@ -130,6 +274,39 @@
   font-weight: 800;
   letter-spacing: 0.2em;
   color: var(--color-text);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+
+#app_scroll_hint_intro {
+  margin: 0;
+  max-width: min(92vw, 42rem);
+  padding: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+#app_scroll_hint_intro_levels {
+  margin: 0;
+  max-width: min(92vw, 62rem);
+  padding: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+
+#app_domain_flow {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  font-size: clamp(0.58rem, 1.15vw, 0.78rem);
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+#app_domain_flow::-webkit-scrollbar {
+  display: none;
 }
 
 #app_scroll_hint_sub {
@@ -264,6 +441,10 @@
 }
 
 @media (max-width: 720px) {
+  #app_scroll_stage {
+    --app-intro-object-clearance: clamp(12.5rem, 30vh, 16.5rem);
+  }
+
   /* Not enough width for a legible side column — the cards drop back to a
      bottom-anchored, full-width band over the object instead. */
   .app_level_group {

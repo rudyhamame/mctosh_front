@@ -1,0 +1,724 @@
+/* Same "far-left fixed-width column, own header+scrollable body" shape as
+   #pdf_annot_history_panel in pdfPage.css — see PDFPage.jsx for how its
+   width is subtracted from #pdf_preview's own splitRatio calc(). */
+#smart_video_panel {
+  flex-shrink: 0;
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+#smart_video_header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#smart_video_header_title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+#smart_video_difficulty {
+  margin-left: auto;
+  padding: 0.25rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.7rem;
+}
+#smart_video_difficulty:disabled { opacity: 0.5; }
+
+#smart_video_prefs_toggle,
+#smart_video_saved_toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#smart_video_prefs_toggle { margin-left: auto; } /* pushes this + saved_toggle together to the right */
+#smart_video_prefs_toggle:hover,
+#smart_video_saved_toggle:hover { color: var(--color-text); }
+#smart_video_prefs_toggle--active,
+#smart_video_prefs_toggle.smart_video_prefs_toggle--active,
+#smart_video_saved_toggle--active,
+#smart_video_saved_toggle.smart_video_saved_toggle--active {
+  border-color: var(--color-highlight);
+  background: color-mix(in srgb, var(--color-highlight) 14%, transparent);
+  color: var(--color-highlight);
+}
+
+#smart_video_saved_list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.smart_video_saved_item {
+  display: flex;
+  align-items: stretch;
+  gap: 0.3rem;
+}
+
+.smart_video_saved_item_main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  text-align: left;
+  cursor: pointer;
+}
+.smart_video_saved_item_main:hover { border-color: var(--color-highlight); }
+
+.smart_video_saved_item_concept {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.smart_video_saved_item_summary {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.smart_video_saved_item_meta {
+  font-size: 0.62rem;
+  color: var(--color-text-muted);
+  opacity: 0.8;
+}
+
+.smart_video_saved_item_delete {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.smart_video_saved_item_delete:hover { color: #e53935; border-color: #e53935; }
+
+/* ── Video Preferences panel ── hard filters vs. ranking preferences are
+   visually separated into two sections (see SmartVideoPanel.jsx's own
+   PreferencesPanel) to match the backend's real distinction between the
+   two — filters exclude, preferences only reorder. */
+#smart_video_preferences {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.smart_video_pref_section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.6rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+}
+
+.smart_video_pref_section_title {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.smart_video_pref_label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.smart_video_pref_row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.smart_video_pref_row input[type="number"] {
+  width: 70px;
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.72rem;
+}
+.smart_video_pref_row select {
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.72rem;
+}
+.smart_video_pref_row input[type="range"] {
+  width: 110px;
+  accent-color: var(--color-highlight);
+}
+
+.smart_video_pref_checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.smart_video_pref_checkbox input { accent-color: var(--color-highlight); }
+
+.smart_video_pref_chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.smart_video_pref_chip {
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.smart_video_pref_chip:hover { color: var(--color-text); }
+.smart_video_pref_chip--active,
+.smart_video_pref_chip.smart_video_pref_chip--active {
+  border-color: var(--color-highlight);
+  background: color-mix(in srgb, var(--color-highlight) 14%, transparent);
+  color: var(--color-highlight);
+}
+
+#smart_video_start_selecting {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text);
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+#smart_video_start_selecting.smart_video_start_selecting--active {
+  border-color: var(--color-highlight);
+  background: color-mix(in srgb, var(--color-highlight) 14%, transparent);
+  color: var(--color-highlight);
+}
+
+#smart_video_body {
+  flex: 1;
+  overflow: auto;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+#smart_video_body.smart_video_body--watching > :not(#smart_video_player_section) {
+  display: none !important;
+}
+
+#smart_video_footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.6rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#smart_video_footer_model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  opacity: 0.8;
+}
+
+.smart_video_status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+.smart_video_status--error {
+  color: #e53935;
+  background: color-mix(in srgb, #e53935 10%, transparent);
+}
+
+#smart_video_eidos {
+  padding: 0.6rem 0.7rem;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+}
+
+#smart_video_eidos_top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+#smart_video_eidos_concept {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+#smart_video_save_btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+#smart_video_save_btn:hover:not(:disabled) { color: var(--color-text); }
+#smart_video_save_btn:disabled { cursor: default; }
+#smart_video_save_btn--saved,
+#smart_video_save_btn.smart_video_save_btn--saved {
+  border-color: var(--color-highlight);
+  color: var(--color-highlight);
+  opacity: 1;
+}
+
+#smart_video_eidos_provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+#smart_video_eidos_summary {
+  margin-top: 0.3rem;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.smart_video_ambiguity {
+  margin-top: 0.4rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, #f59f00 14%, transparent);
+  color: #b8860b;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.smart_video_taglist {
+  margin-top: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+}
+.smart_video_taglist_label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-right: 0.15rem;
+}
+.smart_video_tag {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+
+#smart_video_player_section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.smart_video_player_wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #000;
+}
+.smart_video_player_wrap > div { width: 100%; height: 100%; }
+
+#smart_video_transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 78%, transparent);
+}
+
+#smart_video_transcript_header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--color-text);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+#smart_video_transcript_header > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+#smart_video_transcript_count {
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+#smart_video_transcript_retry {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.22rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#smart_video_transcript_retry:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+#smart_video_transcript_retry:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.smart_video_transcript_status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+
+.smart_video_transcript_status--error {
+  color: #e53935;
+}
+
+#smart_video_transcript_text {
+  width: 100%;
+  min-height: 180px;
+  max-height: 320px;
+  resize: vertical;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+#smart_video_player_close {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+#smart_video_player_close:hover { color: var(--color-text); }
+
+#smart_video_list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+#smart_video_analysis_summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-highlight) 10%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+#smart_video_analysis_summary i { flex-shrink: 0; margin-top: 0.1rem; color: var(--color-highlight); }
+
+.smart_video_card {
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+.smart_video_card--role {
+  border-color: color-mix(in srgb, var(--color-highlight) 55%, var(--color-border));
+}
+
+.smart_video_role_banner {
+  padding: 0.28rem 0.6rem;
+  background: var(--color-highlight);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.smart_video_card_body {
+  display: flex;
+  gap: 0.55rem;
+  padding: 0.5rem;
+}
+
+.smart_video_thumb {
+  position: relative;
+  flex-shrink: 0;
+  width: 120px;
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  overflow: hidden;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+}
+.smart_video_thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.smart_video_thumb_fallback {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--color-text-muted);
+  font-size: 1.4rem;
+}
+.smart_video_duration {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 600;
+}
+
+.smart_video_meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.smart_video_title {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-text);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.smart_video_channel {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+}
+
+.smart_video_badge_row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+}
+
+.smart_video_score_badge {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-highlight) 16%, transparent);
+  color: var(--color-highlight);
+  font-size: 0.62rem;
+  font-weight: 700;
+}
+
+/* The one badge this whole feature exists to make honest: "verified" only
+   ever means an actual transcript was read, never inferred from title. */
+.smart_video_basis_badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.6rem;
+  font-weight: 700;
+}
+.smart_video_basis_badge--verified,
+.smart_video_basis_badge.smart_video_basis_badge--verified {
+  border-color: #2e7d32;
+  background: color-mix(in srgb, #2e7d32 14%, transparent);
+  color: #2e7d32;
+}
+
+.smart_video_confidence_badge {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+  border: 1px solid var(--color-border);
+}
+.smart_video_confidence_badge--high { color: #2e7d32; border-color: #2e7d32; }
+.smart_video_confidence_badge--low { color: #e53935; border-color: #e53935; }
+
+.smart_video_coverage_list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  margin-top: 0.15rem;
+}
+.smart_video_coverage_item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.64rem;
+  color: var(--color-text-muted);
+}
+.smart_video_coverage_item i { color: #e53935; }
+.smart_video_coverage_item--covered,
+.smart_video_coverage_item.smart_video_coverage_item--covered { color: var(--color-text); }
+.smart_video_coverage_item--covered i,
+.smart_video_coverage_item.smart_video_coverage_item--covered i { color: #2e7d32; }
+
+.smart_video_reason {
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--color-text-muted);
+}
+
+.smart_video_basis_note {
+  font-size: 0.6rem;
+  font-style: italic;
+  color: var(--color-text-muted);
+  opacity: 0.85;
+}
+
+.smart_video_actions {
+  margin-top: 0.25rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.smart_video_watch_btn,
+.smart_video_open_btn {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.22rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+}
+.smart_video_watch_btn:hover,
+.smart_video_open_btn:hover { color: var(--color-text); border-color: var(--color-text-muted); }
+.smart_video_watch_btn {
+  color: var(--color-highlight);
+  border-color: color-mix(in srgb, var(--color-highlight) 60%, var(--color-border));
+}
+
+@media (max-width: 900px) {
+  #smart_video_panel { width: 300px; }
+  .smart_video_thumb { width: 96px; }
+}

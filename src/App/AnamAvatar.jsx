@@ -2,9 +2,20 @@ import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } f
 import { createClient, AnamEvent } from "@anam-ai/js-sdk";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { useAvatarProvider } from "../Avatar/AvatarProviderContext";
+import { AVATAR_PROVIDERS } from "../Avatar/avatarConstants";
 import "./anamAvatar.css";
 
 const VIDEO_ELEMENT_ID = "anam_avatar_video";
+
+// Every user gets a one-minute total trial of the cloud Anam avatar (cost
+// control — Anam bills per minute at the single shared API-key level, not
+// per MCTOSH user) before auto-switching to the Local 3D one. The 60s cap
+// itself is enforced backend-side (see ANAM_TRIAL_SECONDS in
+// back/routes/AnamAPI.js) — this just pings elapsed time there every
+// PING_INTERVAL_MS while live, and reacts the instant a response comes
+// back exhausted.
+const PING_INTERVAL_MS = 5000;
 
 // Spoken once, the instant the avatar connects — greets the user and
 // signals it's ready for their own spoken question (see HomeChat.jsx's
@@ -37,7 +48,8 @@ const AnamAvatar = forwardRef((_props, ref) => {
   const clientRef = useRef(null);
   const talkStreamRef = useRef(null);
   const greetedRef = useRef(false); // once per mount — a re-render must never repeat the greeting
-  const [status, setStatus] = useState("connecting"); // connecting | live | error | unconfigured
+  const [status, setStatus] = useState("connecting"); // connecting | live | error | unconfigured | trial_expired
+  const { setProvider } = useAvatarProvider();
 
   useImperativeHandle(ref, () => ({
     // Whether Anam is actually live right now — VoiceCall (HomeChat.jsx)
@@ -81,17 +93,41 @@ const AnamAvatar = forwardRef((_props, ref) => {
 
   useEffect(() => {
     let cancelled = false;
+    let pingInterval = null;
+
+    const authHeaders = () => {
+      const token = readStoredSession()?.token || "";
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    };
+
+    // Ends the Anam session right now (don't wait for the unmount that
+    // setProvider's own re-render will eventually cause) and hands control
+    // to Local 3D — explicit call, not a silent failure fallback, so this
+    // is the one deliberate exception to AvatarProviderContext.jsx's own
+    // "provider only ever changes from an explicit call" rule: the trial
+    // system IS that explicit call.
+    const switchToLocal3DOnTrialExpiry = () => {
+      if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
+      try { clientRef.current?.stopStreaming(); } catch {
+        // Switching providers anyway — nothing left to clean up on failure.
+      }
+      clientRef.current = null;
+      talkStreamRef.current = null;
+      if (!cancelled) setStatus("trial_expired");
+      setProvider(AVATAR_PROVIDERS.LOCAL3D);
+    };
 
     const connect = async () => {
-      const token = readStoredSession()?.token || "";
       try {
         const res = await fetch(apiUrl("/api/anam/session-token"), {
           method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          headers: authHeaders(),
         });
         const data = await res.json();
         if (!res.ok) {
-          if (!cancelled) setStatus(res.status === 503 ? "unconfigured" : "error");
+          if (cancelled) return;
+          if (data?.trialExhausted) { switchToLocal3DOnTrialExpiry(); return; }
+          setStatus(res.status === 503 ? "unconfigured" : "error");
           return;
         }
         if (cancelled) return;
@@ -108,6 +144,26 @@ const AnamAvatar = forwardRef((_props, ref) => {
               // the video/mic are unaffected either way.
             });
           }
+          // Reports elapsed wall-clock time since the trial started ticking
+          // for THIS session (not since the account's first-ever use), in
+          // small PING_INTERVAL_MS increments — the backend does the actual
+          // clamping/exhaustion bookkeeping (see AnamAPI.js's /trial/ping),
+          // this just reacts the instant a response comes back exhausted.
+          pingInterval = setInterval(async () => {
+            try {
+              const pingRes = await fetch(apiUrl("/api/anam/trial/ping"), {
+                method: "POST",
+                headers: { ...authHeaders(), "Content-Type": "application/json" },
+                body: JSON.stringify({ elapsedSeconds: PING_INTERVAL_MS / 1000 }),
+              });
+              const pingData = await pingRes.json().catch(() => ({}));
+              if (!cancelled && pingData?.exhausted) switchToLocal3DOnTrialExpiry();
+            } catch {
+              // A missed ping just means slightly delayed enforcement —
+              // the next successful one (or the server-side session-token
+              // gate on the NEXT panel-open) still catches it.
+            }
+          }, PING_INTERVAL_MS);
         });
         client.addListener(AnamEvent.CONNECTION_CLOSED, () => { if (!cancelled) setStatus("error"); });
         await client.streamToVideoElement(VIDEO_ELEMENT_ID);
@@ -120,13 +176,14 @@ const AnamAvatar = forwardRef((_props, ref) => {
 
     return () => {
       cancelled = true;
+      if (pingInterval) clearInterval(pingInterval);
       try { clientRef.current?.stopStreaming(); } catch {
         // Unmounting anyway — nothing left to clean up on failure.
       }
       clientRef.current = null;
       talkStreamRef.current = null;
     };
-  }, []);
+  }, [setProvider]);
 
   return (
     <div className="anam_avatar">
@@ -136,6 +193,7 @@ const AnamAvatar = forwardRef((_props, ref) => {
           {status === "connecting" && "Connecting avatar…"}
           {status === "error" && "Avatar unavailable — text chat still works."}
           {status === "unconfigured" && "Avatar not configured."}
+          {status === "trial_expired" && "Your 1-minute trial is up — switching to the Local 3D avatar…"}
         </div>
       )}
     </div>

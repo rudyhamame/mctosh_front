@@ -292,7 +292,7 @@ export default function ClinicalSchemata() {
           <i className="fi fi-rr-arrow-left" />
         </button>
         <div id="cs_header_titles">
-          <span id="cs_title">MCTOSH Entities</span>
+          <span id="cs_title">AMCTOSHS Entities</span>
           <span id="cs_subtitle">
             Entity → Entity Schema → Trace → Trace Value · Extracted from the Reservoir
           </span>
@@ -545,7 +545,7 @@ export default function ClinicalSchemata() {
               {extractPanelOpen && (
                 <div id="cs_extract_panel">
                   <p className="cs_extract_desc">
-                    The AI will read all source documents in your MCTOSHS Hyle
+                    The AI will read all source documents in your AMCTOSHS Hyle
                     and extract schema traces relevant to&nbsp;
                     <strong>{selectedEntity.name}</strong> at the&nbsp;
                     <strong>{selectedEntity.dimension}</strong> dimension.
