@@ -308,13 +308,16 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
         const padY = Math.max(2, fontSize * 0.16);
         ctx.fillStyle = ann.color;
         if (ann.textBackground) {
-          // Same low-alpha wash of the annotation's own color as the live
-          // editor preview (~0x40/255 ≈ 25%) — a highlight-style wash
-          // behind the text, not a solid block, so the text drawn on top
-          // (still ann.color, full opacity) stays readable.
+          // Same low-alpha wash of the background swatch's own color
+          // (independently chosen from the text/ink color, via the same
+          // floating color picker) as the live editor preview
+          // (~0x40/255 ≈ 25%) — a highlight-style wash behind the text,
+          // not a solid block, so the text drawn on top (still ann.color,
+          // full opacity) stays readable. Falls back to ann.color only
+          // for annotations saved before textBackgroundColor existed.
           ctx.save();
           ctx.globalAlpha = 0.25;
-          ctx.fillStyle = ann.color;
+          ctx.fillStyle = ann.textBackgroundColor || ann.color;
           if (ctx.roundRect) {
             ctx.beginPath();
             ctx.roundRect(left - padX, textTop - padY, textWidth + padX * 2, textHeight + padY * 2, [Math.max(3, fontSize * 0.12)]);
