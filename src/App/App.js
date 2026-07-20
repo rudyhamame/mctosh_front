@@ -177,44 +177,19 @@ const LEVELS = [
   },
 ];
 const LEVEL_LABELS = LEVELS.map((level) => level.label);
-const HOME_SCROLL_STORAGE_KEY = "mctoshs_home_scroll_top";
-const HOME_PROGRESS_STORAGE_KEY = "mctoshs_home_progress";
 
-const readSavedHomeScrollTop = () => {
-  try {
-    const fromSession = Number(sessionStorage.getItem(HOME_SCROLL_STORAGE_KEY) || "");
-    if (Number.isFinite(fromSession) && fromSession > 0) return fromSession;
-  } catch {}
-  try {
-    const fromLocal = Number(localStorage.getItem(HOME_SCROLL_STORAGE_KEY) || "");
-    if (Number.isFinite(fromLocal) && fromLocal > 0) return fromLocal;
-  } catch {}
-  return 0;
-};
-
-const saveHomeScrollTop = (value) => {
-  const next = String(Math.max(0, Number(value) || 0));
-  try { sessionStorage.setItem(HOME_SCROLL_STORAGE_KEY, next); } catch {}
-  try { localStorage.setItem(HOME_SCROLL_STORAGE_KEY, next); } catch {}
-};
-
-const readSavedHomeProgress = () => {
-  try {
-    const fromSession = Number(sessionStorage.getItem(HOME_PROGRESS_STORAGE_KEY) || "");
-    if (Number.isFinite(fromSession) && fromSession >= 0) return Math.min(1, fromSession);
-  } catch {}
-  try {
-    const fromLocal = Number(localStorage.getItem(HOME_PROGRESS_STORAGE_KEY) || "");
-    if (Number.isFinite(fromLocal) && fromLocal >= 0) return Math.min(1, fromLocal);
-  } catch {}
-  return 0;
-};
-
-const saveHomeProgress = (value) => {
-  const next = String(Math.min(1, Math.max(0, Number(value) || 0)));
-  try { sessionStorage.setItem(HOME_PROGRESS_STORAGE_KEY, next); } catch {}
-  try { localStorage.setItem(HOME_PROGRESS_STORAGE_KEY, next); } catch {}
-};
+// How many screens of scrolling each level's own step takes — 1 = today's
+// uniform 100vh-per-level default. Hardcoded here, NOT persisted anywhere
+// at runtime (no localStorage, no backend) — same "tune live, copy the
+// result into source, commit it" pattern as ThreadPyramidLogo.jsx's own
+// DEFAULT_CAMERA_PRESETS, so every visitor gets the same pacing rather than
+// whoever's browser happened to save one. weights[0] (Hyle) is scrolled
+// through BEFORE any climbing starts; weights[1..8] each pace exactly one
+// sewing span (Hyle->Atoms sews Atoms, Atoms->Molecules sews Molecules, and
+// so on — see ThreadPyramidLogo.jsx's own floorSewFractionFor). The
+// control panel's "Copy scroll weights as code" button produces a
+// paste-ready replacement for this array.
+const DEFAULT_LEVEL_SCROLL_WEIGHTS = LEVELS.map(() => 1);
 
 const readProfilePhoto = (session) => (
   session?.photoUrl
@@ -270,64 +245,61 @@ const App = ({ onLogout }) => {
     const el = event.currentTarget;
     const scrollable = el.scrollHeight - el.clientHeight;
     const p = scrollable > 0 ? el.scrollTop / scrollable : 0;
-    saveHomeScrollTop(el.scrollTop);
-    saveHomeProgress(p);
     setProgress(Math.min(1, Math.max(0, p)));
   };
 
-  const activeLevel = useMemo(
-    () => Math.min(LEVELS.length - 1, Math.floor(progress * (LEVELS.length - 1) + 0.0001)),
-    [progress]
-  );
+  const [scrollWeights, setScrollWeights] = useState(DEFAULT_LEVEL_SCROLL_WEIGHTS);
+  const setScrollWeight = (levelIndex, weight) => {
+    setScrollWeights((prev) => prev.map((w, i) => (i === levelIndex ? Math.max(0.1, weight) : w)));
+  };
+
+  // Cumulative raw-progress boundary at the START of each level's own
+  // scroll step, derived from the REAL (possibly hand-tuned, non-uniform)
+  // per-level weights instead of assuming every step is the same height —
+  // length LEVELS.length + 1: boundaries[0] = 0, boundaries[LEVELS.length] = 1.
+  const levelBoundaries = useMemo(() => {
+    const total = scrollWeights.reduce((sum, w) => sum + Math.max(0.1, w), 0) || 1;
+    let cursor = 0;
+    const boundaries = [0];
+    for (const w of scrollWeights) {
+      cursor += Math.max(0.1, w) / total;
+      boundaries.push(cursor);
+    }
+    return boundaries;
+  }, [scrollWeights]);
+
+  const activeLevel = useMemo(() => {
+    for (let i = LEVELS.length - 1; i >= 0; i--) {
+      if (progress >= levelBoundaries[i] - 0.0001) return i;
+    }
+    return 0;
+  }, [progress, levelBoundaries]);
 
   // The scrollable track has nine snap positions but only eight intervals
   // between them. Those eight intervals are exactly the eight sewing spans:
   // Hyle -> Atoms sews Atoms, Atoms -> Molecules sews Molecules, and so on.
-  const climbProgress = progress;
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const savedTop = readSavedHomeScrollTop();
-    const savedProgress = readSavedHomeProgress();
-    if (!savedTop && !savedProgress) return;
-
-    let raf = 0;
-    let cancelled = false;
-    let attempts = 0;
-    const MAX_ATTEMPTS = 60;
-
-    const restoreScroll = () => {
-      if (cancelled) return;
-      attempts += 1;
-
-      const maxScroll = Math.max(0, el.scrollHeight - el.clientHeight);
-      const fallbackTop = savedProgress > 0 ? savedProgress * maxScroll : 0;
-      const desiredTop = savedTop > 0 ? savedTop : fallbackTop;
-      const nextTop = Math.min(desiredTop, maxScroll);
-      if (maxScroll > 0 && nextTop > 0) {
-        el.scrollTop = nextTop;
-        const p = nextTop / maxScroll;
-        setProgress(Math.min(1, Math.max(0, p)));
-      } else if (maxScroll > 0 && savedProgress > 0) {
-        setProgress(Math.min(1, Math.max(0, savedProgress)));
-      }
-
-      // Keep retrying until the scroll container has measurable travel and
-      // the desired position sticks after layout settles.
-      const layoutNotReady = maxScroll <= 0 && (savedTop > 0 || savedProgress > 0);
-      const positionNotApplied = maxScroll > 0 && Math.abs(el.scrollTop - nextTop) > 1;
-      if (attempts < MAX_ATTEMPTS && (layoutNotReady || positionNotApplied)) {
-        raf = requestAnimationFrame(restoreScroll);
-      }
-    };
-
-    raf = requestAnimationFrame(restoreScroll);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-    };
-  }, []);
+  // "Hyle -> Atoms sews Atoms" means literally that: Atoms builds up WHILE
+  // scrolling through Hyle's own zone, finishing exactly when you cross
+  // into Atoms' zone — not while scrolling through Atoms' own zone after
+  // you've already arrived. That distinction matters a lot in practice:
+  // scroll-snap-type:mandatory means the page only ever comes to rest at
+  // the START of a level's zone, never partway through it — so if a
+  // level's own geometry only sewed itself while dwelling in its own zone,
+  // it would always be sitting at 0% built the instant you actually landed
+  // on it (this was a real bug: restoring a saved scroll position, or just
+  // scrolling normally, would land you on e.g. Atoms with its geometry
+  // still fully unsewn, indistinguishable from bare Hyle). Sewing level k
+  // during level (k-1)'s own zone instead means it's already fully built
+  // by the time you arrive.
+  const climbProgress = useMemo(() => {
+    const sewSpanCount = LEVELS.length - 1; // 8 — matches FLOOR_COUNT-1 in ThreadPyramidLogo.jsx
+    if (activeLevel >= sewSpanCount) return 1; // resting on/past the last level — everything already built
+    const zoneStart = levelBoundaries[activeLevel];
+    const zoneEnd = levelBoundaries[activeLevel + 1] ?? 1;
+    const zoneSpan = Math.max(0.0001, zoneEnd - zoneStart);
+    const withinZone = Math.min(1, Math.max(0, (progress - zoneStart) / zoneSpan));
+    return (activeLevel + withinZone) / sewSpanCount;
+  }, [progress, activeLevel, levelBoundaries]);
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -357,6 +329,8 @@ const App = ({ onLogout }) => {
               progress={climbProgress}
               activeLevel={activeLevel}
               levelLabels={LEVEL_LABELS}
+              scrollWeights={scrollWeights}
+              onScrollWeightChange={setScrollWeight}
             />
 
             <div id="app_profile_menu" ref={profileMenuRef}>
@@ -466,8 +440,13 @@ const App = ({ onLogout }) => {
             </div>
           </div>
 
-          {LEVELS.map(({ label }) => (
-            <div key={`scroll-step-${label}`} className="app_floor_scroll_step" aria-hidden="true" />
+          {LEVELS.map(({ label }, i) => (
+            <div
+              key={`scroll-step-${label}`}
+              className="app_floor_scroll_step"
+              style={{ height: `calc(var(--vh, 1vh) * 100 * ${scrollWeights[i]})` }}
+              aria-hidden="true"
+            />
           ))}
         </div>
       </div>

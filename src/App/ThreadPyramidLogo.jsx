@@ -497,28 +497,26 @@ const disposeCargo = (group) => {
 };
 
 // Manually-tuned camera shots, one per level (keyed by index into App.js's
-// LEVELS), saved from the floating control panel below — the alternative to
-// guessing framing values with no way to actually see the result. Persisted
-// in localStorage so a tuning session survives a reload.
-const CAMERA_PRESETS_STORAGE_KEY = "mctoshs_thread_camera_presets";
-const loadCameraPresets = () => {
-  try {
-    const raw = localStorage.getItem(CAMERA_PRESETS_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+// LEVELS), tuned live from the floating control panel below — the
+// alternative to guessing framing values with no way to actually see the
+// result. Deliberately hardcoded here, NOT persisted anywhere at runtime
+// (no localStorage, no backend) — every visitor needs the same tuned shots,
+// not just whoever's browser happened to save one. The panel's "Save
+// current view" button copies a ready-to-paste snippet for that level to
+// the clipboard; pasting it into this object (and committing the change)
+// is what actually makes a tuned shot permanent/shipped.
+const DEFAULT_CAMERA_PRESETS = {
+  0: { position: { x: 0, y: 1151.6, z: 0 }, target: { x: 0, y: 800, z: 0 } },
+  1: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
+  2: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
+  3: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
+  4: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
+  5: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
+  6: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
+  7: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
+  8: { position: { x: 1939.67, y: 724.46, z: 1239.42 }, target: { x: -88.11, y: -102.8, z: 477.92 } },
 };
-const saveCameraPresetsToStorage = (presets) => {
-  try {
-    localStorage.setItem(CAMERA_PRESETS_STORAGE_KEY, JSON.stringify(presets));
-  } catch {
-    // Private browsing / storage full / disabled — the preset still applies
-    // for the rest of this session via React state, it just won't survive
-    // a reload.
-  }
-};
+const loadCameraPresets = () => ({ ...DEFAULT_CAMERA_PRESETS });
 
 // No more built-in per-level default framing — every level's shot comes
 // from a saved preset (the control panel below) or it doesn't move at all.
@@ -546,7 +544,7 @@ const floorSewFractionFor = (floorIndex, climbProgress) => {
   return clamp01(climbProgress / perFloorSpan - (floorIndex - 1));
 };
 
-const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) => {
+const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, scrollWeights = [], onScrollWeightChange = null }) => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
@@ -560,6 +558,7 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) 
   const hyleMeshRef = useRef(null); // the Hyle floor's single tube mesh — shrunk via geometry.setDrawRange as the climb consumes it, see the progress effect below
   const [cameraPresets, setCameraPresets] = useState(loadCameraPresets);
   const [presetPanelOpen, setPresetPanelOpen] = useState(false);
+  const [copiedLevel, setCopiedLevel] = useState(null); // brief "Copied!" confirmation, see saveCurrentViewAsPreset
   const [objectAutoRotationEnabled, setObjectAutoRotationEnabled] = useState(true);
   const [showThreadLengthHud, setShowThreadLengthHud] = useState(false);
   const [floorLengths, setFloorLengths] = useState([]); // index 0 = Hyle's total, 1..8 = each lettered floor's own — set once after the ground thread is built
@@ -668,7 +667,28 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) 
     });
   };
 
-  const saveCurrentViewAsPreset = (levelIndex) => {
+  // Rounded to 2dp — these are hand-tuned camera shots, not physics; the
+  // raw float noise three.js reports isn't meaningful precision, just
+  // clutter in the pasted code.
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const formatPreset = (preset) => (
+    `{ position: { x: ${round2(preset.position.x)}, y: ${round2(preset.position.y)}, z: ${round2(preset.position.z)} }, ` +
+    `target: { x: ${round2(preset.target.x)}, y: ${round2(preset.target.y)}, z: ${round2(preset.target.z)} } }`
+  );
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // Updates the LIVE in-memory preset (so you can immediately see how it
+  // looks while tuning) and copies a ready-to-paste snippet — pasting that
+  // into DEFAULT_CAMERA_PRESETS above and committing is what actually ships
+  // it to every visitor; nothing here persists on its own.
+  const saveCurrentViewAsPreset = async (levelIndex) => {
     const camera = cameraRef.current;
     const controls = controlsRef.current;
     if (!camera || !controls) return;
@@ -676,11 +696,12 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) 
       position: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
       target: { x: controls.target.x, y: controls.target.y, z: controls.target.z },
     };
-    setCameraPresets((prev) => {
-      const next = { ...prev, [levelIndex]: preset };
-      saveCameraPresetsToStorage(next);
-      return next;
-    });
+    setCameraPresets((prev) => ({ ...prev, [levelIndex]: preset }));
+    const copied = await copyToClipboard(`${levelIndex}: ${formatPreset(preset)},`);
+    if (copied) {
+      setCopiedLevel(levelIndex);
+      setTimeout(() => setCopiedLevel((current) => (current === levelIndex ? null : current)), 2000);
+    }
   };
 
   const clearPresetForLevel = (levelIndex) => {
@@ -688,9 +709,31 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) 
       if (!(levelIndex in prev)) return prev;
       const next = { ...prev };
       delete next[levelIndex];
-      saveCameraPresetsToStorage(next);
       return next;
     });
+  };
+
+  // Exports every currently-tuned level in one paste-ready block, for after
+  // a full tuning pass across all levels rather than one at a time.
+  const copyAllPresetsAsCode = () => {
+    const lines = Object.entries(cameraPresets)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([levelIndex, preset]) => `  ${levelIndex}: ${formatPreset(preset)},`);
+    copyToClipboard(`const DEFAULT_CAMERA_PRESETS = {\n${lines.join("\n")}\n};`);
+    setCopiedLevel("all");
+    setTimeout(() => setCopiedLevel((current) => (current === "all" ? null : current)), 2000);
+  };
+
+  // Same hardcode-and-commit pattern as the camera presets above, but for
+  // how many screens of scrolling each level's own step takes — see
+  // DEFAULT_LEVEL_SCROLL_WEIGHTS in App.js, which actually owns this state
+  // (it drives the real .app_floor_scroll_step heights there); this panel
+  // is just the live-tuning remote control for it.
+  const copyScrollWeightsAsCode = () => {
+    const lines = scrollWeights.map((w) => `  ${round2(w)},`);
+    copyToClipboard(`const DEFAULT_LEVEL_SCROLL_WEIGHTS = [\n${lines.join("\n")}\n];`);
+    setCopiedLevel("scroll-weights");
+    setTimeout(() => setCopiedLevel((current) => (current === "scroll-weights" ? null : current)), 2000);
   };
 
   // Mount-only: renderer, camera, lights, controls — everything that
@@ -1117,8 +1160,27 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) 
         {presetPanelOpen && (
           <div id="camera_preset_panel_body">
             <p id="camera_preset_panel_hint">
-              Scroll to a level, drag/pinch to the shot you want, then save it.
+              Scroll to a level, drag/pinch to the shot you want, then save it —
+              this copies the shot to your clipboard as code. Paste it into
+              DEFAULT_CAMERA_PRESETS in ThreadPyramidLogo.jsx and commit it —
+              nothing here ships to other visitors on its own.
             </p>
+            <button
+              type="button"
+              className="camera_preset_copy_btn"
+              onClick={copyAllPresetsAsCode}
+              disabled={Object.keys(cameraPresets).length === 0}
+            >
+              {copiedLevel === "all" ? "Copied!" : "Copy all tuned levels as code"}
+            </button>
+            <button
+              type="button"
+              className="camera_preset_copy_btn"
+              onClick={copyScrollWeightsAsCode}
+              disabled={!scrollWeights.length}
+            >
+              {copiedLevel === "scroll-weights" ? "Copied!" : "Copy scroll weights as code"}
+            </button>
             <label id="camera_rotation_toggle" className="camera_preset_control_row">
               <span>
                 <strong>Object rotation</strong>
@@ -1151,12 +1213,24 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0 }) 
                   {cameraPresets[i] && <span className="camera_preset_row_dot" title="Custom shot saved" />}
                 </span>
                 <div className="camera_preset_row_actions">
+                  {onScrollWeightChange && (
+                    <label className="camera_preset_scroll_weight" title="Screens of scrolling this level's own step takes (1 = default)">
+                      <span>Scroll</span>
+                      <input
+                        type="number"
+                        min="0.25"
+                        step="0.25"
+                        value={scrollWeights[i] ?? 1}
+                        onChange={(event) => onScrollWeightChange(i, Number(event.target.value) || 1)}
+                      />
+                    </label>
+                  )}
                   <button
                     disabled={i !== activeLevel}
                     onClick={() => saveCurrentViewAsPreset(i)}
-                    title={i === activeLevel ? "Save the current view for this level" : "Scroll to this level first"}
+                    title={i === activeLevel ? "Copy this level's current view as a code snippet" : "Scroll to this level first"}
                   >
-                    Save current view
+                    {copiedLevel === i ? "Copied!" : "Save current view"}
                   </button>
                   {cameraPresets[i] && (
                     <button onClick={() => clearPresetForLevel(i)} title="Remove the saved shot">

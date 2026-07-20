@@ -82,6 +82,40 @@
   line-height: 1.4;
 }
 
+.camera_preset_copy_btn {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-text) 5%, transparent);
+  color: var(--color-text);
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.camera_preset_copy_btn:hover:not(:disabled) { border-color: var(--color-text-muted); }
+.camera_preset_copy_btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.camera_preset_scroll_weight {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.camera_preset_scroll_weight span {
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+}
+.camera_preset_scroll_weight input {
+  width: 3.2rem;
+  padding: 0.2rem 0.3rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.68rem;
+}
+
 .camera_preset_control_row {
   display: flex;
   align-items: center;
