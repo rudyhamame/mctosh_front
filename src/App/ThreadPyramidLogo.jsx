@@ -544,7 +544,7 @@ const floorSewFractionFor = (floorIndex, climbProgress) => {
   return clamp01(climbProgress / perFloorSpan - (floorIndex - 1));
 };
 
-const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, scrollWeights = [], onScrollWeightChange = null }) => {
+const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, scrollWeights = [], onScrollWeightChange = null, showCameraPanel = false }) => {
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
@@ -802,6 +802,15 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
     controls.target.copy(focus);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    // Always on — needed for OrbitControls' own internal touch-pinch dolly
+    // (controls.touches.TWO below) to work. This does NOT reopen the
+    // touchpad-scroll-hijack hole that used to come with it: OrbitControls'
+    // own internal wheel listener lives on the canvas itself, a descendant
+    // of `mount`, and the custom onWheel handler below is registered on
+    // `mount` with capture:true — capture fires first, on the way down,
+    // so onWheel always gets first (and, via stopPropagation, final) say
+    // over every wheel event before OrbitControls' own listener ever sees
+    // it. See onWheel's own comments for how each case is handled.
     controls.enableZoom = true;
     // Capped well short of the camera's own far plane (20000, see above) so
     // zooming out can never push part of the object past it and clip —
@@ -911,20 +920,40 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
     renderer.domElement.addEventListener("touchcancel", onThreeFingerTouchEnd, { passive: false, capture: true });
 
     const onWheel = (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      const distance = camera.position.distanceTo(controls.target);
-
+      // Browsers report an actual trackpad pinch as a wheel event with
+      // ctrlKey set — that's always a deliberate zoom gesture, never
+      // confusable with a plain two-finger scroll, so it zooms the object
+      // regardless of whether the camera-tuning panel is open.
       if (event.ctrlKey) {
-        // Browsers report an actual trackpad pinch as a wheel event with
-        // ctrlKey set — treat that as zoom, not pan.
+        event.preventDefault();
+        event.stopPropagation();
+        const distance = camera.position.distanceTo(controls.target);
         const zoomed = distance * Math.pow(0.98, -event.deltaY);
         const clamped = Math.min(controls.maxDistance, Math.max(controls.minDistance, zoomed));
         camera.position.sub(controls.target).setLength(clamped).add(controls.target);
         return;
       }
 
+      // A laptop touchpad's two-finger scroll and an actual mouse wheel
+      // both fire as plain (non-ctrl) "wheel" events — with no camera-
+      // tuning panel open, that gesture should do exactly what it looks
+      // like it should: scroll the page to climb levels, not silently pan
+      // the 3D camera. Not calling preventDefault is what lets it bubble
+      // up to #app_home_grid as normal page scroll — but stopPropagation
+      // still runs, so OrbitControls' own internal wheel listener (on the
+      // canvas itself, a descendant of `mount`; see controls.enableZoom's
+      // own comment above for why it's permanently true now) never gets a
+      // chance to preventDefault this same event out from under us. Only
+      // while actively tuning a shot (panel open) does plain wheel/
+      // trackpad input pan the camera instead.
+      if (!presetPanelOpenRef.current) {
+        event.stopPropagation();
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+
+      const distance = camera.position.distanceTo(controls.target);
       const panScale = distance * 0.0016;
       panRight.setFromMatrixColumn(camera.matrix, 0);
       panUp.setFromMatrixColumn(camera.matrix, 1);
@@ -1073,11 +1102,14 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
   // structured floor: Hyle->Atoms sews Atoms, Atoms->Molecules sews
   // Molecules, and so on. At the same time, and
   // driven by that exact same `progress` value, the Hyle floor's own thread
-  // visibly shrinks from its outer/peripheral endpoint inward — that outer
-  // endpoint is the feed end closest to the Atomic floor's downward open
-  // end. Hyle's total length WAS the other eight floors' combined length to
-  // begin with (see buildGroundThread): building them is depicted as
-  // consuming it, not as two unrelated things happening to share a number.
+  // visibly shrinks from its inner/central endpoint outward — that central
+  // endpoint (index 0 in buildHyleThreadPoints, theta≈0) is the feed end
+  // closest to the Atomic floor's downward open end, so the outer/
+  // peripheral endpoint (the tube's last point) is what survives until the
+  // whole thread is consumed. Hyle's total length WAS the other eight
+  // floors' combined length to begin with (see buildGroundThread): building
+  // them is depicted as consuming it, not as two unrelated things happening
+  // to share a number.
   useEffect(() => {
     const hyleTotal = floorLengths[0] || 0;
     const hyleVisibleFraction = clamp01(1 - progress);
@@ -1086,7 +1118,8 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
       const { tubularSegments, radialSegments } = hyleMesh.userData;
       const indicesPerStep = radialSegments * 6;
       const visibleSteps = Math.floor(tubularSegments * hyleVisibleFraction);
-      hyleMesh.geometry.setDrawRange(0, Math.max(0, visibleSteps * indicesPerStep));
+      const hiddenSteps = tubularSegments - visibleSteps;
+      hyleMesh.geometry.setDrawRange(hiddenSteps * indicesPerStep, Math.max(0, visibleSteps * indicesPerStep));
     }
     setHyleRemaining(hyleTotal * hyleVisibleFraction);
 
@@ -1155,6 +1188,7 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
   return (
     <>
       <div ref={mountRef} id="thread_logo_canvas" />
+      {showCameraPanel && (
       <div id="camera_preset_panel" className={presetPanelOpen ? "camera_preset_panel--open" : ""}>
         <button
           id="camera_preset_panel_toggle"
@@ -1165,7 +1199,7 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
         {presetPanelOpen && (
           <div id="camera_preset_panel_body">
             <p id="camera_preset_panel_hint">
-              Scroll to a level, drag/pinch to the shot you want, then save it —
+              Pick a level, drag/pinch to the shot you want, then save it —
               this copies the shot to your clipboard as code. Paste it into
               DEFAULT_CAMERA_PRESETS in ThreadPyramidLogo.jsx and commit it —
               nothing here ships to other visitors on its own.
@@ -1248,6 +1282,7 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
           </div>
         )}
       </div>
+      )}
       {showThreadLengthHud && (
         <div id="thread_length_hud">
           <div id="thread_length_hud_title">Thread length</div>

@@ -12,6 +12,7 @@ import HyleCards from "./HyleCards";
 import SystemMessageModal from "./SystemMessageModal";
 import SmartVideoPanel from "./SmartVideoPanel";
 import NarrativeModePanel from "./NarrativeModePanel";
+import ClinicalVignetteBuilderPanel from "./ClinicalVignetteBuilderPanel";
 import { drawAnnotation } from "./annotationDraw";
 import { PDF_TYPE_ICON } from "./pdfTypeIcon";
 import { InfoPopupButton } from "./InfoPopupButton";
@@ -556,6 +557,7 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   textUnderline: false,
   textBordered: false,
   textBackground: false,
+  textBackgroundColor: "#FFE066",
 };
 const isHexColor = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 const readNumberSetting = (value, fallback, min, max) => (
@@ -602,6 +604,7 @@ const loadPdfToolbarSettings = () => {
       textUnderline: readBooleanSetting(parsed.textUnderline, DEFAULT_PDF_TOOLBAR_SETTINGS.textUnderline),
       textBordered: readBooleanSetting(parsed.textBordered, DEFAULT_PDF_TOOLBAR_SETTINGS.textBordered),
       textBackground: readBooleanSetting(parsed.textBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.textBackground),
+      textBackgroundColor: isHexColor(parsed.textBackgroundColor) ? parsed.textBackgroundColor : DEFAULT_PDF_TOOLBAR_SETTINGS.textBackgroundColor,
     };
   } catch {
     return DEFAULT_PDF_TOOLBAR_SETTINGS;
@@ -1576,23 +1579,29 @@ const PDFPage = forwardRef(({
   // page's AI Providers section already uses (DB override, else env var,
   // else its own defaultModel — one source of truth, instead of yet another
   // hardcoded provider->model map going stale here the way aiClient.js's did).
-  // Lets the footer show a model name even before any search has run.
-  const [smartVideoProviderModels, setSmartVideoProviderModels] = useState({});
+  // Shared by every "you are using: <provider>" footer in this page (Smart
+  // Video Search, the AMCTOSHS Clinical Vignette Generator) — one fetch,
+  // cached, not a per-tool copy.
+  const [aiProviderModels, setAiProviderModels] = useState({});
+  const fetchAiProviderModelsOnce = useCallback(() => {
+    if (Object.keys(aiProviderModels).length) return;
+    authFetch(apiUrl("/api/settings/ai-status"))
+      .then((res) => res.json())
+      .then((data) => {
+        const byId = {};
+        for (const p of data.providers || []) byId[p.id] = p.model;
+        setAiProviderModels(byId);
+      })
+      .catch(() => {}); // footer just falls back to provider-only if this fails
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiProviderModels]);
   // Mount the aside the moment the tool is picked; leaving the tool disarms
   // capture mode so switching away and back always requires an explicit
   // "Start selecting" press again, never a silently-still-armed drag.
   useEffect(() => {
     if (annotTool !== "smartVideo") { setSmartVideoSelecting(false); return; }
     setSmartVideoOpen(true);
-    if (Object.keys(smartVideoProviderModels).length) return;
-    authFetch(apiUrl("/api/settings/ai-status"))
-      .then((res) => res.json())
-      .then((data) => {
-        const byId = {};
-        for (const p of data.providers || []) byId[p.id] = p.model;
-        setSmartVideoProviderModels(byId);
-      })
-      .catch(() => {}); // footer just falls back to provider-only if this fails
+    fetchAiProviderModelsOnce();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [annotTool]);
 
@@ -1708,6 +1717,19 @@ const PDFPage = forwardRef(({
     setNarrativeModeOpen((open) => !open);
   }, []);
 
+  // ── AMCTOSHS Clinical Vignette Generator ─────────────────────────────────
+  // Also independent of the annotTool tool-strip — generates a clinical
+  // vignette from the same Entity Schema library the Builder above writes to.
+  const [amctoshsVignetteOpen, setAmctoshsVignetteOpen] = useState(false);
+  const toggleAmctoshsVignette = useCallback(() => {
+    setAmctoshsVignetteOpen((open) => !open);
+  }, []);
+  useEffect(() => {
+    if (!amctoshsVignetteOpen) return;
+    fetchAiProviderModelsOnce();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [amctoshsVignetteOpen]);
+
   // ── Selection action (selectionOnly mode) ──────────────────────────────────
   const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
   const [selectionActionError, setSelectionActionError] = useState("");
@@ -1741,6 +1763,12 @@ const PDFPage = forwardRef(({
   const [textUnderline, setTextUnderline] = useState(savedToolbarSettings.textUnderline);
   const [textBordered, setTextBordered] = useState(savedToolbarSettings.textBordered);
   const [textBackground, setTextBackground] = useState(savedToolbarSettings.textBackground);
+  const [textBackgroundColor, setTextBackgroundColor] = useState(savedToolbarSettings.textBackgroundColor);
+  // Which color the shared floating dropdown (.annot_dd--colors) writes
+  // to when a swatch is clicked — "ink" (annotColor, every tool) or
+  // "background" (textBackgroundColor, Text tool's Background swatch
+  // only). Not persisted — always resets to "ink" on reload.
+  const [colorMenuTarget, setColorMenuTarget] = useState("ink");
   const [drawTextBusy, setDrawTextBusy] = useState(false);
   const [drawTextStatus, setDrawTextStatus] = useState("");
   const [drawTextProgress, setDrawTextProgress] = useState(0);
@@ -1748,6 +1776,20 @@ const PDFPage = forwardRef(({
   const [textMenuOpen, setTextMenuOpen] = useState(false); // floating text controls dropdown
   const colorMenuRef = useRef(null);
   const textMenuRef = useRef(null);
+  // The color dropdown (.annot_dd--colors) is portalled straight to
+  // document.body — same reasoning as InfoPopupButton.jsx's own popup:
+  // #pdf_toolbar sits in a DOM branch (#pdf_page's direct children) that,
+  // for reasons that held even at z-index:99999, painted BEHIND
+  // #pdf_annot_canvas's own branch (#pdf_content > ... > the canvas) —
+  // no in-place z-index fix reached it, only escaping the subtree does.
+  // colorMenuPopoverRef covers the portalled node for the outside-click
+  // handler below, since it's no longer a DOM descendant of colorMenuRef.
+  const colorMenuPopoverRef = useRef(null);
+  const [colorMenuPos, setColorMenuPos] = useState(null);
+  // A second trigger (the Text tool's Background swatch) opens the same
+  // shared dropdown — this ref covers ITS wrap for the outside-click
+  // check below, same reason colorMenuRef does for the Ink trigger.
+  const bgSwatchRef = useRef(null);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
   const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
@@ -1788,6 +1830,7 @@ const PDFPage = forwardRef(({
       textUnderline,
       textBordered,
       textBackground,
+      textBackgroundColor,
     });
   }, [
     annotToolColors,
@@ -1817,6 +1860,7 @@ const PDFPage = forwardRef(({
     textUnderline,
     textBordered,
     textBackground,
+    textBackgroundColor,
   ]);
   const getOcrWorker = useCallback(async () => {
     if (ocrWorkerRef.current) return ocrWorkerRef.current;
@@ -1927,7 +1971,12 @@ const PDFPage = forwardRef(({
   useEffect(() => {
     if (!colorMenuOpen && !textActionMenu) return;
     const onDocPointerDown = (e) => {
-      if (colorMenuOpen && colorMenuRef.current && !colorMenuRef.current.contains(e.target)) setColorMenuOpen(false);
+      if (
+        colorMenuOpen
+        && !(colorMenuRef.current && colorMenuRef.current.contains(e.target))
+        && !(bgSwatchRef.current && bgSwatchRef.current.contains(e.target))
+        && !(colorMenuPopoverRef.current && colorMenuPopoverRef.current.contains(e.target))
+      ) setColorMenuOpen(false);
       if (textActionMenu && textActionMenuRef.current && !textActionMenuRef.current.contains(e.target)) setTextActionMenu(null);
     };
     document.addEventListener("mousedown", onDocPointerDown);
@@ -1947,16 +1996,23 @@ const PDFPage = forwardRef(({
     });
   }, [annotTextInput]);
 
-  const primeTextStyleFromAnnotation = useCallback((hit, scale = 1) => {
+  // fontSize stays canvas-space throughout (matching ann.fontSize's own
+  // stored semantics, see annotationDraw.js's `(ann.fontSize||16) * s`) —
+  // not scaled by the caller's current zoom, so the SizeKnob's number and
+  // the eventual saved value never drift from what's actually on the page.
+  // Only the live-editing <input>'s own CSS font-size (rendered, not
+  // stored) needs a zoom multiply, applied right where it's used.
+  const primeTextStyleFromAnnotation = useCallback((hit) => {
     setTextFontFamily(hit.fontFamily || "Georgia");
-    setTextFontSize(Math.max(10, Math.round((hit.fontSize || 16) * scale)));
+    setTextFontSize(Math.max(10, Math.round(hit.fontSize || 16)));
     setTextAlign(hit.textAlign || "left");
     setTextBold(Boolean(hit.fontBold));
     setTextItalic(Boolean(hit.fontItalic));
     setTextUnderline(Boolean(hit.textUnderline));
     setTextBordered(Boolean(hit.textBordered));
     setTextBackground(Boolean(hit.textBackground));
-  }, []);
+    setTextBackgroundColor(hit.textBackgroundColor || annotColor);
+  }, [annotColor]);
 
   const openTextEditorForHit = useCallback((hit) => {
     const scale = fitScaleRef.current * zoomRef.current;
@@ -1970,7 +2026,7 @@ const PDFPage = forwardRef(({
       editingId: hit.id,
     });
     setAnnotTextVal(hit.text || "");
-    primeTextStyleFromAnnotation(hit, scale);
+    primeTextStyleFromAnnotation(hit);
     setTextStyleTargetId(null);
     setTextActionMenu(null);
   }, [getTextAnnotationBounds, primeTextStyleFromAnnotation]);
@@ -2048,6 +2104,42 @@ const PDFPage = forwardRef(({
   useLongPressSelect(mdTextRef);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
+
+  // Click-to-select an existing text annotation without first having to
+  // arm the Text tool — a plain click while just reading selects it and
+  // opens the same Edit text/Edit Style/Delete popout the Text tool's own
+  // onDown opens (see findTextAnnotationAt above). Attached to
+  // canvasWrapRef (an ancestor, always interactive) rather than the annot
+  // canvas itself, since that canvas is pointer-events:none whenever no
+  // drawing tool is armed — exactly the idle "just reading" state this is
+  // for. Skipped whenever a real drawing tool IS armed (annotToolRef.current)
+  // since that tool's own onDown already owns clicks then.
+  useEffect(() => {
+    const wrap = canvasWrapRef.current;
+    if (!wrap || !pdfDoc) return;
+    const onClick = (e) => {
+      if (annotToolRef.current) return;
+      if (e.target.closest?.("button, select, input, a, .annot_text_action_menu, .annot_text_input_wrap")) return;
+      const ac = annotCanvasRef.current;
+      if (!ac) return;
+      const rect = ac.getBoundingClientRect();
+      const scale = fitScaleRef.current * zoomRef.current;
+      const x = (e.clientX - rect.left) / scale;
+      const y = (e.clientY - rect.top) / scale;
+      const hit = findTextAnnotationAt(x, y);
+      if (!hit) return;
+      const box = getTextAnnotationBounds(hit, scale);
+      primeTextStyleFromAnnotation(hit);
+      setTextActionMenu({
+        vx: rect.left + box.left,
+        vy: rect.top + box.top,
+        width: Math.max(180, box.right - box.left + 18),
+        editingId: hit.id,
+      });
+    };
+    wrap.addEventListener("click", onClick);
+    return () => wrap.removeEventListener("click", onClick);
+  }, [pdfDoc, findTextAnnotationAt, getTextAnnotationBounds, primeTextStyleFromAnnotation]);
   // The zoom % label — pinch/ctrl-scroll/held +/- all defer the real `zoom`
   // state update until the gesture settles (a live re-render on every tick
   // would re-trigger the expensive PDF.js rasterization this whole scheme
@@ -2800,7 +2892,7 @@ const PDFPage = forwardRef(({
         if (hit) {
           const scale = fitScaleRef.current * zoomRef.current;
           const box = getTextAnnotationBounds(hit, scale);
-          primeTextStyleFromAnnotation(hit, scale);
+          primeTextStyleFromAnnotation(hit);
           setTextActionMenu({
             vx: annotCanvasRef.current.getBoundingClientRect().left + box.left,
             vy: annotCanvasRef.current.getBoundingClientRect().top + box.top,
@@ -2810,6 +2902,13 @@ const PDFPage = forwardRef(({
           setAnnotTextInput(null);
           return;
         }
+        // An in-progress, unconfirmed box with real typed text stays put
+        // on a stray click elsewhere — this used to unconditionally
+        // overwrite annotTextInput/annotTextVal with a fresh blank box at
+        // the new click point, silently discarding whatever was typed.
+        // Only an empty draft (nothing worth keeping) gets replaced this
+        // way; a non-empty one waits for its own Confirm/Cancel/Enter/Escape.
+        if (annotTextInput && annotTextVal.trim()) return;
         setTextActionMenu(null);
         setTextStyleTargetId(null);
         setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y, width: undefined, editingId: null });
@@ -2901,7 +3000,12 @@ const PDFPage = forwardRef(({
             ? getTextAlignedHighlightPoint(e, ann.lineCenterY)
             : p;
           if (ann.type === "highlight" && linePoint.textAligned && ann.lineCenterY == null) ann.lineCenterY = linePoint.y;
-          if (ann.type === "highlight" && linePoint.lineWidth) ann.lineWidth = Math.max(ann.lineWidth || 0, linePoint.lineWidth);
+          // Track the live detected text height exactly, not just grow into
+          // it — Math.max here used to mean a highlight that started off
+          // text (falling back to the manual annotSize thickness) could
+          // never shrink back down to the real, usually-smaller detected
+          // line height once the drag actually reached real text.
+          if (ann.type === "highlight" && linePoint.lineWidth) ann.lineWidth = linePoint.lineWidth;
           const lockedY = ann.type === "highlight" && ann.lineCenterY != null ? ann.lineCenterY : linePoint.y;
           if (ann.type === "highlight" && ann.points[0]) ann.points[0].y = lockedY;
           ann.points[1] = { x: linePoint.x, y: lockedY };
@@ -3070,7 +3174,7 @@ const PDFPage = forwardRef(({
       x: annotTextInput.cx / scale,
       y: annotTextInput.cy / scale,
       text: annotTextVal,
-      fontSize: textFontSize / scale,
+      fontSize: textFontSize,
       fontFamily: textFontFamily,
       textAlign,
       fontBold: textBold,
@@ -3078,6 +3182,7 @@ const PDFPage = forwardRef(({
       textUnderline,
       textBordered,
       textBackground,
+      textBackgroundColor,
       textBaseline: "top",
     };
     setAnnotations((prev) => ({
@@ -3092,7 +3197,7 @@ const PDFPage = forwardRef(({
     setTextActionMenu(null);
     setTextStyleTargetId(null);
     setAnnotTextVal("");
-  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBordered, textBackground]);
+  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBordered, textBackground, textBackgroundColor]);
 
   // Full 8-point resize (corners + edges) on the text-annotation editor
   // box, matching the standard text-box handle set of PowerPoint/Figma/
@@ -5787,6 +5892,19 @@ const PDFPage = forwardRef(({
                   <i className="bx bx-network-chart" />
                 </button>
               )}
+              {/* AMCTOSHS Clinical Vignette Generator — same convention as
+                  the Entities Builder trigger above. */}
+              {pdfDoc && (
+                <button
+                  type="button"
+                  className={`annot_trigger annot_tool_btn${amctoshsVignetteOpen ? " annot_trigger--active" : ""}`}
+                  onClick={toggleAmctoshsVignette}
+                  title="AMCTOSHS Clinical Vignette Generator"
+                  aria-label="AMCTOSHS Clinical Vignette Generator"
+                >
+                  <i className="bx bx-user-plus" />
+                </button>
+              )}
             </div>
 
             {/* Color/size/tool-settings for whichever tool is currently
@@ -5831,42 +5949,88 @@ const PDFPage = forwardRef(({
                 <button
                   type="button"
                   className="annot_trigger annot_trigger--color"
-                  onClick={() => setColorMenuOpen((o) => !o)}
+                  onClick={(e) => {
+                    setColorMenuTarget("ink");
+                    setColorMenuOpen((wasOpen) => {
+                      if (wasOpen && colorMenuTarget === "ink") return false;
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      if (toolbarDock.edge === "bottom") {
+                        setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
+                      } else {
+                        setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
+                      }
+                      return true;
+                    });
+                  }}
                   title="Color"
                 >
                   <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
                   <span className="annot_trigger_label">Ink</span>
                   <i className="bx bx-chevron-down annot_trigger_chevron" />
                 </button>
-                {colorMenuOpen && (
-                  <div className="annot_dd annot_dd--colors">
+                {colorMenuOpen && colorMenuPos && createPortal(
+                  <div ref={colorMenuPopoverRef} className="annot_dd annot_dd--colors" style={colorMenuPos}>
                     <div className="annot_color_preview">
-                      <div className="annot_color_preview_chip" style={{ background: annotColor }} />
+                      <div
+                        className="annot_color_preview_chip"
+                        style={{ background: colorMenuTarget === "background" ? textBackgroundColor : annotColor }}
+                      />
                       <div className="annot_color_preview_text">
-                        <span className="annot_color_preview_label">Current ink</span>
-                        <span className="annot_color_preview_hex">{annotColor.toUpperCase()}</span>
+                        <span className="annot_color_preview_label">
+                          {colorMenuTarget === "background" ? "Current background" : "Current ink"}
+                        </span>
+                        <span className="annot_color_preview_hex">
+                          {(colorMenuTarget === "background" ? textBackgroundColor : annotColor).toUpperCase()}
+                        </span>
                       </div>
                     </div>
+                    {colorMenuTarget === "background" && (
+                      <button
+                        type="button"
+                        className="annot_dd_none_btn"
+                        onClick={() => {
+                          setTextBackground(false);
+                          updateStyledTextTarget({ textBackground: false });
+                          setColorMenuOpen(false);
+                        }}
+                      >
+                        <span className="annot_swatch_btn annot_swatch_btn--none" aria-hidden="true" />
+                        No background
+                      </button>
+                    )}
                     {ANNOT_COLOR_GROUPS.map(({ label, colors }) => (
                       <div key={label} className="annot_color_group">
                         <div className="annot_color_group_label">{label}</div>
                         <div className="annot_color_group_grid">
-                          {colors.map((c) => (
-                            <button
-                              key={c}
-                              type="button"
-                              className={`annot_swatch_btn${annotColor === c ? " annot_swatch_btn--active" : ""}`}
-                              style={{ background: c }}
-                              title={c}
-                              onClick={() => { setAnnotColor(c); setColorMenuOpen(false); }}
-                            >
-                              {annotColor === c && <span className="annot_swatch_btn_inner" />}
-                            </button>
-                          ))}
+                          {colors.map((c) => {
+                            const active = (colorMenuTarget === "background" ? textBackgroundColor : annotColor) === c;
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                className={`annot_swatch_btn${active ? " annot_swatch_btn--active" : ""}`}
+                                style={{ background: c }}
+                                title={c}
+                                onClick={() => {
+                                  if (colorMenuTarget === "background") {
+                                    setTextBackgroundColor(c);
+                                    setTextBackground(true);
+                                    updateStyledTextTarget({ textBackgroundColor: c, textBackground: true });
+                                  } else {
+                                    setAnnotColor(c);
+                                  }
+                                  setColorMenuOpen(false);
+                                }}
+                              >
+                                {active && <span className="annot_swatch_btn_inner" />}
+                              </button>
+                            );
+                          })}
                         </div>
                       </div>
                     ))}
-                  </div>
+                  </div>,
+                  document.body,
                 )}
               </div>
             )}
@@ -6010,23 +6174,32 @@ const PDFPage = forwardRef(({
                       <path d="M17 3H3v18h18V3zm2 4v12H5V5h14z" />
                     </svg>
                   </button>
-                  <button
-                    type="button"
-                    className={`annot_mode_btn${textBackground ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => {
-                      setTextBackground((value) => {
-                        const next = !value;
-                        updateStyledTextTarget({ textBackground: next });
-                        return next;
-                      });
-                    }}
-                    title="Background"
-                    aria-label="Text background"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
-                      <path d="M3 3h18v18H3z" />
-                    </svg>
-                  </button>
+                  <div className="annot_dd_wrap" ref={bgSwatchRef}>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn${textBackground ? " annot_mode_btn--active" : ""}`}
+                      onClick={(e) => {
+                        setColorMenuTarget("background");
+                        setColorMenuOpen((wasOpen) => {
+                          if (wasOpen && colorMenuTarget === "background") return false;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          if (toolbarDock.edge === "bottom") {
+                            setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
+                          } else {
+                            setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
+                          }
+                          return true;
+                        });
+                      }}
+                      title="Background color"
+                      aria-label="Text background color"
+                    >
+                      <span
+                        className="annot_swatch annot_swatch--trigger"
+                        style={{ background: textBackgroundColor, opacity: textBackground ? 1 : 0.35 }}
+                      />
+                    </button>
+                  </div>
                 </div>
                 <span className="annot_text_separator" aria-hidden="true" />
 
@@ -6062,7 +6235,7 @@ const PDFPage = forwardRef(({
                   value={textFontSize}
                   onChange={(next) => {
                     setTextFontSize(next);
-                    updateStyledTextTarget({ fontSize: next / (fitScaleRef.current * zoomRef.current) });
+                    updateStyledTextTarget({ fontSize: next });
                   }}
                   color={annotColor}
                   dashed={false}
@@ -6469,7 +6642,7 @@ const PDFPage = forwardRef(({
             onWatch={setSmartVideoActiveVideoId}
             onCloseVideo={() => setSmartVideoActiveVideoId(null)}
             provider={provider}
-            providerModels={smartVideoProviderModels}
+            providerModels={aiProviderModels}
             savedOpen={smartVideoSavedOpen}
             onToggleSaved={toggleSmartVideoSaved}
             saved={smartVideoSaved}
@@ -6498,13 +6671,23 @@ const PDFPage = forwardRef(({
           />
         )}
 
+        {/* Far left — AMCTOSHS Clinical Vignette Generator. Same far-left-
+            column convention as the Entities Builder panel above. */}
+        {amctoshsVignetteOpen && (
+          <ClinicalVignetteBuilderPanel
+            onClose={toggleAmctoshsVignette}
+            provider={provider}
+            providerModels={aiProviderModels}
+          />
+        )}
+
         {/* Left — PDF viewer or upload zone */}
         <div
           id="pdf_preview"
           style={{
             width: splitRatio === 0
               ? "0"
-              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (narrativeModeOpen ? 360 : 0)}px)`,
+              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (narrativeModeOpen ? 360 : 0) + (amctoshsVignetteOpen ? 360 : 0)}px)`,
           }}
           className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${annotTool === "highlight" ? " pdf_preview--highlight-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
         >
@@ -6567,7 +6750,17 @@ const PDFPage = forwardRef(({
                               width: annotTextInput.width || undefined,
                               height: annotTextInput.height || undefined,
                               fontFamily: textFontFamily,
-                              fontSize: `${textFontSize}px`,
+                              // textFontSize is canvas-space (matches
+                              // ann.fontSize's own stored semantics — see
+                              // annotationDraw.js's `(ann.fontSize||16)*s`)
+                              // — scale up to the current on-screen size
+                              // here, the one place that actually needs
+                              // it, so the live box matches how the text
+                              // will really look at this zoom instead of
+                              // sitting at a flat, zoom-independent px
+                              // size that reads bigger at 50% and smaller
+                              // at 200% relative to the page around it.
+                              fontSize: `${textFontSize * fitScaleRef.current * zoomRef.current}px`,
                               fontWeight: textBold ? 700 : 400,
                               fontStyle: textItalic ? "italic" : "normal",
                               textDecoration: textUnderline ? "underline" : "none",
@@ -6579,10 +6772,10 @@ const PDFPage = forwardRef(({
                               border: textBordered ? "1px solid var(--color-border)" : "1px dashed var(--color-border)",
                               // Same fill annotationDraw.js uses for the
                               // committed annotation (see the "text" case) —
-                              // a low-alpha wash of the annotation's own
-                              // color, not a solid block, so typed text
+                              // a low-alpha wash of the background swatch's
+                              // own color, not a solid block, so typed text
                               // stays readable on top of it.
-                              background: textBackground ? `${annotColor}40` : undefined,
+                              background: textBackground ? `${textBackgroundColor}40` : undefined,
                             }}
                           />
                           {TEXT_RESIZE_HANDLES.map(({ dir, cursor }) => (
@@ -6599,12 +6792,10 @@ const PDFPage = forwardRef(({
                             <button
                               type="button"
                               className="annot_text_confirm_btn"
-                              // preventDefault on mousedown stops the input
-                              // from blurring before this click fires — the
-                              // input's onBlur already commits, so without
-                              // this the click would land after the value
-                              // was already committed (and cancel's click
-                              // would arrive too late to matter).
+                              // preventDefault on mousedown keeps the input
+                              // focused (no blur), so a stray click on this
+                              // button can never race the input's own
+                              // onBlur/outside-click handling.
                               onMouseDown={(e) => e.preventDefault()}
                               onClick={commitAnnotText}
                               title="Confirm"

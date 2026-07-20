@@ -189,7 +189,13 @@
    stay fixed on screen while the page scrolls "through" them. */
 #app_scroll_stage {
   --app-intro-top-offset: 0;
-  --app-intro-object-clearance: clamp(10.5rem, 24vh, 14.5rem);
+  /* Sized to the intro banner's own (now much shorter, single-title +
+     one compact row) real height plus a little breathing room — was
+     clamp(10.5rem, 24vh, 14.5rem) back when the intro was a full
+     multi-line description block; left that large after shortening it
+     just left dead empty space above the object instead of the object
+     filling it. */
+  --app-intro-object-clearance: clamp(6rem, 14vh, 7.5rem);
   position: sticky;
   top: 0;
   height: calc(var(--vh, 1vh) * 100);
@@ -205,7 +211,11 @@
   pointer-events: none;
 }
 
-/* ── Scroll hint — fades out the instant the user starts scrolling ── */
+/* ── Scroll hint — fades out the instant the user starts scrolling. Kept
+   to a single compact row (title + info icon + domain flow) plus one
+   short sub-line: the long description that used to always sit here now
+   lives behind the info icon instead, so this takes minimal canvas
+   height while it's up. ── */
 #app_scroll_hint {
   position: absolute;
   left: 0;
@@ -215,9 +225,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.3rem;
   width: 100%;
-  padding: 1rem max(1.25rem, 4vw) 0.95rem;
+  padding: 0.55rem max(1.25rem, 4vw) 0.5rem;
   border-left: none;
   border-right: none;
   border-top: none;
@@ -269,30 +279,31 @@
   opacity: 0;
 }
 
+/* #app_scroll_hint_head opts back into pointer-events so its info icon is
+   clickable while the intro is showing (the rest of the intro, and this
+   whole div once hidden, stay click-through) — but opacity:0 alone
+   doesn't revoke that, so without this the invisible head strip would
+   keep intercepting clicks/drags meant for the 3D object underneath it
+   even long after scrolling past. */
+#app_scroll_hint.app_scroll_hint--hidden #app_scroll_hint_head {
+  pointer-events: none;
+}
+
+#app_scroll_hint_head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  pointer-events: auto;
+}
+
 #app_scroll_hint_title {
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   font-weight: 800;
   letter-spacing: 0.2em;
   color: var(--color-text);
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
-}
-
-#app_scroll_hint_intro {
-  margin: 0;
-  max-width: min(92vw, 42rem);
-  padding: 0;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  color: var(--color-text);
-}
-
-#app_scroll_hint_intro_levels {
-  margin: 0;
-  max-width: min(92vw, 62rem);
-  padding: 0;
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: var(--color-text-muted);
 }
 
 #app_domain_flow {
@@ -300,7 +311,8 @@
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
-  font-size: clamp(0.58rem, 1.15vw, 0.78rem);
+  font-size: clamp(0.58rem, 1.15vw, 0.72rem);
+  color: var(--color-text-muted);
   white-space: nowrap;
   scrollbar-width: none;
 }
@@ -315,11 +327,15 @@
   color: var(--color-text-muted);
 }
 
-/* ── Level card overlay — one group per biological level, stacked in the
-   same spot so only the group whose LED ring the camera is currently
-   passing is visible; the rest wait faded-out underneath it. Lives in the
-   left gutter #thread_logo_canvas leaves free (see threadPyramidLogo.css),
-   never over the object itself. ── */
+/* ── Level card overlay — one card per biological level, stacked in the
+   same spot so only the card whose LED ring the camera is currently
+   passing is visible; the rest wait faded-out underneath it. Anchored
+   above the object (not beside it, and not vertically centered) — Hyle's
+   ground threads are a full-width flat coil (see buildGroundThreads in
+   ThreadPyramidLogo.jsx), unlike every other level's right-framed object,
+   so nothing here can safely sit low/mid-canvas without risking the same
+   low-contrast overlap Hyle used to have; every level uses the one
+   guaranteed-clear spot instead. ── */
 #app_level_overlay {
   position: absolute;
   inset: 0;
@@ -330,21 +346,31 @@
 .app_level_group {
   position: absolute;
   left: 4%;
-  top: 50%;
+  /* Just below #app_scroll_hint's own block (it shares the same
+     --app-intro-object-clearance the canvas itself is offset by), so the
+     two never overlap even at scroll 0 where the intro hint is still
+     visible. */
+  top: calc(var(--app-intro-object-clearance, 10rem) + 0.75rem);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.85rem;
+  gap: 0.6rem;
+  width: min(320px, 30vw);
+  padding: 0.9rem 1.1rem;
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   opacity: 0;
-  transform: translate(-18px, -50%);
-  transition: opacity 0.5s ease, transform 0.5s ease;
+  transform: translateY(-10px);
+  transition: opacity 0.4s ease, transform 0.4s ease;
   pointer-events: none;
-  width: min(300px, 26vw);
 }
 
 .app_level_group--active {
   opacity: 1;
-  transform: translate(0, -50%);
+  transform: translateY(0);
   pointer-events: auto;
 }
 
@@ -442,10 +468,14 @@
 
 @media (max-width: 720px) {
   #app_scroll_stage {
-    --app-intro-object-clearance: clamp(12.5rem, 30vh, 16.5rem);
+    /* Narrow screens wrap the domain-flow row onto more lines (see
+       #app_scroll_hint_head's flex-wrap), so this needs more headroom
+       than the desktop value above even though it's shorter than the
+       old multi-paragraph intro this used to be sized for. */
+    --app-intro-object-clearance: clamp(7rem, 20vh, 10rem);
   }
 
-  /* Not enough width for a legible side column — the cards drop back to a
+  /* Not enough width for a legible side column — the card drops back to a
      bottom-anchored, full-width band over the object instead. */
   .app_level_group {
     left: 50%;

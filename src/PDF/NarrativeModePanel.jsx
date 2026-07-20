@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 import "./narrativeModePanel.css";
 import { InfoPopupButton } from "./InfoPopupButton";
+import { apiUrl } from "../config/api";
+import { readStoredSession } from "../utils/sessionCleanup";
+
+const authHeaders = () => {
+  const session = readStoredSession();
+  return session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+};
+const jsonHeaders = () => ({ "Content-Type": "application/json", ...authHeaders() });
 
 const AMCTOSHS_ENTITY_INFO = "An AMCTOSHS sub-entity is a representation of an aspect of a patient (ontic entity), constructed from the observed traces through which that aspect is known.";
 
@@ -35,9 +43,9 @@ const ENTITY_TYPES = [
   },
   {
     key: "instance",
-    label: "Entity Instance",
+    label: "Entity Schema Instance",
     icon: "bx bx-layer-plus",
-    helper: "Instantiates a schema with trace:value couples.",
+    helper: "Instantiates a schema via one trace:value pair. Build several for a schema with multiple traces.",
   },
   {
     key: "intervener",
@@ -48,14 +56,33 @@ const ENTITY_TYPES = [
 ];
 
 const ENTITY_BUILDER_STORAGE_KEY = "amctoshs_entity_builder_history";
+const ENTITY_BUILDER_MIGRATED_KEY = "amctoshs_entity_builder_migrated";
 
-const loadHistory = () => {
+// One-time migration of whatever was already built under the old
+// localStorage-only history into the backend AmctoshsEntity collection —
+// after this runs once per browser, the backend is the source of truth
+// and this localStorage key is never written to again.
+const migrateLocalHistoryIfNeeded = async () => {
+  if (localStorage.getItem(ENTITY_BUILDER_MIGRATED_KEY)) return;
+  let entries = [];
   try {
     const parsed = JSON.parse(localStorage.getItem(ENTITY_BUILDER_STORAGE_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed : [];
+    entries = Array.isArray(parsed) ? parsed : [];
   } catch {
-    return [];
+    entries = [];
   }
+  for (const entry of entries) {
+    try {
+      await fetch(apiUrl("/api/amctoshs-entities"), {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify(entry),
+      });
+    } catch {
+      // best-effort — a failed migration entry just stays absent server-side
+    }
+  }
+  localStorage.setItem(ENTITY_BUILDER_MIGRATED_KEY, "1");
 };
 
 const formatEntity = (entry) => {
@@ -77,10 +104,10 @@ const formatEntity = (entry) => {
     lines.push(`3. Entity Schema Trace Value: ${entry.value || entry.sourceText}`);
     lines.push(`4. Unit: ${entry.unit}`);
   } else if (entry.type === "instance") {
-    lines.push(`2. Entity Instance: ${entry.name || "Untitled Instance"}`);
-    lines.push(`3. Instantiated Entity Schema: ${entry.parentSchema || "Not specified"}`);
-    lines.push(`4. Trace:Value Couples: ${entry.traceCouples || "Not specified"}`);
-    lines.push(`5. Instance Source Text: ${entry.sourceText}`);
+    lines.push(`2. Entity Schema Instance: ${entry.name || "Untitled Instance"}`);
+    lines.push(`3. Entity Schema Name: ${entry.parentSchema || "Not specified"}`);
+    lines.push(`4. Entity Schema Trace Name: ${entry.traceName || "Not specified"}`);
+    lines.push(`5. Entity Schema Trace Value Entry: ${entry.value || "Not specified"}`);
   } else if (entry.type === "intervener") {
     lines.push(`2. Entity Intervener: ${entry.name || "Untitled Intervener"}`);
     lines.push(`3. Target Entity Schema Trace Value: ${entry.traceName || "Not specified"}`);
@@ -100,9 +127,9 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   const [traceName, setTraceName] = useState("");
   const [value, setValue] = useState("");
   const [unit, setUnit] = useState("");
-  const [traceCouples, setTraceCouples] = useState("");
   const [error, setError] = useState("");
-  const [history, setHistory] = useState(loadHistory);
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(true);
 
   const cleanSelectedText = selectedText.trim();
   const activeType = ENTITY_TYPES.find((type) => type.key === entityType) || ENTITY_TYPES[0];
@@ -131,12 +158,23 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   }, [cleanSelectedText]);
 
   useEffect(() => {
-    localStorage.setItem(ENTITY_BUILDER_STORAGE_KEY, JSON.stringify(history));
-  }, [history]);
+    let cancelled = false;
+    (async () => {
+      await migrateLocalHistoryIfNeeded();
+      try {
+        const res = await fetch(apiUrl("/api/amctoshs-entities"), { headers: authHeaders() });
+        const data = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok) setHistory(Array.isArray(data.entities) ? data.entities : []);
+      } catch {
+        // best-effort — leave history empty rather than blocking the panel
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const draftEntry = useMemo(() => ({
-    id: `entity_${Date.now()}`,
-    createdAt: new Date().toISOString(),
     type: entityType,
     typeLabel: activeType.label,
     sourceText: sourceText.trim(),
@@ -146,12 +184,11 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
     traceName: traceName.trim(),
     value: value.trim(),
     unit: unit.trim(),
-    traceCouples: traceCouples.trim(),
-  }), [activeType.label, domain, entityType, name, parentSchema, sourceText, traceCouples, traceName, unit, value]);
+  }), [activeType.label, domain, entityType, name, parentSchema, sourceText, traceName, unit, value]);
 
   const preview = draftEntry.sourceText ? formatEntity(draftEntry) : "";
 
-  const buildEntity = () => {
+  const buildEntity = async () => {
     if (!draftEntry.sourceText) {
       setError("Select text or enter text before building an AMCTOSHS Sub-Entity.");
       return;
@@ -164,8 +201,37 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
       setError("Entity Schema Trace Value must include a unit.");
       return;
     }
-    setHistory((prev) => [{ ...draftEntry, id: `entity_${Date.now()}` }, ...prev].slice(0, 30));
-    setError("");
+    if (entityType === "instance" && (!draftEntry.traceName || !draftEntry.value)) {
+      setError("Enter both the Entity Schema Trace name and its Trace Value entry.");
+      return;
+    }
+    try {
+      const res = await fetch(apiUrl("/api/amctoshs-entities"), {
+        method: "POST",
+        headers: jsonHeaders(),
+        body: JSON.stringify(draftEntry),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error || "Failed to save that entity.");
+        return;
+      }
+      setHistory((prev) => [data, ...prev].slice(0, 30));
+      setError("");
+    } catch {
+      setError("Failed to save that entity — check your connection.");
+    }
+  };
+
+  const deleteEntity = async (id) => {
+    const prev = history;
+    setHistory((current) => current.filter((item) => item.id !== id));
+    try {
+      const res = await fetch(apiUrl(`/api/amctoshs-entities/${id}`), { method: "DELETE", headers: authHeaders() });
+      if (!res.ok) setHistory(prev);
+    } catch {
+      setHistory(prev);
+    }
   };
 
   const clearForm = () => {
@@ -175,7 +241,6 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
     setTraceName("");
     setValue("");
     setUnit("");
-    setTraceCouples("");
     setError("");
   };
 
@@ -280,26 +345,22 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
           </>
         )}
 
-        {(entityType === "trace_value" || entityType === "intervener") && (
+        {(entityType === "trace_value" || entityType === "intervener" || entityType === "instance") && (
           <>
-            <label className="entity_builder_label" htmlFor="entity_builder_trace">Existing Entity Schema Trace</label>
+            <label className="entity_builder_label" htmlFor="entity_builder_trace">
+              {entityType === "instance" ? "Entity Schema Trace Name" : "Existing Entity Schema Trace"}
+            </label>
             <input id="entity_builder_trace" value={traceName} onChange={(event) => setTraceName(event.target.value)} placeholder="Example: heart rate" />
-            <label className="entity_builder_label" htmlFor="entity_builder_value">Value / change</label>
+            <label className="entity_builder_label" htmlFor="entity_builder_value">
+              {entityType === "instance" ? "Entity Schema Trace Value Entry" : "Value / change"}
+            </label>
             <input id="entity_builder_value" value={value} onChange={(event) => setValue(event.target.value)} placeholder="Example: 72" />
-            <label className="entity_builder_label" htmlFor="entity_builder_unit">Unit{entityType === "trace_value" ? " (required)" : ""}</label>
-            <input id="entity_builder_unit" value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="Example: beats/min" />
-          </>
-        )}
-
-        {entityType === "instance" && (
-          <>
-            <label className="entity_builder_label" htmlFor="entity_builder_couples">Trace: value couples</label>
-            <textarea
-              id="entity_builder_couples"
-              value={traceCouples}
-              onChange={(event) => setTraceCouples(event.target.value)}
-              placeholder="Example: heart rate: 72 beats/min&#10;stroke volume: 70 mL"
-            />
+            {entityType !== "instance" && (
+              <>
+                <label className="entity_builder_label" htmlFor="entity_builder_unit">Unit{entityType === "trace_value" ? " (required)" : ""}</label>
+                <input id="entity_builder_unit" value={unit} onChange={(event) => setUnit(event.target.value)} placeholder="Example: beats/min" />
+              </>
+            )}
           </>
         )}
 
@@ -321,6 +382,8 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
           </>
         )}
 
+        {historyLoading && <p className="entity_builder_helper">Loading your built entities...</p>}
+
         {history.length > 0 && (
           <>
             <div className="entity_builder_section_title">Built Entities</div>
@@ -331,7 +394,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
                     <strong>{entry.typeLabel}</strong>
                     <button
                       type="button"
-                      onClick={() => setHistory((prev) => prev.filter((item) => item.id !== entry.id))}
+                      onClick={() => deleteEntity(entry.id)}
                       title="Delete entity"
                     >
                       <i className="bx bx-trash" />

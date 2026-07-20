@@ -166,10 +166,6 @@
   line-height: 1.45;
 }
 
-#entity_builder_couples {
-  min-height: 72px !important;
-}
-
 .entity_builder_helper {
   margin: -0.18rem 0 0.2rem;
   color: var(--color-text-muted);

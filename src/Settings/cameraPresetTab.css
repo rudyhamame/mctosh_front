@@ -1,0 +1,47 @@
+#sett_camera_tab {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+#sett_camera_level_picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.sett_camera_level_btn {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.sett_camera_level_btn:hover { color: var(--color-text); border-color: var(--color-highlight); }
+.sett_camera_level_btn--active {
+  color: var(--color-highlight);
+  border-color: var(--color-highlight);
+  background: color-mix(in srgb, var(--color-highlight) 12%, transparent);
+}
+
+/* Contains ThreadPyramidLogo.jsx's own absolute/fixed-positioned elements
+   (#thread_logo_canvas, #camera_preset_panel, #thread_length_hud) inside
+   this tab instead of letting them size/pin to the whole browser viewport
+   the way they do on Home. */
+.sett_camera_stage {
+  position: relative;
+  height: min(70vh, 640px);
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-bg);
+  --app-intro-object-clearance: 0px;
+}
+
+.sett_camera_stage #camera_preset_panel,
+.sett_camera_stage #thread_length_hud {
+  position: absolute;
+}

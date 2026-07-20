@@ -1,0 +1,340 @@
+#cvb_panel {
+  flex-shrink: 0;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+#cvb_header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#cvb_header_title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+#cvb_close {
+  margin-left: auto;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2rem;
+}
+#cvb_close:hover { color: var(--color-text); }
+
+#cvb_body {
+  flex: 1;
+  overflow: auto;
+  padding: 0.65rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.cvb_notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.cvb_label {
+  margin-top: 0.15rem;
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.cvb_helper { margin-top: -0.1rem; }
+
+/* :not([type=checkbox]):not([type=radio]) — the toggles below (.cvb_toggle)
+   use native checkbox/radio inputs, which must keep their own intrinsic
+   box-shape, not the text-input styling (width:100%, padding, border-
+   radius) this rule is actually meant for. Without the exclusion, a
+   checkbox's hit area stretched to fill the whole row (width:100% on an
+   inline element with 0.48rem padding) — the "not laid out well" bug. */
+#cvb_body input:not([type="checkbox"]):not([type="radio"]),
+#cvb_body select,
+#cvb_body textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 0.76rem;
+  padding: 0.48rem 0.55rem;
+  outline: none;
+}
+
+#cvb_body input:not([type="checkbox"]):not([type="radio"]):focus,
+#cvb_body select:focus,
+#cvb_body textarea:focus {
+  border-color: var(--color-highlight);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-highlight) 14%, transparent);
+}
+
+.cvb_toggle input[type="checkbox"],
+.cvb_toggle input[type="radio"] {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--color-highlight);
+}
+
+#cvb_body textarea {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.cvb_toggle_row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+}
+
+.cvb_toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding-top: 0.15rem;
+  font-size: 0.74rem;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+#cvb_actions {
+  display: flex;
+  gap: 0.4rem;
+  padding-top: 0.15rem;
+}
+
+#cvb_actions button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.32rem;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.42rem 0.5rem;
+}
+
+#cvb_actions button:hover:not(:disabled) {
+  color: var(--color-text);
+  border-color: var(--color-highlight);
+}
+
+#cvb_actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+#cvb_generate {
+  color: var(--color-highlight) !important;
+  border-color: var(--color-highlight) !important;
+  background: color-mix(in srgb, var(--color-highlight) 12%, transparent) !important;
+}
+
+.cvb_phase_status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.cvb_phase {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+}
+
+.cvb_phase--completed { color: var(--color-text); }
+.cvb_phase--failed { color: #e53935; }
+.cvb_phase--running { color: var(--color-highlight); }
+
+#cvb_narrative {
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 82%, transparent);
+  color: var(--color-text);
+  white-space: pre-wrap;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  padding: 0.6rem;
+}
+
+#cvb_instance_list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.cvb_instance {
+  position: relative;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-bg) 82%, transparent);
+  color: var(--color-text);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  padding: 0.5rem 0.6rem;
+}
+
+.cvb_instance_domain {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-highlight);
+}
+
+.cvb_exam_block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+#cvb_attempt_history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.cvb_attempt {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  font-size: 0.72rem;
+  color: var(--color-text);
+}
+
+.cvb_attempt strong { text-transform: capitalize; }
+.cvb_attempt p { margin: 0.25rem 0 0; color: var(--color-text-muted); }
+
+.cvb_attempt--correct strong { color: #2e7d32; }
+.cvb_attempt--partial strong { color: #f9a825; }
+.cvb_attempt--incorrect strong { color: #e53935; }
+
+.cvb_exam_key {
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  padding: 0.55rem 0.6rem;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--color-text);
+}
+
+#cvb_saved_toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+  padding-top: 0.55rem;
+  border: none;
+  border-top: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+#cvb_saved_toggle:hover { color: var(--color-text); }
+
+#cvb_saved_list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.cvb_saved_item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.cvb_saved_open {
+  flex: 1;
+  text-align: left;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: none;
+  color: var(--color-text);
+  font-size: 0.72rem;
+  padding: 0.4rem 0.55rem;
+  cursor: pointer;
+}
+.cvb_saved_open:hover { border-color: var(--color-highlight); }
+
+.cvb_saved_item > button:last-child {
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: none;
+  color: var(--color-text-muted);
+  width: 28px;
+  height: 28px;
+  cursor: pointer;
+}
+.cvb_saved_item > button:last-child:hover { color: #e53935; border-color: #e53935; }
+
+#cvb_footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.6rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#cvb_footer_model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  opacity: 0.8;
+}
+
+@media (max-width: 900px) {
+  #cvb_panel { width: 300px; }
+}

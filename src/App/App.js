@@ -2,7 +2,10 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "rea
 import { useNavigate } from "react-router-dom";
 import ThreadPyramidLogo from "./ThreadPyramidLogo";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { InfoPopupButton } from "../PDF/InfoPopupButton";
 import "./App.css";
+
+const AMCTOSHS_INTRO_INFO = "A composite representational entity of a patient, constituted by a collection of AMCTOSHS sub-entities, each representing a distinct aspect of that patient.";
 
 // Loaded the same lazy way AppRouter.js loads it for every other page — the
 // app-wide footer is hidden on Home (see AppRouter.js's FooterGate), so Dev
@@ -176,7 +179,7 @@ const LEVELS = [
     cards: [],
   },
 ];
-const LEVEL_LABELS = LEVELS.map((level) => level.label);
+export const LEVEL_LABELS = LEVELS.map((level) => level.label);
 
 // How many screens of scrolling each level's own step takes — 1 = today's
 // uniform 100vh-per-level default. Hardcoded here, NOT persisted anywhere
@@ -398,14 +401,10 @@ const App = ({ onLogout }) => {
 
             <div id="app_scroll_hint" className={progress > 0.03 ? "app_scroll_hint--hidden" : ""}>
               <span id="app_scroll_hint_title">AMCTOSHS</span>
-              <p id="app_scroll_hint_intro">
-                A composite representational entity of a patient, constituted by a collection of AMCTOSHS sub-entities, each representing a distinct aspect of that patient.
-              </p>
-              <p id="app_scroll_hint_intro_levels">
-                The domain of AMCTOSHS spans the following levels of organization:
-                <br />
+              <div id="app_scroll_hint_head">
                 <span id="app_domain_flow">Atoms → Molecules → Tissues → Organs → Organ Systems → Humans → Societies</span>
-              </p>
+                <InfoPopupButton info={AMCTOSHS_INTRO_INFO} label="About AMCTOSHS" />
+              </div>
               <span id="app_scroll_hint_sub">Scroll to study the hyle and climb the eight biological scales ↓</span>
             </div>
 

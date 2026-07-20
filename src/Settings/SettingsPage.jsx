@@ -7,6 +7,7 @@ import { getPredictionPools, setPredictionPoolEnabled, rebuildPredictionPool, in
 import objectivesEn from "../MCC/mccqeObjectivesData.json";
 import objectivesAr from "../MCC/mccqeObjectivesArabicData.json";
 import AvatarProviderSelector from "../Avatar/AvatarProviderSelector";
+import CameraPresetTab from "./CameraPresetTab";
 import {
   readVoiceSettings, writeVoiceSettings,
   TTS_PROVIDERS, readTtsProviderId, writeTtsProviderId,
@@ -17,7 +18,7 @@ import "./settingsPage.css";
 const TTS_PROVIDER_OPTIONS = [
   { id: TTS_PROVIDERS.BROWSER, label: "Browser Speech Synthesis", desc: "Free, built into your browser — no setup needed." },
   { id: TTS_PROVIDERS.OPENVOICE, label: "OpenVoiceClone", desc: "Speaks in your own cloned voice — needs a voice profile below." },
-  { id: TTS_PROVIDERS.KOKORO, label: "Kokoro", desc: "Not available yet — reserved for a future self-hosted option.", disabled: true },
+  { id: TTS_PROVIDERS.KOKORO, label: "Kokoro", desc: "Free, self-hosted — a fixed high-quality voice, no setup needed." },
 ];
 
 const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
@@ -47,6 +48,13 @@ const SECTIONS = [
   { id: "pdf_reader", label: "PDF Reader",      icon: "fi fi-rr-file-pdf" },
   { id: "theme",      label: "Theme",           icon: "fi fi-rr-palette" },
 ];
+
+// Dev-only camera tuning tool (moved off the Home page, see
+// CameraPresetTab.jsx) — restricted to a single username, not a general
+// permission/role, since it's a one-person workflow (tune a shot, copy it
+// as code, paste it into ThreadPyramidLogo.jsx, commit).
+const CAMERA_TAB_USERNAME = "rudyhamame";
+const CAMERA_SECTION = { id: "camera", label: "3D Camera", icon: "fi fi-rr-camera" };
 
 // Kept in sync with the same list PDFPage.jsx reads from localStorage
 // ("mctosh_pdf_translate_lang") for the selection bar's "Translate to" action.
@@ -127,6 +135,8 @@ const SettingsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [section,   setSection]   = useState(() => new URLSearchParams(location.search).get("section") || "personal");
+  const canSeeCameraTab = readStoredSession()?.username === CAMERA_TAB_USERNAME;
+  const visibleSections = canSeeCameraTab ? [...SECTIONS, CAMERA_SECTION] : SECTIONS;
   const [theme,     setTheme]     = useState(() => readStoredTheme());
   const [pdfTranslateLang, setPdfTranslateLang] = useState(() => localStorage.getItem("mctosh_pdf_translate_lang") || "English");
   const [providers, setProviders] = useState([]);
@@ -757,7 +767,7 @@ const SettingsPage = () => {
       <div id="sett_layout">
         {/* ── Sidebar ── */}
         <nav id="sett_nav">
-          {SECTIONS.map(s => (
+          {visibleSections.map(s => (
             <button
               key={s.id}
               className={`sett_nav_item${section === s.id ? " sett_nav_item--active" : ""}`}
@@ -1470,6 +1480,14 @@ const SettingsPage = () => {
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {section === "camera" && canSeeCameraTab && (
+            <div className="sett_section">
+              <h2 className="sett_section_title">3D Camera</h2>
+              <p className="sett_section_desc">Tune the Home page pyramid's camera shot per level. Pick a level, drag/pinch the 3D view to the shot you want, then save it — this copies the shot to your clipboard as code to paste into ThreadPyramidLogo.jsx and commit. Nothing here ships to other visitors on its own.</p>
+              <CameraPresetTab />
             </div>
           )}
 
