@@ -157,6 +157,14 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
     if (cleanSelectedText) setSourceText(cleanSelectedText);
   }, [cleanSelectedText]);
 
+  // Name takes its value from the same live selection, same "only fires
+  // forward on an actual new selection" rule as sourceText above — still
+  // a plain editable input afterward, this just seeds it instead of
+  // leaving it blank.
+  useEffect(() => {
+    if (cleanSelectedText) setName(cleanSelectedText);
+  }, [cleanSelectedText]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -280,7 +288,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
         )}
 
         <div className="entity_builder_label_row">
-          <label className="entity_builder_label" htmlFor="entity_builder_source">Selected / entered text</label>
+          <label className="entity_builder_label" htmlFor="entity_builder_source">Selected Text</label>
           <button
             type="button"
             id="entity_builder_verify"

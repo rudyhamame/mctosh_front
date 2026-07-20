@@ -2164,6 +2164,39 @@ html.theme-light #pdf_preview_scroll {
   box-shadow: 0 0 0 1px rgba(0,0,0,0.18);
 }
 
+/* "No background" row — only shown when the shared color dropdown is
+   targeting the Text tool's background swatch (colorMenuTarget ===
+   "background"), see PDFPage.jsx. */
+.annot_dd_none_btn {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.annot_dd_none_btn:hover {
+  background: color-mix(in srgb, var(--color-bg) 84%, transparent);
+  color: var(--color-text);
+}
+
+.annot_swatch_btn--none {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background:
+    linear-gradient(to top right, transparent calc(50% - 1px), #e53935 calc(50% - 1px), #e53935 calc(50% + 1px), transparent calc(50% + 1px)),
+    repeating-conic-gradient(var(--color-bg) 0% 25%, color-mix(in srgb, var(--color-text) 12%, transparent) 0% 50%) 0 0 / 8px 8px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.16);
+}
+
 .annot_size_knob {
   display: flex;
   align-items: center;

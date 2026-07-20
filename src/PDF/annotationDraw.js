@@ -221,6 +221,16 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
   ctx.lineCap     = "round";
   ctx.lineJoin    = "round";
 
+  // Shapes tools only (line/arrow/rect/circle) — border.borderStyle set
+  // once at creation time (PDFPage.jsx's onDown), from the toolbar's
+  // Border style toggle. Dash lengths scale with the stroke's own width
+  // so a thicker border still reads as clearly dashed/dotted, not just a
+  // faint texture.
+  if (["rect", "circle", "line", "arrow"].includes(ann.type) && ann.borderStyle && ann.borderStyle !== "solid") {
+    const w = ctx.lineWidth;
+    ctx.setLineDash(ann.borderStyle === "dotted" ? [w * 0.01, w * 2.2] : [w * 2.4, w * 1.6]);
+  }
+
   switch (ann.type) {
     case "highlight": {
       drawExpressiveHighlight(ann);
@@ -274,9 +284,19 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       ctx.closePath(); ctx.fill();
       break;
     }
-    case "rect":
-      ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
+    case "rect": {
+      const radius = Math.max(0, (ann.borderRadius || 0) * s);
+      if (radius > 0 && ctx.roundRect) {
+        const rw = p(ann.w), rh = p(ann.h);
+        const capped = Math.min(radius, Math.abs(rw) / 2, Math.abs(rh) / 2);
+        ctx.beginPath();
+        ctx.roundRect(p(ann.x), p(ann.y), rw, rh, capped);
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
+      }
       break;
+    }
     case "circle":
       ctx.beginPath();
       ctx.ellipse(p(ann.x + ann.w / 2), p(ann.y + ann.h / 2), Math.abs(p(ann.w / 2)), Math.abs(p(ann.h / 2)), 0, 0, Math.PI * 2);

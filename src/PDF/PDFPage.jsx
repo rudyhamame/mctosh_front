@@ -466,6 +466,13 @@ const ERASER_MODES = [
   { key: "precise", label: "Precise" },
   { key: "stroke", label: "Stroke" },
 ];
+// Shapes tools only (line/arrow/rect/circle) — see annotationDraw.js's
+// own dash-pattern handling for how each renders.
+const SHAPE_BORDER_STYLES = [
+  { key: "solid", label: "Solid" },
+  { key: "dashed", label: "Dashed" },
+  { key: "dotted", label: "Dotted" },
+];
 const distancePointToSegment = (px, py, x1, y1, x2, y2) => {
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -558,6 +565,8 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   textBordered: false,
   textBackground: false,
   textBackgroundColor: "#FFE066",
+  shapeBorderStyle: "solid",
+  shapeBorderRadius: 0,
 };
 const isHexColor = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 const readNumberSetting = (value, fallback, min, max) => (
@@ -605,6 +614,8 @@ const loadPdfToolbarSettings = () => {
       textBordered: readBooleanSetting(parsed.textBordered, DEFAULT_PDF_TOOLBAR_SETTINGS.textBordered),
       textBackground: readBooleanSetting(parsed.textBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.textBackground),
       textBackgroundColor: isHexColor(parsed.textBackgroundColor) ? parsed.textBackgroundColor : DEFAULT_PDF_TOOLBAR_SETTINGS.textBackgroundColor,
+      shapeBorderStyle: ["solid", "dashed", "dotted"].includes(parsed.shapeBorderStyle) ? parsed.shapeBorderStyle : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderStyle,
+      shapeBorderRadius: readNumberSetting(parsed.shapeBorderRadius, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderRadius, 0, 60),
     };
   } catch {
     return DEFAULT_PDF_TOOLBAR_SETTINGS;
@@ -1764,6 +1775,11 @@ const PDFPage = forwardRef(({
   const [textBordered, setTextBordered] = useState(savedToolbarSettings.textBordered);
   const [textBackground, setTextBackground] = useState(savedToolbarSettings.textBackground);
   const [textBackgroundColor, setTextBackgroundColor] = useState(savedToolbarSettings.textBackgroundColor);
+  // Shapes tools only (line/arrow/rect/circle) — border dash pattern and
+  // (rect only) corner rounding. See annotationDraw.js's own "rect"/
+  // shared-dash handling for how these render.
+  const [shapeBorderStyle, setShapeBorderStyle] = useState(savedToolbarSettings.shapeBorderStyle);
+  const [shapeBorderRadius, setShapeBorderRadius] = useState(savedToolbarSettings.shapeBorderRadius);
   // Which color the shared floating dropdown (.annot_dd--colors) writes
   // to when a swatch is clicked — "ink" (annotColor, every tool) or
   // "background" (textBackgroundColor, Text tool's Background swatch
@@ -1831,6 +1847,8 @@ const PDFPage = forwardRef(({
       textBordered,
       textBackground,
       textBackgroundColor,
+      shapeBorderStyle,
+      shapeBorderRadius,
     });
   }, [
     annotToolColors,
@@ -1861,6 +1879,8 @@ const PDFPage = forwardRef(({
     textBordered,
     textBackground,
     textBackgroundColor,
+    shapeBorderStyle,
+    shapeBorderRadius,
   ]);
   const getOcrWorker = useCallback(async () => {
     if (ocrWorkerRef.current) return ocrWorkerRef.current;
@@ -2939,8 +2959,14 @@ const PDFPage = forwardRef(({
               ]
             : [{ x: firstPoint.x, y: firstPoint.y }],
         };
-      } else if (["underline","strikethrough","rect","circle"].includes(annotTool)) {
+      } else if (["underline","strikethrough"].includes(annotTool)) {
         activeAnnotRef.current = { type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
+      } else if (["rect","circle"].includes(annotTool)) {
+        activeAnnotRef.current = {
+          type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
+          borderStyle: shapeBorderStyle,
+          ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
+        };
       } else if (annotTool === "drawText") {
         activeAnnotRef.current = { type: "drawTextSelection", color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (annotTool === "smartVideo" && smartVideoSelecting && !smartVideoCaptureBusy) {
@@ -2948,6 +2974,7 @@ const PDFPage = forwardRef(({
       } else if (["line","arrow"].includes(annotTool)) {
         activeAnnotRef.current = {
           type: annotTool, color: strokeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y,
+          borderStyle: shapeBorderStyle,
           ...(annotTool === "arrow" ? { lineWidth: arrowSize / getScale() } : {}),
         };
       } else if (annotTool === "pen") {
@@ -3127,7 +3154,7 @@ const PDFPage = forwardRef(({
       ac.removeEventListener("contextmenu", preventNativeTouchDrawingGesture);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penDynamic, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot]);
+  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penDynamic, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, shapeBorderStyle, shapeBorderRadius]);
 
   // Eraser-size cursor circle — a real hit-test-radius preview, not just a
   // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
@@ -5950,10 +5977,15 @@ const PDFPage = forwardRef(({
                   type="button"
                   className="annot_trigger annot_trigger--color"
                   onClick={(e) => {
+                    // Capture the rect synchronously, before it goes into
+                    // the setColorMenuOpen updater below — e.currentTarget
+                    // is only valid for the duration of this handler; by
+                    // the time a functional setState updater actually
+                    // runs, React has already nulled it out.
+                    const rect = e.currentTarget.getBoundingClientRect();
                     setColorMenuTarget("ink");
                     setColorMenuOpen((wasOpen) => {
                       if (wasOpen && colorMenuTarget === "ink") return false;
-                      const rect = e.currentTarget.getBoundingClientRect();
                       if (toolbarDock.edge === "bottom") {
                         setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
                       } else {
@@ -6043,6 +6075,33 @@ const PDFPage = forwardRef(({
                 color={annotColor}
                 dashed={annotTool === "eraser"}
                 variant={annotTool === "highlight" ? "highlight" : "dot"}
+              />
+            )}
+
+            {SHAPE_TOOL_KEYS.includes(annotTool) && (
+              <div className="annot_mode_toggle" aria-label="Border style">
+                {SHAPE_BORDER_STYLES.map(({ key, label }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`annot_mode_btn${shapeBorderStyle === key ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setShapeBorderStyle(key)}
+                    title={`${label} border`}
+                    aria-label={`${label} border`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {annotTool === "rect" && (
+              <SizeKnob
+                min={0} max={60} step={1}
+                value={shapeBorderRadius}
+                onChange={setShapeBorderRadius}
+                color={annotColor}
+                variant="dot"
               />
             )}
 
@@ -6179,10 +6238,12 @@ const PDFPage = forwardRef(({
                       type="button"
                       className={`annot_mode_btn${textBackground ? " annot_mode_btn--active" : ""}`}
                       onClick={(e) => {
+                        // Same capture-before-updater reasoning as the Ink
+                        // trigger above.
+                        const rect = e.currentTarget.getBoundingClientRect();
                         setColorMenuTarget("background");
                         setColorMenuOpen((wasOpen) => {
                           if (wasOpen && colorMenuTarget === "background") return false;
-                          const rect = e.currentTarget.getBoundingClientRect();
                           if (toolbarDock.edge === "bottom") {
                             setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
                           } else {
