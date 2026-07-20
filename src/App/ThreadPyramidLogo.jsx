@@ -558,6 +558,11 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
   const hyleMeshRef = useRef(null); // the Hyle floor's single tube mesh — shrunk via geometry.setDrawRange as the climb consumes it, see the progress effect below
   const [cameraPresets, setCameraPresets] = useState(loadCameraPresets);
   const [presetPanelOpen, setPresetPanelOpen] = useState(false);
+  // Read inside the mount-only effect below (empty deps — it can't just
+  // close over presetPanelOpen directly and stay current) so the wheel
+  // handler there knows whether tuning is actually in progress.
+  const presetPanelOpenRef = useRef(presetPanelOpen);
+  useEffect(() => { presetPanelOpenRef.current = presetPanelOpen; }, [presetPanelOpen]);
   const [copiedLevel, setCopiedLevel] = useState(null); // brief "Copied!" confirmation, see saveCurrentViewAsPreset
   const [objectAutoRotationEnabled, setObjectAutoRotationEnabled] = useState(true);
   const [showThreadLengthHud, setShowThreadLengthHud] = useState(false);
