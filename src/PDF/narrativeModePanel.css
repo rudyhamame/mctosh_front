@@ -40,6 +40,19 @@
 }
 #narrative_mode_close:hover { color: var(--color-text); }
 
+#narrative_mode_footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.65rem;
+  border-top: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 76%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
 #entity_builder_body {
   flex: 1;
   overflow: auto;
@@ -49,7 +62,6 @@
   gap: 0.45rem;
 }
 
-.entity_builder_notice,
 .narrative_mode_status {
   display: flex;
   align-items: flex-start;
@@ -67,7 +79,6 @@
   background: color-mix(in srgb, #e53935 10%, transparent);
 }
 
-.entity_builder_selected_btn,
 #entity_builder_actions button,
 .entity_builder_history_top button {
   display: inline-flex;
@@ -83,12 +94,6 @@
   cursor: pointer;
 }
 
-.entity_builder_selected_btn {
-  align-self: flex-start;
-  padding: 0.35rem 0.55rem;
-}
-
-.entity_builder_selected_btn:hover,
 #entity_builder_actions button:hover,
 .entity_builder_history_top button:hover {
   color: var(--color-text);
@@ -141,8 +146,7 @@
 }
 
 #entity_builder_body input,
-#entity_builder_body select,
-#entity_builder_body textarea {
+#entity_builder_body select {
   width: 100%;
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -154,16 +158,27 @@
 }
 
 #entity_builder_body input:focus,
-#entity_builder_body select:focus,
-#entity_builder_body textarea:focus {
+#entity_builder_body select:focus {
   border-color: var(--color-highlight);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-highlight) 14%, transparent);
 }
 
-#entity_builder_body textarea {
-  min-height: 88px;
-  resize: vertical;
-  line-height: 1.45;
+/* <select>'s closed-box text is drawn by the browser's own native combo-box
+   widget, not by normal CSS text layout — iOS Safari in particular clips
+   the selected option's text against that native widget's own internal
+   metrics regardless of padding/line-height tweaks here (confirmed: fine
+   on desktop Chrome/Safari, clipped on iPad Safari). appearance: none
+   drops the native widget entirely so the box renders like a plain text
+   field (same fix already used by #ai_provider_select), with a drawn-on
+   chevron replacing the native arrow it removes. */
+#entity_builder_body select {
+  padding-right: 1.9rem;
+  appearance: none;
+  color-scheme: light dark;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  cursor: pointer;
 }
 
 .entity_builder_helper {

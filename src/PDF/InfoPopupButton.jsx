@@ -10,7 +10,7 @@ const InfoIcon = () => (
 );
 
 // Shared by the PDF Reader's annotation toolbar (LabeledPercentKnob,
-// AnnotControlHeaderInfo) and the AMCTOSHS Entities Builder panel. The
+// AnnotControlHeaderInfo) and the AMCTOSHS Entity Builder panel. The
 // popup is portalled straight to document.body (position: fixed,
 // positioned from the trigger's own getBoundingClientRect()) instead of
 // rendering inline as position:absolute — several real DOM parents this

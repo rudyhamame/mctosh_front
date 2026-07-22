@@ -12,7 +12,7 @@ const SPLIT_VIEW_PAGES = [
   { path: "/hylomorphism/youtube_source", icon: "fi-rr-play-alt",      label: "YouTube Source" },
   { path: "/hylomorphism/pdf_source",     icon: "fi-rr-file-pdf",      label: "PDF Source" },
   { path: "/sources",                icon: "fi-rr-books",               label: "AMCTOSHS Hyle" },
-  { path: "/clinical-schemata",      icon: "fi-rr-network",             label: "AMCTOSHS Entities" },
+  { path: "/clinical-schemata",      icon: "fi-rr-network",             label: "AMCTOSHS Entity" },
   { path: "/patient-instantiation",  icon: "fi-rr-hospital-user",       label: "Patient Instantiation" },
   { path: "/hylomorphism",           icon: "fi-rr-diagram-project",     label: "Hylomorphism" },
   { path: "/pdf-reader",             icon: "fi-rr-file-pdf",            label: "PDF Reader" },

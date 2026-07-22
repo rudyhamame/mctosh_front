@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { useAIProvider } from "../hooks/useAIProvider";
@@ -13,11 +13,29 @@ import SystemMessageModal from "./SystemMessageModal";
 import SmartVideoPanel from "./SmartVideoPanel";
 import NarrativeModePanel from "./NarrativeModePanel";
 import ClinicalVignetteBuilderPanel from "./ClinicalVignetteBuilderPanel";
-import { drawAnnotation } from "./annotationDraw";
+import { drawAnnotation, drawMaskedHighlightText } from "./annotationDraw";
 import { PDF_TYPE_ICON } from "./pdfTypeIcon";
 import { InfoPopupButton } from "./InfoPopupButton";
+import { createPageIndexCache } from "./pdfSearchIndex.js";
+import { normalizeQuery, searchPageForQuery } from "./pdfFuzzySearch.js";
+import { correctSelectedPdfText } from "./pdfTextCorrection.js";
+import { analyzePageLayout } from "./pdfPageLayout.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
+
+const InsertPageIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M13 10h-2v3H8v2h3v3h2v-3h3v-2h-3z" />
+    <path d="m19.94 7.68-.03-.09a.8.8 0 0 0-.2-.29l-5-5c-.09-.09-.19-.15-.29-.2l-.09-.03a.8.8 0 0 0-.26-.05c-.02 0-.04-.01-.06-.01H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-12s-.01-.04-.01-.06c0-.09-.02-.17-.05-.26ZM6 20V4h7v4c0 .55.45 1 1 1h4v11z" />
+  </svg>
+);
+
+const DeletePageIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M8 13h8v2H8z" />
+    <path d="m19.94 7.68-.03-.09a.8.8 0 0 0-.2-.29l-5-5c-.09-.09-.19-.15-.29-.2l-.09-.03a.8.8 0 0 0-.26-.05c-.02 0-.04-.01-.06-.01H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-12s-.01-.04-.01-.06c0-.09-.02-.17-.05-.26ZM6 20V4h7v4c0 .55.45 1 1 1h4v11z" />
+  </svg>
+);
 
 const PDF_TYPE_LABEL = {
   "text-based": "Text-based",
@@ -223,13 +241,6 @@ const ArrowToolIcon = () => (
   </svg>
 );
 
-const StrokeBorderIcon = () => (
-  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
-    <path d="M11 7h2v2h-2zm0 8h2v2h-2zm-4-4h2v2H7zm8 0h2v2h-2zm-4 0h2v2h-2z" />
-    <path d="M17 3H3v18h18V3zm2 4v12H5V5h14z" />
-  </svg>
-);
-
 // "smartVideo" tool-strip icon (Extract Eidos and Find Videos) — see the
 // Smart Video Search state/handlers further down, the smartVideoCapture
 // branch in the annotation-drawing effect, and <SmartVideoPanel> in the render.
@@ -273,13 +284,6 @@ const dynamicZoomGain = (baseGain, currentZoom) => baseGain / (1 + ZOOM_RESISTAN
 const ZOOM_HOLD_TICK_MS = 48;
 const ZOOM_HOLD_RAMP_MS = 1800;
 const ZOOM_HOLD_MAX_MULTIPLIER = 8;
-const PDF_FLOATING_TOOLBAR_MARGIN = 16;
-// How far past its own resting margin the handle has to be dragged, toward
-// the edge the toolbar is already docked at, before the toolbar tucks away
-// collapsed (see toolbarCollapsed) — has to clear "just reached the edge"
-// (that's the normal resting position already) by a deliberate margin so an
-// ordinary drag-to-reposition near that edge doesn't collapse it by accident.
-const TOOLBAR_COLLAPSE_THRESHOLD = 56;
 
 // ── Momentum ("billiard ball") panning ──────────────────────────────────────
 // After a drag/pan is released fast enough, the scroll container keeps
@@ -448,7 +452,7 @@ const getSafeCanvasOutputScale = (width, height, deviceScale = window.devicePixe
   return Math.max(0.1, Math.min(deviceScale, dimLimitedScale, areaLimitedScale));
 };
 const DEFAULT_PEN_SETTINGS = {
-  dynamic: false,
+  dynamic: true, // always on now — no toggle, no per-session setting
   stabilization: 45,
   pressureAssist: 55,
   taper: 72,
@@ -540,21 +544,29 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   annotToolColors: DEFAULT_ANNOT_TOOL_COLORS,
   annotSize: 16,
   penSize: 2,
-  penDynamic: DEFAULT_PEN_SETTINGS.dynamic,
   arrowSize: 3,
   penStabilization: DEFAULT_PEN_SETTINGS.stabilization,
   penPressureAssist: DEFAULT_PEN_SETTINGS.pressureAssist,
   penTaper: DEFAULT_PEN_SETTINGS.taper,
   penFlow: DEFAULT_PEN_SETTINGS.flow,
-  penBorder: DEFAULT_PEN_SETTINGS.border,
   penNibAngle: DEFAULT_PEN_SETTINGS.nibAngle,
   penNibSpread: DEFAULT_PEN_SETTINGS.nibSpread,
   penType: "ball",
   eraserSize: 18,
   eraserMode: "standard",
   highlightMode: "freehand",
-  highlightAutoWidth: true,
+  // Off by default so a plain drag isn't unexpectedly word-snapped; when
+  // turned on, "line" mode's onMove continuously re-snaps to whichever
+  // word is under the cursor and grows from the starting word out to it
+  // (see autoWidthLocked's onMove branch) — not a per-word stepped stroke.
+  highlightAutoWidth: false,
   highlightTaperEnds: true,
+  // Opt-in: clamps the highlight's rendered color to a legible lightness
+  // and masks/repaints the original PDF text underneath in a contrasting
+  // color (see findSpansOverlappingHighlight below and
+  // drawMaskedHighlightText in annotationDraw.js). Off by default — only
+  // applies to highlights drawn while this is on.
+  highlightAutoContrast: false,
   annotOpacity: 35,
   textFontFamily: "Georgia",
   textFontSize: 16,
@@ -562,11 +574,16 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   textBold: false,
   textItalic: false,
   textUnderline: false,
-  textBordered: false,
   textBackground: false,
   textBackgroundColor: "#FFE066",
+  // 100 = the original fixed fontSize*0.18/0.16 ratio (annotationDraw.js's
+  // "text" case) — a multiplier on that ratio, not an absolute pixel
+  // value, so it still scales sensibly across different font sizes.
+  textPadding: 100,
   shapeBorderStyle: "solid",
   shapeBorderRadius: 0,
+  shapeBackground: false,
+  shapeBackgroundColor: "#FFE066",
 };
 const isHexColor = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 const readNumberSetting = (value, fallback, min, max) => (
@@ -589,13 +606,11 @@ const loadPdfToolbarSettings = () => {
       annotToolColors: colors,
       annotSize: readNumberSetting(parsed.annotSize, DEFAULT_PDF_TOOLBAR_SETTINGS.annotSize, 4, 96),
       penSize: readNumberSetting(parsed.penSize, DEFAULT_PDF_TOOLBAR_SETTINGS.penSize, 1, 36),
-      penDynamic: readBooleanSetting(parsed.penDynamic, DEFAULT_PDF_TOOLBAR_SETTINGS.penDynamic),
       arrowSize: readNumberSetting(parsed.arrowSize, DEFAULT_PDF_TOOLBAR_SETTINGS.arrowSize, 1, 20),
       penStabilization: readNumberSetting(parsed.penStabilization, DEFAULT_PDF_TOOLBAR_SETTINGS.penStabilization, 0, 100),
       penPressureAssist: readNumberSetting(parsed.penPressureAssist, DEFAULT_PDF_TOOLBAR_SETTINGS.penPressureAssist, 0, 100),
       penTaper: readNumberSetting(parsed.penTaper, DEFAULT_PDF_TOOLBAR_SETTINGS.penTaper, 0, 100),
       penFlow: readNumberSetting(parsed.penFlow, DEFAULT_PDF_TOOLBAR_SETTINGS.penFlow, 0, 100),
-      penBorder: readBooleanSetting(parsed.penBorder, DEFAULT_PDF_TOOLBAR_SETTINGS.penBorder),
       penNibAngle: readNumberSetting(parsed.penNibAngle, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibAngle, 0, 180),
       penNibSpread: readNumberSetting(parsed.penNibSpread, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibSpread, 0, 100),
       penType: ["ball", "fountain"].includes(parsed.penType) ? parsed.penType : DEFAULT_PDF_TOOLBAR_SETTINGS.penType,
@@ -604,6 +619,7 @@ const loadPdfToolbarSettings = () => {
       highlightMode: ["freehand", "line"].includes(parsed.highlightMode) ? parsed.highlightMode : DEFAULT_PDF_TOOLBAR_SETTINGS.highlightMode,
       highlightAutoWidth: readBooleanSetting(parsed.highlightAutoWidth, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoWidth),
       highlightTaperEnds: readBooleanSetting(parsed.highlightTaperEnds, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightTaperEnds),
+      highlightAutoContrast: readBooleanSetting(parsed.highlightAutoContrast, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoContrast),
       annotOpacity: readNumberSetting(parsed.annotOpacity, DEFAULT_PDF_TOOLBAR_SETTINGS.annotOpacity, OPACITY_MIN_PCT, OPACITY_MAX_PCT),
       textFontFamily: TEXT_FONT_FAMILIES.some(({ key }) => key === parsed.textFontFamily) ? parsed.textFontFamily : DEFAULT_PDF_TOOLBAR_SETTINGS.textFontFamily,
       textFontSize: readNumberSetting(parsed.textFontSize, DEFAULT_PDF_TOOLBAR_SETTINGS.textFontSize, 10, 48),
@@ -611,11 +627,13 @@ const loadPdfToolbarSettings = () => {
       textBold: readBooleanSetting(parsed.textBold, DEFAULT_PDF_TOOLBAR_SETTINGS.textBold),
       textItalic: readBooleanSetting(parsed.textItalic, DEFAULT_PDF_TOOLBAR_SETTINGS.textItalic),
       textUnderline: readBooleanSetting(parsed.textUnderline, DEFAULT_PDF_TOOLBAR_SETTINGS.textUnderline),
-      textBordered: readBooleanSetting(parsed.textBordered, DEFAULT_PDF_TOOLBAR_SETTINGS.textBordered),
       textBackground: readBooleanSetting(parsed.textBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.textBackground),
       textBackgroundColor: isHexColor(parsed.textBackgroundColor) ? parsed.textBackgroundColor : DEFAULT_PDF_TOOLBAR_SETTINGS.textBackgroundColor,
+      textPadding: readNumberSetting(parsed.textPadding, DEFAULT_PDF_TOOLBAR_SETTINGS.textPadding, 0, 300),
       shapeBorderStyle: ["solid", "dashed", "dotted"].includes(parsed.shapeBorderStyle) ? parsed.shapeBorderStyle : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderStyle,
       shapeBorderRadius: readNumberSetting(parsed.shapeBorderRadius, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderRadius, 0, 60),
+      shapeBackground: readBooleanSetting(parsed.shapeBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackground),
+      shapeBackgroundColor: isHexColor(parsed.shapeBackgroundColor) ? parsed.shapeBackgroundColor : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackgroundColor,
     };
   } catch {
     return DEFAULT_PDF_TOOLBAR_SETTINGS;
@@ -625,6 +643,13 @@ const savePdfToolbarSettings = (settings) => {
   try {
     localStorage.setItem(PDF_TOOLBAR_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
   } catch {}
+};
+const distToSegment = (px, py, x1, y1, x2, y2) => {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 };
 const smoothStrokePoint = (points, nextPoint, stabilization, scale = 1) => {
   if (!points.length) return nextPoint;
@@ -1097,6 +1122,41 @@ const PDFPage = forwardRef(({
   const [filename, setFilename]     = useState("");
   const [pageNum, setPageNum]       = useState(1);
   const [pageCount, setPageCount]   = useState(0);
+  // Booklet mode shows pageNum alongside a second, independently-picked
+  // companion page (not fixed to pageNum+1 — e.g. {1,7} is a valid pair).
+  // Read-only: full annotation editing stays on pageNum only, the
+  // companion is a plain raster page rendered via the same renderPage()
+  // used for pageNum, just without the interactive canvas layers.
+  const [readingMode, setReadingMode] = useState("single"); // "single" | "booklet"
+  const [bookletRightPage, setBookletRightPage] = useState(null);
+  const [insertingBlankPage, setInsertingBlankPage] = useState(false);
+  const [deletingPage, setDeletingPage] = useState(false);
+  // Page numbers this reading session itself inserted blank via the toolbar
+  // button — the ONLY pages eligible for the page-corner Delete button
+  // (arbitrary real content can't be one-click-deleted, only a blank page
+  // just added can). Client-side/session-only, not persisted — re-derived
+  // fresh each time a page is inserted/deleted, not restored on reload.
+  const [blankInsertedPages, setBlankInsertedPages] = useState(() => new Set());
+
+  // ── Document text search ────────────────────────────────────────────────
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  // [{page, itemIndexes, matchType, confidence, originalMatchedText}],
+  // sorted by page then position — matchType/confidence come from the
+  // tolerant search pipeline (pdfFuzzySearch.js): "exact" for a literal
+  // substring match down through "fuzzy" for a distorted-text match found
+  // only via edit-distance, see pdfSearchIndexCacheRef below.
+  const [searchMatches, setSearchMatches] = useState([]);
+  const [searchActiveIndex, setSearchActiveIndex] = useState(-1);
+  const [searchScanning, setSearchScanning] = useState(false);
+  const pageTextItemsCacheRef = useRef({}); // { [pageNum]: pdf.js text-content items[] } — raw getTextContent() results, independent of zoom/scale
+  // Per-page normalized/compact/tokenized search index (pdfSearchIndex.js) —
+  // built once per page from pageTextItemsCacheRef's items and cached
+  // alongside it, cleared at the same point (loadPdfBytes) on document change.
+  const pageIndexCacheRef = useRef(createPageIndexCache());
+  const searchCanvasRef = useRef(null);
+  const searchRunIdRef = useRef(0);
+  const [hasSourceId, setHasSourceId] = useState(false); // mirrors currentSourceIdRef.current — see loadPdfBytes/loadFromSource for why a plain ref isn't enough here
   const [pdfType, setPdfType]       = useState(null);
   useEffect(() => { onPdfTypeChange?.(pdfType); }, [pdfType]); // eslint-disable-line react-hooks/exhaustive-deps -- onPdfTypeChange is a stable-enough callback prop, not a reactive dep
   const [loading, setLoading]       = useState(false);
@@ -1122,28 +1182,65 @@ const PDFPage = forwardRef(({
   const savedRatioRef                 = useRef(0.42);
   const contentRef                    = useRef(null);
   const toolbarRef                    = useRef(null);
-  const toolbarDragStateRef           = useRef(null);
-  const toolbarLongPressRef           = useRef(null); // { timer, onMove, onEnd } — the "holding, not yet armed" phase
+  const toolButtonRefs                = useRef({}); // key -> tool strip button element, used to anchor .annot_tool_options at that button's own position instead of the toolbar's fixed corner
+  const toolbarDragStateRef           = useRef(null); // { startX, startY, pointerId } while the drag handle is held
   const toolbarTouchLabelTimerRef     = useRef(0);
   const fitScaleRef                 = useRef(1);
   const zoomRef                     = useRef(1);
   const extractModeRef              = useRef("ai");
-  const [toolbarDock, setToolbarDock] = useState({ edge: "top", offset: 24 });
-  const [toolbarDragging, setToolbarDragging] = useState(false);
-  const [toolbarBounds, setToolbarBounds] = useState({ top: 0, left: 0, width: 0, height: 0 });
+  // Which edge the toolbar is docked to — "top" (the default) and "bottom"
+  // are full-width flat bars in normal document flow (never overlapping the
+  // PDF pages below/above them); "left" and "right" are full-height flat
+  // bars (#pdf_page switches to a row flex layout for these, see
+  // pdf_page--toolbar-side below). No floating/overlay mode at all — dragging
+  // the single handle button (see handleToolbarHandlePointerDown further
+  // down) just reads which direction you dragged and snaps straight to
+  // that flat dock, it never visually follows the cursor.
+  const [toolbarDock, setToolbarDock] = useState({ edge: "top" });
+  const [toolOptionsOffset, setToolOptionsOffset] = useState(0); // .annot_tool_options' own left (top/bottom dock) or top (left/right dock) offset, measured from the active tool's own button — see the effect near annotTool below
   const [toolbarTouchLabel, setToolbarTouchLabel] = useState(null); // { key, label }
-  // Dragging the handle further into the edge the toolbar is already
-  // docked at (past its own resting margin, not just up to it) tucks the
-  // whole toolbar out of view behind that edge — only the handle stays
-  // reachable, so it can be dragged/tapped again to bring the toolbar back.
-  // Refs (not the state directly) are what handleToolbarDragStart/the
-  // pointermove tracking effect read — both are useCallback([])/useEffect
-  // with stable deps, so a directly-closed-over state value would go stale.
-  const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
-  const toolbarCollapsedRef = useRef(false);
-  useEffect(() => { toolbarCollapsedRef.current = toolbarCollapsed; }, [toolbarCollapsed]);
-  const toolbarDockRef = useRef(toolbarDock);
-  useEffect(() => { toolbarDockRef.current = toolbarDock; }, [toolbarDock]);
+
+  // Single drag handle (replaces the old 4-button dock pad) — press and
+  // drag in any direction; once the drag clears a small dead zone (so an
+  // ordinary click/tap never accidentally redocks it), the DOMINANT axis
+  // of the drag (whichever of dx/dy is bigger) picks the edge, live,
+  // every move tick — same "drag right to dock right" gesture the old
+  // floating handle had, just without any floating visual to follow along
+  // the way, since every dock is already a flat in-flow bar now.
+  const TOOLBAR_DRAG_DEAD_ZONE = 18;
+  const handleToolbarHandlePointerDown = useCallback((event) => {
+    if (event.button != null && event.button !== 0 && !event.touches) return;
+    event.preventDefault();
+    const point = (e) => (e.touches ? (e.touches[0] || e.changedTouches[0]) : e);
+    const p0 = point(event);
+    toolbarDragStateRef.current = { startX: p0.clientX, startY: p0.clientY, pointerId: event.pointerId ?? null };
+    if (event.pointerId != null) event.currentTarget.setPointerCapture?.(event.pointerId);
+  }, []);
+
+  useEffect(() => {
+    const onMove = (event) => {
+      const drag = toolbarDragStateRef.current;
+      if (!drag || (drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < TOOLBAR_DRAG_DEAD_ZONE) return;
+      const edge = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "bottom" : "top");
+      setToolbarDock((prev) => (prev.edge === edge ? prev : { edge }));
+    };
+    const onEnd = (event) => {
+      const drag = toolbarDragStateRef.current;
+      if (!drag || (drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
+      toolbarDragStateRef.current = null;
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onEnd);
+    window.addEventListener("pointercancel", onEnd);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+      window.removeEventListener("pointercancel", onEnd);
+    };
+  }, []);
 
   const [hyleData, setHyleData]       = useState(null);
   const [hyleFontSize, setHyleFontSize] = useState(1);
@@ -1208,6 +1305,10 @@ const PDFPage = forwardRef(({
   const [selectionToolResult, setSelectionToolResult] = useState(null); // { label, text }
   const [selectionToolError,  setSelectionToolError]  = useState("");
   const [selectionVerifyBusy, setSelectionVerifyBusy] = useState(false); // AMCTOSHS builder source verification
+  // Local/free/deterministic "Correct text" action result (pdfTextCorrection.js)
+  // — a full correctSelectedPdfText() return value, distinct from the AI-backed
+  // translate/define/linguistic-check tools' simpler { label, text } shape.
+  const [correctionResult, setCorrectionResult] = useState(null);
 
   const [history, setHistory]               = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -1343,163 +1444,6 @@ const PDFPage = forwardRef(({
     });
   }, [mdCurrentPage.page, scrollReaderToPage, splitRatio]);
 
-  const normalizeToolbarDock = useCallback((dock) => {
-    const contentEl = contentRef.current;
-    const toolbarEl = toolbarRef.current;
-    if (!contentEl || !toolbarEl || !dock) return dock;
-    const maxLeft = Math.max(
-      PDF_FLOATING_TOOLBAR_MARGIN,
-      contentEl.clientWidth - toolbarEl.offsetWidth - PDF_FLOATING_TOOLBAR_MARGIN,
-    );
-    const maxTop = Math.max(
-      PDF_FLOATING_TOOLBAR_MARGIN,
-      contentEl.clientHeight - toolbarEl.offsetHeight - PDF_FLOATING_TOOLBAR_MARGIN,
-    );
-    return {
-      edge: dock.edge,
-      offset: Math.round(clamp(
-        dock.offset,
-        PDF_FLOATING_TOOLBAR_MARGIN,
-        dock.edge === "top" || dock.edge === "bottom" ? maxLeft : maxTop,
-      )),
-    };
-  }, []);
-
-  useLayoutEffect(() => {
-    const syncToolbarLayout = () => {
-      const contentEl = contentRef.current;
-      if (contentEl) {
-        setToolbarBounds({
-          top: contentEl.offsetTop,
-          left: contentEl.offsetLeft,
-          width: contentEl.clientWidth,
-          height: contentEl.clientHeight,
-        });
-      }
-      setToolbarDock((prev) => {
-        const next = normalizeToolbarDock(prev);
-        return next.edge === prev.edge && next.offset === prev.offset ? prev : next;
-      });
-    };
-    syncToolbarLayout();
-    window.addEventListener("resize", syncToolbarLayout);
-    const resizeObserver = typeof ResizeObserver === "function" ? new ResizeObserver(syncToolbarLayout) : null;
-    if (resizeObserver && contentRef.current) resizeObserver.observe(contentRef.current);
-    if (resizeObserver && toolbarRef.current) resizeObserver.observe(toolbarRef.current);
-    return () => {
-      window.removeEventListener("resize", syncToolbarLayout);
-      resizeObserver?.disconnect();
-    };
-  }, [normalizeToolbarDock]);
-
-  useEffect(() => {
-    const onPointerMove = (event) => {
-      const drag = toolbarDragStateRef.current;
-      if (!drag || (drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
-      event.preventDefault();
-      const rawLeft = event.clientX - drag.boundsLeft - drag.shiftX;
-      const rawTop  = event.clientY - drag.boundsTop - drag.shiftY;
-
-      // Pushed further into the edge it's already docked at (past the
-      // resting margin, not just up to it) — tuck it away collapsed. Only
-      // ever checked against collapseEdge, the edge fixed at drag-start, so
-      // snapping to a *different* edge mid-drag can't also trigger this.
-      const pastEdge =
-        drag.collapseEdge === "top"    ? PDF_FLOATING_TOOLBAR_MARGIN - rawTop :
-        drag.collapseEdge === "bottom" ? (rawTop + drag.height) - (drag.boundsHeight - PDF_FLOATING_TOOLBAR_MARGIN) :
-        drag.collapseEdge === "left"   ? PDF_FLOATING_TOOLBAR_MARGIN - rawLeft :
-                                          (rawLeft + drag.width) - (drag.boundsWidth - PDF_FLOATING_TOOLBAR_MARGIN);
-      if (pastEdge > TOOLBAR_COLLAPSE_THRESHOLD) {
-        setToolbarCollapsed(true);
-        return; // frozen at the last dock position for the rest of this gesture
-      }
-
-      const nextLeft = clamp(
-        rawLeft,
-        PDF_FLOATING_TOOLBAR_MARGIN,
-        Math.max(PDF_FLOATING_TOOLBAR_MARGIN, drag.boundsWidth - drag.width - PDF_FLOATING_TOOLBAR_MARGIN),
-      );
-      const nextTop = clamp(
-        rawTop,
-        PDF_FLOATING_TOOLBAR_MARGIN,
-        Math.max(PDF_FLOATING_TOOLBAR_MARGIN, drag.boundsHeight - drag.height - PDF_FLOATING_TOOLBAR_MARGIN),
-      );
-      const snapCandidates = [
-        { edge: "top", value: nextTop - PDF_FLOATING_TOOLBAR_MARGIN, offset: nextLeft },
-        { edge: "bottom", value: drag.boundsHeight - PDF_FLOATING_TOOLBAR_MARGIN - (nextTop + drag.height), offset: nextLeft },
-        { edge: "left", value: nextLeft - PDF_FLOATING_TOOLBAR_MARGIN, offset: nextTop },
-        { edge: "right", value: drag.boundsWidth - PDF_FLOATING_TOOLBAR_MARGIN - (nextLeft + drag.width), offset: nextTop },
-      ].sort((a, b) => a.value - b.value);
-      setToolbarDock(normalizeToolbarDock({ edge: snapCandidates[0].edge, offset: snapCandidates[0].offset }));
-    };
-
-    const onPointerEnd = (event) => {
-      const drag = toolbarDragStateRef.current;
-      if (!drag || (drag.pointerId != null && event.pointerId !== drag.pointerId)) return;
-      toolbarDragStateRef.current = null;
-      setToolbarDragging(false);
-      setToolbarDock((prev) => normalizeToolbarDock(prev));
-      // Restore normal touch handling now that the drag is over — see
-      // handleToolbarDragStart's own comment on why this gets set in the
-      // first place.
-      if (toolbarRef.current) toolbarRef.current.style.touchAction = "";
-    };
-
-    window.addEventListener("pointermove", onPointerMove, { passive: false });
-    window.addEventListener("pointerup", onPointerEnd);
-    window.addEventListener("pointercancel", onPointerEnd);
-    return () => {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerEnd);
-      window.removeEventListener("pointercancel", onPointerEnd);
-    };
-  }, [normalizeToolbarDock]);
-
-  // A small dedicated handle (see .pdf_toolbar_edge_handle in pdfPage.css,
-  // positioned on whichever edge faces inward — opposite the dock edge)
-  // is the only drag surface now, so this can start the drag immediately
-  // on press instead of needing a long-press to disambiguate it from
-  // clicking a tool button — the earlier long-press+vibrate approach hit
-  // real iOS Safari reliability issues (Pointer Events/setPointerCapture)
-  // that a dedicated, unambiguous grab target sidesteps entirely.
-  const handleToolbarDragStart = useCallback((event) => {
-    if (event.button != null && event.button !== 0 && !event.touches) return;
-    event.preventDefault();
-    // Collapsed: this press only reveals the toolbar again — it doesn't
-    // also start a drag. Measuring the toolbar's rect here would capture
-    // its collapsed (near-zero) size, since the setToolbarCollapsed(false)
-    // below hasn't re-rendered/re-laid-out yet — a real drag has to wait
-    // for a second, separate press once the toolbar is back to full size.
-    if (toolbarCollapsedRef.current) {
-      setToolbarCollapsed(false);
-      return;
-    }
-    const point = (e) => (e.touches ? (e.touches[0] || e.changedTouches[0]) : e);
-    const p0 = point(event);
-    const contentEl = contentRef.current;
-    const toolbarEl = toolbarRef.current;
-    if (!contentEl || !toolbarEl) return;
-    const contentRect = contentEl.getBoundingClientRect();
-    const toolbarRect = toolbarEl.getBoundingClientRect();
-    toolbarDragStateRef.current = {
-      pointerId: event.pointerId ?? null,
-      shiftX: p0.clientX - toolbarRect.left,
-      shiftY: p0.clientY - toolbarRect.top,
-      width: toolbarRect.width,
-      height: toolbarRect.height,
-      boundsLeft: contentRect.left,
-      boundsTop: contentRect.top,
-      boundsWidth: contentRect.width,
-      boundsHeight: contentRect.height,
-      // Fixed for the whole gesture — which edge "collapse" pushes toward
-      // (see the pointermove tracking effect below). Read from the ref,
-      // not toolbarDock directly: this callback has an empty dep array.
-      collapseEdge: toolbarDockRef.current.edge,
-    };
-    if (event.pointerId != null) toolbarEl.setPointerCapture?.(event.pointerId);
-    setToolbarDragging(true);
-    setColorMenuOpen(false);
-  }, []);
 
   const showToolbarTouchLabel = useCallback((key, label) => {
     if (toolbarTouchLabelTimerRef.current) clearTimeout(toolbarTouchLabelTimerRef.current);
@@ -1717,7 +1661,7 @@ const PDFPage = forwardRef(({
     }
   }, [smartVideoSavedId, fetchSmartVideoSaved]);
 
-  // ── AMCTOSHS Entities Builder ────────────────────────────────────────────
+  // ── AMCTOSHS Entity Builder ────────────────────────────────────────────
   // Independent of the annotTool tool-strip. It only builds from explicit
   // user-provided text: the latest manual text selection or text typed into
   // the panel. It intentionally does not read the current page text.
@@ -1750,13 +1694,11 @@ const PDFPage = forwardRef(({
   const [annotToolColors, setAnnotToolColors] = useState(savedToolbarSettings.annotToolColors);
   const [annotSize,      setAnnotSize]      = useState(savedToolbarSettings.annotSize);  // highlight lineWidth
   const [penSize,        setPenSize]        = useState(savedToolbarSettings.penSize);   // pen lineWidth
-  const [penDynamic, setPenDynamic] = useState(savedToolbarSettings.penDynamic);
   const [arrowSize,      setArrowSize]      = useState(savedToolbarSettings.arrowSize);   // arrow lineWidth
   const [penStabilization, setPenStabilization] = useState(savedToolbarSettings.penStabilization);
   const [penPressureAssist, setPenPressureAssist] = useState(savedToolbarSettings.penPressureAssist);
   const [penTaper, setPenTaper] = useState(savedToolbarSettings.penTaper);
   const [penFlow, setPenFlow] = useState(savedToolbarSettings.penFlow);
-  const [penBorder, setPenBorder] = useState(savedToolbarSettings.penBorder);
   const [penNibAngle, setPenNibAngle] = useState(savedToolbarSettings.penNibAngle);
   const [penNibSpread, setPenNibSpread] = useState(savedToolbarSettings.penNibSpread);
   const [penType,          setPenType]          = useState(savedToolbarSettings.penType);
@@ -1765,6 +1707,7 @@ const PDFPage = forwardRef(({
   const [highlightMode,  setHighlightMode]  = useState(savedToolbarSettings.highlightMode); // "freehand" | "line"
   const [highlightAutoWidth, setHighlightAutoWidth] = useState(savedToolbarSettings.highlightAutoWidth);
   const [highlightTaperEnds, setHighlightTaperEnds] = useState(savedToolbarSettings.highlightTaperEnds);
+  const [highlightAutoContrast, setHighlightAutoContrast] = useState(savedToolbarSettings.highlightAutoContrast);
   const [annotOpacity,      setAnnotOpacity]      = useState(savedToolbarSettings.annotOpacity);    // % — highlight fill opacity
   const [textFontFamily, setTextFontFamily] = useState(savedToolbarSettings.textFontFamily);
   const [textFontSize, setTextFontSize] = useState(savedToolbarSettings.textFontSize);
@@ -1772,18 +1715,23 @@ const PDFPage = forwardRef(({
   const [textBold, setTextBold] = useState(savedToolbarSettings.textBold);
   const [textItalic, setTextItalic] = useState(savedToolbarSettings.textItalic);
   const [textUnderline, setTextUnderline] = useState(savedToolbarSettings.textUnderline);
-  const [textBordered, setTextBordered] = useState(savedToolbarSettings.textBordered);
   const [textBackground, setTextBackground] = useState(savedToolbarSettings.textBackground);
   const [textBackgroundColor, setTextBackgroundColor] = useState(savedToolbarSettings.textBackgroundColor);
+  const [textPadding, setTextPadding] = useState(savedToolbarSettings.textPadding);
   // Shapes tools only (line/arrow/rect/circle) — border dash pattern and
   // (rect only) corner rounding. See annotationDraw.js's own "rect"/
   // shared-dash handling for how these render.
   const [shapeBorderStyle, setShapeBorderStyle] = useState(savedToolbarSettings.shapeBorderStyle);
   const [shapeBorderRadius, setShapeBorderRadius] = useState(savedToolbarSettings.shapeBorderRadius);
+  // Fill for closed shapes only (rect/circle — line/arrow have no
+  // interior to fill), same low-alpha wash convention as textBackground.
+  const [shapeBackground, setShapeBackground] = useState(savedToolbarSettings.shapeBackground);
+  const [shapeBackgroundColor, setShapeBackgroundColor] = useState(savedToolbarSettings.shapeBackgroundColor);
   // Which color the shared floating dropdown (.annot_dd--colors) writes
-  // to when a swatch is clicked — "ink" (annotColor, every tool) or
-  // "background" (textBackgroundColor, Text tool's Background swatch
-  // only). Not persisted — always resets to "ink" on reload.
+  // to when a swatch is clicked — "ink" (annotColor, every tool),
+  // "background" (textBackgroundColor, Text tool's Background swatch),
+  // or "shapeFill" (shapeBackgroundColor, Shapes tool's Background
+  // swatch). Not persisted — always resets to "ink" on reload.
   const [colorMenuTarget, setColorMenuTarget] = useState("ink");
   const [drawTextBusy, setDrawTextBusy] = useState(false);
   const [drawTextStatus, setDrawTextStatus] = useState("");
@@ -1822,13 +1770,11 @@ const PDFPage = forwardRef(({
       annotToolColors,
       annotSize,
       penSize,
-      penDynamic,
       arrowSize,
       penStabilization,
       penPressureAssist,
       penTaper,
       penFlow,
-      penBorder,
       penNibAngle,
       penNibSpread,
       penType,
@@ -1837,6 +1783,7 @@ const PDFPage = forwardRef(({
       highlightMode,
       highlightAutoWidth,
       highlightTaperEnds,
+      highlightAutoContrast,
       annotOpacity,
       textFontFamily,
       textFontSize,
@@ -1844,23 +1791,23 @@ const PDFPage = forwardRef(({
       textBold,
       textItalic,
       textUnderline,
-      textBordered,
       textBackground,
       textBackgroundColor,
+      textPadding,
       shapeBorderStyle,
       shapeBorderRadius,
+      shapeBackground,
+      shapeBackgroundColor,
     });
   }, [
     annotToolColors,
     annotSize,
     penSize,
-    penDynamic,
     arrowSize,
     penStabilization,
     penPressureAssist,
     penTaper,
     penFlow,
-    penBorder,
     penNibAngle,
     penNibSpread,
     penType,
@@ -1869,6 +1816,7 @@ const PDFPage = forwardRef(({
     highlightMode,
     highlightAutoWidth,
     highlightTaperEnds,
+    highlightAutoContrast,
     annotOpacity,
     textFontFamily,
     textFontSize,
@@ -1876,11 +1824,13 @@ const PDFPage = forwardRef(({
     textBold,
     textItalic,
     textUnderline,
-    textBordered,
     textBackground,
     textBackgroundColor,
+    textPadding,
     shapeBorderStyle,
     shapeBorderRadius,
+    shapeBackground,
+    shapeBackgroundColor,
   ]);
   const getOcrWorker = useCallback(async () => {
     if (ocrWorkerRef.current) return ocrWorkerRef.current;
@@ -1940,15 +1890,48 @@ const PDFPage = forwardRef(({
 
   const findTextAnnotationAt = useCallback((x, y) => {
     const scale = fitScaleRef.current * zoomRef.current;
+    // x/y come in canvas-space (matches toCanvas's own p.x/p.y, and every
+    // caller of this function), but getTextAnnotationBounds returns a box
+    // in rendered/screen space (ann.x * scale — see its own comment on
+    // the `ann.x * scale` line) since 3 of its 4 call sites need that for
+    // absolute vx/vy positioning. Scale the point up to match, or this
+    // silently only hits at combined scale === 1 (fitScale*zoom, almost
+    // never exactly 1 for a real page/viewport size).
+    const sx = x * scale;
+    const sy = y * scale;
     const anns = annotations[pageNum] || [];
     for (let i = anns.length - 1; i >= 0; i--) {
       const ann = anns[i];
       if (ann.type !== "text") continue;
       const box = getTextAnnotationBounds(ann, scale);
-      if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom) return ann;
+      if (sx >= box.left && sx <= box.right && sy >= box.top && sy <= box.bottom) return ann;
     }
     return null;
   }, [annotations, getTextAnnotationBounds, pageNum]);
+
+  // x/y here are canvas-space, matching toCanvas's p.x/p.y directly — a
+  // highlight's own points/lineWidth are stored unscaled (see
+  // annotationDraw.js's `p(v) = v * s` / `(ann.lineWidth||16) * s`), so
+  // unlike findTextAnnotationAt above this needs no scale conversion.
+  const findHighlightAnnotationAt = useCallback((x, y) => {
+    const anns = annotations[pageNum] || [];
+    for (let i = anns.length - 1; i >= 0; i--) {
+      const ann = anns[i];
+      if (ann.type !== "highlight" || !Array.isArray(ann.points) || !ann.points.length) continue;
+      const tolerance = (ann.lineWidth || 16) / 2 + 4;
+      if (ann.points.length === 1) {
+        if (Math.hypot(x - ann.points[0].x, y - ann.points[0].y) <= tolerance) return ann;
+        continue;
+      }
+      const pts = ann.mode === "line" ? [ann.points[0], ann.points[ann.points.length - 1]] : ann.points;
+      let hit = false;
+      for (let j = 0; j < pts.length - 1; j++) {
+        if (distToSegment(x, y, pts[j].x, pts[j].y, pts[j + 1].x, pts[j + 1].y) <= tolerance) { hit = true; break; }
+      }
+      if (hit) return ann;
+    }
+    return null;
+  }, [annotations, pageNum]);
 
   useEffect(() => () => {
     drawTextJobRef.current = 0;
@@ -1961,6 +1944,10 @@ const PDFPage = forwardRef(({
   // Autosave the annotation session in the background — debounced so a whole
   // stroke's worth of state updates only writes once, a beat after the user
   // pauses. Server-side model (SourceAnnotation) already existed, just unused.
+  // history rides along on the same debounced write (each entry already
+  // carries its own `time`, stamped by logAnnotHistory when it's created)
+  // so the Annotation History panel survives a reload instead of resetting
+  // empty every session.
   useEffect(() => {
     if (skipNextAnnotationAutosaveRef.current) { skipNextAnnotationAutosaveRef.current = false; return; }
     const sourceId = currentSourceIdRef.current;
@@ -1969,28 +1956,48 @@ const PDFPage = forwardRef(({
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: annotations }),
+        body: JSON.stringify({ layers: annotations, history: annotHistory }),
       }).catch(() => {}); // best-effort background autosave — a failed write shouldn't interrupt reading/annotating
     }, 1500);
     return () => clearTimeout(timer);
-  }, [annotations]);
+  }, [annotations, annotHistory]);
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
-  const [textActionMenu, setTextActionMenu] = useState(null); // { vx, vy, width, editingId }
+  const [textActionMenu, setTextActionMenu] = useState(null); // { vx, vy, editingId }
   const [textStyleTargetId, setTextStyleTargetId] = useState(null); // id of an existing text annotation being style-edited
   const [annotTextVal,   setAnnotTextVal]   = useState("");
+  const [highlightActionMenu, setHighlightActionMenu] = useState(null); // { vx, vy, editingId }
+  const [highlightStyleTargetId, setHighlightStyleTargetId] = useState(null); // id of an existing highlight being style-edited
   const annotTextInputRef = useRef(null);
   const textActionMenuRef = useRef(null);
+  const highlightActionMenuRef = useRef(null);
   const annotCanvasRef  = useRef(null);
+  // Separate, non-multiply-blended layer stacked above #pdf_annot_canvas —
+  // see drawMaskedHighlightText's own comment in annotationDraw.js for why
+  // masked/recolored highlight text can't just draw on the (CSS
+  // mix-blend-mode:multiply) annotation canvas itself: multiply can never
+  // fully replace/hide what's underneath with a new opaque color.
+  const maskCanvasRef = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
   const eraserCursorRef = useRef(null);  // eraser-size preview circle, see the effect below
   const ocrWorkerRef = useRef(null);
   const ocrWorkerPromiseRef = useRef(null);
   const drawTextJobRef = useRef(0);
 
-  // Close the floating color/text action dropdowns on an outside click
+  // Close the floating color/text/highlight action dropdowns on an outside
+  // click. Listens on "click" (fires after mouseup), not "mousedown" —
+  // mousedown fires before a button's own onClick, so with mousedown a
+  // click landing squarely on e.g. the highlight menu's Delete button could
+  // still lose a race: this handler runs first, closes/unmounts the menu,
+  // and the button's own onClick never gets a chance to fire once its DOM
+  // node is gone. Synthetic/instant test clicks never showed it (down+up
+  // with no gap leaves no time for the intervening re-render), but any
+  // real click with normal human press/release timing hits it — reported
+  // as "Delete's background flashes red then nothing happens". Listening
+  // on "click" instead means the target's own onClick (attached to the
+  // element itself) always runs before this bubbled document-level check.
   useEffect(() => {
-    if (!colorMenuOpen && !textActionMenu) return;
-    const onDocPointerDown = (e) => {
+    if (!colorMenuOpen && !textActionMenu && !highlightActionMenu) return;
+    const onDocClick = (e) => {
       if (
         colorMenuOpen
         && !(colorMenuRef.current && colorMenuRef.current.contains(e.target))
@@ -1998,15 +2005,36 @@ const PDFPage = forwardRef(({
         && !(colorMenuPopoverRef.current && colorMenuPopoverRef.current.contains(e.target))
       ) setColorMenuOpen(false);
       if (textActionMenu && textActionMenuRef.current && !textActionMenuRef.current.contains(e.target)) setTextActionMenu(null);
+      if (highlightActionMenu && highlightActionMenuRef.current && !highlightActionMenuRef.current.contains(e.target)) setHighlightActionMenu(null);
     };
-    document.addEventListener("mousedown", onDocPointerDown);
-    return () => document.removeEventListener("mousedown", onDocPointerDown);
-  }, [colorMenuOpen, textActionMenu]);
+    document.addEventListener("click", onDocClick);
+    return () => document.removeEventListener("click", onDocClick);
+  }, [colorMenuOpen, textActionMenu, highlightActionMenu]);
 
   useEffect(() => {
     if (annotTool !== "text") setTextActionMenu(null);
     if (annotTool !== "text") setTextStyleTargetId(null);
+    if (annotTool !== "highlight") setHighlightActionMenu(null);
+    if (annotTool !== "highlight") setHighlightStyleTargetId(null);
   }, [annotTool]);
+
+  // .annot_tool_options (the sub-toolbar dropdown) opens from the active
+  // tool's OWN button position, not the toolbar's fixed corner — any of
+  // the 4 SHAPE_TOOL_KEYS still anchor to the single "Shapes" button in
+  // the main strip (there's no separate button per shape), everything
+  // else anchors to its own like-named button directly.
+  useEffect(() => {
+    const anchorKey = SHAPE_TOOL_KEYS.includes(annotTool) ? "shapes" : annotTool;
+    const btn = anchorKey ? toolButtonRefs.current[anchorKey] : null;
+    const toolbarEl = toolbarRef.current;
+    if (!btn || !toolbarEl) { setToolOptionsOffset(0); return; }
+    const btnRect = btn.getBoundingClientRect();
+    const toolbarRect = toolbarEl.getBoundingClientRect();
+    const offset = (toolbarDock.edge === "left" || toolbarDock.edge === "right")
+      ? btnRect.top - toolbarRect.top
+      : btnRect.left - toolbarRect.left;
+    setToolOptionsOffset(offset);
+  }, [annotTool, toolbarDock.edge]);
 
   useEffect(() => {
     if (!annotTextInput) return;
@@ -2029,9 +2057,9 @@ const PDFPage = forwardRef(({
     setTextBold(Boolean(hit.fontBold));
     setTextItalic(Boolean(hit.fontItalic));
     setTextUnderline(Boolean(hit.textUnderline));
-    setTextBordered(Boolean(hit.textBordered));
     setTextBackground(Boolean(hit.textBackground));
     setTextBackgroundColor(hit.textBackgroundColor || annotColor);
+    setTextPadding(hit.padding ?? 100);
   }, [annotColor]);
 
   const openTextEditorForHit = useCallback((hit) => {
@@ -2095,6 +2123,69 @@ const PDFPage = forwardRef(({
     openTextEditorForHit(hit);
   }, [textActionMenu, annotations, pageNum, logAnnotHistory, primeTextStyleFromAnnotation]);
 
+  // Primes the shared highlight toolbar controls from an existing
+  // annotation — annotColor is already namespaced per-tool (see its own
+  // definition above), so this only ever touches the highlight tool's
+  // own remembered color, same as switching tools normally would.
+  const primeHighlightStyleFromAnnotation = useCallback((hit) => {
+    setAnnotColor(hit.color || annotColor);
+    setAnnotSize(hit.lineWidth || annotSize);
+    setHighlightMode(hit.mode || "freehand");
+    setHighlightTaperEnds(hit.taperEnds !== false);
+    setAnnotOpacity(Math.round((hit.opacity ?? 0.35) * 100));
+  }, [annotColor, annotSize, setAnnotColor]);
+
+  const updateStyledHighlightTarget = useCallback((patch) => {
+    if (!highlightStyleTargetId) return;
+    setAnnotations((prev) => ({
+      ...prev,
+      [pageNum]: (prev[pageNum] || []).map((ann) => (ann.id === highlightStyleTargetId ? { ...ann, ...patch } : ann)),
+    }));
+    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+    logAnnotHistory({ action: "edit", type: "highlight", page: pageNum });
+  }, [highlightStyleTargetId, pageNum, logAnnotHistory]);
+
+  // Single central sync point instead of wiring every highlight toolbar
+  // control's own onChange individually (color swatch, SizeKnob, mode
+  // toggle, taper toggle, opacity slider) — same net effect as
+  // updateStyledTextTarget's per-control calls, less places to miss one.
+  useEffect(() => {
+    if (!highlightStyleTargetId) return;
+    updateStyledHighlightTarget({
+      color: annotColor,
+      lineWidth: annotSize,
+      mode: highlightMode,
+      taperEnds: highlightTaperEnds,
+      opacity: annotOpacity / 100,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [annotColor, annotSize, highlightMode, highlightTaperEnds, annotOpacity, highlightStyleTargetId]);
+
+  const handleHighlightAction = useCallback((action) => {
+    if (!highlightActionMenu) return;
+    const hit = (annotations[pageNum] || []).find((ann) => ann.id === highlightActionMenu.editingId);
+    if (!hit) {
+      setHighlightActionMenu(null);
+      return;
+    }
+
+    if (action === "delete") {
+      setAnnotations((prev) => ({
+        ...prev,
+        [pageNum]: (prev[pageNum] || []).filter((ann) => ann.id !== hit.id),
+      }));
+      setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+      logAnnotHistory({ action: "delete", type: "highlight", page: pageNum });
+      setHighlightStyleTargetId(null);
+      setHighlightActionMenu(null);
+      return;
+    }
+
+    setHighlightStyleTargetId(hit.id);
+    primeHighlightStyleFromAnnotation(hit);
+    setHighlightActionMenu(null);
+  }, [highlightActionMenu, annotations, pageNum, logAnnotHistory, primeHighlightStyleFromAnnotation]);
+
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
   const pageContainerRefs = useRef([]);
@@ -2153,7 +2244,6 @@ const PDFPage = forwardRef(({
       setTextActionMenu({
         vx: rect.left + box.left,
         vy: rect.top + box.top,
-        width: Math.max(180, box.right - box.left + 18),
         editingId: hit.id,
       });
     };
@@ -2187,6 +2277,7 @@ const PDFPage = forwardRef(({
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
   const lastLoadedSourceKeyRef = useRef("");
   const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
+  const insertBlankPageRef = useRef(null); // latest insertBlankPageAfterCurrent closure — see its own effect further down for why this indirection is needed
   const lastLoadedFileRef = useRef(null);
   const skipNextAnnotationAutosaveRef = useRef(false); // set right before restoring a saved session, so that restore doesn't immediately re-trigger the autosave effect below
   const wheelZoomStateRef  = useRef({
@@ -2555,6 +2646,28 @@ const PDFPage = forwardRef(({
     renderPage(pageNum);
   }, [pdfDoc, pageCount, pageNum, renderPage]);
 
+  // Booklet mode's companion page — same renderPage() call, same
+  // pageCanvasRefs/renderedScaleRef arrays (index by page number), just
+  // triggered off bookletRightPage instead of pageNum.
+  useEffect(() => {
+    if (!pdfDoc || pageCount === 0) return;
+    if (readingMode !== "booklet" || !bookletRightPage) return;
+    renderedScaleRef.current[bookletRightPage - 1] = null;
+    renderPage(bookletRightPage);
+  }, [pdfDoc, pageCount, readingMode, bookletRightPage, renderPage]);
+
+  // Picking a sensible default companion page (pageNum+1) the moment
+  // booklet mode is switched on, without stomping a value the user
+  // already chose while staying in booklet mode.
+  useEffect(() => {
+    if (readingMode !== "booklet" || pageCount === 0) return;
+    setBookletRightPage((prev) => {
+      if (prev && prev >= 1 && prev <= pageCount) return prev;
+      return Math.min(pageCount, pageNum + 1);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only readingMode/pageCount should pick a fresh default; pageNum is read once at the moment of switching, not tracked afterward
+  }, [readingMode, pageCount]);
+
   // Jumping to a new page always lands at its top-left, not wherever the
   // previous page happened to be scrolled/panned to.
   useEffect(() => {
@@ -2602,7 +2715,167 @@ const PDFPage = forwardRef(({
     ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
     ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
     for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
+
+    const mc = maskCanvasRef.current;
+    if (mc) {
+      mc.width  = ac.width;
+      mc.height = ac.height;
+      mc.style.width = ac.style.width;
+      mc.style.height = ac.style.height;
+      const maskCtx = mc.getContext("2d");
+      maskCtx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+      maskCtx.clearRect(0, 0, pageViewport.width, pageViewport.height);
+      for (const ann of (annotations[pageNum] || [])) {
+        if (ann.type === "highlight") drawMaskedHighlightText(maskCtx, ann, scale);
+      }
+    }
   }, [annotations, pageNum, pageViewport]);
+
+  // Fetches (and caches) a page's raw pdf.js text-content items — the same
+  // data the "Manual mode" text-layer effect above turns into DOM word-
+  // spans, just kept at the pdf.js item level here since search only needs
+  // the item's own transform/width to draw a highlight rect, not per-word
+  // sub-splitting. Cached per page number so re-searching or paging back
+  // to an already-scanned page never re-fetches.
+  const getPageTextItems = useCallback(async (n) => {
+    if (pageTextItemsCacheRef.current[n]) return pageTextItemsCacheRef.current[n];
+    const page = await pdfDoc.getPage(n);
+    const content = await page.getTextContent();
+    pageTextItemsCacheRef.current[n] = content.items;
+    return content.items;
+  }, [pdfDoc]);
+
+  // Scans every page's text for the query, debounced so fast typing doesn't
+  // re-scan on every keystroke. Runs sequentially page-by-page (cheap after
+  // the first pass, since getPageTextItems caches) rather than in parallel,
+  // so an in-flight scan can be cleanly superseded (searchRunIdRef) the
+  // instant the query changes again instead of racing a stale one to
+  // completion and overwriting fresher results.
+  useEffect(() => {
+    if (!searchOpen || !pdfDoc || !pageCount || !searchQuery.trim()) {
+      setSearchMatches([]);
+      setSearchActiveIndex(-1);
+      setSearchScanning(false);
+      return;
+    }
+    const runId = ++searchRunIdRef.current;
+    const timer = setTimeout(async () => {
+      setSearchScanning(true);
+      // Tolerant multi-stage search (pdfTextNormalizer/pdfSearchIndex/
+      // pdfFuzzySearch) — normalize the query once, then per page: build
+      // (or reuse the cached) page index and try exact -> case-insensitive
+      // -> compact/whitespace-and-hyphen-insensitive -> scientific-alias ->
+      // token-aware -> fuzzy, safest first. Every result already carries
+      // its exact originalText range mapped back through those stages, so
+      // this still resolves to the same {page, itemIndexes} shape the
+      // highlight-drawing effect below expects, plus matchType/confidence
+      // for the "Likely match" indicator in the search bar (spec: search
+      // the normalized/compact representation, but always highlight the
+      // untouched original PDF text). itemIndexes is every PDF.js item
+      // behind the match, NOT necessarily numerically contiguous — the
+      // search index is now built in true reading order (pdfPageLayout.js),
+      // so a multi-column page's item stream order can differ from
+      // reading order; see originalRangeToItemIndexes's own comment.
+      const queryRepr = normalizeQuery(searchQuery);
+      const results = [];
+      for (let n = 1; n <= pageCount; n++) {
+        if (searchRunIdRef.current !== runId) return; // superseded by a newer search
+        let items;
+        try { items = await getPageTextItems(n); } catch { continue; }
+        const pageIndex = pageIndexCacheRef.current.get(n, items);
+        const pageResults = searchPageForQuery(pageIndex, queryRepr, { fuzzy: true });
+        for (const r of pageResults) {
+          if (!r.itemIndexes?.length) continue;
+          results.push({
+            page: n,
+            itemIndexes: r.itemIndexes,
+            matchType: r.matchType,
+            confidence: r.confidence,
+            originalMatchedText: r.originalMatchedText,
+          });
+        }
+      }
+      if (searchRunIdRef.current !== runId) return;
+      setSearchMatches(results);
+      setSearchActiveIndex(results.length ? 0 : -1);
+      setSearchScanning(false);
+      if (results.length) setPageNum(results[0].page);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [searchQuery, searchOpen, pdfDoc, pageCount, getPageTextItems]);
+
+  const goToSearchMatch = useCallback((delta) => {
+    setSearchActiveIndex((prev) => {
+      if (!searchMatches.length) return prev;
+      const next = ((prev + delta) % searchMatches.length + searchMatches.length) % searchMatches.length;
+      const m = searchMatches[next];
+      if (m.page !== pageNumRef.current) setPageNum(m.page);
+      return next;
+    });
+  }, [searchMatches]);
+
+  // Draws highlight rects for every match on the CURRENT page (the active
+  // one in a stronger color, matching browser Ctrl+F conventions) — sized/
+  // positioned the same way the Manual-mode text layer above computes a
+  // text item's on-screen box (viewport.transform × item.transform), just
+  // at whole-item granularity rather than split into words, since that's
+  // all a search match needs.
+  useEffect(() => {
+    const canvas = searchCanvasRef.current;
+    if (!canvas || !pageViewport) return;
+    const backingScale = currentBackingScaleRef.current || 1;
+    canvas.width  = Math.max(1, Math.floor(pageViewport.width * backingScale));
+    canvas.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
+    canvas.style.width  = `${pageViewport.width}px`;
+    canvas.style.height = `${pageViewport.height}px`;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
+    if (!searchOpen || !searchMatches.length) return;
+
+    const items = pageTextItemsCacheRef.current[pageNum];
+    if (!items) return;
+    const vt    = pageViewport.transform;
+    const scale = Math.hypot(vt[0], vt[1]);
+    const mul   = ([a2, b2, c2, d2, e2, f2]) => [
+      vt[0] * a2 + vt[2] * b2,
+      vt[1] * a2 + vt[3] * b2,
+      vt[0] * c2 + vt[2] * d2,
+      vt[1] * c2 + vt[3] * d2,
+      vt[0] * e2 + vt[2] * f2 + vt[4],
+      vt[1] * e2 + vt[3] * f2 + vt[5],
+    ];
+    searchMatches.forEach((m, idx) => {
+      if (m.page !== pageNum) return;
+      const isActive = idx === searchActiveIndex;
+      // Fuzzy/token matches are real but approximate — a lighter fill
+      // keeps them visually distinct from exact/case/compact hits without
+      // hiding them, matching the "show what was likely found" framing in
+      // the search bar's confidence indicator.
+      const isTentative = m.matchType === "fuzzy" || m.matchType === "token";
+      ctx.fillStyle = isActive
+        ? "rgba(255,140,0,0.55)"
+        : isTentative ? "rgba(255,235,59,0.28)" : "rgba(255,235,59,0.45)";
+      // Every PDF.js item actually behind the match, not a numeric
+      // itemIndex..itemIndexEnd range — reading-order reconstruction
+      // (pdfPageLayout.js) means those aren't guaranteed contiguous for a
+      // multi-column page, so looping a min..max range could draw the
+      // wrong items (or skip real ones) for a match that crosses a
+      // reading-order reordering. See originalRangeToItemIndexes.
+      for (const itemIndex of m.itemIndexes || []) {
+        const item = items[itemIndex];
+        if (!item) continue;
+        const tx = mul(item.transform);
+        const fontSize = Math.hypot(tx[0], tx[1]);
+        if (fontSize < 1) continue;
+        const width  = Math.max(2, item.width * scale);
+        const height = fontSize * 1.05;
+        const x = tx[4];
+        const y = tx[5] - fontSize * 0.85;
+        ctx.fillRect(x, y, width, height);
+      }
+    });
+  }, [searchOpen, searchMatches, searchActiveIndex, pageNum, pageViewport]);
 
   const runDrawToTextRecognition = useCallback(async (selection) => {
     const pageCanvas = canvasRef.current;
@@ -2842,19 +3115,144 @@ const PDFPage = forwardRef(({
       };
     };
 
+    // Y-band only (no X requirement at all) — a text line is "present"
+    // for its FULL width, page edge to page edge, not just the tight
+    // glyph boxes of the words sitting on it. findHighlightSpanAt's
+    // exact per-word bbox is too strict for the "can I start drawing
+    // here" gate: a click landing a pixel outside a word's box (very
+    // common when aiming right at a word's leading edge, to grab its
+    // first letter) used to be rejected as "not on text" even though
+    // the row obviously has text on it.
+    const findTextRowAt = (clientY) => {
+      let best = null;
+      let bestDist = Infinity;
+      for (const span of spansRef.current) {
+        const r = span.el?.getBoundingClientRect();
+        if (!r || r.height <= 0) continue;
+        if (clientY < r.top || clientY > r.bottom) continue;
+        const dist = Math.abs(clientY - (r.top + r.height / 2));
+        if (dist < bestDist) { bestDist = dist; best = r; }
+      }
+      if (!best) return null;
+      const canvasRect = ac.getBoundingClientRect();
+      const scale = getScale();
+      return {
+        top: (best.top - canvasRect.top) / scale,
+        height: best.height / scale,
+      };
+    };
+
+    // Word-snap lookup used where an exact word box is still needed
+    // (underline/strikethrough, Auto Width's width lock) — tries the
+    // exact tight-bbox hit first, and if that misses, falls back to
+    // whichever word on the SAME row sits horizontally closest to the
+    // pointer, so a click just short of a word's left edge still snaps
+    // to that word (its first letter included) instead of finding
+    // nothing.
+    const findNearestSpanOnRow = (clientX, clientY) => {
+      const exact = findHighlightSpanAt(clientX, clientY);
+      if (exact) return exact;
+      let rowCenterY = null;
+      let rowDist = Infinity;
+      for (const span of spansRef.current) {
+        const r = span.el?.getBoundingClientRect();
+        if (!r || r.height <= 0) continue;
+        if (clientY < r.top || clientY > r.bottom) continue;
+        const centerY = r.top + r.height / 2;
+        const dist = Math.abs(clientY - centerY);
+        if (dist < rowDist) { rowDist = dist; rowCenterY = centerY; }
+      }
+      if (rowCenterY == null) return null;
+      let nearest = null;
+      let nearestDist = Infinity;
+      for (const span of spansRef.current) {
+        const r = span.el?.getBoundingClientRect();
+        if (!r || r.height <= 0) continue;
+        const centerY = r.top + r.height / 2;
+        if (Math.abs(centerY - rowCenterY) > r.height * 0.5) continue;
+        const dist = clientX < r.left ? r.left - clientX : clientX > r.right ? clientX - r.right : 0;
+        if (dist < nearestDist) { nearestDist = dist; nearest = r; }
+      }
+      if (!nearest) return null;
+      const canvasRect = ac.getBoundingClientRect();
+      const scale = getScale();
+      return {
+        left: (nearest.left - canvasRect.left) / scale,
+        top: (nearest.top - canvasRect.top) / scale,
+        width: nearest.width / scale,
+        height: nearest.height / scale,
+      };
+    };
+
+    // Every text-layer word span whose box overlaps a just-drawn
+    // highlight's own bounding box (padded by half its line width) — used
+    // to bake a masked/recolored text overlay onto the highlight so the
+    // original PDF glyphs (whatever color they happen to be) don't fight
+    // the highlight color for contrast. Bbox overlap, not exact stroke-path
+    // distance — fine for "line" mode (near-exact) and close enough for
+    // "freehand" (drawn tightly over the intended text in practice).
+    // Returns canvas-space (PDF-point) geometry, matching ann.points'
+    // own storage convention, computed once at commit time while the live
+    // spans still exist (they don't for off-screen/unrendered pages).
+    const findSpansOverlappingHighlight = (points) => {
+      if (!points || !points.length) return [];
+      const canvasRect = ac.getBoundingClientRect();
+      const scale = getScale();
+      // No horizontal padding at all — the highlight's own x-range must
+      // actually intersect a word's box. Padding by the stroke's lineWidth
+      // (previous version) was generous enough to reach into whichever
+      // word sat immediately before/after the intended range, even though
+      // the ink itself never got there — reported as "two extra words
+      // highlighted, one before and one after the preview." Vertical
+      // tolerance is based on each span's own height (half of it), not
+      // lineWidth — keeps same-line words in "line" mode (whose Y is
+      // locked to a detected span's center, see getTextAlignedHighlightPoint)
+      // while still excluding adjacent lines a full line-height away.
+      const minX = Math.min(...points.map((pt) => pt.x));
+      const maxX = Math.max(...points.map((pt) => pt.x));
+      const minY = Math.min(...points.map((pt) => pt.y));
+      const maxY = Math.max(...points.map((pt) => pt.y));
+      const results = [];
+      for (const span of spansRef.current) {
+        if (!span.text || !span.text.trim()) continue;
+        const r = span.el?.getBoundingClientRect();
+        if (!r) continue;
+        const left = (r.left - canvasRect.left) / scale;
+        const top = (r.top - canvasRect.top) / scale;
+        const width = r.width / scale;
+        const height = r.height / scale;
+        if (left + width <= minX || left >= maxX) continue;
+        const spanCenterY = top + height / 2;
+        const verticalTolerance = height * 0.5;
+        if (spanCenterY < minY - verticalTolerance || spanCenterY > maxY + verticalTolerance) continue;
+        results.push({
+          text: span.text,
+          x: left,
+          y: top,
+          width,
+          height,
+          fontSize: (parseFloat(span.el.style.fontSize) || height) / scale,
+          fontFamily: span.fontFamily || "sans-serif",
+          fontWeight: span.fontWeight || "normal",
+          fontStyle: span.fontStyle || "normal",
+        });
+      }
+      return results;
+    };
+
     const getTextAlignedHighlightPoint = (e, lockedY = null) => {
       const basePoint = toCanvas(e);
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      const span = findHighlightSpanAt(clientX, clientY);
-      if (!span) {
+      const row = findTextRowAt(clientY);
+      if (!row) {
         return lockedY == null
           ? { ...basePoint, lineWidth: null, textAligned: false }
           : { ...basePoint, y: lockedY, lineWidth: null, textAligned: false };
       }
 
-      const centerY = span.top + span.height / 2;
-      const textHeight = Math.max(8, span.height * 0.82);
+      const centerY = row.top + row.height / 2;
+      const textHeight = Math.max(8, row.height * 0.82);
       return {
         ...basePoint,
         y: lockedY ?? centerY,
@@ -2868,7 +3266,7 @@ const PDFPage = forwardRef(({
       if (!alignedPoint.textAligned) return null;
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
       const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-      const span = findHighlightSpanAt(clientX, clientY);
+      const span = findNearestSpanOnRow(clientX, clientY);
       if (!span) return null;
       return {
         ...alignedPoint,
@@ -2916,7 +3314,6 @@ const PDFPage = forwardRef(({
           setTextActionMenu({
             vx: annotCanvasRef.current.getBoundingClientRect().left + box.left,
             vy: annotCanvasRef.current.getBoundingClientRect().top + box.top,
-            width: Math.max(180, box.right - box.left + 18),
             editingId: hit.id,
           });
           setAnnotTextInput(null);
@@ -2931,18 +3328,59 @@ const PDFPage = forwardRef(({
         if (annotTextInput && annotTextVal.trim()) return;
         setTextActionMenu(null);
         setTextStyleTargetId(null);
-        setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x, cy: p.y, width: undefined, editingId: null });
+        // cx/cy must match openTextEditorForHit's convention (canvas-space
+        // × scale) since commitAnnotText divides them by scale once to get
+        // the final stored position — p.x/p.y from toCanvas are already
+        // canvas-space, so storing them raw here double-divided on commit
+        // and made the saved text jump toward the canvas origin.
+        setAnnotTextInput({ vx: p.vx, vy: p.vy, cx: p.x * getScale(), cy: p.y * getScale(), width: undefined, editingId: null });
         setAnnotTextVal("");
         return;
       }
       const p = toCanvas(e);
       const strokeColor = annotColor;
       if (annotTool === "highlight") {
-        const alignedRange = highlightMode === "line" ? getTextAlignedHighlightRange(e) : null;
+        const hit = findHighlightAnnotationAt(p.x, p.y);
+        if (hit) {
+          const canvasRect = annotCanvasRef.current.getBoundingClientRect();
+          const scale = getScale();
+          const minX = Math.min(...hit.points.map((pt) => pt.x));
+          const minY = Math.min(...hit.points.map((pt) => pt.y));
+          setHighlightActionMenu({
+            vx: canvasRect.left + minX * scale,
+            vy: canvasRect.top + minY * scale,
+            editingId: hit.id,
+          });
+          return;
+        }
+        setHighlightStyleTargetId(null);
+        // Gated on highlightAutoWidth, not just highlightMode==="line" —
+        // getTextAlignedHighlightRange snaps the START point/width to the
+        // clicked word's own left/right edges, which is exactly the
+        // lock-to-word-boundaries behavior Auto Width is supposed to gate.
+        // Previously this ran whenever "line" mode was active regardless
+        // of the toggle, so even with Auto Width off, whatever you dragged
+        // still started from a word-snapped position/width — reported as
+        // "Auto Width is always working... it should only work when
+        // clicked." getTextAlignedHighlightPoint below still keeps Y
+        // centered on the text line and matches its height either way —
+        // that part is "line" mode's own baseline-following behavior, not
+        // the width-locking Auto Width controls.
+        const alignedRange = highlightMode === "line" && highlightAutoWidth ? getTextAlignedHighlightRange(e) : null;
         const firstPoint = highlightMode === "line"
           ? (alignedRange || getTextAlignedHighlightPoint(e))
           : p;
-        activeAnnotRef.current = {
+        // Same restriction as underline/strikethrough — a highlight can
+        // only start over real text, never blank margins/figures. "line"
+        // mode already knows this via textAligned (set by
+        // getTextAlignedHighlightPoint's own row lookup); "freehand" mode
+        // never checked at all, so it's a separate findTextRowAt call at
+        // the exact click point here. Row-band, not word-bbox — the whole
+        // line counts as text from page-left to page-right, so starting
+        // right at a word's leading edge (its first letter) never misses.
+        const hlClientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const hasTextHere = highlightMode === "line" ? Boolean(firstPoint.textAligned) : Boolean(findTextRowAt(hlClientY));
+        activeAnnotRef.current = !hasTextHere ? null : {
           type: "highlight",
           color: strokeColor,
           lineWidth: (firstPoint.lineWidth || annotSize),
@@ -2952,6 +3390,15 @@ const PDFPage = forwardRef(({
           taperEnds: highlightTaperEnds,
           lineCenterY: highlightMode === "line" && firstPoint.textAligned ? firstPoint.y : null,
           autoWidthLocked: Boolean(highlightMode === "line" && highlightAutoWidth && alignedRange),
+          // The starting word's own bounds — onMove (below) re-snaps to
+          // whichever word is now under the cursor and grows/shrinks the
+          // highlight to span from this fixed anchor out to that word,
+          // continuously covering every whole word in between as the drag
+          // moves. Without an anchor, "locked" mode had nothing to extend
+          // FROM and just kept redrawing the single starting word forever
+          // (reported as "highlights word-by-word instead of continuous").
+          _autoWidthAnchorLeft: alignedRange ? alignedRange.startX : null,
+          _autoWidthAnchorRight: alignedRange ? alignedRange.endX : null,
           points: highlightMode === "line" && highlightAutoWidth && alignedRange
             ? [
                 { x: alignedRange.startX, y: firstPoint.y },
@@ -2960,11 +3407,26 @@ const PDFPage = forwardRef(({
             : [{ x: firstPoint.x, y: firstPoint.y }],
         };
       } else if (["underline","strikethrough"].includes(annotTool)) {
-        activeAnnotRef.current = { type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
+        // Snaps to the word under the pointer — findNearestSpanOnRow
+        // tries the exact tight bbox first, then falls back to the
+        // closest word on the same text row, so a click landing just
+        // short of a word's left edge (aiming for its first letter)
+        // still finds that word instead of nothing.
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const span = findNearestSpanOnRow(clientX, clientY);
+        // No manual-drag fallback for a non-text click — underline/
+        // strikethrough only ever mark real text now, never margins,
+        // figures, or other blank page area (activeAnnotRef staying null
+        // means onMove/onUp both just no-op for this gesture).
+        activeAnnotRef.current = span
+          ? { type: annotTool, color: strokeColor, x: span.left, y: span.top, w: Math.max(1, span.width), h: span.height, _startLeft: span.left, textAligned: true }
+          : null;
       } else if (["rect","circle"].includes(annotTool)) {
         activeAnnotRef.current = {
           type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
           borderStyle: shapeBorderStyle,
+          shapeBackground, shapeBackgroundColor,
           ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
         };
       } else if (annotTool === "drawText") {
@@ -2984,12 +3446,12 @@ const PDFPage = forwardRef(({
           lineWidth: penSize,
           penType,
           penSettings: {
-            dynamic: penDynamic,
+            dynamic: true, // always on — no toggle, see DEFAULT_PEN_SETTINGS.dynamic
             stabilization: penStabilization,
             pressureAssist: penPressureAssist,
             taper: penTaper,
             flow: penFlow,
-            border: penBorder,
+            border: true, // always on — no toggle, see DEFAULT_PEN_SETTINGS.border
             nibAngle: penNibAngle,
             nibSpread: penNibSpread,
           },
@@ -3020,6 +3482,20 @@ const PDFPage = forwardRef(({
       if (ann.type === "pen" || ann.type === "highlight") {
         if (ann.mode === "line") {
           if (ann.type === "highlight" && ann.autoWidthLocked) {
+            // Continuously re-snap to whichever word is now under the
+            // cursor, growing/shrinking from the FIXED starting-word anchor
+            // out to it — same word-span lookup underline/strikethrough's
+            // own onMove uses. Previously this branch just redrew the
+            // single word captured at mousedown on every tick and never
+            // looked at where the cursor had moved to, so a drag across a
+            // whole line only ever covered the first word touched.
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            const span = findNearestSpanOnRow(clientX, clientY);
+            if (span) {
+              ann.points[0].x = Math.min(ann._autoWidthAnchorLeft, span.left);
+              ann.points[1].x = Math.max(ann._autoWidthAnchorRight, span.left + span.width);
+            }
             redraw(ann);
             return;
           }
@@ -3047,6 +3523,21 @@ const PDFPage = forwardRef(({
             : { x: p.x, y: p.y };
           if (!nextPoint) return;
           ann.points.push(nextPoint);
+        }
+        redraw(ann);
+      } else if ((ann.type === "underline" || ann.type === "strikethrough") && ann.textAligned) {
+        // Dragging across more words extends the line to cover them,
+        // same word-span lookup as onDown — a plain click (no drag)
+        // just keeps the single word it started on.
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        const span = findNearestSpanOnRow(clientX, clientY);
+        if (span) {
+          const left = Math.min(ann._startLeft, span.left);
+          const right = Math.max(ann._startLeft + ann.w, span.left + span.width);
+          ann.x = left;
+          ann.w = right - left;
+          ann.h = Math.max(ann.h, span.height);
         }
         redraw(ann);
       } else if (["underline","strikethrough","rect","circle","drawTextSelection","smartVideoCapture"].includes(ann.type)) {
@@ -3107,7 +3598,11 @@ const PDFPage = forwardRef(({
           ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < tinyDocThreshold
           : ann.w < tinyDocThreshold && ann.h < tinyDocThreshold;
       if (tiny) return;
-      const { _sx, _sy, ...clean } = ann;
+      const { _sx, _sy, _startLeft, textAligned, ...clean } = ann;
+      if (clean.type === "highlight" && highlightAutoContrast) {
+        const maskedText = findSpansOverlappingHighlight(clean.points);
+        if (maskedText.length) clean.maskedText = maskedText;
+      }
       setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), { ...clean, id: Date.now() }] }));
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       logAnnotHistory({
@@ -3154,7 +3649,7 @@ const PDFPage = forwardRef(({
       ac.removeEventListener("contextmenu", preventNativeTouchDrawingGesture);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penDynamic, penStabilization, penPressureAssist, penTaper, penFlow, penBorder, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, shapeBorderStyle, shapeBorderRadius]);
+  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, shapeBorderStyle, shapeBorderRadius, shapeBackground, shapeBackgroundColor]);
 
   // Eraser-size cursor circle — a real hit-test-radius preview, not just a
   // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
@@ -3207,10 +3702,10 @@ const PDFPage = forwardRef(({
       fontBold: textBold,
       fontItalic: textItalic,
       textUnderline,
-      textBordered,
       textBackground,
       textBackgroundColor,
       textBaseline: "top",
+      padding: textPadding,
     };
     setAnnotations((prev) => ({
       ...prev,
@@ -3224,7 +3719,7 @@ const PDFPage = forwardRef(({
     setTextActionMenu(null);
     setTextStyleTargetId(null);
     setAnnotTextVal("");
-  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBordered, textBackground, textBackgroundColor]);
+  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBackground, textBackgroundColor, textPadding]);
 
   // Full 8-point resize (corners + edges) on the text-annotation editor
   // box, matching the standard text-box handle set of PowerPoint/Figma/
@@ -3309,10 +3804,24 @@ const PDFPage = forwardRef(({
 
   const handleAnnotClear = useCallback(() => {
     const count = (annotations[pageNum] || []).length;
-    setAnnotations((prev) => ({ ...prev, [pageNum]: [] }));
+    if (count === 0) return;
+    const nextAnnotations = { ...annotations, [pageNum]: [] };
+    setAnnotations(nextAnnotations);
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-    if (count > 0) logAnnotHistory({ action: "clear", page: pageNum, count });
-  }, [pageNum, annotations, logAnnotHistory]);
+    logAnnotHistory({ action: "clear", page: pageNum, count });
+    // Clearing is destructive — persist immediately instead of waiting on
+    // the debounced autosave effect (below), so a page cleared right
+    // before closing the tab/navigating away doesn't silently survive in
+    // the db because the debounce never got a chance to fire.
+    const sourceId = currentSourceIdRef.current;
+    if (sourceId) {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
+      }).catch(() => {});
+    }
+  }, [pageNum, annotations, annotHistory, logAnnotHistory]);
 
   // Lets an embedding parent drive undo/history/redo externally when
   // hideUndoRedo hides this instance's own copy of that row (see
@@ -3333,11 +3842,32 @@ const PDFPage = forwardRef(({
   }, [undoRedoState]); // eslint-disable-line react-hooks/exhaustive-deps -- onUndoRedoStateChange is a stable-enough callback prop, not a reactive dep
 
   // Same pattern as undoRedoState above, for the prev/page-number/next row.
+  // readingMode/bookletRightPage ride along here too so an embedding
+  // parent (PDFReaderWorkspace) can hoist the Booklet toggle + companion-
+  // page picker next to its own hoisted page-nav row the same way.
+  // The active match's own matchType/confidence/text — not just the count —
+  // so the search bar can show "Likely match: ... Confidence: NN%" for
+  // anything found via the tolerant (non-exact) stages, per spec section
+  // 54 ("do not show confidence unnecessarily for exact matches").
+  const searchActiveMatch = searchMatches[searchActiveIndex] || null;
+
   const pageNavState = useMemo(() => ({
     pageNum,
     pageCount,
     disabled: pinchActive,
-  }), [pageNum, pageCount, pinchActive]);
+    readingMode,
+    bookletRightPage,
+    insertingBlankPage,
+    canInsertBlankPage: hasSourceId,
+    searchOpen,
+    searchQuery,
+    searchMatchCount: searchMatches.length,
+    searchActiveIndex,
+    searchScanning,
+    searchActiveMatchType: searchActiveMatch?.matchType ?? null,
+    searchActiveConfidence: searchActiveMatch?.confidence ?? null,
+    searchActiveMatchedText: searchActiveMatch?.originalMatchedText ?? null,
+  }), [pageNum, pageCount, pinchActive, readingMode, bookletRightPage, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
 
   useEffect(() => {
     onPageNavStateChange?.(pageNavState);
@@ -3350,8 +3880,15 @@ const PDFPage = forwardRef(({
     ...undoRedoState,
     goToPrevPage: () => setPageNum((n) => Math.max(1, n - 1)),
     goToNextPage: () => setPageNum((n) => Math.min(pageCount, n + 1)),
+    setReadingMode,
+    setBookletRightPage,
+    insertBlankPageAfterCurrent: () => insertBlankPageRef.current?.(),
+    setSearchOpen,
+    setSearchQuery,
+    goToSearchMatch,
+    closeSearch: () => { setSearchOpen(false); setSearchQuery(""); },
     ...pageNavState,
-  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState]);
+  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch]);
 
   // Debounced commit shared by ctrl+scroll zoom (below) and the +/- zoom
   // buttons (see zoomFromCenter, further down): both only push a cheap CSS
@@ -3698,8 +4235,37 @@ const PDFPage = forwardRef(({
       pinchTransformApplied = false;
     };
 
+    // Manual hit-test against the text layer's own spans, instead of
+    // document.elementFromPoint(cx, cy) — WebKit has long-standing bugs
+    // where elementFromPoint doesn't correctly account for the
+    // non-standard CSS `zoom` property this app uses for its own zoom
+    // feature (document.body.style.zoom, see bodyZoom elsewhere in this
+    // file), while getBoundingClientRect() does. Confirmed live: this
+    // mismatches badly enough on iPad Safari that a tap on one word
+    // resolves to an entirely unrelated span elsewhere on the page.
+    // getBoundingClientRect() is what everything else here already
+    // trusts (visuallyConnected, the merge-cap logic, the handle-drag
+    // math), so hit-testing against it too keeps every coordinate in this
+    // function consistent, regardless of what elementFromPoint does.
+    const spanAtPoint = (cx, cy) => {
+      let nearest = null;
+      let nearestDist = Infinity;
+      for (const sp of spansRef.current) {
+        const r = sp.el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) continue;
+        if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) return sp.el;
+        // Sub-pixel/rounding gaps between adjacent spans can leave a point
+        // just outside every rect — track the closest one as a fallback.
+        const dx = Math.max(r.left - cx, 0, cx - r.right);
+        const dy = Math.max(r.top - cy, 0, cy - r.bottom);
+        const dist = Math.hypot(dx, dy);
+        if (dist < nearestDist) { nearestDist = dist; nearest = sp.el; }
+      }
+      return nearestDist <= 3 ? nearest : null;
+    };
+
     const selectWordAt = (cx, cy) => {
-      const target = document.elementFromPoint(cx, cy);
+      const target = spanAtPoint(cx, cy);
       const layer  = textLayerRef.current;
       if (!target || !layer || !layer.contains(target)) return null;
 
@@ -3724,37 +4290,86 @@ const PDFPage = forwardRef(({
       // PDFs split normal spaced words into separate text items without an
       // actual whitespace token, so "no literal space" is not enough proof
       // that two spans belong to one word.
+      // Vertical CENTER, not top — a drop-cap/small-caps run sits at a
+      // different font size than the rest of its own word (confirmed live:
+      // "B"'s top and "radyarrhythmias"'s top differ by ~2px even though
+      // they're the same word), so comparing tops under-tolerates same-word
+      // fragments and, worse, on some renderers (confirmed: reproduces on
+      // iPad Safari, not desktop Chrome) over-tolerates true cross-column
+      // bleed in a dense two-column layout where two unrelated lines can
+      // land within the top-based tolerance band.
+      // Reads geoLeft/geoRight/geoTop/geoHeight (deterministic PDF-space
+      // numbers, set alongside each span's CSS at creation time), NOT
+      // getBoundingClientRect() — see the geo* fields' own comment above
+      // for why: confirmed live on iPad Safari that getBoundingClientRect
+      // reports a real gap for a pair the PDF's own data proves is
+      // touching (gap 0), while desktop Chrome reports that same pair
+      // correctly as touching. Using the pre-transform source numbers
+      // instead sidesteps whatever WebKit does differently, on any device.
       const visuallyConnected = (a, b) => {
-        const ar = a?.el?.getBoundingClientRect?.();
-        const br = b?.el?.getBoundingClientRect?.();
-        if (!ar || !br) return false;
-        const h = Math.max(ar.height, br.height, 1);
-        const sameLine = Math.abs(ar.top - br.top) < h * 0.5;
-        const gap = br.left - ar.right;
+        if (!a || !b) return false;
+        const h = Math.max(a.geoHeight, b.geoHeight, 1);
+        const acy = a.geoTop + a.geoHeight / 2;
+        const bcy = b.geoTop + b.geoHeight / 2;
+        const sameLine = Math.abs(acy - bcy) < h * 0.6;
+        const gap = b.geoLeft - a.geoRight;
         return sameLine && gap <= Math.max(1.5, h * 0.12);
       };
+      // Hard sanity caps, independent of the visuallyConnected heuristic
+      // above — belt and suspenders. Confirmed live on iPad Safari: a
+      // double-tap on "B" (in "Bradyarrhythmias", left TOC column) merged
+      // clear across the page into the right column's "Secondary
+      // Hypertension 63", producing "econdary hypertention 63
+      // radyarrhythmias" as the "selected word" — whatever the underlying
+      // per-pair gap miscalculation was, a single legitimately-fragmented
+      // word never needs more than a handful of extra spans or anywhere
+      // close to 40 characters, so both caps stop a runaway merge cold
+      // regardless of root cause.
+      const MAX_WORD_MERGE_SPANS = 8;
+      const MAX_MERGED_WORD_LENGTH = 40;
       let loIdx = spanIdx, hiIdx = spanIdx;
       if (s === 0) {
+        let mergedLen = text.length;
         while (
           loIdx > 0
+          && spanIdx - loIdx < MAX_WORD_MERGE_SPANS
+          && mergedLen < MAX_MERGED_WORD_LENGTH
           && visuallyConnected(spans[loIdx - 1], spans[loIdx])
           && !/\s$/.test(spans[loIdx - 1]?.el.textContent || " ")
-        ) loIdx--;
+        ) {
+          mergedLen += (spans[loIdx - 1]?.el.textContent || "").length;
+          loIdx--;
+        }
       }
       if (e === text.length) {
+        let mergedLen = text.length;
         while (
           hiIdx < spans.length - 1
+          && hiIdx - spanIdx < MAX_WORD_MERGE_SPANS
+          && mergedLen < MAX_MERGED_WORD_LENGTH
           && visuallyConnected(spans[hiIdx], spans[hiIdx + 1])
           && !/^\s/.test(spans[hiIdx + 1]?.el.textContent || " ")
-        ) hiIdx++;
+        ) {
+          mergedLen += (spans[hiIdx + 1]?.el.textContent || "").length;
+          hiIdx++;
+        }
       }
 
+      // No separator: every span in [loIdx, hiIdx] passed visuallyConnected
+      // (near-zero gap) and is guaranteed non-whitespace (the expansion
+      // loops above stop at the first span bordering real whitespace), so
+      // these are fragments of one word split across PDF text items —
+      // common with stylized headers whose drop-cap/small-caps run sits in
+      // a different font item than the rest of the word, glued with a zero
+      // gap. Joining with a literal space used to insert one mid-word
+      // ("B radyarrhythmias" instead of "Bradyarrhythmias").
       const parts = [
         ...spans.slice(loIdx, spanIdx).map((sp) => sp.el.textContent),
         text.substring(s, e),
         ...spans.slice(spanIdx + 1, hiIdx + 1).map((sp) => sp.el.textContent),
       ];
-      const word = sanitizeSelectedText(parts.join(" "));
+      const word = sanitizeSelectedText(parts.join(""));
+
       if (!word) return null;
       window.getSelection()?.removeAllRanges();
 
@@ -4275,6 +4890,31 @@ const PDFPage = forwardRef(({
           const dirX = Math.cos(angle);
           const dirY = Math.sin(angle);
 
+          // Resolved once per item (not per token) — used only for the
+          // Highlight tool's masked/recolored text (drawMaskedHighlightText,
+          // annotationDraw.js) so it can clone the PDF's real font instead
+          // of a generic fallback. fallbackName is pdf.js's own generic
+          // CSS-safe classification (serif/sans-serif/monospace) derived
+          // from the embedded font's metadata — not the exact embedded
+          // typeface (that would need hooking into pdf.js's FontLoader to
+          // register its @font-face and get a browser-usable name), but a
+          // close, always-available approximation. commonObjs.get throws
+          // if the font isn't resolved yet, hence has() first + try/catch.
+          let itemFontFamily = "sans-serif";
+          let itemFontWeight = "normal";
+          let itemFontStyle = "normal";
+          try {
+            if (page.commonObjs.has(item.fontName)) {
+              const fontObj = page.commonObjs.get(item.fontName);
+              itemFontFamily = fontObj?.fallbackName || "sans-serif";
+              itemFontWeight = fontObj?.black ? "900" : fontObj?.bold ? "bold" : "normal";
+              itemFontStyle = fontObj?.italic ? "italic" : "normal";
+            }
+          } catch {
+            // leave defaults — a font that isn't resolved yet just falls
+            // back to sans-serif for this item's masked-text rendering
+          }
+
           measureCtx.font = `${fontSize}px sans-serif`;
           const fullNaturalWidth = measureCtx.measureText(item.str).width;
           // Corrects for the measurement font not being the PDF's real
@@ -4300,7 +4940,25 @@ const PDFPage = forwardRef(({
 
             const span = document.createElement("span");
             span.dataset.spanIdx = String(spansRef.current.length);
-            spansRef.current.push({ text: token, el: span });
+            // geo* fields are the exact numbers this span's position/size
+            // CSS was set from below — i.e. deterministic PDF-space math
+            // (pageViewport.transform × item.transform, no canvas
+            // measureText involved for single-token items — see the
+            // scaleX comment above for why that cancels out exactly).
+            // Selection logic (visuallyConnected, column detection) reads
+            // THESE instead of live getBoundingClientRect() — confirmed on
+            // iPad Safari that a same-line, zero-gap pair (per this exact
+            // math) reports a getBoundingClientRect() gap large enough to
+            // block merging, while desktop Chrome reports ~0 for the
+            // identical PDF — a WebKit-specific measurement quirk (this
+            // app's own zoom uses the non-standard `zoom` CSS property,
+            // which WebKit has long-standing getBoundingClientRect bugs
+            // with) rather than anything about the document itself.
+            spansRef.current.push({
+              text: token, el: span, fontFamily: itemFontFamily, fontWeight: itemFontWeight, fontStyle: itemFontStyle,
+              geoLeft: originX, geoRight: originX + tokenWidth,
+              geoTop: originY - fontSize * 0.8, geoHeight: fontSize,
+            });
             span.textContent        = token;
             span.style.position     = "absolute";
             span.style.left         = `${originX}px`;
@@ -4327,16 +4985,35 @@ const PDFPage = forwardRef(({
         // PDF content streams are not guaranteed to match visual reading
         // order. Selection ranges are index-based, so normalize the span
         // index to what the user actually sees on the page: top-to-bottom,
-        // then left-to-right within each line.
-        const visualLineToleranceFor = (rect) => Math.max(4, rect.height * 0.55);
-        spansRef.current.sort((a, b) => {
-          const ar = a.el.getBoundingClientRect();
-          const br = b.el.getBoundingClientRect();
-          if (Math.abs(ar.top - br.top) > Math.max(visualLineToleranceFor(ar), visualLineToleranceFor(br))) {
-            return ar.top - br.top;
+        // then left-to-right within each line, AND per column for a
+        // multi-column layout (e.g. a two-column table of contents).
+        //
+        // Delegates to pdfPageLayout.js — the same reading-order/column-
+        // detection engine pdfSearchIndex.js uses for the search index —
+        // instead of a second, independently-maintained copy of this
+        // logic. That module's own comments cover the full history (the
+        // non-transitive-sort root cause, the WebKit getBoundingClientRect
+        // quirk that's why geo* fields exist at all, the position-
+        // consensus gutter detection, the two-pass per-column line
+        // reconstruction that fixes cross-column Y-coincidence, and the
+        // page-number-tab-stop exclusion) — this call site only needs to
+        // adapt spansRef.current's word/whitespace-token spans into the
+        // module's plain spatial-item shape and apply its result back.
+        const spatialItems = spansRef.current.map((sp) => ({
+          text: sp.text, x1: sp.geoLeft, x2: sp.geoRight, y1: sp.geoTop, y2: sp.geoTop + sp.geoHeight, spanRef: sp,
+        }));
+        const layout = analyzePageLayout(spatialItems);
+
+        const orderedSpans = [];
+        for (const block of layout.blocks) {
+          for (const spatialItem of block.items) {
+            const sp = spatialItem.spanRef;
+            sp.rowIndex = block.lineIndex;
+            sp.columnIndex = block.columnIndex; // null for a full-width block — callers already treat null as "unscoped"
+            orderedSpans.push(sp);
           }
-          return ar.left - br.left;
-        });
+        }
+        spansRef.current = orderedSpans;
         spansRef.current.forEach((span, index) => {
           span.el.dataset.spanIdx = String(index);
         });
@@ -4564,30 +5241,62 @@ const PDFPage = forwardRef(({
       if (!spans.length) return { spanIdx: -1, charOffset: 0 };
 
       const seededIndex = nearIndex != null ? Math.max(0, Math.min(spans.length - 1, nearIndex)) : nearestSpanIndex(clientX, clientY);
-      const seedRect = spans[seededIndex]?.el?.getBoundingClientRect?.();
-      const seedHeight = seedRect?.height || 16;
-      const lineTolerance = Math.max(8, seedHeight * 0.7);
+      const seedSpan = spans[seededIndex];
       const allRects = spans
         .map((span, index) => ({ span, index, rect: span?.el?.getBoundingClientRect?.() }))
         .filter(({ span, rect }) => span && rect);
-      const seedLine = allRects
-        .filter(({ rect }) => Math.abs(rect.top - (seedRect?.top ?? rect.top)) <= lineTolerance)
-        .sort((a, b) => a.rect.left - b.rect.left);
-      const seedLineTop = Math.min(...seedLine.map(({ rect }) => rect.top));
-      const seedLineBottom = Math.max(...seedLine.map(({ rect }) => rect.bottom));
-      const pointerStillOnSeedLine = seedLine.length
+      // Scoped to the seed's own column (multi-column layouts, e.g. a
+      // two-column TOC) — otherwise "nearest line" is a pure Y-distance
+      // search across the WHOLE page width, which favors whichever
+      // column happens to have a line closer to the pointer's height
+      // rather than continuing down the column actually being dragged.
+      // Falls back to the full page if the column-scoped set is empty
+      // (single-column documents, or a genuinely out-of-range drag).
+      //
+      // "Which line" is resolved via span.rowIndex — the SAME canonical,
+      // precomputed, transitive row grouping the reading-order sort uses
+      // (see the big comment on that sort for why it has to be
+      // precomputed rather than a live pairwise/tolerance comparison) —
+      // not a second, independent Y-tolerance re-clustering here. Reusing
+      // one canonical grouping everywhere selection logic needs "same
+      // line" was necessary: an earlier version of this function did its
+      // own from-scratch re-clustering, which was consistent enough for
+      // the FIRST line-wrap of a drag but drifted from the sort's own
+      // grouping by the second — confirmed live, a drag that correctly
+      // wrapped from a left-column line to the next left-column line
+      // then wrapped again into the RIGHT column on the following line.
+      const seedColumn = seedSpan?.columnIndex;
+      const searchPoolAll = seedColumn != null ? allRects.filter(({ span }) => span.columnIndex === seedColumn) : allRects;
+      const searchPool = searchPoolAll.length ? searchPoolAll : allRects;
+
+      const seedRow = seedSpan?.rowIndex;
+      let candidates = seedRow != null
+        ? searchPool.filter(({ span }) => span.rowIndex === seedRow).sort((a, b) => a.rect.left - b.rect.left)
+        : [];
+      const seedHeight = seedSpan?.el?.getBoundingClientRect?.()?.height || 16;
+      const seedLineTop = candidates.length ? Math.min(...candidates.map(({ rect }) => rect.top)) : null;
+      const seedLineBottom = candidates.length ? Math.max(...candidates.map(({ rect }) => rect.bottom)) : null;
+      const pointerStillOnSeedLine = candidates.length
         && clientY >= seedLineTop - seedHeight
         && clientY <= seedLineBottom + seedHeight;
 
-      let candidates = seedLine;
       if (!pointerStillOnSeedLine) {
-        const nearestLineTop = allRects.reduce((best, { rect }) => {
-          const distance = Math.abs(((rect.top + rect.bottom) / 2) - clientY);
-          return !best || distance < best.distance ? { top: rect.top, distance } : best;
-        }, null)?.top;
-        candidates = allRects
-          .filter(({ rect }) => Math.abs(rect.top - nearestLineTop) <= lineTolerance)
-          .sort((a, b) => a.rect.left - b.rect.left);
+        const rowExtent = new Map(); // rowIndex -> { top, bottom }
+        for (const { span, rect } of searchPool) {
+          if (span.rowIndex == null) continue;
+          const cur = rowExtent.get(span.rowIndex) || { top: rect.top, bottom: rect.bottom };
+          cur.top = Math.min(cur.top, rect.top);
+          cur.bottom = Math.max(cur.bottom, rect.bottom);
+          rowExtent.set(span.rowIndex, cur);
+        }
+        let nearestRow = null, nearestDist = Infinity;
+        for (const [ri, { top, bottom }] of rowExtent) {
+          const dist = Math.abs((top + bottom) / 2 - clientY);
+          if (dist < nearestDist) { nearestDist = dist; nearestRow = ri; }
+        }
+        candidates = nearestRow != null
+          ? searchPool.filter(({ span }) => span.rowIndex === nearestRow).sort((a, b) => a.rect.left - b.rect.left)
+          : [];
       }
 
       if (!candidates.length) candidates = allRects.sort((a, b) => a.rect.top - b.rect.top || a.rect.left - b.rect.left);
@@ -4814,6 +5523,7 @@ const PDFPage = forwardRef(({
   // ── Load PDF ───────────────────────────────────────────────────────────────
   const loadPdfBytes = useCallback(async (arrayBuffer, name) => {
     currentSourceIdRef.current = ""; // caller (loadFromSource) sets this back if applicable
+    setHasSourceId(false); // mirrors currentSourceIdRef.current as real state — a plain ref mutation alone doesn't trigger the re-render canInsertBlankPage/pageNavState need to pick up the change
     setLoading(true);
     setLoadError("");
     setFilename(name);
@@ -4824,6 +5534,9 @@ const PDFPage = forwardRef(({
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
     pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
+    pageTextItemsCacheRef.current = {};
+    pageIndexCacheRef.current.clear();
+    setSearchQuery(""); setSearchMatches([]); setSearchActiveIndex(-1); setSearchOpen(false);
     try {
       const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
       setPdfDoc(doc);
@@ -4859,6 +5572,11 @@ const PDFPage = forwardRef(({
   }, [loadPdfBytes]);
 
   const loadFromSource = useCallback(async (sourceId, name, jumpToPage = null) => {
+    // A genuine switch to a different document — as opposed to insert/
+    // delete-page's own reload of the SAME document (same sourceId) —
+    // starts blankInsertedPages fresh, since the set only makes sense
+    // relative to the currently-open PDF's own page numbers.
+    if (sourceId !== currentSourceIdRef.current) setBlankInsertedPages(new Set());
     setLoading(true);
     setLoadError("");
     try {
@@ -4872,6 +5590,7 @@ const PDFPage = forwardRef(({
       const arrayBuffer = await res.arrayBuffer();
       const numPages = await loadPdfBytes(arrayBuffer, name);
       currentSourceIdRef.current = sourceId;
+      setHasSourceId(true);
       if (jumpToPage && numPages) {
         setPageNum(Math.min(Math.max(1, parseInt(jumpToPage, 10) || 1), numPages));
       }
@@ -4898,6 +5617,10 @@ const PDFPage = forwardRef(({
           const annData = await annRes.json();
           skipNextAnnotationAutosaveRef.current = true; // suppress the autosave effect for this restore
           setAnnotations(annData.layers || {});
+          // `time` round-trips through JSON as an ISO string — logAnnotHistory
+          // and the history panel's own rendering (.toLocaleTimeString(),
+          // day-bucketing) both expect a real Date instance.
+          setAnnotHistory((annData.history || []).map((h) => ({ ...h, time: new Date(h.time) })));
         }
       } catch {
         // best-effort restore — a failure here shouldn't block reading the PDF
@@ -4907,6 +5630,124 @@ const PDFPage = forwardRef(({
       setLoading(false);
     }
   }, [loadPdfBytes]);
+
+  // Inserts a real blank PDF page (server-side, via pdf-lib) right after the
+  // one currently shown — only meaningful in page-by-page mode, since
+  // booklet mode's whole premise is picking two EXISTING pages to view
+  // together. Every annotation layer on a page after the insertion point
+  // shifts up by one first (and is written back directly, ahead of the
+  // reload below) so drawings stay attached to the same visual content
+  // they were made on instead of drifting onto the new blank page.
+  const insertBlankPageAfterCurrent = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId || insertingBlankPage) return;
+    setInsertingBlankPage(true);
+    try {
+      const res = await authFetch(apiUrl(`/api/sources/${sourceId}/insert-page`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ afterPage: pageNum }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setLoadError(`Could not insert page: ${data.error || res.status}`);
+        return;
+      }
+
+      const shiftPagesUp = (obj) => {
+        const shifted = {};
+        for (const [key, val] of Object.entries(obj || {})) {
+          const n = parseInt(key, 10);
+          shifted[n > pageNum ? n + 1 : n] = val;
+        }
+        return shifted;
+      };
+      const shiftedLayers = shiftPagesUp(annotations);
+      skipNextAnnotationAutosaveRef.current = true; // writing it directly below — the debounced autosave effect shouldn't also fire against the pre-shift state
+      setAnnotations(shiftedLayers);
+      setRedoStacks({});
+      await authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layers: shiftedLayers, history: annotHistory }),
+      }).catch(() => {});
+
+      setBlankInsertedPages((prev) => {
+        const next = new Set(Array.from(prev, (n) => (n > pageNum ? n + 1 : n)));
+        next.add(pageNum + 1); // the new blank page itself
+        return next;
+      });
+
+      await loadFromSource(sourceId, filename, pageNum + 1);
+    } finally {
+      setInsertingBlankPage(false);
+    }
+  }, [pageNum, annotations, annotHistory, filename, loadFromSource, insertingBlankPage]);
+  // Ref-mirrored (same pattern as textSelectableRef/onSelectionActionRef
+  // above) so useImperativeHandle — declared earlier in this component,
+  // before insertBlankPageAfterCurrent even exists as a binding — can
+  // still always call the LATEST version of this closure.
+  useEffect(() => { insertBlankPageRef.current = insertBlankPageAfterCurrent; }, [insertBlankPageAfterCurrent]);
+
+  // Deletes the currently-viewed page outright — but ONLY a page this same
+  // session inserted blank via the button above (blankInsertedPages), so
+  // this is strictly an "undo my own insert," never a way to one-click
+  // remove real, pre-existing document content. Same server-side pdf-lib
+  // edit + reload shape as insertBlankPageAfterCurrent, just shifting
+  // every later page's annotation layer DOWN by one instead of up, and
+  // dropping the deleted page's own layer entirely (nothing for it to
+  // reattach to — it's blank by construction, never had any).
+  const deletePageAtCurrent = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId || insertingBlankPage || deletingPage || pageCount <= 1) return;
+    if (!blankInsertedPages.has(pageNum)) return;
+    setDeletingPage(true);
+    try {
+      const res = await authFetch(apiUrl(`/api/sources/${sourceId}/delete-page`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ page: pageNum }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setLoadError(`Could not delete page: ${data.error || res.status}`);
+        return;
+      }
+
+      const shiftPagesDown = (obj) => {
+        const shifted = {};
+        for (const [key, val] of Object.entries(obj || {})) {
+          const n = parseInt(key, 10);
+          if (n === pageNum) continue;
+          shifted[n > pageNum ? n - 1 : n] = val;
+        }
+        return shifted;
+      };
+      const shiftedLayers = shiftPagesDown(annotations);
+      skipNextAnnotationAutosaveRef.current = true;
+      setAnnotations(shiftedLayers);
+      setRedoStacks({});
+      await authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layers: shiftedLayers, history: annotHistory }),
+      }).catch(() => {});
+
+      setBlankInsertedPages((prev) => {
+        const next = new Set();
+        for (const n of prev) {
+          if (n === pageNum) continue;
+          next.add(n > pageNum ? n - 1 : n);
+        }
+        return next;
+      });
+
+      const newPageCount = Math.max(1, pageCount - 1);
+      await loadFromSource(sourceId, filename, Math.min(pageNum, newPageCount));
+    } finally {
+      setDeletingPage(false);
+    }
+  }, [pageNum, pageCount, annotations, annotHistory, filename, loadFromSource, insertingBlankPage, deletingPage, blankInsertedPages]);
 
   // ── Load from Sources page ────────────────────────────────────────────────
   useEffect(() => {
@@ -5137,6 +5978,7 @@ const PDFPage = forwardRef(({
     if (Number.isFinite(n)) goToMarkdownPage(n);
     else setMdPageInputVal(String(mdCurrentPage.page));
   }, [mdPageInputVal, goToMarkdownPage, mdCurrentPage]);
+
 
   // Fetches every page's Markdown in one go (it's already converted, so this
   // is just a read) and keeps whichever page is currently displayed in view.
@@ -5415,9 +6257,22 @@ const PDFPage = forwardRef(({
     }
   }, [manualSelection, selectionToolBusy, provider]);
 
+  // Local, free, deterministic text correction (pdfTextCorrection.js) —
+  // no network call, no AI provider, runs synchronously against the
+  // selection alone. A separate action from Translate/Define/Linguistic
+  // Check above (those call the backend's AI text-tool endpoint); this one
+  // never leaves the browser.
+  const runLocalTextCorrection = useCallback(() => {
+    const word = manualSelection?.text;
+    if (!word) return;
+    setSelectionToolError("");
+    setSelectionToolResult(null);
+    setCorrectionResult(correctSelectedPdfText({ selectedText: word, pageNumber: pageNum }));
+  }, [manualSelection, pageNum]);
+
   // Cross-check builder source text against the current page text via AI
   // and return a corrected value. The selection bar no longer owns this
-  // action; AMCTOSHS Entities Builder does.
+  // action; AMCTOSHS Entity Builder does.
   const verifyEntityBuilderSource = useCallback(async (text) => {
     const word = String(text || "").trim();
     if (!word || selectionVerifyBusy) return word;
@@ -5590,11 +6445,15 @@ const PDFPage = forwardRef(({
   const showFooterSelection = Boolean(manualPopup);
 
   // Reset any Translate/Definition/Linguistic Check result when the
-  // selected word changes (including when it's cleared).
+  // selected word changes, and forward-sync the Entity Builder's Name
+  // field to any new selection. Clearing the Name field back out again
+  // is NOT done here — see the canvas-click listener below, which only
+  // clears it for that one specific dismissal path.
   useEffect(() => {
     setSelectionToolResult(null);
     setSelectionToolError("");
     setSelectionToolBusy(null);
+    setCorrectionResult(null);
     if (manualSelection?.text?.trim()) setEntityBuilderSelectedText(manualSelection.text.trim());
   }, [manualSelection]);
 
@@ -5615,6 +6474,25 @@ const PDFPage = forwardRef(({
       document.removeEventListener("touchstart", handler);
     };
   }, [manualSelection]);
+
+  // Clears the Entity Builder's synced Name field, but only when the
+  // selection is deselected by clicking on the page canvas itself —
+  // dismissing it any other way (the ✕ button, switching tools, clicking
+  // the Entity Builder panel, etc.) leaves the last-synced Name alone.
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.closest?.(".sel_selection_handle")) return;
+      if (selBarRef.current && selBarRef.current.contains(e.target)) return;
+      if (!e.target.closest?.(".pdf_page_container")) return;
+      setEntityBuilderSelectedText("");
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
+  }, []);
 
   // ── Noun controls ──────────────────────────────────────────────────────────
   const reindex = (items, card, mode) =>
@@ -5752,46 +6630,13 @@ const PDFPage = forwardRef(({
     annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
     annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
     null;
-  const toolbarWidth = toolbarRef.current?.offsetWidth || 0;
-  const toolbarHeight = toolbarRef.current?.offsetHeight || 0;
-  const centeredToolbarLeft = toolbarBounds.left + Math.max(
-    PDF_FLOATING_TOOLBAR_MARGIN,
-    (toolbarBounds.width - toolbarWidth) / 2,
-  );
-  const centeredToolbarTop = toolbarBounds.top + Math.max(
-    PDF_FLOATING_TOOLBAR_MARGIN,
-    (toolbarBounds.height - toolbarHeight) / 2,
-  );
-  // Collapsed: the toolbar's own chrome/content is hidden (see
-  // .pdf_toolbar--collapsed in pdfPage.css, which also zeroes its
-  // padding/border), so toolbarWidth/toolbarHeight above read as ~0 —
-  // anchoring flush at the true content edge (no resting margin) is what
-  // puts the handle's own bulge right at the boundary, tucked away, instead
-  // of still floating MARGIN px inside it.
-  const toolbarStyle = toolbarCollapsed
-    ? (
-        toolbarDock.edge === "top"
-          ? { top: toolbarBounds.top, left: centeredToolbarLeft }
-          : toolbarDock.edge === "bottom"
-            ? { top: toolbarBounds.top + toolbarBounds.height, left: centeredToolbarLeft }
-            : toolbarDock.edge === "left"
-              ? { top: centeredToolbarTop, left: toolbarBounds.left }
-              : { top: centeredToolbarTop, left: toolbarBounds.left + toolbarBounds.width }
-      )
-    : toolbarDock.edge === "top"
-      ? { top: toolbarBounds.top + PDF_FLOATING_TOOLBAR_MARGIN + 4, left: centeredToolbarLeft }
-      : toolbarDock.edge === "bottom"
-        ? { top: toolbarBounds.top + toolbarBounds.height - PDF_FLOATING_TOOLBAR_MARGIN - toolbarHeight, left: centeredToolbarLeft }
-        : toolbarDock.edge === "left"
-          ? { top: centeredToolbarTop, left: toolbarBounds.left + PDF_FLOATING_TOOLBAR_MARGIN }
-          : { top: centeredToolbarTop, left: toolbarBounds.left + toolbarBounds.width - PDF_FLOATING_TOOLBAR_MARGIN - toolbarWidth };
-
   return (
     <div
       id="pdf_page"
       className={[
         embedded ? "pdf_page--embedded" : "",
         showFooterSelection ? "pdf_page--footer-open" : "",
+        toolbarDock.edge === "left" || toolbarDock.edge === "right" ? "pdf_page--toolbar-side" : "",
       ].filter(Boolean).join(" ") || undefined}
     >
       {showSysModal && <SystemMessageModal onClose={() => setShowSysModal(false)} />}
@@ -5800,40 +6645,114 @@ const PDFPage = forwardRef(({
       <div
         id="pdf_toolbar"
         ref={toolbarRef}
-        className={`pdf_toolbar--${toolbarDock.edge}${toolbarDragging ? " pdf_toolbar--dragging" : ""}${toolbarCollapsed ? " pdf_toolbar--collapsed" : ""}`}
-        style={toolbarStyle}
+        className={`pdf_toolbar--${toolbarDock.edge}`}
       >
-        {/* Dedicated drag handle, not the toolbar's general chrome — always
-            on whichever edge faces inward (opposite the dock edge itself),
-            via .pdf_toolbar_edge_handle's own dock-scoped CSS, so it's
-            reachable from the content side rather than hidden against the
-            screen's own edge. A distinct small target is also what lets
-            this start the drag immediately on press, with no long-press
-            needed to disambiguate it from clicking a tool button. */}
-        <button
-          type="button"
-          className="pdf_toolbar_edge_handle"
-          onTouchStart={handleToolbarDragStart}
-          onMouseDown={handleToolbarDragStart}
-          title="Drag to move the tools bar to any edge of the canvas"
-        />
-        {/* Wraps everything except the drag handle above — at left/right
-            dock this is what actually scrolls (see .pdf_toolbar_scroll in
-            pdfPage.css), so #pdf_toolbar's own overflow can stay visible
-            and not clip the handle's outward bulge. */}
+        {/* Wraps the toolbar's own content (page-nav/search/undo-redo row +
+            tool-icons row) — a flex sibling of the dock-direction pad below,
+            not a parent of it, so the pad always stays a fixed-size item
+            pinned to the toolbar's own trailing edge (right for a
+            horizontal top/bottom dock, bottom for a vertical left/right
+            one) regardless of how much the content side scrolls/wraps. */}
         <div className="pdf_toolbar_scroll">
         <div id="pdf_toolbar_topbar">
           {pdfDoc && !selectionOnly && (
             <div id="pdf_toolbar_topbar_controls">
+              {/* Hidden when an embedding parent drives it externally instead
+                  (see hideUndoRedo prop + the useImperativeHandle above) —
+                  e.g. PDFReaderWorkspace hoists this into its own tab bar,
+                  to the left of undo/redo, same as the reading-mode toggle. */}
+              {!hideUndoRedo && (
+                <div id="pdf_search_group">
+                  <button
+                    type="button"
+                    id="pdf_search_toggle_btn"
+                    className={searchOpen ? "pdf_search_toggle_btn--active" : undefined}
+                    onClick={() => setSearchOpen((v) => !v)}
+                    title="Search text"
+                  >
+                    <i className="bx bx-search" />
+                  </button>
+                  {searchOpen && (
+                    <div id="pdf_search_bar">
+                      <div id="pdf_search_bar_row">
+                        <input
+                          type="text"
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") { e.preventDefault(); goToSearchMatch(e.shiftKey ? -1 : 1); }
+                            else if (e.key === "Escape") { setSearchOpen(false); }
+                          }}
+                          placeholder="Search in document…"
+                          autoFocus
+                        />
+                        <span id="pdf_search_count">
+                          {searchScanning
+                            ? "…"
+                            : searchMatches.length
+                              ? `${searchActiveIndex + 1} / ${searchMatches.length}`
+                              : searchQuery.trim()
+                                ? "0 / 0"
+                                : ""}
+                        </span>
+                        <button type="button" onClick={() => goToSearchMatch(-1)} disabled={!searchMatches.length} title="Previous match"><i className="bx bx-chevron-up" /></button>
+                        <button type="button" onClick={() => goToSearchMatch(1)} disabled={!searchMatches.length} title="Next match"><i className="bx bx-chevron-down" /></button>
+                        <button type="button" onClick={() => { setSearchOpen(false); setSearchQuery(""); }} title="Close search"><i className="bx bx-x" /></button>
+                      </div>
+                      {/* Only shown for a non-exact (tolerant/fuzzy) match — an exact hit
+                          needs no explanation, per spec section 54. */}
+                      {searchActiveMatch && searchActiveMatch.matchType !== "exact" && (
+                        <div id="pdf_search_confidence">
+                          <i className="bx bx-info-circle" /> Likely match: "{searchActiveMatch.originalMatchedText}"
+                          <span id="pdf_search_confidence_pct">{Math.round(searchActiveMatch.confidence * 100)}%</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Hidden when an embedding parent drives page navigation
                   externally instead (see hidePageNav prop + the
                   useImperativeHandle above) — same reasoning as
                   hideUndoRedo just below. */}
               {!hidePageNav && (
-                <div id="pdf_page_nav">
-                  <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1 || pinchActive} title="Previous page">‹</button>
-                  <span id="pdf_page_nav_label">{pageNum} / {pageCount}</span>
-                  <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount || pinchActive} title="Next page">›</button>
+                <div id="pdf_page_nav_row">
+                  {/* Always the LEFT/original/primary page (pageNum) — never
+                      swaps to reflect the booklet companion, in single mode
+                      or booklet mode alike. */}
+                  <div id="pdf_page_nav">
+                    <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1 || pinchActive} title="Previous page">‹</button>
+                    <span id="pdf_page_nav_label">{pageNum} / {pageCount}</span>
+                    <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount || pinchActive} title="Next page">›</button>
+                  </div>
+                  {readingMode === "single" && (
+                    <button
+                      type="button"
+                      id="pdf_insert_blank_page_btn"
+                      onClick={insertBlankPageAfterCurrent}
+                      disabled={insertingBlankPage || !hasSourceId}
+                      title="Insert a blank page after this one"
+                    >
+                      {insertingBlankPage ? <i className="bx bx-loader-alt bx-spin" /> : <InsertPageIcon />}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    id="pdf_reading_mode_toggle"
+                    className={readingMode === "booklet" ? "pdf_reading_mode_toggle--active" : undefined}
+                    onClick={() => setReadingMode((m) => (m === "booklet" ? "single" : "booklet"))}
+                    disabled={pageCount < 2}
+                    title={readingMode === "booklet" ? "Switch to page-by-page" : "Switch to booklet (two pages side by side)"}
+                  >
+                    <i className="bx bx-book-open" />
+                  </button>
+                  {readingMode === "booklet" && (
+                    <div id="pdf_page_nav_right">
+                      <button onClick={() => setBookletRightPage((n) => Math.max(1, (n || 1) - 1))} disabled={(bookletRightPage || 1) <= 1 || pinchActive} title="Previous page">‹</button>
+                      <span id="pdf_page_nav_right_label">{bookletRightPage || 1} / {pageCount}</span>
+                      <button onClick={() => setBookletRightPage((n) => Math.min(pageCount, (n || 1) + 1))} disabled={(bookletRightPage || 1) >= pageCount || pinchActive} title="Next page">›</button>
+                    </div>
+                  )}
                 </div>
               )}
               {/* Hidden when an embedding parent drives undo/history/redo
@@ -5849,7 +6768,7 @@ const PDFPage = forwardRef(({
                       <button
                         className={`annot_action_btn${annotHistoryOpen ? " annot_action_btn--active" : ""}`}
                         onClick={() => setAnnotHistoryOpen((v) => !v)}
-                        title="Annotation History — every step taken this session"
+                        title="Annotation History"
                       >
                         <i className="bx bx-history" />
                       </button>
@@ -5872,6 +6791,7 @@ const PDFPage = forwardRef(({
                   return (
                     <button
                       key="shapes"
+                      ref={(el) => { toolButtonRefs.current.shapes = el; }}
                       type="button"
                       className={`annot_trigger annot_tool_btn${(shapesActive || annotTool === "shapes") ? " annot_trigger--active" : ""}`}
                       onClick={() => {
@@ -5891,6 +6811,7 @@ const PDFPage = forwardRef(({
                   <React.Fragment key={key}>
                     {key === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
                     <button
+                      ref={(el) => { toolButtonRefs.current[key] = el; }}
                       type="button"
                       className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}`}
                       onPointerDown={(event) => {
@@ -5906,15 +6827,15 @@ const PDFPage = forwardRef(({
                   </React.Fragment>
                 );
               })}
-              {/* AMCTOSHS Entities Builder — not a real annotTool and not
+              {/* AMCTOSHS Entity Builder — not a real annotTool and not
                   page-driven. It only uses selected or entered text. */}
               {pdfDoc && (
                 <button
                   type="button"
                   className={`annot_trigger annot_tool_btn${narrativeModeOpen ? " annot_trigger--active" : ""}`}
                   onClick={toggleNarrativeMode}
-                  title="AMCTOSHS Entities Builder"
-                  aria-label="AMCTOSHS Entities Builder"
+                  title="AMCTOSHS Entity Builder"
+                  aria-label="AMCTOSHS Entity Builder"
                 >
                   <i className="bx bx-network-chart" />
                 </button>
@@ -5935,14 +6856,20 @@ const PDFPage = forwardRef(({
             </div>
 
             {/* Color/size/tool-settings for whichever tool is currently
-                active — grouped in their own row so they stay a row
-                regardless of toolbar dock edge (see .annot_tool_options in
-                pdfPage.css): at top/bottom it sits inline in the toolbar's
-                own horizontal flow like normal; at left/right it remains
-                inside the toolbar container as a second column separated by
-                a vertical divider. */}
+                active — a detached dropdown popover (see .annot_tool_options
+                in pdfPage.css), sized to its own content rather than
+                stretching/shrinking the toolbar itself: a column list
+                dropping down/up off a horizontal (top/bottom) dock, a row
+                list flying out sideways off a vertical (left/right) one.
+                Opens from the active tool's own button position (see
+                toolOptionsOffset above), not the toolbar's fixed corner. */}
             <div
               className="annot_tool_options"
+              style={
+                (toolbarDock.edge === "left" || toolbarDock.edge === "right")
+                  ? { top: toolOptionsOffset }
+                  : { left: toolOptionsOffset }
+              }
             >
             {shapeToolbarOpen && (
               <div className="annot_shape_subtoolbar" aria-label="Shape tools">
@@ -6005,14 +6932,14 @@ const PDFPage = forwardRef(({
                     <div className="annot_color_preview">
                       <div
                         className="annot_color_preview_chip"
-                        style={{ background: colorMenuTarget === "background" ? textBackgroundColor : annotColor }}
+                        style={{ background: colorMenuTarget === "background" ? textBackgroundColor : colorMenuTarget === "shapeFill" ? shapeBackgroundColor : annotColor }}
                       />
                       <div className="annot_color_preview_text">
                         <span className="annot_color_preview_label">
-                          {colorMenuTarget === "background" ? "Current background" : "Current ink"}
+                          {colorMenuTarget === "background" ? "Current background" : colorMenuTarget === "shapeFill" ? "Current fill" : "Current ink"}
                         </span>
                         <span className="annot_color_preview_hex">
-                          {(colorMenuTarget === "background" ? textBackgroundColor : annotColor).toUpperCase()}
+                          {(colorMenuTarget === "background" ? textBackgroundColor : colorMenuTarget === "shapeFill" ? shapeBackgroundColor : annotColor).toUpperCase()}
                         </span>
                       </div>
                     </div>
@@ -6030,12 +6957,25 @@ const PDFPage = forwardRef(({
                         No background
                       </button>
                     )}
+                    {colorMenuTarget === "shapeFill" && (
+                      <button
+                        type="button"
+                        className="annot_dd_none_btn"
+                        onClick={() => {
+                          setShapeBackground(false);
+                          setColorMenuOpen(false);
+                        }}
+                      >
+                        <span className="annot_swatch_btn annot_swatch_btn--none" aria-hidden="true" />
+                        No background
+                      </button>
+                    )}
                     {ANNOT_COLOR_GROUPS.map(({ label, colors }) => (
                       <div key={label} className="annot_color_group">
                         <div className="annot_color_group_label">{label}</div>
                         <div className="annot_color_group_grid">
                           {colors.map((c) => {
-                            const active = (colorMenuTarget === "background" ? textBackgroundColor : annotColor) === c;
+                            const active = (colorMenuTarget === "background" ? textBackgroundColor : colorMenuTarget === "shapeFill" ? shapeBackgroundColor : annotColor) === c;
                             return (
                               <button
                                 key={c}
@@ -6048,6 +6988,9 @@ const PDFPage = forwardRef(({
                                     setTextBackgroundColor(c);
                                     setTextBackground(true);
                                     updateStyledTextTarget({ textBackgroundColor: c, textBackground: true });
+                                  } else if (colorMenuTarget === "shapeFill") {
+                                    setShapeBackgroundColor(c);
+                                    setShapeBackground(true);
                                   } else {
                                     setAnnotColor(c);
                                   }
@@ -6067,6 +7010,14 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
+            {annotTool === "highlight" && (
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Opacity" info="Transparency of the highlight layer" />
+                <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
+              </div>
+            )}
+            {annotTool === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
+
             {hasSize && (
               <SizeKnob
                 min={sizeProps.min} max={sizeProps.max} step={sizeProps.step}
@@ -6077,6 +7028,7 @@ const PDFPage = forwardRef(({
                 variant={annotTool === "highlight" ? "highlight" : "dot"}
               />
             )}
+            {annotTool === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
 
             {SHAPE_TOOL_KEYS.includes(annotTool) && (
               <div className="annot_mode_toggle" aria-label="Border style">
@@ -6103,6 +7055,35 @@ const PDFPage = forwardRef(({
                 color={annotColor}
                 variant="dot"
               />
+            )}
+
+            {["rect", "circle"].includes(annotTool) && (
+              <div className="annot_dd_wrap" ref={bgSwatchRef}>
+                <button
+                  type="button"
+                  className={`annot_mode_btn${shapeBackground ? " annot_mode_btn--active" : ""}`}
+                  onClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setColorMenuTarget("shapeFill");
+                    setColorMenuOpen((wasOpen) => {
+                      if (wasOpen && colorMenuTarget === "shapeFill") return false;
+                      if (toolbarDock.edge === "bottom") {
+                        setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
+                      } else {
+                        setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
+                      }
+                      return true;
+                    });
+                  }}
+                  title="Fill color"
+                  aria-label="Shape background color"
+                >
+                  <span
+                    className="annot_swatch annot_swatch--trigger"
+                    style={{ background: shapeBackgroundColor, opacity: shapeBackground ? 1 : 0.35 }}
+                  />
+                </button>
+              </div>
             )}
 
             {annotTool === "eraser" && (
@@ -6215,24 +7196,6 @@ const PDFPage = forwardRef(({
                       <path d="M5 18h14v2H5zM6 4v6c0 3.31 2.69 6 6 6s6-2.69 6-6V4h-2v6c0 2.21-1.79 4-4 4s-4-1.79-4-4V4z" />
                     </svg>
                   </button>
-                  <button
-                    type="button"
-                    className={`annot_mode_btn${textBordered ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => {
-                      setTextBordered((value) => {
-                        const next = !value;
-                        updateStyledTextTarget({ textBordered: next });
-                        return next;
-                      });
-                    }}
-                    title="Bordered"
-                    aria-label="Bordered"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
-                      <path d="M11 7h2v2h-2zm0 8h2v2h-2zm-4-4h2v2H7zm8 0h2v2h-2zm-4 0h2v2h-2z" />
-                      <path d="M17 3H3v18h18V3zm2 4v12H5V5h14z" />
-                    </svg>
-                  </button>
                   <div className="annot_dd_wrap" ref={bgSwatchRef}>
                     <button
                       type="button"
@@ -6301,43 +7264,44 @@ const PDFPage = forwardRef(({
                   color={annotColor}
                   dashed={false}
                 />
+
+                <span className="annot_text_separator annot_text_separator--wide" aria-hidden="true" />
+
+                <LabeledPercentKnob
+                  title="Padding Size"
+                  subtitle="Space around text in the background/border box"
+                  value={textPadding}
+                  onChange={(next) => {
+                    setTextPadding(next);
+                    updateStyledTextTarget({ padding: next });
+                  }}
+                  min={0}
+                  max={300}
+                  step={10}
+                  label="%"
+                />
               </div>
             )}
 
             {annotTool === "pen" && (
               <div className="annot_pen_panel">
                 <div className="annot_pen_controls annot_pen_controls--column">
-                  <LabeledPercentKnob
-                    title="Smoothing"
-                    subtitle="Reduce hand jitter"
-                    value={penStabilization}
-                    onChange={setPenStabilization}
-                    label="%"
-                  />
-                  <div className="annot_mode_toggle annot_mode_toggle--pen">
-                    <button
-                      type="button"
-                      className={`annot_mode_btn${penDynamic ? " annot_mode_btn--active" : ""}`}
-                      onClick={() => setPenDynamic((value) => !value)}
-                      title="Dynamic ink: vary thickness with pressure and motion"
-                      aria-label="Dynamic ink"
-                    >
-                      Dynamic ink
-                    </button>
-                    {penDynamic && (
-                      <button
-                        type="button"
-                        className={`annot_mode_btn${penBorder ? " annot_mode_btn--active" : ""}`}
-                        onClick={() => setPenBorder((value) => !value)}
-                        title="Stroke border"
-                        aria-label="Stroke border"
-                      >
-                        <StrokeBorderIcon />
-                      </button>
-                    )}
-                  </div>
-                  {penDynamic && (
-                    <>
+                  <div className="annot_pen_stroke_shaping">
+                    <LabeledPercentKnob
+                      title="Smoothing"
+                      subtitle="Reduce hand jitter"
+                      value={penStabilization}
+                      onChange={setPenStabilization}
+                      label="%"
+                    />
+                    {/* Always a column under Smoothing, regardless of the
+                        toolbar's own dock — unlike every other control here,
+                        this trio doesn't flip to a row alongside Smoothing
+                        when docked top/bottom (see .annot_pen_stroke_shaping
+                        in pdfPage.css). Dynamic ink is always on now (see
+                        DEFAULT_PEN_SETTINGS.dynamic) — no toggle needed, so
+                        this always renders instead of being conditional. */}
+                    <div className="annot_pen_stroke_shaping_extra">
                       <LabeledPercentKnob
                         title="Pressure assist"
                         subtitle="Shape width without stylus pressure"
@@ -6359,11 +7323,11 @@ const PDFPage = forwardRef(({
                         onChange={setPenFlow}
                         label="%"
                       />
-                    </>
-                  )}
+                    </div>
+                  </div>
                 </div>
 
-                {penDynamic && penType === "fountain" && (
+                {penType === "fountain" && (
                   <div className="annot_pen_controls">
                     <LabeledPercentKnob
                       title="Nib angle"
@@ -6399,6 +7363,14 @@ const PDFPage = forwardRef(({
                   className={`annot_mode_btn${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
                   onClick={() => setHighlightMode("line")}
                 >Straight line</button>
+                <button
+                  type="button"
+                  className={`annot_mode_btn annot_mode_btn--toggle${highlightAutoContrast ? " annot_mode_btn--active" : ""}`}
+                  onClick={() => setHighlightAutoContrast((value) => !value)}
+                  title="Auto Contrast: keep the highlight legible by clamping its color and repainting the covered text in a contrasting color"
+                >
+                  Auto Contrast
+                </button>
               </div>
             )}
             {annotTool === "highlight" && highlightMode === "line" && (
@@ -6419,12 +7391,6 @@ const PDFPage = forwardRef(({
                 >
                   {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
                 </button>
-              </div>
-            )}
-            {annotTool === "highlight" && (
-              <div className="annot_control">
-                <AnnotControlHeaderInfo title="Opacity" info="Transparency of the highlight layer" />
-                <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
               </div>
             )}
             </div>
@@ -6475,6 +7441,20 @@ const PDFPage = forwardRef(({
         </div>
         </div>
 
+        {/* Single drag handle — a fixed-size item pinned to the toolbar's
+            own trailing edge (right side for a horizontal top/bottom dock,
+            bottom for a vertical left/right one). Press and drag in any
+            direction to redock (see handleToolbarHandlePointerDown above);
+            it snaps straight to the flat dock for whichever direction you
+            dragged, no floating/overlay state ever shown mid-drag. */}
+        <button
+          type="button"
+          className="pdf_toolbar_drag_handle"
+          onPointerDown={handleToolbarHandlePointerDown}
+          title="Drag to move the toolbar (up/down/left/right)"
+        >
+          <i className="bx bx-move" />
+        </button>
       </div>
 
       {/* Thin selection bar — appears under the toolbar for a double-clicked
@@ -6497,6 +7477,11 @@ const PDFPage = forwardRef(({
                 <i className={selectionToolBusy === "linguistic_check" ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-git-branch"} />
                 Linguistic Structure Check
               </button>
+              {/* Local/free — no AI provider, no network call, see pdfTextCorrection.js */}
+              <button type="button" onClick={runLocalTextCorrection} title="Repair split words, ligatures, and line-break hyphens — runs locally, no AI">
+                <i className="bx bx-spell-check" />
+                Correct text
+              </button>
             </div>
             <button type="button" id="pdf_selection_bar_close" onClick={() => setManualSelection(null)} title="Dismiss">
               <i className="bx bx-x" />
@@ -6507,6 +7492,28 @@ const PDFPage = forwardRef(({
               {selectionToolError
                 ? <span>⚠ {selectionToolError}</span>
                 : <span><strong>{selectionToolResult.label}:</strong> {selectionToolResult.text}</span>}
+            </div>
+          )}
+          {correctionResult && (
+            <div id="pdf_selection_bar_result">
+              {correctionResult.changes.length || correctionResult.candidates.length ? (
+                <>
+                  <span>
+                    <strong>{correctionResult.uncertain ? "Suggested correction" : "Corrected"}:</strong>{" "}
+                    {correctionResult.correctedText}
+                    {correctionResult.uncertain && (
+                      <span className="pdf_correction_confidence"> ({Math.round(correctionResult.confidence * 100)}%)</span>
+                    )}
+                  </span>
+                  {correctionResult.candidates.map((c, i) => (
+                    <span key={i} className="pdf_correction_candidate">
+                      Did you mean "{c.text}"? ({Math.round(c.confidence * 100)}%)
+                    </span>
+                  ))}
+                </>
+              ) : (
+                <span>No corrections found — this text already looks correct.</span>
+              )}
             </div>
           )}
         </div>
@@ -6659,24 +7666,50 @@ const PDFPage = forwardRef(({
               <button id="pdf_annot_history_close" onClick={() => setAnnotHistoryOpen(false)} title="Close">✕</button>
             </div>
             <div id="pdf_annot_history_body">
-              {[...annotHistory].reverse().map((h) => {
-                const meta = ANNOT_HISTORY_META[h.action] || ANNOT_HISTORY_META.add;
-                const toolLabel = ANNOT_TOOLS.find((t) => t.key === h.type)?.label || (h.type === "text" ? "Text" : h.type);
-                return (
-                  <div key={h.id} className="anh_row">
-                    <i className={`${meta.icon} anh_icon`} />
-                    <div className="anh_main">
-                      <span className="anh_label">
-                        {meta.verb}{h.action === "clear" ? ` ${h.count} item${h.count === 1 ? "" : "s"}` : h.action === "erase" ? ` ${h.count} mark${h.count === 1 ? "" : "s"}` : toolLabel ? ` ${toolLabel}` : ""}
-                      </span>
-                      <span className="anh_meta">
-                        p.{h.page} · {h.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                      </span>
+              {(() => {
+                // Newest-first, chunked into per-day groups with a date
+                // header between them — history now survives a reload
+                // (see the autosave/restore effects above), so a single
+                // flat list would otherwise mix days together with no way
+                // to tell them apart once there's more than one session's
+                // worth of entries.
+                const isSameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+                const today = new Date();
+                const yesterday = new Date(today);
+                yesterday.setDate(today.getDate() - 1);
+                const dayLabel = (d) => {
+                  if (isSameDay(d, today)) return "Today";
+                  if (isSameDay(d, yesterday)) return "Yesterday";
+                  return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+                };
+                const rows = [];
+                let lastDay = null;
+                for (const h of [...annotHistory].reverse()) {
+                  if (!lastDay || !isSameDay(lastDay, h.time)) {
+                    rows.push(
+                      <div key={`day-${h.id}`} className="anh_day_header">{dayLabel(h.time)}</div>
+                    );
+                    lastDay = h.time;
+                  }
+                  const meta = ANNOT_HISTORY_META[h.action] || ANNOT_HISTORY_META.add;
+                  const toolLabel = ANNOT_TOOLS.find((t) => t.key === h.type)?.label || (h.type === "text" ? "Text" : h.type);
+                  rows.push(
+                    <div key={h.id} className="anh_row">
+                      <i className={`${meta.icon} anh_icon`} />
+                      <div className="anh_main">
+                        <span className="anh_label">
+                          {meta.verb}{h.action === "clear" ? ` ${h.count} item${h.count === 1 ? "" : "s"}` : h.action === "erase" ? ` ${h.count} mark${h.count === 1 ? "" : "s"}` : toolLabel ? ` ${toolLabel}` : ""}
+                        </span>
+                        <span className="anh_meta">
+                          p.{h.page} · {h.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                      </div>
+                      {h.color && <span className="anh_swatch" style={{ background: h.color }} />}
                     </div>
-                    {h.color && <span className="anh_swatch" style={{ background: h.color }} />}
-                  </div>
-                );
-              })}
+                  );
+                }
+                return rows;
+              })()}
             </div>
           </div>
         )}
@@ -6720,7 +7753,7 @@ const PDFPage = forwardRef(({
           />
         )}
 
-        {/* Far left — AMCTOSHS Entities Builder. Same far-left-column
+        {/* Far left — AMCTOSHS Entity Builder. Same far-left-column
             convention as the other panels above — unlike them, it has its
             own close button since it isn't tied to re-pressing an annotTool. */}
         {narrativeModeOpen && (
@@ -6755,11 +7788,26 @@ const PDFPage = forwardRef(({
           <div id="pdf_preview_scroll" ref={previewRef}>
           {pdfDoc ? (
             <>
-              <div id="pdf_canvas_wrap" ref={canvasWrapRef}>
-                {/* Single-page view: only the current page is ever mounted —
+              <div
+                id="pdf_canvas_wrap"
+                ref={canvasWrapRef}
+                className={readingMode === "booklet" ? "pdf_canvas_wrap--booklet" : undefined}
+              >
+                {/* Single-page mode: only the current page is ever mounted —
                     no continuous scroll between pages, navigate with the
-                    page arrows instead. */}
-                {(pageNum ? [pageNum] : []).map(n => (
+                    page arrows instead. Booklet mode mounts a second,
+                    independently-picked companion page alongside it — it's
+                    rendered (rasterized) the same way as the primary page,
+                    but stays read-only: the annotation/mask canvases and
+                    every interactive layer below are still gated on
+                    `pageNum === n`, so only the primary/left page is ever
+                    editable. */}
+                {(pageNum
+                  ? readingMode === "booklet" && bookletRightPage && bookletRightPage !== pageNum
+                    ? [pageNum, bookletRightPage]
+                    : [pageNum]
+                  : []
+                ).map(n => (
                   <div
                     key={n}
                     className="pdf_page_container"
@@ -6770,6 +7818,17 @@ const PDFPage = forwardRef(({
                       className="pdf_page_canvas"
                       ref={el => { pageCanvasRefs.current[n - 1] = el; }}
                     />
+                    {readingMode === "single" && pageNum === n && pageCount > 1 && blankInsertedPages.has(n) && (
+                      <button
+                        type="button"
+                        id="pdf_delete_page_btn"
+                        onClick={deletePageAtCurrent}
+                        disabled={deletingPage}
+                        title="Delete this blank page"
+                      >
+                        {deletingPage ? <i className="bx bx-loader-alt bx-spin" /> : <DeletePageIcon />}
+                      </button>
+                    )}
                     {pageNum === n && (
                       <>
                       <canvas
@@ -6777,6 +7836,8 @@ const PDFPage = forwardRef(({
                         ref={annotCanvasRef}
                         style={{ pointerEvents: toolActive ? "auto" : "none", cursor: annotTool === "eraser" ? "none" : toolActive ? "crosshair" : "default" }}
                       />
+                      <canvas id="pdf_mask_canvas" ref={maskCanvasRef} />
+                      <canvas id="pdf_search_canvas" ref={searchCanvasRef} />
                       {createPortal(
                         <div ref={eraserCursorRef} className="eraser_cursor_circle" />,
                         document.body,
@@ -6826,11 +7887,9 @@ const PDFPage = forwardRef(({
                               fontStyle: textItalic ? "italic" : "normal",
                               textDecoration: textUnderline ? "underline" : "none",
                               textAlign,
-                              // Dashed while editing marks this as the live
-                              // preview box, not the final annotation —
-                              // switches to the solid style once textBordered
-                              // is on, previewing what will actually render.
-                              border: textBordered ? "1px solid var(--color-border)" : "1px dashed var(--color-border)",
+                              // Dashed marks this as the live preview box,
+                              // not the final annotation.
+                              border: "1px dashed var(--color-border)",
                               // Same fill annotationDraw.js uses for the
                               // committed annotation (see the "text" case) —
                               // a low-alpha wash of the background swatch's
@@ -6881,14 +7940,23 @@ const PDFPage = forwardRef(({
                           </div>
                         </div>
                       )}
-                      {textActionMenu && (
+                      {textActionMenu && createPortal(
+                        // Portalled + position:fixed + z-index above the
+                        // site-wide #app_footer (position:fixed,
+                        // z-index:950). In-tree with a local z-index, this menu's clicks
+                        // were silently eaten by the footer whenever it
+                        // rendered in whatever screen region the footer
+                        // physically covers (elementsFromPoint confirmed
+                        // it, not visible in a screenshot) — the button's
+                        // own onClick works fine when invoked directly,
+                        // which is what made it look like a logic bug.
                         <div
                           ref={textActionMenuRef}
                           className="annot_text_action_menu"
                           style={{
-                            left: textActionMenu.vx - annotCanvasRef.current?.getBoundingClientRect().left,
-                            top: Math.max(8, textActionMenu.vy - annotCanvasRef.current?.getBoundingClientRect().top - 46),
-                            width: textActionMenu.width,
+                            position: "fixed",
+                            left: textActionMenu.vx,
+                            top: Math.max(8, textActionMenu.vy - 46),
                           }}
                         >
                           <button type="button" className="annot_text_action_btn" onClick={() => handleTextAction("edit-text")}>Edit text</button>
@@ -6896,7 +7964,24 @@ const PDFPage = forwardRef(({
                           <button type="button" className="annot_text_action_btn" onClick={() => handleTextAction("edit-style")}>Edit Style</button>
                           <span className="annot_text_action_sep" aria-hidden="true" />
                           <button type="button" className="annot_text_action_btn annot_text_action_btn--danger" onClick={() => handleTextAction("delete")}>Delete</button>
-                        </div>
+                        </div>,
+                        document.body,
+                      )}
+                      {highlightActionMenu && createPortal(
+                        <div
+                          ref={highlightActionMenuRef}
+                          className="annot_text_action_menu"
+                          style={{
+                            position: "fixed",
+                            left: highlightActionMenu.vx,
+                            top: Math.max(8, highlightActionMenu.vy - 46),
+                          }}
+                        >
+                          <button type="button" className="annot_text_action_btn" onClick={() => handleHighlightAction("edit")}>Edit</button>
+                          <span className="annot_text_action_sep" aria-hidden="true" />
+                          <button type="button" className="annot_text_action_btn annot_text_action_btn--danger" onClick={() => handleHighlightAction("delete")}>Delete</button>
+                        </div>,
+                        document.body,
                       )}
                       {drawTextBusy && (
                         <div id="pdf_draw_text_status">

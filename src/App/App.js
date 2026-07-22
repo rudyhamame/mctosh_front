@@ -61,7 +61,7 @@ const LEVELS = [
       {
         path: "/clinical-schemata",
         icon: "fi-rr-network",
-        label: "AMCTOSHS Entities",
+        label: "AMCTOSHS Morphe",
         description: "Extract or manually define Entities and their Entity Schemas — traces and trace values — across the six biological dimensions",
         color: "#26c6da",
       },
@@ -181,6 +181,12 @@ const LEVELS = [
 ];
 export const LEVEL_LABELS = LEVELS.map((level) => level.label);
 
+// The one named chunk inside the AMCTOSHS Tools dropdown (see app_study_tools_*
+// below) — AMCTOSHS Hyle and AMCTOSHS Morphe are the two tools that actually
+// BUILD an AMCTOSHS entity's raw material/structure, so they're grouped
+// under their own heading; every other tool stays a flat, ungrouped list.
+const BUILDING_TOOL_PATHS = ["/sources", "/clinical-schemata"];
+
 // How many screens of scrolling each level's own step takes — 1 = today's
 // uniform 100vh-per-level default. Hardcoded here, NOT persisted anywhere
 // at runtime (no localStorage, no backend) — same "tune live, copy the
@@ -238,6 +244,8 @@ const App = ({ onLogout }) => {
   const scrollRef = useRef(null);
   const profileMenuRef = useRef(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const studyToolsRef = useRef(null);
+  const [studyToolsOpen, setStudyToolsOpen] = useState(false);
   const session = readStoredSession();
   const profilePhoto = readProfilePhoto(session);
   const displayName = readDisplayName(session);
@@ -309,10 +317,16 @@ const App = ({ onLogout }) => {
       if (!profileMenuRef.current?.contains(event.target)) {
         setProfileMenuOpen(false);
       }
+      if (!studyToolsRef.current?.contains(event.target)) {
+        setStudyToolsOpen(false);
+      }
     };
 
     const handleEscape = (event) => {
-      if (event.key === "Escape") setProfileMenuOpen(false);
+      if (event.key === "Escape") {
+        setProfileMenuOpen(false);
+        setStudyToolsOpen(false);
+      }
     };
 
     document.addEventListener("pointerdown", handlePointerDown);
@@ -335,6 +349,59 @@ const App = ({ onLogout }) => {
               scrollWeights={scrollWeights}
               onScrollWeightChange={setScrollWeight}
             />
+
+            {/* Every level's own tool buttons, consolidated into one dropdown
+                on the intro banner's left side (the profile menu already
+                owns the right) — the per-level cards used to sit inline in
+                each level's floating panel below the object, one row per
+                level; now that panel is just the label/blurb (see
+                app_level_group below), and every tool lives here regardless
+                of which level it belongs to. */}
+            <div id="app_study_tools_menu" ref={studyToolsRef}>
+              <button
+                id="app_study_tools_trigger"
+                onClick={() => setStudyToolsOpen((open) => !open)}
+                aria-haspopup="menu"
+                aria-expanded={studyToolsOpen}
+                title="AMCTOSHS Tools"
+              >
+                <i className="fi fi-rr-apps" />
+                <span>AMCTOSHS Tools</span>
+              </button>
+
+              {studyToolsOpen && (() => {
+                const allCards = LEVELS.flatMap((level) => level.cards);
+                const buildingCards = allCards.filter((card) => BUILDING_TOOL_PATHS.includes(card.path));
+                const otherCards = allCards.filter((card) => !BUILDING_TOOL_PATHS.includes(card.path));
+                const renderCard = (card) => (
+                  <button
+                    key={card.path}
+                    className="app_home_card"
+                    role="menuitem"
+                    style={{ "--nav-color": card.color }}
+                    onClick={() => {
+                      setStudyToolsOpen(false);
+                      navigate(card.path);
+                    }}
+                  >
+                    <i className={`fi ${card.icon} app_home_card_icon`} />
+                    <span className="app_home_card_label">{card.label}</span>
+                    <span className="app_home_card_desc">{card.description}</span>
+                  </button>
+                );
+                return (
+                  <div id="app_study_tools_dropdown" role="menu" aria-label="AMCTOSHS Tools">
+                    {buildingCards.length > 0 && (
+                      <div className="app_study_tools_group">
+                        <div className="app_study_tools_group_label">AMCTOSHS Building Tools</div>
+                        {buildingCards.map(renderCard)}
+                      </div>
+                    )}
+                    {otherCards.map(renderCard)}
+                  </div>
+                );
+              })()}
+            </div>
 
             <div id="app_profile_menu" ref={profileMenuRef}>
               <button
@@ -399,7 +466,7 @@ const App = ({ onLogout }) => {
               <HomeChat />
             </Suspense>
 
-            <div id="app_scroll_hint" className={progress > 0.03 ? "app_scroll_hint--hidden" : ""}>
+            <div id="app_scroll_hint">
               <span id="app_scroll_hint_title">AMCTOSHS</span>
               <div id="app_scroll_hint_head">
                 <span id="app_domain_flow">Atoms → Molecules → Tissues → Organs → Organ Systems → Humans → Societies</span>
@@ -409,7 +476,7 @@ const App = ({ onLogout }) => {
             </div>
 
             <div id="app_level_overlay">
-              {LEVELS.map(({ label, color, letter, blurb, cards }, i) => (
+              {LEVELS.map(({ label, color, letter, blurb }, i) => (
                 <div
                   key={label}
                   className={`app_level_group${i === activeLevel ? " app_level_group--active" : ""}`}
@@ -420,20 +487,6 @@ const App = ({ onLogout }) => {
                     <span className="app_level_group_label">{label}</span>
                   </div>
                   {blurb && <p className="app_level_group_blurb">{blurb}</p>}
-                  <div className="app_level_group_row">
-                    {cards.map(({ path, icon, label: cardLabel, description, color: cardColor }) => (
-                      <button
-                        key={path}
-                        className="app_home_card"
-                        style={{ "--nav-color": cardColor }}
-                        onClick={() => navigate(path)}
-                      >
-                        <i className={`fi ${icon} app_home_card_icon`} />
-                        <span className="app_home_card_label">{cardLabel}</span>
-                        <span className="app_home_card_desc">{description}</span>
-                      </button>
-                    ))}
-                  </div>
                 </div>
               ))}
             </div>

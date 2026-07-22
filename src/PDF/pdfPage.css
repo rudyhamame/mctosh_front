@@ -31,6 +31,15 @@
   box-sizing: border-box;
 }
 
+/* Toolbar docked left/right (see toolbarDock in PDFPage.jsx) — switch the
+   main axis to row so the (now full-height, not floating) toolbar and
+   #pdf_preview sit side by side instead of stacked. order on #pdf_toolbar
+   itself (see pdfPage.css's own --left/--right rules) puts it on whichever
+   side was picked without needing to reorder anything in the DOM. */
+#pdf_page.pdf_page--toolbar-side {
+  flex-direction: row;
+}
+
 /* Embedded inside another page's layout (e.g. Units Extraction) — fill the
    parent's flex-allocated box instead of the whole browser viewport. */
 #pdf_page.pdf_page--embedded {
@@ -133,91 +142,22 @@
 }
 
 /* ── Toolbar ── */
-/* "Liquid Glass" (iPadOS-style) capsule — a real backdrop-filter blur
-   doing the actual work, plus three static layers standing in for what's
-   otherwise dynamic light refraction: a diagonal sheen baked into the
-   background gradient, a bright translucent rim (not just a muted
-   border), and a soft specular highlight arc (::before) tracing the top
-   edge like light catching curved glass. All still color-mix-driven off
-   --color-surface/--color-border, so it holds up on both themes without a
-   separate override. */
+/* Flat, matching the tab bar it docks against (.pdfw_tabbar in
+   pdfReaderWorkspace.css: solid surface color, a hairline border, no
+   shadow/blur/rounding) — no floating/overlay mode at all, on any of the
+   4 dock edges. Base rule holds everything shared; the per-edge rules
+   below only set orientation (row vs column), which border gets the
+   hairline, and where the dock-pad's order puts it (leading vs trailing). */
 #pdf_toolbar {
-  position: absolute;
+  position: relative;
   z-index: 26;
   display: flex;
-  flex-direction: column;
   align-items: stretch;
   gap: 0.5rem;
-  padding: 0.6rem 0.7rem;
-  border: 1px solid color-mix(in srgb, white 42%, color-mix(in srgb, var(--color-border) 80%, transparent));
-  border-radius: 24px;
+  padding: 0.6rem 1rem;
   font-size: 0.85rem;
-  width: max-content;
-  max-width: min(calc(100% - 2rem), 1100px);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, white 20%, transparent) 0%, transparent 30%, transparent 72%, color-mix(in srgb, white 8%, transparent) 100%),
-    color-mix(in srgb, var(--color-surface) 78%, transparent);
-  background-clip: padding-box;
-  isolation: isolate;
-  /* Three-tier depth (tight contact shadow → mid → soft far ambient) reads
-     as a single deliberate floating panel instead of one flat blur, plus a
-     hairline inset sheen along the top edge for the glass/backdrop-filter
-     look — both stay low-opacity so they hold up on light and dark theme
-     surfaces alike without a separate per-theme override. */
-  box-shadow:
-    0 1px 2px rgba(15, 23, 42, 0.10),
-    0 8px 20px -6px rgba(15, 23, 42, 0.22),
-    0 26px 48px -14px rgba(15, 23, 42, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(24px) saturate(1.6) brightness(1.06);
-  -webkit-backdrop-filter: blur(24px) saturate(1.6) brightness(1.06);
-  transition: left 0.18s ease, top 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
-}
-
-/* Specular highlight — a soft bright arc hugging the top-inner edge,
-   fading out toward the sides/bottom, the way light skims the curved top
-   of a real glass capsule. Purely decorative, never intercepts clicks. */
-#pdf_toolbar::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  z-index: -1;
-  pointer-events: none;
-  background: radial-gradient(120% 60% at 30% -10%, color-mix(in srgb, white 32%, transparent) 0%, transparent 55%);
-}
-
-/* Liquid motion — two soft highlight blobs slowly drifting across the
-   capsule's own surface (background-position animated, not transform, so
-   they stay masked to border-radius: inherit and never spill past the
-   rounded corners), the way real Liquid Glass's highlight shifts as its
-   refraction reacts to what's moving underneath. Independent of ::before
-   (the fixed top arc) — this is the "alive" layer on top of it. */
-#pdf_toolbar::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(38% 55% at 50% 50%, color-mix(in srgb, white 30%, transparent) 0%, transparent 70%),
-    radial-gradient(30% 45% at 50% 50%, color-mix(in srgb, white 18%, transparent) 0%, transparent 70%);
-  background-repeat: no-repeat;
-  background-size: 60% 100%, 55% 90%;
-  animation: pdf_toolbar_liquid_drift 10s ease-in-out infinite alternate;
-  mix-blend-mode: overlay;
-}
-
-@keyframes pdf_toolbar_liquid_drift {
-  0%   { background-position: -10% 30%, 110% 70%; }
-  50%  { background-position: 55% 65%,  45% 25%; }
-  100% { background-position: 110% 20%, -10% 80%; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #pdf_toolbar::after { animation: none; }
+  background: var(--color-surface);
+  flex-shrink: 0;
 }
 
 #pdf_toolbar_topbar,
@@ -243,90 +183,64 @@
 #pdf_toolbar_left { min-width: 0; }
 #pdf_toolbar_center { flex-shrink: 0; }
 
-/* transition: none avoids the resting-state's left/top/transform easing
-   fighting the drag-tracking effect's own per-frame position updates; the
-   lifted box-shadow below is the "picked up" tactile cue while dragging,
-   settling back to the resting three-tier shadow above once released. */
-#pdf_toolbar.pdf_toolbar--dragging {
-  transition: none;
-  box-shadow:
-    0 2px 4px rgba(15, 23, 42, 0.14),
-    0 14px 28px -6px rgba(15, 23, 42, 0.28),
-    0 36px 64px -16px rgba(15, 23, 42, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+/* The toolbar's own content — a flex sibling of .pdf_toolbar_drag_handle
+   (see PDFPage.jsx), not a parent of it, so the handle stays a fixed-size
+   item pinned to the toolbar's trailing edge regardless of how much this
+   side scrolls/wraps. flex: 1 + min-width/min-height: 0 is what lets it
+   actually shrink instead of forcing #pdf_toolbar past its own bounds. */
+.pdf_toolbar_scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
-/* Dragging the handle past its own resting margin, toward the edge it's
-   already docked at, tucks the toolbar's own chrome away entirely — the
-   box shrinks to nothing (no padding/border/shadow/background of its own)
-   and JS anchors it flush at the true content edge (see the toolbarStyle
-   branch for toolbarCollapsed), so only .pdf_toolbar_edge_handle's own
-   bulge is left poking into view. Grabbing/tapping that handle again is
-   what brings it back (see handleToolbarDragStart). */
-#pdf_toolbar.pdf_toolbar--collapsed {
-  padding: 0;
-  border: none;
-  border-radius: 0;
-  background: none;
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+/* top (default) and bottom: full-width horizontal bar. order flips bottom
+   to the end of #pdf_page's column flow (see PDFPage.jsx: #pdf_toolbar is
+   the first child, right before #pdf_preview — order: 2 here visually
+   moves it after #pdf_preview instead, without changing DOM order, which
+   the sewing/annotation logic doesn't care about either way). */
+#pdf_toolbar.pdf_toolbar--top,
+#pdf_toolbar.pdf_toolbar--bottom {
+  flex-direction: row;
+  align-self: stretch;
 }
-#pdf_toolbar.pdf_toolbar--collapsed #pdf_toolbar_topbar,
-#pdf_toolbar.pdf_toolbar--collapsed #pdf_toolbar_mainbar {
-  display: none;
+#pdf_toolbar.pdf_toolbar--top {
+  order: 0;
+  border-bottom: 1px solid var(--color-border);
+}
+#pdf_toolbar.pdf_toolbar--bottom {
+  order: 2;
+  border-top: 1px solid var(--color-border);
 }
 
-/* REVERTED: touch-action: none here (top/bottom dock) was meant to stop a
-   touch on the toolbar from reaching the browser's native pull-to-refresh
-   recognizer, but touch-action is an intersection down the ancestor chain
-   — a descendant button can never opt back OUT of an ancestor's none, so
-   this silently broke tap-to-select on every tool button too (confirmed:
-   buttons stopped even highlighting as selected on iOS Safari). A broken
-   toolbar is a worse bug than an occasional pull-to-refresh, so this is
-   back to inheriting #pdf_page's own touch-action: manipulation default
-   until a fix that doesn't cover interactive descendants is found. */
-
-/* Docked to the left/right edge — lay out as a vertical column instead of
-   the default horizontal row (previously unstyled: dragging the toolbar to
-   a side edge just left a wide horizontal bar sticking out sideways).
-   max-width/max-height swap for the same reason: a side-docked toolbar is
-   height-constrained by the viewport, not width-constrained. */
+/* left/right: full-height vertical bar — #pdf_page switches to a row flex
+   layout for these (see #pdf_page.pdf_page--toolbar-side below), so
+   align-self: stretch here spans the full height instead of the full
+   width. Internal content (tool strip, options row, etc.) reflows to a
+   vertical stack via the dock-scoped rules further down, reused as-is
+   from when this dock floated — that reflow was already about content
+   orientation, not about floating vs flat positioning. */
 #pdf_toolbar.pdf_toolbar--left,
 #pdf_toolbar.pdf_toolbar--right {
   flex-direction: column;
+  align-self: stretch;
   width: max-content;
-  max-width: none;
-  height: max-content;
-  max-height: min(calc(100% - 2rem), 90vh);
-  /* visible, not auto — the scroll clip moved to .pdf_toolbar_scroll below
-     so it no longer also clips .pdf_toolbar_edge_handle, which is a
-     sibling of that wrapper (not inside it): the handle bulges outside
-     #pdf_toolbar's own box via a negative offset (see its own rules), and
-     an ancestor with overflow: auto/hidden clips that bulge away
-     regardless of the negative offset — it was invisible/unreachable at
-     this dock until the handle's clipping ancestor moved down a level. */
-  overflow: visible;
-  /* No explicit touch-action override here (same reasoning as the
-     top/bottom revert above) — restricting it, even to pan-y, still risks
-     the same "descendant buttons can't opt back out" problem, and this
-     dock's own scroll already worked fine on touch before the
-     pull-to-refresh fix touched it. */
+}
+#pdf_toolbar.pdf_toolbar--left {
+  order: 0;
+  border-right: 1px solid var(--color-border);
+}
+#pdf_toolbar.pdf_toolbar--right {
+  order: 2;
+  border-left: 1px solid var(--color-border);
 }
 
-/* Wraps #pdf_toolbar_topbar + #pdf_toolbar_mainbar only (not the handle) —
-   see the comment above. min-height: 0 is what lets a flex child actually
-   shrink below its own content size instead of forcing #pdf_toolbar past
-   its max-height. */
 #pdf_toolbar.pdf_toolbar--left .pdf_toolbar_scroll,
 #pdf_toolbar.pdf_toolbar--right .pdf_toolbar_scroll {
-  min-height: 0;
   overflow-y: auto;
-}
-
-#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_handle,
-#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_handle {
-  transform: rotate(90deg);
 }
 
 #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_center,
@@ -374,58 +288,67 @@
   margin: 0.15rem 0;
 }
 
-/* Color/size/tool-settings row for whichever tool is active (see
-   .annot_tool_options in PDFPage.jsx). At top/bottom dock this is plain
-   static flow below the tool strip. At left/right dock it remains part of
-   the toolbar container as a second column separated by a vertical rule. */
+/* Color/size/tool-settings for whichever tool is active (see
+   .annot_tool_options in PDFPage.jsx) — a genuine dropdown now, not part
+   of the toolbar's own inline flow: a detached popover sized to fit its
+   own content (never stretching or shrinking the toolbar itself as
+   different tools' option sets vary in size), anchored just off the
+   toolbar's trailing edge. Column list for a horizontal (top/bottom)
+   dock — drops down/up like an ordinary menu; row list for a vertical
+   (left/right) dock — flies out sideways instead. :empty stays
+   display:none so nothing renders (not even the border/shadow) when the
+   active tool has no options. */
 .annot_tool_options {
+  position: absolute;
+  z-index: 27;
   display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 0.6rem;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  box-shadow: 0 10px 28px -6px rgba(15, 23, 42, 0.28), 0 2px 8px rgba(15, 23, 42, 0.14);
+  width: max-content;
+  max-width: min(90vw, 520px);
+  max-height: min(80vh, 520px);
+  flex-wrap: wrap;
+  overflow: auto;
   scrollbar-width: thin;
 }
-
-/* Thin divider between the main tool strip and this "sub-toolbar" of
-   options for whichever tool is active. Top/bottom use a horizontal rule;
-   side docks use a vertical rule because the options sit beside the tool
-   column inside the same toolbar container.
-   :not(:empty) so no stray line shows when no tool's controls are being
-   displayed. */
-#pdf_toolbar:not(.pdf_toolbar--left):not(.pdf_toolbar--right) .annot_tool_options:not(:empty) {
-  margin-top: 0.6rem; /* #pdf_toolbar_left's children stack as plain blocks here, no flex gap to rely on */
-  border-top: 1px solid var(--color-border);
-  padding-top: 0.6rem;
+.annot_tool_options:empty {
+  display: none;
 }
 
-#pdf_toolbar.pdf_toolbar--left .annot_tool_options,
-#pdf_toolbar.pdf_toolbar--right .annot_tool_options {
-  position: static;
+/* left/top: 0 here are just the fallback before layout settles — PDFPage.jsx
+   sets the real value inline (toolOptionsOffset), anchoring the dropdown to
+   the active tool's own button position instead of the toolbar's corner. */
+#pdf_toolbar.pdf_toolbar--top .annot_tool_options {
+  top: 100%;
+  left: 0;
+  margin-top: 0.5rem;
   flex-direction: column;
-  flex-wrap: nowrap;
-  align-items: flex-start;
-  align-self: stretch;
-  border-left: 1px solid var(--color-border);
-  margin-left: 0.6rem;
-  padding-left: 0.7rem;
-  max-height: calc(90vh - 1.2rem);
-  overflow: auto;
+  align-items: stretch;
 }
-#pdf_toolbar.pdf_toolbar--left .annot_tool_options:empty,
-#pdf_toolbar.pdf_toolbar--right .annot_tool_options:empty {
-  display: none; /* no active tool's controls to show — don't render an empty floating panel */
+#pdf_toolbar.pdf_toolbar--bottom .annot_tool_options {
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 0.5rem;
+  flex-direction: column;
+  align-items: stretch;
+}
+#pdf_toolbar.pdf_toolbar--left .annot_tool_options {
+  left: 100%;
+  top: 0;
+  margin-left: 0.5rem;
+  flex-direction: row;
+  align-items: center;
 }
 #pdf_toolbar.pdf_toolbar--right .annot_tool_options {
-  border-left: none;
-  border-right: 1px solid var(--color-border);
-  margin-left: 0;
-  margin-right: 0.6rem;
-  padding-left: 0;
-  padding-right: 0.7rem;
-  order: -1;
+  right: 100%;
+  top: 0;
+  margin-right: 0.5rem;
+  flex-direction: row;
+  align-items: center;
 }
 
 /* A vertical toolbar can run taller than the viewport once every tool
@@ -441,10 +364,6 @@
     height: auto;
     max-height: none;
     overflow-y: visible;
-  }
-  #pdf_toolbar.pdf_toolbar--left .pdf_toolbar_handle,
-  #pdf_toolbar.pdf_toolbar--right .pdf_toolbar_handle {
-    transform: none;
   }
   #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_left,
   #pdf_toolbar.pdf_toolbar--left #pdf_toolbar_center,
@@ -467,18 +386,6 @@
     width: 1px;
     height: 1.9rem;
     margin: 0 0.2rem;
-  }
-  #pdf_toolbar.pdf_toolbar--left .annot_tool_options,
-  #pdf_toolbar.pdf_toolbar--right .annot_tool_options {
-    flex-direction: row;
-    align-items: center;
-    border-left: none;
-    border-right: none;
-    margin-left: 0;
-    margin-right: 0;
-    padding-left: 0;
-    padding-right: 0;
-    order: initial;
   }
 }
 
@@ -508,65 +415,33 @@
   cursor: default;
 }
 
-/* Dedicated drag handle (see .pdf_toolbar_edge_handle further down) — a
-   small, unambiguous grab target instead of the whole toolbar's own
-   chrome, so pressing a tool button never has to be disambiguated from
-   starting a drag. Positioned on whichever edge faces inward, opposite
-   the dock edge — see the dock-scoped rules below. */
-.pdf_toolbar_edge_handle {
-  position: absolute;
-  border: none;
+/* Single drag handle — replaces the 4-button dock pad. Pinned as a
+   fixed-size flex item at the toolbar's own trailing edge (see
+   .pdf_toolbar_scroll's flex: 1 above, which is what leaves this its own
+   fixed space rather than fighting it for room). Press and drag in any
+   direction to redock (see handleToolbarHandlePointerDown in PDFPage.jsx)
+   — no floating/overlay state shown while dragging, it just snaps
+   straight to the flat dock for whichever direction the drag went. */
+.pdf_toolbar_drag_handle {
+  flex-shrink: 0;
+  align-self: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
   padding: 0;
-  background: color-mix(in srgb, var(--color-text-muted) 55%, transparent);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
   cursor: grab;
-  touch-action: none; /* this element's only job is the drag gesture — no competing native scroll/select to preserve here, unlike #pdf_toolbar itself */
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.22);
+  touch-action: none; /* this button's only job is the drag gesture — no competing native scroll/select to preserve */
 }
-
-#pdf_toolbar.pdf_toolbar--dragging .pdf_toolbar_edge_handle {
+.pdf_toolbar_drag_handle:active {
   cursor: grabbing;
-}
-
-/* Sized to sit entirely OUTSIDE the toolbar's own box (offset by its own
-   full width/height, not a few px in from the edge) so it reads as a tab
-   bulging off the edge rather than a control overlapping the toolbar's
-   own chrome/content. Only the corners facing away from the toolbar are
-   rounded — the edge flush against the toolbar stays square so the tab
-   looks attached to it rather than floating free. */
-#pdf_toolbar.pdf_toolbar--top .pdf_toolbar_edge_handle,
-#pdf_toolbar.pdf_toolbar--bottom .pdf_toolbar_edge_handle {
-  width: 40px;
-  height: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-}
-#pdf_toolbar.pdf_toolbar--top .pdf_toolbar_edge_handle {
-  bottom: -14px;
-  border-radius: 0 0 10px 10px;
-}
-#pdf_toolbar.pdf_toolbar--bottom .pdf_toolbar_edge_handle {
-  top: -14px;
-  border-radius: 10px 10px 0 0;
-}
-
-/* Same "fully outside, flush on the attached edge" treatment, rotated for
-   a left/right-docked toolbar — right for a left-docked toolbar, left for
-   a right-docked one (the exact opposite pairing from top/bottom above,
-   same "always face the content" reasoning). */
-#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_edge_handle,
-#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_edge_handle {
-  width: 14px;
-  height: 40px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-#pdf_toolbar.pdf_toolbar--left .pdf_toolbar_edge_handle {
-  right: -14px;
-  border-radius: 0 10px 10px 0;
-}
-#pdf_toolbar.pdf_toolbar--right .pdf_toolbar_edge_handle {
-  left: -14px;
-  border-radius: 10px 0 0 10px;
 }
 
 @keyframes pdf_icon_spin { to { transform: rotate(360deg); } }
@@ -655,6 +530,8 @@
 }
 #pdf_selection_bar_result strong { color: var(--color-text-muted); font-weight: 600; margin-right: 0.3rem; }
 .pdf_selection_bar_result--error { color: #f44336; }
+.pdf_correction_confidence { color: var(--color-text-muted); font-size: 0.82em; }
+.pdf_correction_candidate { display: block; margin-top: 0.25rem; color: var(--color-text-muted); font-size: 0.9em; font-style: italic; }
 
 #pdf_selected_text_preview {
   position: absolute;
@@ -664,6 +541,7 @@
   transform: translateX(-50%);
   width: min(34rem, calc(100% - 8rem));
   max-width: 78%;
+  max-height: 22vh;
   display: flex;
   align-items: flex-start;
   gap: 0.55rem;
@@ -688,7 +566,7 @@
 
 #pdf_selected_text_preview_body {
   min-width: 0;
-  max-height: 40vh;
+  max-height: 22vh;
   overflow-y: auto;
   overflow-x: hidden;
   white-space: pre-wrap;
@@ -1298,6 +1176,21 @@
   gap: 0.15rem;
 }
 
+.anh_day_header {
+  padding: 0.5rem 0.5rem 0.25rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 0.15rem;
+}
+
+.anh_day_header:first-child {
+  padding-top: 0.1rem;
+}
+
 .anh_row {
   display: flex;
   align-items: center;
@@ -1538,6 +1431,37 @@ html.theme-light #pdf_preview_scroll {
   border-radius: 2px;
 }
 
+#pdf_delete_page_btn {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 20;
+  width: 1.9rem;
+  height: 1.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-bg) 85%, transparent);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+#pdf_delete_page_btn svg,
+#pdf_delete_page_btn i { width: 1.05rem; height: 1.05rem; font-size: 1.05rem; }
+#pdf_delete_page_btn:disabled { opacity: 0.4; cursor: default; }
+
+/* Booklet mode: primary (left, editable) page and its companion (right,
+   view-only) page side by side instead of #pdf_canvas_wrap's default
+   single-column stack. align-items: center is inherited from the base
+   rule above (not overridden here) — that's what keeps both pages
+   vertically centered against each other/the viewport as zoom changes
+   their heights, same as the base rule already does for single-page
+   mode's own cross-axis. */
+#pdf_canvas_wrap.pdf_canvas_wrap--booklet {
+  flex-direction: row;
+}
+
 #pdf_page_minimap {
   position: absolute;
   right: 18px;
@@ -1622,6 +1546,37 @@ html.theme-light #pdf_preview_scroll {
   -webkit-tap-highlight-color: transparent;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* Same size/position as #pdf_annot_canvas, stacked above it — deliberately
+   NOT mix-blend-mode:multiply. Only draws masked/recolored highlight text
+   (see drawMaskedHighlightText in annotationDraw.js): that needs to fully
+   replace/hide the original PDF glyphs underneath with an opaque color,
+   which multiply blending can never do (it composites against, never
+   replaces, what's beneath it). pointer-events:none — purely visual, never
+   part of the drawing/hit-testing surface. */
+#pdf_mask_canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+/* Search-match highlight rects — stacked above the mask canvas so they stay
+   visible even over a masked/recolored highlight annotation. Not
+   mix-blend-mode:multiply either, same reasoning as the mask canvas: a
+   translucent fill needs to read consistently regardless of what color the
+   page content underneath happens to be. */
+#pdf_search_canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
 }
 
 /* Matches the "paper" look of #draft_editor in the Draft page (src/Draft) —
@@ -1715,22 +1670,29 @@ html.theme-light #pdf_preview_scroll {
 .annot_text_cancel_btn:hover { color: #f44336; border-color: #f44336; }
 
 .annot_text_action_menu {
-  position: absolute;
-  z-index: 31;
+  /* position:fixed set inline (PDFPage.jsx) — this is portalled to
+     document.body with z-index above the site-wide #app_footer's 950
+     (position:fixed); anything less gets its clicks silently eaten by the
+     footer even while rendering visually on top. */
+  z-index: 961;
   display: flex;
   align-items: stretch;
+  width: max-content;
   padding: 0.25rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-surface) 92%, transparent);
   border: 1px solid var(--color-border);
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(10px);
-  overflow: hidden;
+  /* Now portalled to document.body, so no longer actually a descendant of
+     .pdf_page_container — kept anyway in case that ever changes back;
+     costs nothing. See its own line-height:0 note below. */
+  line-height: normal;
 }
 
 .annot_text_action_btn {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 0.35rem 0.65rem;
   border: 0;
   border-radius: 999px;
@@ -2382,6 +2344,21 @@ html.theme-light #pdf_preview_scroll {
   margin: 0;
 }
 
+/* The sub-toolbar (.annot_tool_options) is a column list when the toolbar
+   itself docks top/bottom, a row when it docks left/right (see
+   .annot_tool_options in pdfPage.css) — these separators need to match:
+   a horizontal rule between stacked rows for the column case, the
+   original vertical divider only still makes sense for the row case. */
+#pdf_toolbar.pdf_toolbar--top .annot_text_separator,
+#pdf_toolbar.pdf_toolbar--bottom .annot_text_separator,
+#pdf_toolbar.pdf_toolbar--top .annot_text_separator--wide,
+#pdf_toolbar.pdf_toolbar--bottom .annot_text_separator--wide {
+  width: 100%;
+  height: 1px;
+  align-self: auto;
+  margin: 0.2rem 0;
+}
+
 .annot_text_font_row {
   display: flex;
   align-items: center;
@@ -2547,11 +2524,44 @@ html.theme-light #pdf_preview_scroll {
   flex-wrap: wrap;
 }
 
+/* Smoothing + (when Dynamic ink is on) Pressure assist/Tip taper/Ink flow
+   — always a column, regardless of the toolbar's own dock. Unlike every
+   other control group here, this one doesn't flip to a row alongside
+   Smoothing when docked top/bottom; it's its own fixed vertical stack
+   nested inside .annot_pen_controls--column's own row. */
+.annot_pen_stroke_shaping,
+.annot_pen_stroke_shaping_extra {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+/* Every row's own .annot_control_head reserves the same width regardless
+   of its label's own length ("Smoothing" vs "Pressure assist") — without
+   this, each row's knob starts at a different x, however far its own
+   label happens to run, and the stacked column reads as jagged rather
+   than aligned. Sized to fit "Pressure assist", the longest label here. */
+.annot_pen_stroke_shaping .annot_control_head,
+.annot_pen_stroke_shaping_extra .annot_control_head {
+  min-width: 6.6rem;
+}
+
 .annot_control {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
   min-width: 0;
+}
+
+/* Same "column stacks better narrow, row fits better in a wide horizontal
+   dock" reasoning as .annot_pen_controls--column above — every
+   LabeledPercentKnob control (title/subtitle above its slider) across
+   Pen/Highlight/Text's dropdowns runs its title next to the slider
+   instead of above it once the toolbar itself is docked top/bottom. */
+#pdf_toolbar.pdf_toolbar--top .annot_control,
+#pdf_toolbar.pdf_toolbar--bottom .annot_control {
+  flex-direction: row;
+  align-items: center;
 }
 
 .annot_control_head {
@@ -2592,7 +2602,7 @@ html.theme-light #pdf_preview_scroll {
 
 /* .annot_control_info_btn / .annot_control_info_popup now live in
    infoPopupButton.css, co-located with the shared <InfoPopupButton>
-   component (also used by NarrativeModePanel.jsx's AMCTOSHS Entities
+   component (also used by NarrativeModePanel.jsx's AMCTOSHS Entity
    Builder) — imported automatically wherever that component is imported. */
 
 #pdf_annot_right_group {
@@ -2620,6 +2630,165 @@ html.theme-light #pdf_preview_scroll {
 
 .annot_action_btn:disabled { opacity: 0.3; cursor: default; }
 .annot_action_btn--active { color: #ab47bc; border-color: #ab47bc; background: color-mix(in srgb, #ab47bc 10%, transparent); }
+
+#pdf_page_nav_row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#pdf_search_group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#pdf_search_toggle_btn {
+  padding: 0.28rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+#pdf_search_toggle_btn.pdf_search_toggle_btn--active { color: #ab47bc; border-color: #ab47bc; background: color-mix(in srgb, #ab47bc 10%, transparent); }
+
+#pdf_search_bar {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 0.15rem 0.3rem;
+}
+#pdf_search_bar_row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+#pdf_search_bar input {
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font-size: 0.82rem;
+  padding: 0.12rem 0.3rem;
+  width: 11rem;
+  outline: none;
+}
+#pdf_search_count {
+  min-width: 3.4rem;
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+#pdf_search_bar button {
+  padding: 0.22rem 0.4rem;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  line-height: 1;
+  cursor: pointer;
+}
+#pdf_search_bar button:disabled { opacity: 0.3; cursor: default; }
+
+/* Shown only for a non-exact (tolerant/fuzzy) search match — see spec
+   section 54: exact matches need no explanation, but a match found via
+   the compact/token/fuzzy stages shows what it actually found in the PDF
+   (the untouched original text) and how confident that match is. */
+#pdf_search_confidence {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.2rem 0.3rem 0.15rem;
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border);
+  margin-top: 0.15rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#pdf_search_confidence_pct {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-weight: 700;
+  color: #ab47bc;
+}
+
+/* Single icon button between the two page navigators — toggles booklet
+   mode on/off rather than a two-button single/booklet group, so it reads
+   as a divider between the left (original) and right (companion)
+   navigators once booklet mode is on. */
+#pdf_reading_mode_toggle {
+  padding: 0.28rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+#pdf_reading_mode_toggle:disabled { opacity: 0.3; cursor: default; }
+#pdf_reading_mode_toggle.pdf_reading_mode_toggle--active { color: #ab47bc; border-color: #ab47bc; background: color-mix(in srgb, #ab47bc 10%, transparent); }
+
+#pdf_insert_blank_page_btn {
+  padding: 0.28rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#pdf_insert_blank_page_btn:disabled { opacity: 0.3; cursor: default; }
+/* The inline SVG icon (InsertPageIcon) carries its own width="24"
+   height="24" attributes — without an override here it renders much
+   bigger than the boxicon font-glyphs every sibling button uses at the
+   same font-size, making this one button visibly larger than the rest. */
+#pdf_insert_blank_page_btn svg { width: 0.9rem; height: 0.9rem; }
+
+/* Right/companion-page navigator — same look as #pdf_page_nav, distinct
+   ids since both are mounted at once in booklet mode. */
+#pdf_page_nav_right {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+#pdf_page_nav_right button {
+  padding: 0.28rem 0.55rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  line-height: 1;
+}
+#pdf_page_nav_right_label {
+  min-width: 3.2rem;
+  text-align: center;
+  font-size: 0.74rem !important;
+  border-left: 1px solid var(--color-border) !important;
+  border-right: 1px solid var(--color-border) !important;
+  color: var(--color-text-muted);
+  padding: 0.28rem 0.3rem;
+  display: inline-block;
+}
 
 .pdf_page_canvas {
   background: #ffffff;
@@ -3363,6 +3532,12 @@ html.theme-light #pdf_preview_scroll {
 @media (hover: hover) {
   #pdf_drop_zone:hover { border-color: var(--color-highlight); }
   #pdf_page_nav button:hover:not(:disabled) { color: var(--color-text); background: var(--color-surface); }
+  #pdf_page_nav_right button:hover:not(:disabled) { color: var(--color-text); background: var(--color-surface); }
+  #pdf_reading_mode_toggle:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+  #pdf_insert_blank_page_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+  #pdf_delete_page_btn:hover:not(:disabled) { color: #f44336; border-color: #f44336; }
+  #pdf_search_toggle_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-text-muted); }
+  #pdf_search_bar button:hover:not(:disabled) { color: var(--color-text); }
   #pdf_zoom_controls button:hover { color: #fff; background: rgba(255, 255, 255, 0.12); }
   #pdf_text_extract_btn:hover:not(:disabled),
   #pdf_linguistic_btn:hover:not(:disabled) { color: #4fc3f7; border-color: #4fc3f7; }

@@ -292,7 +292,7 @@ export default function ClinicalSchemata() {
           <i className="fi fi-rr-arrow-left" />
         </button>
         <div id="cs_header_titles">
-          <span id="cs_title">AMCTOSHS Entities</span>
+          <span id="cs_title">AMCTOSHS Entity</span>
           <span id="cs_subtitle">
             Entity → Entity Schema → Trace → Trace Value · Extracted from the Reservoir
           </span>

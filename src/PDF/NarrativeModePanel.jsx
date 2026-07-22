@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./narrativeModePanel.css";
 import { InfoPopupButton } from "./InfoPopupButton";
 import { apiUrl } from "../config/api";
@@ -25,25 +25,25 @@ const ENTITY_DOMAINS = [
 const ENTITY_TYPES = [
   {
     key: "schema",
-    label: "Entity Schema",
+    label: "Schema",
     icon: "bx bx-cube-alt",
     helper: "Points to an ontic object, such as heart.",
   },
   {
     key: "trace",
-    label: "Entity Schema Trace",
+    label: "Schema Trace",
     icon: "bx bx-git-branch",
     helper: "Nested inside a preexisting Entity Schema.",
   },
   {
     key: "trace_value",
-    label: "Entity Schema Trace Value",
+    label: "Schema Trace Value",
     icon: "bx bx-ruler",
     helper: "A value for an existing trace. Unit is required.",
   },
   {
     key: "instance",
-    label: "Entity Schema Instance",
+    label: "Schema Instance",
     icon: "bx bx-layer-plus",
     helper: "Instantiates a schema via one trace:value pair. Build several for a schema with multiple traces.",
   },
@@ -93,7 +93,7 @@ const formatEntity = (entry) => {
 
   if (entry.type === "schema") {
     lines.push(`2. Entity Schema: ${entry.name || "Untitled Schema"}`);
-    lines.push(`3. Entity Schema Domain: ${entry.domain}`);
+    lines.push(`3. AMCTOSHS Sub-Entity schema Domain: ${entry.domain}`);
     lines.push(`4. Ontic Object Text: ${entry.sourceText}`);
   } else if (entry.type === "trace") {
     lines.push(`2. Entity Schema Trace: ${entry.name || "Untitled Trace"}`);
@@ -120,7 +120,6 @@ const formatEntity = (entry) => {
 
 const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, onVerifySource = null }) => {
   const [entityType, setEntityType] = useState("schema");
-  const [sourceText, setSourceText] = useState("");
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("Organs");
   const [parentSchema, setParentSchema] = useState("");
@@ -149,20 +148,18 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   // Live — selectedText already tracks the current PDF selection in real
   // time, including mid-drag as a selection handle moves (see
   // manualSelection's own effect in PDFPage.jsx), so this box should track
-  // it too rather than only grabbing a one-time snapshot the first time
-  // it's empty. Only fires forward on an actual new selection (never
-  // clears the box just because the selection was dismissed), so typed/
-  // edited text survives until a genuinely new selection replaces it.
+  // it too. Also clears when the PDF selection is dismissed, but only if
+  // the box still holds exactly what the last selection put there — text
+  // the user has since typed or edited is left alone.
+  const lastNameSyncRef = useRef("");
   useEffect(() => {
-    if (cleanSelectedText) setSourceText(cleanSelectedText);
-  }, [cleanSelectedText]);
-
-  // Name takes its value from the same live selection, same "only fires
-  // forward on an actual new selection" rule as sourceText above — still
-  // a plain editable input afterward, this just seeds it instead of
-  // leaving it blank.
-  useEffect(() => {
-    if (cleanSelectedText) setName(cleanSelectedText);
+    if (cleanSelectedText) {
+      setName(cleanSelectedText);
+      lastNameSyncRef.current = cleanSelectedText;
+    } else {
+      setName((current) => (current === lastNameSyncRef.current ? "" : current));
+      lastNameSyncRef.current = "";
+    }
   }, [cleanSelectedText]);
 
   useEffect(() => {
@@ -185,14 +182,14 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   const draftEntry = useMemo(() => ({
     type: entityType,
     typeLabel: activeType.label,
-    sourceText: sourceText.trim(),
+    sourceText: name.trim(),
     name: name.trim(),
     domain,
     parentSchema: parentSchema.trim(),
     traceName: traceName.trim(),
     value: value.trim(),
     unit: unit.trim(),
-  }), [activeType.label, domain, entityType, name, parentSchema, sourceText, traceName, unit, value]);
+  }), [activeType.label, domain, entityType, name, parentSchema, traceName, unit, value]);
 
   const preview = draftEntry.sourceText ? formatEntity(draftEntry) : "";
 
@@ -243,7 +240,6 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   };
 
   const clearForm = () => {
-    setSourceText("");
     setName("");
     setParentSchema("");
     setTraceName("");
@@ -254,7 +250,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
 
   const verifySourceText = async () => {
     if (!onVerifySource || verifyBusy) return;
-    const text = sourceText.trim();
+    const text = name.trim();
     if (!text) {
       setError("Enter or select text before verifying it.");
       return;
@@ -262,7 +258,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
     setError("");
     try {
       const corrected = await onVerifySource(text);
-      if (corrected) setSourceText(corrected);
+      if (corrected) setName(corrected);
     } catch (err) {
       setError(err.message || "Verification failed.");
     }
@@ -271,29 +267,24 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   return (
     <div id="narrative_mode_panel" onMouseDown={(event) => event.stopPropagation()}>
       <div id="narrative_mode_header">
-        <span id="narrative_mode_header_title"><i className="bx bx-network-chart" /> AMCTOSHS Entities Builder</span>
+        <span id="narrative_mode_header_title">
+          <i className="bx bx-network-chart" /> AMCTOSHS Entity Builder
+          <InfoPopupButton
+            info="Builds only from selected text or text entered here. Page text is not used."
+            label="AMCTOSHS Entity Builder info"
+          />
+        </span>
         <button type="button" id="narrative_mode_close" onClick={onClose} title="Close">✕</button>
       </div>
 
       <div id="entity_builder_body">
-        <div className="entity_builder_notice">
-          <i className="bx bx-selection" />
-          Builds only from selected text or text entered here. Page text is not used.
-        </div>
-
-        {cleanSelectedText && (
-          <button type="button" className="entity_builder_selected_btn" onClick={() => setSourceText(cleanSelectedText)}>
-            <i className="bx bx-import" /> Use selected text
-          </button>
-        )}
-
         <div className="entity_builder_label_row">
-          <label className="entity_builder_label" htmlFor="entity_builder_source">Selected Text</label>
+          <label className="entity_builder_label" htmlFor="entity_builder_name">Name</label>
           <button
             type="button"
             id="entity_builder_verify"
             onClick={verifySourceText}
-            disabled={verifyBusy || !sourceText.trim()}
+            disabled={verifyBusy || !name.trim()}
             title="Verify/correct this text against the current PDF page"
             aria-label="Verify builder source text"
           >
@@ -304,12 +295,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
             )}
           </button>
         </div>
-        <textarea
-          id="entity_builder_source"
-          value={sourceText}
-          onChange={(event) => setSourceText(event.target.value)}
-          placeholder="Select text from the PDF, or enter text manually..."
-        />
+        <input id="entity_builder_name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: heart" />
 
         <div className="entity_builder_label_row">
           <label className="entity_builder_label" htmlFor="entity_builder_type">AMCTOSHS Sub-Entity</label>
@@ -320,16 +306,9 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
         </select>
         <p className="entity_builder_helper">{activeType.helper}</p>
 
-        {(entityType === "schema" || entityType === "trace" || entityType === "instance" || entityType === "intervener") && (
-          <>
-            <label className="entity_builder_label" htmlFor="entity_builder_name">Name</label>
-            <input id="entity_builder_name" value={name} onChange={(event) => setName(event.target.value)} placeholder="Example: heart" />
-          </>
-        )}
-
         {entityType === "schema" && (
           <>
-            <label className="entity_builder_label" htmlFor="entity_builder_domain">Entity Schema Domain</label>
+            <label className="entity_builder_label" htmlFor="entity_builder_domain">AMCTOSHS Sub-Entity schema Domain</label>
             <select id="entity_builder_domain" value={domain} onChange={(event) => setDomain(event.target.value)}>
               {ENTITY_DOMAINS.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
@@ -415,6 +394,12 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
           </>
         )}
       </div>
+
+      {verifyBusy && (
+        <div id="narrative_mode_footer">
+          <i className="bx bx-loader-circle pdf_icon_spin" /> Using AI to verify this text against the page.
+        </div>
+      )}
     </div>
   );
 };

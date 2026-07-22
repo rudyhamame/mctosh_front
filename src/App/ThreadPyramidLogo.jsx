@@ -5,40 +5,25 @@ import "./threadPyramidLogo.css";
 
 // ── Rebuild, from scratch ────────────────────────────────────────────────
 // Each STRUCTURED floor (Atoms through Societies — see FLOOR_COUNT below)
-// is ONE thread, not many. It covers the field by going back and forth —
-// runs a stretch, turns, runs back the other way one row over, turns
-// again, and so on — a single unbroken, continuous path the whole time.
-// Every one of those internal turns is close enough to see — that's the
-// whole point, it's what actually shows this is one thread weaving back
-// and forth rather than a field of separate parallel ones. Only the very
-// first and very last row keep going instead of turning — see the
-// free-end bends further down, where those two true open ends (per floor)
-// bend vertically instead of receding into the horizontal distance. Flat
-// otherwise, nothing else rises out of it — just the thread itself.
+// is ONE thread, not many — a single unbroken, continuous path the whole
+// time. It's a coil: the same kind of deterministic expanding spiral the
+// Hyle floor already uses (see buildHyleThreadPoints/buildStructuredCoilPoints
+// below), not a flat back-and-forth weave. Each floor's own thread LENGTH
+// shrinks going up the stack (floorLengthScaleFor below — Atoms/floor 1 is
+// longest, Societies/the last floor shortest), and since a coil's radius is
+// derived directly from how much length it has to contain (the same
+// footprint-area relationship Hyle's own radius uses), the radius shrinks
+// right along with it — the whole structured stack reads as a narrowing
+// cone of coils, not a rack of identical flat rings.
 //
 // The Hyle floor (floor 0, see buildHyleFloor below) is deliberately NOT
-// one of these — it's the raw material of all eight structured floors
-// combined, before any of it has resolved into a flat, weave-structured
-// plane: a single continuous thread whose own length is calculated (not
-// guessed) from the other eight floors' real combined length, wandering
-// freely in 3D rather than confined to a flat weave.
+// one of the structured floors — it's the raw material of all eight of
+// them combined, before any of it has resolved into a specific floor: a
+// single continuous thread whose own length is calculated (not guessed)
+// from the other eight floors' real combined length.
 
 const GROUND_Y = 0;
-const ROW_COUNT = 40; // how many back-and-forth passes the one thread makes
-const FIELD_HALF_WIDTH = 1000; // lateral spread, perpendicular to the shared direction — wider field, same row count, so rows sit further apart
-const INNER_HALF_LENGTH = 320; // how far each INTERNAL turn sits from center — close enough to actually see the weave, now covering more ground along each row's own run
 const THREAD_RADIUS = 1.4; // thick enough that a whole floor reads as a solid, prominent band rather than a fine wire
-
-// One fixed direction the thread runs along on each pass.
-const AXIS_ANGLE = 0.35; // radians — arbitrary, just fixed
-const AXIS = new THREE.Vector3(Math.cos(AXIS_ANGLE), 0, Math.sin(AXIS_ANGLE));
-const PERP = new THREE.Vector3(-AXIS.z, 0, AXIS.x); // perpendicular — the direction consecutive passes step across
-
-const point = (along, lateral) =>
-  new THREE.Vector3(0, GROUND_Y, 0).addScaledVector(AXIS, along).addScaledVector(PERP, lateral);
-
-const ROW_STEP = ROW_COUNT > 1 ? (FIELD_HALF_WIDTH * 2) / (ROW_COUNT - 1) : 0;
-const lateralForRow = (r) => -FIELD_HALF_WIDTH + r * ROW_STEP;
 
 // One floor per level of App.js's own scroll (LEVELS): Hyle, Atoms,
 // Molecules, Cells, Tissues, Organs, Organ Systems, Humans, Societies —
@@ -54,33 +39,28 @@ const FLOOR_SPACING = 200;
 const ATOMIC_FLOOR_INDEX = 1;
 const MOLECULAR_FLOOR_INDEX = 2;
 
-// Every STRUCTURED floor's own thread (floors 1..FLOOR_COUNT-1 — Hyle,
-// floor 0, isn't part of this scheme at all, see buildHyleFloor above) has
-// two true open ends — row 0's own start (the PROXIMAL one, closest to
-// where the whole thread's own path structurally begins) and the last
-// row's own end (the DISTAL one). Rather than every floor's own pair
-// receding flat into the horizontal distance, each end bends vertically —
-// a quarter-turn (sin/cos easing, so the tangent is purely horizontal at
-// the join, purely vertical at the tip) from the same INNER_HALF_LENGTH
-// join every ordinary internal turn already uses — and alternates
-// direction floor to floor:
-//   floor 1: proximal up,   distal down
-//   floor 2: proximal down, distal up
-//   floor 3: proximal up,   distal down
+// Every STRUCTURED floor's own coil (floors 1..FLOOR_COUNT-1 — Hyle, floor
+// 0, isn't part of this scheme at all, see buildHyleFloor above) has two
+// true open ends — its INNER end (theta≈0, closest to where the coil's own
+// path structurally begins) and its OUTER end (theta=max, the last point
+// wound). Rather than receding flat into the distance, each end bends
+// vertically — a quarter-turn (sin/cos easing, so the tangent continues the
+// coil's own direction at the join, then eases to purely vertical at the
+// tip) — and alternates direction floor to floor:
+//   floor 1: inner up,   outer down
+//   floor 2: inner down, outer up
+//   floor 3: inner up,   outer down
 //   ...and so on, odd floors matching floor 1, even floors matching floor 2.
-// Two neighboring floors' facing ends (floor 1's proximal-up meeting floor
-// 2's proximal-down; floor 2's distal-up meeting floor 3's distal-down;
-// and so on) bend the identical horizontal distance and exactly half of
-// FLOOR_SPACING vertically each, so their tips land on the exact same
-// point in space — blending into one continuous connector rather than two
+// Two neighboring floors' facing ends (floor 1's inner-up meeting floor 2's
+// inner-down; floor 2's outer-up meeting floor 3's outer-down; and so on)
+// bend exactly half of FLOOR_SPACING vertically each, so their tips land at
+// the same height — blending into one continuous connector rather than two
 // separate stubs. Only the two ends with nothing to meet stay true open
 // ends, hanging past the whole structured stack instead: whichever end
-// (proximal or distal — which one it is depends on floor parity) points
-// down at floor 1 (the bottom of the structured stack, fed by the Hyle
-// floor's peripheral endpoint), and whichever end points up at the very
-// last floor.
-const FREE_END_BEND_ALONG = -INNER_HALF_LENGTH; // where every bend starts
-const FREE_END_BEND_RUN = 140; // horizontal distance every bend covers
+// (inner or outer — which one it is depends on floor parity) points down at
+// floor 1 (the bottom of the structured stack, fed by the Hyle floor's own
+// peripheral endpoint), and whichever end points up at the very last floor.
+const FREE_END_BEND_RUN = 140; // horizontal distance every bend covers, continuing the coil's own tangent direction at the join
 const FREE_END_BEND_SAMPLES = 20;
 const HALF_FLOOR_SPACING = FLOOR_SPACING / 2; // internal floor-to-floor bends each cover exactly this much, so they meet in the middle
 const OPEN_FREE_END_DROP = 260; // the structured stack's own two true open ends (bottom of floor 1, top of the last floor) hang this far past it
@@ -100,6 +80,81 @@ const isOpenFreeEnd = (sign, floorIndex) =>
 const FLOOR_GLOW_EMISSIVE_INTENSITY = 1.0;
 const colorForFloor = (floorIndex) => new THREE.Color().setHSL(floorIndex / FLOOR_COUNT, 0.85, 0.6);
 
+// ── Structured floors as shrinking coils ──────────────────────────────────
+// Floor 1 (Atoms) gets the full base length; every floor above it tapers
+// down toward STRUCTURED_LENGTH_MIN_SCALE of that (the last floor,
+// Societies) — since a coil's radius is derived from how much length it
+// has to contain (see structuredCoilRadiusFor below, the same footprint-
+// area relationship the Hyle floor's own radius uses), the radius shrinks
+// right along with the length, with no separate radius parameter needed.
+const BASE_STRUCTURED_FLOOR_LENGTH = 28000; // floor 1 (Atoms)'s own target length — matches what every floor's old back-and-forth weave used to measure out to
+const STRUCTURED_LENGTH_MIN_SCALE = 0.35; // the last floor (Societies)'s target length, as a fraction of floor 1's
+const STRUCTURED_COIL_STEP_LENGTH = 55; // tighter point sampling than Hyle's own (90) — these coils are far shorter, closer-spaced points still read as a smooth wind
+const STRUCTURED_COIL_MIN_CLEARANCE = THREAD_RADIUS * 2 + 1.0;
+const STRUCTURED_COIL_CENTER_CLEARANCE_RADIUS = 40; // smaller dead center than Hyle's own 120 — these coils are far shorter, a big empty middle would look sparse
+const STRUCTURED_COIL_FILL_FRACTION = 0.3; // slightly denser winding than Hyle's "unformed" 0.22 — reads as more resolved/deliberate than the raw Hyle material it came from
+const COIL_POINTS_PER_SEGMENT = 6; // curve points per tube segment — chunks the coil into small, individually-sewable pieces, similar count to the old weave's own per-row segments
+
+const floorLengthScaleFor = (floorIndex) => {
+  const t = (floorIndex - 1) / (FLOOR_COUNT - 2); // 0 at floor 1 (Atoms) .. 1 at the last floor (Societies)
+  return 1 - t * (1 - STRUCTURED_LENGTH_MIN_SCALE);
+};
+
+const structuredCoilRadiusFor = (totalLength) => {
+  const footprintArea = totalLength * STRUCTURED_COIL_MIN_CLEARANCE;
+  return Math.sqrt(footprintArea / (Math.PI * STRUCTURED_COIL_FILL_FRACTION));
+};
+
+// Every parameter needed to both WALK a floor's coil (buildStructuredCoilPoints
+// below) and to re-sample a single point on it later (coilPointAt, used by
+// cargo to ride the same path) — computed once per floor from nothing but
+// its own target length, so both call sites always agree on the same shape
+// without passing built geometry back and forth.
+const coilParamsFor = (floorIndex) => {
+  const totalLength = BASE_STRUCTURED_FLOOR_LENGTH * floorLengthScaleFor(floorIndex);
+  const wanderRadius = structuredCoilRadiusFor(totalLength);
+  const spacingFromBudget = (Math.PI * wanderRadius * wanderRadius * STRUCTURED_COIL_FILL_FRACTION) / Math.max(totalLength, 1);
+  const spacing = Math.max(STRUCTURED_COIL_MIN_CLEARANCE * 3.4, spacingFromBudget);
+  const spiralB = (spacing * 1.6) / (Math.PI * 2);
+  return { totalLength, spacing, spiralB, seed: floorIndex * 37.5 };
+};
+
+const coilPointAt = (params, theta) => {
+  const radius = STRUCTURED_COIL_CENTER_CLEARANCE_RADIUS + params.spiralB * theta;
+  const wobbleFade = Math.min(1, (radius - STRUCTURED_COIL_CENTER_CLEARANCE_RADIUS) / (params.spacing * 6));
+  const wobble = Math.sin(theta * 0.73 + params.seed) * params.spacing * 0.1 * wobbleFade;
+  return new THREE.Vector3((radius + wobble) * Math.cos(theta), GROUND_Y, (radius - wobble) * Math.sin(theta));
+};
+
+// Same deterministic expanding-spiral walk as buildHyleThreadPoints, just
+// bounded to this floor's own (smaller) length budget — returns both the
+// points and the final theta reached, so cargo (buildCargo below) knows the
+// coil's own angular span to spread its items across.
+const buildStructuredCoilPoints = (params) => {
+  const points = [];
+  let theta = 0.01;
+  let travelled = 0;
+  points.push(coilPointAt(params, theta));
+  while (travelled < params.totalLength) {
+    const current = points[points.length - 1];
+    const localRadius = Math.max(params.spacing, params.spiralB * theta);
+    const dTheta = Math.min(0.22, STRUCTURED_COIL_STEP_LENGTH / Math.hypot(localRadius, params.spiralB));
+    theta += dTheta;
+    let next = coilPointAt(params, theta);
+    const stepLength = current.distanceTo(next);
+    const remaining = params.totalLength - travelled;
+    if (stepLength > remaining) {
+      next = current.clone().lerp(next, remaining / stepLength);
+      points.push(next);
+      travelled = params.totalLength;
+      break;
+    }
+    points.push(next);
+    travelled += stepLength;
+  }
+  return { points, thetaMax: theta };
+};
+
 // The ordered list of point-arrays that make up one STRUCTURED floor's
 // thread (floors 1..FLOOR_COUNT-1, i.e. Atoms through Societies) — each
 // array becomes one tube segment. Pulled out of buildFloor so the exact
@@ -108,63 +163,51 @@ const colorForFloor = (floorIndex) => new THREE.Color().setHSL(floorIndex / FLOO
 // come from the real geometry, not a hand-derived estimate that could
 // silently drift out of sync with it.
 const floorSegments = (floorIndex) => {
-  const segments = [];
+  const { points: coilPoints } = buildStructuredCoilPoints(coilParamsFor(floorIndex));
 
-  // sign: +1 bends up, -1 bends down. drop: how far, in local (this
-  // floor's own) coordinates — HALF_FLOOR_SPACING for an internal bend
-  // that meets its neighbor exactly halfway, OPEN_FREE_END_DROP for a
-  // true open end with no neighbor to meet.
-  const addFreeEndBendPoints = (lateral, sign, drop) => {
+  // A short vertical bend hanging off a coil endpoint — same sin/cos easing
+  // as the old weave's own free-end bends (continues the coil's own
+  // tangent direction at the join, eases to purely vertical at the tip),
+  // just computed from that endpoint's own local tangent instead of a
+  // fixed AXIS-aligned direction, since a coil's tangent varies
+  // continuously with theta rather than staying fixed the way a straight
+  // weave row's did.
+  const bendPointsFrom = (endpoint, tangentDir, sign, drop) => {
     const bendPoints = [];
     for (let s = 0; s <= FREE_END_BEND_SAMPLES; s++) {
       const u = s / FREE_END_BEND_SAMPLES;
-      const alongOffset = -FREE_END_BEND_RUN * Math.sin((u * Math.PI) / 2);
+      const alongOffset = FREE_END_BEND_RUN * Math.sin((u * Math.PI) / 2);
       const rise = sign * drop * (1 - Math.cos((u * Math.PI) / 2));
-      bendPoints.push(
-        new THREE.Vector3(0, rise, 0)
-          .addScaledVector(AXIS, FREE_END_BEND_ALONG + alongOffset)
-          .addScaledVector(PERP, lateral)
-      );
+      bendPoints.push(endpoint.clone().addScaledVector(tangentDir, alongOffset).add(new THREE.Vector3(0, rise, 0)));
     }
-    segments.push(bendPoints);
+    return bendPoints;
   };
 
   const isEven = floorIndex % 2 === 0;
-  const proximalSign = isEven ? -1 : 1;
-  const distalSign = isEven ? 1 : -1;
-  const proximalDrop = isOpenFreeEnd(proximalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
-  const distalDrop = isOpenFreeEnd(distalSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
+  const innerSign = isEven ? -1 : 1;
+  const outerSign = isEven ? 1 : -1;
+  const innerDrop = isOpenFreeEnd(innerSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
+  const outerDrop = isOpenFreeEnd(outerSign, floorIndex) ? OPEN_FREE_END_DROP : HALF_FLOOR_SPACING;
 
-  for (let r = 0; r < ROW_COUNT; r++) {
-    const lateral = lateralForRow(r);
-    const forward = r % 2 === 0; // alternating direction each pass — what makes it one continuous back-and-forth thread
-    const startAlong = forward ? -INNER_HALF_LENGTH : INNER_HALF_LENGTH;
-    const endAlong = forward ? INNER_HALF_LENGTH : -INNER_HALF_LENGTH;
+  // Tangent direction at each endpoint, from the last two coil points on
+  // that side — inner points "backward" (continuing inward, away from
+  // where the coil starts winding out), outer points "forward" (continuing
+  // the coil's own outward direction of travel).
+  const innerTangent = coilPoints[0].clone().sub(coilPoints[1]).normalize();
+  const outerTangent = coilPoints[coilPoints.length - 1].clone().sub(coilPoints[coilPoints.length - 2]).normalize();
 
-    if (r === 0) {
-      addFreeEndBendPoints(lateral, proximalSign, proximalDrop);
-      segments.push([point(FREE_END_BEND_ALONG, lateral), point(endAlong, lateral)]);
-    } else if (r === ROW_COUNT - 1) {
-      segments.push([point(startAlong, lateral), point(FREE_END_BEND_ALONG, lateral)]);
-      addFreeEndBendPoints(lateral, distalSign, distalDrop);
-    } else {
-      segments.push([point(startAlong, lateral), point(endAlong, lateral)]);
-    }
-
-    // The turn — a short connector from the end of this pass to the start
-    // of the next, at the next row's lateral position. Still the same one
-    // continuous thread, just changing rows.
-    if (r < ROW_COUNT - 1) {
-      const nextLateral = lateralForRow(r + 1);
-      segments.push([point(endAlong, lateral), point(endAlong, nextLateral)]);
-    }
+  const segments = [];
+  segments.push(bendPointsFrom(coilPoints[0], innerTangent, innerSign, innerDrop));
+  for (let i = 0; i < coilPoints.length - 1; i += COIL_POINTS_PER_SEGMENT) {
+    const chunk = coilPoints.slice(i, Math.min(coilPoints.length, i + COIL_POINTS_PER_SEGMENT + 1));
+    if (chunk.length >= 2) segments.push(chunk);
   }
+  segments.push(bendPointsFrom(coilPoints[coilPoints.length - 1], outerTangent, outerSign, outerDrop));
 
   // Build every structured floor from its downward end toward its upward
-  // end. Odd floors have their downward end at the distal/peripheral side,
-  // so they reverse; even floors already start at their downward proximal
-  // connector. That keeps the sewing continuous from Hyle -> Atoms -> ...
-  // -> Societies.
+  // end. Odd floors have their downward end at the outer side, so they
+  // reverse; even floors already start at their downward inner connector.
+  // That keeps the sewing continuous from Hyle -> Atoms -> ... -> Societies.
   return isEven ? segments : segments.reverse().map((points) => [...points].reverse());
 };
 
@@ -412,17 +455,17 @@ const CARGO_OUTLINE_SCALE = 1.28;
 const CARGO_CLEARANCE = CARGO_RADIUS * CARGO_OUTLINE_SCALE + 2; // lifts the cargo just clear of the thread's own surface, not clipping through it
 const CARGO_LABEL_WORLD_SIZE = 14;
 const CARGO_LABEL_CLEARANCE = 8;
-// Each item drives back and forth along its own row, staying within the
-// visible weave span (away from the free-end bends either side) — a
-// simple there-and-back "drive," not a full traversal of the whole
-// back-and-forth thread.
-const CARGO_TRAVEL_HALF_SPAN = INNER_HALF_LENGTH;
-const CARGO_SPEED = 45; // world units per second
-const CARGO_PERIOD = (CARGO_TRAVEL_HALF_SPAN * 4) / CARGO_SPEED; // seconds for one full there-and-back cycle
+// Each item drives back and forth along its own floor's coil, staying
+// within the coil's own angular span (away from the free-end bends either
+// side) — a simple there-and-back "drive" sliding along the wound thread,
+// not a full traversal of it.
+const CARGO_THETA_HALF_SPAN = 0.5; // radians each item swings around its own resting point along the coil
+const CARGO_SPEED = 0.6; // radians per second
+const CARGO_PERIOD = (CARGO_THETA_HALF_SPAN * 4) / CARGO_SPEED; // seconds for one full there-and-back cycle
 
 const buildCargo = () => {
   const group = new THREE.Group();
-  const items = []; // { mesh, lateral, offset } — read every frame by updateCargo below
+  const items = []; // { mesh, coilParams, theta0, offset } — read every frame by updateCargo below
 
   const cargoMaterialTemplate = new THREE.MeshStandardMaterial({
     color: CARGO_COLOR,
@@ -447,11 +490,14 @@ const buildCargo = () => {
     const cargoMaterial = cargoMaterialTemplate.clone();
     const outlineMaterial = outlineMaterialTemplate.clone();
 
+    const coilParams = coilParamsFor(floorIndex);
+    const { thetaMax } = buildStructuredCoilPoints(coilParams);
+
     labels.forEach((label, i) => {
-      // Spread across the rows between the two free-end bends (row 0 and
-      // the last row), evenly, so cargo doesn't cluster near either end.
-      const r = 1 + Math.round(((i + 0.5) * (ROW_COUNT - 2)) / labels.length);
-      const lateral = lateralForRow(r);
+      // Spread evenly along the coil's own angular span, staying clear of
+      // the free-end bends at either end (theta≈0 and theta≈thetaMax).
+      const t = (i + 0.5) / labels.length;
+      const theta0 = thetaMax * 0.08 + t * thetaMax * 0.84;
 
       const itemGroup = new THREE.Group();
       itemGroup.add(new THREE.Mesh(outlineGeometry, outlineMaterial)); // rendered first, back faces only, so it silhouettes the gem inside it
@@ -461,7 +507,7 @@ const buildCargo = () => {
       itemGroup.add(sprite);
       floorGroup.add(itemGroup);
 
-      items.push({ mesh: itemGroup, lateral, offset: i / labels.length });
+      items.push({ mesh: itemGroup, coilParams, thetaMax, theta0, offset: i / labels.length });
     });
   };
 
@@ -471,15 +517,20 @@ const buildCargo = () => {
   return { group, items, floorGroups };
 };
 
-// Called every animation frame — moves each cargo item along its own row
-// via a constant-speed triangle wave (drive out, drive back), staggered by
-// its own offset so a floor's items don't all move in lockstep.
+// Called every animation frame — moves each cargo item along its own
+// floor's coil via a constant-speed triangle wave (drive in, drive out),
+// staggered by its own offset so a floor's items don't all move in
+// lockstep. Swinging theta (rather than a fixed radius) means each item
+// genuinely rides the wound thread — sliding along it changes both its
+// angle and its radius together, the same way a bead on a coiled wire
+// would move.
 const updateCargo = (items, elapsedSeconds) => {
   for (const item of items) {
     const cyclePhase = (elapsedSeconds / CARGO_PERIOD + item.offset) % 1;
     const t = cyclePhase < 0.5 ? cyclePhase * 2 : 2 - cyclePhase * 2; // 0 -> 1 -> 0
-    const along = -CARGO_TRAVEL_HALF_SPAN + t * (CARGO_TRAVEL_HALF_SPAN * 2);
-    item.mesh.position.copy(point(along, item.lateral));
+    const swing = -CARGO_THETA_HALF_SPAN + t * (CARGO_THETA_HALF_SPAN * 2);
+    const theta = Math.max(0.01, Math.min(item.thetaMax, item.theta0 + swing));
+    item.mesh.position.copy(coilPointAt(item.coilParams, theta));
     item.mesh.position.y += CARGO_CLEARANCE;
   }
 };
@@ -521,10 +572,11 @@ const loadCameraPresets = () => ({ ...DEFAULT_CAMERA_PRESETS });
 // No more built-in per-level default framing — every level's shot comes
 // from a saved preset (the control panel below) or it doesn't move at all.
 // This is just where the camera sits before any level has one saved yet:
-// pulled back generously (the ground field is wide and dense —
-// FIELD_HALF_WIDTH=1000, rows spaced ~51 apart, each running 320 deep) and
-// centered on the middle of the whole floor stack vertically, so it starts
-// clear of the field rather than up against or inside it.
+// pulled back generously (floor 1/Atoms' own coil, the widest of the
+// tapering stack, spans roughly BASE_STRUCTURED_FLOOR_LENGTH worth of
+// wound thread) and centered on the middle of the whole floor stack
+// vertically, so it starts clear of the field rather than up against or
+// inside it.
 const INITIAL_CAMERA_FOCUS = new THREE.Vector3(0, ((FLOOR_COUNT - 1) * FLOOR_SPACING) / 2, 0);
 const INITIAL_CAMERA_DISTANCE = 1400;
 

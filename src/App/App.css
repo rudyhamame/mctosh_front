@@ -211,11 +211,11 @@
   pointer-events: none;
 }
 
-/* ── Scroll hint — fades out the instant the user starts scrolling. Kept
-   to a single compact row (title + info icon + domain flow) plus one
-   short sub-line: the long description that used to always sit here now
-   lives behind the info icon instead, so this takes minimal canvas
-   height while it's up. ── */
+/* ── Scroll hint — stays up permanently while scrolling (never fades),
+   kept to a single compact row (title + info icon + domain flow) plus
+   one short sub-line: the long description that used to always sit here
+   now lives behind the info icon instead, so this takes minimal canvas
+   height regardless. ── */
 #app_scroll_hint {
   position: absolute;
   left: 0;
@@ -241,7 +241,6 @@
     inset 0 0 30px rgba(120, 87, 41, 0.08);
   text-align: center;
   pointer-events: none;
-  transition: opacity 0.4s ease;
   z-index: 2;
 }
 
@@ -273,20 +272,6 @@
     39% 35%, 48% 62%, 57% 31%, 66% 67%, 74% 40%, 83% 70%,
     91% 36%, 100% 58%, 100% 0
   );
-}
-
-#app_scroll_hint.app_scroll_hint--hidden {
-  opacity: 0;
-}
-
-/* #app_scroll_hint_head opts back into pointer-events so its info icon is
-   clickable while the intro is showing (the rest of the intro, and this
-   whole div once hidden, stay click-through) — but opacity:0 alone
-   doesn't revoke that, so without this the invisible head strip would
-   keep intercepting clicks/drags meant for the 3D object underneath it
-   even long after scrolling past. */
-#app_scroll_hint.app_scroll_hint--hidden #app_scroll_hint_head {
-  pointer-events: none;
 }
 
 #app_scroll_hint_head {
@@ -327,15 +312,14 @@
   color: var(--color-text-muted);
 }
 
-/* ── Level card overlay — one card per biological level, stacked in the
-   same spot so only the card whose LED ring the camera is currently
-   passing is visible; the rest wait faded-out underneath it. Anchored
-   above the object (not beside it, and not vertically centered) — Hyle's
-   ground threads are a full-width flat coil (see buildGroundThreads in
-   ThreadPyramidLogo.jsx), unlike every other level's right-framed object,
-   so nothing here can safely sit low/mid-canvas without risking the same
-   low-contrast overlap Hyle used to have; every level uses the one
-   guaranteed-clear spot instead. ── */
+/* ── Level label overlay — one label/blurb per biological level, stacked in
+   the same spot so only whichever level the camera is currently passing is
+   visible; the rest wait faded-out underneath it. Anchored bottom-left of
+   the canvas — now that the per-level tool buttons live in the AMCTOSHS Tools
+   dropdown instead (see app_study_tools_* below), this is just a short
+   caption, not a tall card, so it no longer needs the old top-anchored
+   "one guaranteed-clear spot" reasoning that was about clearing Hyle's
+   full-width flat coil (see buildGroundThreads in ThreadPyramidLogo.jsx). ── */
 #app_level_overlay {
   position: absolute;
   inset: 0;
@@ -346,11 +330,7 @@
 .app_level_group {
   position: absolute;
   left: 4%;
-  /* Just below #app_scroll_hint's own block (it shares the same
-     --app-intro-object-clearance the canvas itself is offset by), so the
-     two never overlap even at scroll 0 where the intro hint is still
-     visible. */
-  top: calc(var(--app-intro-object-clearance, 10rem) + 0.75rem);
+  bottom: 1.5rem;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -363,7 +343,7 @@
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   opacity: 0;
-  transform: translateY(-10px);
+  transform: translateY(10px);
   transition: opacity 0.4s ease, transform 0.4s ease;
   pointer-events: none;
 }
@@ -413,17 +393,82 @@
   color: var(--color-text-muted);
 }
 
-.app_level_group_row {
+/* ── AMCTOSHS Tools — every level's tool buttons, consolidated into one
+   dropdown on the intro banner's left side (mirrors #app_profile_menu,
+   which owns the right side). ── */
+#app_study_tools_menu {
+  position: absolute;
+  top: 1rem;
+  left: 1.25rem;
+  z-index: 3;
+}
+
+#app_study_tools_trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 2.5rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, transform 0.15s;
+}
+
+#app_study_tools_trigger:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+  transform: translateY(-1px);
+}
+
+#app_study_tools_dropdown {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  left: 0;
+  width: min(320px, 88vw);
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  padding: 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
-  align-items: stretch;
-  width: 100%;
+  gap: 0.5rem;
+}
+
+/* The one named chunk inside the dropdown (AMCTOSHS Hyle + AMCTOSHS
+   Morphe) — everything else in the list stays flat/ungrouped below it. */
+.app_study_tools_group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding-bottom: 0.5rem;
+  margin-bottom: 0.1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
+}
+
+.app_study_tools_group_label {
+  padding: 0 0.3rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  font-weight: 700;
 }
 
 /* ── Home card — compact and translucent (a glass chip, not an opaque
-   panel), since it now sits over the same stage as the 3D object instead
-   of a plain page background and must never read as blocking it ── */
+   panel) — reused inside the AMCTOSHS Tools dropdown above, its original home
+   before every level's tool buttons were consolidated into one menu. ── */
 .app_home_card {
   display: flex;
   flex-direction: column;
@@ -487,4 +532,17 @@
   }
   .app_level_group--active { transform: translate(-50%, 0); }
   .app_level_group_blurb { text-align: center; }
+
+  /* Icon-only, matching the profile button's circular footprint on the
+     opposite corner — the full "AMCTOSHS Tools" text label is too wide next
+     to the centered intro banner title on narrow screens. */
+  #app_study_tools_trigger {
+    width: 2.5rem;
+    height: 2.5rem;
+    padding: 0;
+    border-radius: 50%;
+    justify-content: center;
+  }
+  #app_study_tools_trigger span { display: none; }
+  #app_study_tools_dropdown { width: min(88vw, 320px); }
 }

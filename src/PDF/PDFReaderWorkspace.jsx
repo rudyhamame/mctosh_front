@@ -12,6 +12,13 @@ const BackArrowIcon = () => (
   </svg>
 );
 
+const InsertPageIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M13 10h-2v3H8v2h3v3h2v-3h3v-2h-3z" />
+    <path d="m19.94 7.68-.03-.09a.8.8 0 0 0-.2-.29l-5-5c-.09-.09-.19-.15-.29-.2l-.09-.03a.8.8 0 0 0-.26-.05c-.02 0-.04-.01-.06-.01H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-12s-.01-.04-.01-.06c0-.09-.02-.17-.05-.26ZM6 20V4h7v4c0 .55.45 1 1 1h4v11z" />
+  </svg>
+);
+
 const authFetch = (url, options = {}) => {
   const token = readStoredSession()?.token || "";
   return fetch(url, {
@@ -167,10 +174,43 @@ const TabStrip = ({
           true center regardless of whether a document with pages is open. */}
       <div className="pdfw_tabbar_center">
         {pageNav && pageNav.pageCount > 0 && (
-          <div id="pdf_page_nav" className="pdfw_page_nav_group">
-            <button onClick={pageNav.goToPrevPage} disabled={pageNav.pageNum <= 1 || pageNav.disabled} title="Previous page">‹</button>
-            <span id="pdf_page_nav_label">{pageNav.pageNum} / {pageNav.pageCount}</span>
-            <button onClick={pageNav.goToNextPage} disabled={pageNav.pageNum >= pageNav.pageCount || pageNav.disabled} title="Next page">›</button>
+          <div id="pdf_page_nav_row">
+            {/* Always the LEFT/original/primary page (pageNum) — never
+                swaps to reflect the booklet companion. */}
+            <div id="pdf_page_nav" className="pdfw_page_nav_group">
+              <button onClick={pageNav.goToPrevPage} disabled={pageNav.pageNum <= 1 || pageNav.disabled} title="Previous page">‹</button>
+              <span id="pdf_page_nav_label">{pageNav.pageNum} / {pageNav.pageCount}</span>
+              <button onClick={pageNav.goToNextPage} disabled={pageNav.pageNum >= pageNav.pageCount || pageNav.disabled} title="Next page">›</button>
+            </div>
+            {pageNav.readingMode === "single" && (
+              <button
+                type="button"
+                id="pdf_insert_blank_page_btn"
+                onClick={pageNav.insertBlankPageAfterCurrent}
+                disabled={pageNav.insertingBlankPage || !pageNav.canInsertBlankPage}
+                title="Insert a blank page after this one"
+              >
+                {pageNav.insertingBlankPage ? <i className="bx bx-loader-alt bx-spin" /> : <InsertPageIcon />}
+              </button>
+            )}
+            {pageNav.pageCount > 1 && (
+              <button
+                type="button"
+                id="pdf_reading_mode_toggle"
+                className={pageNav.readingMode === "booklet" ? "pdf_reading_mode_toggle--active" : undefined}
+                onClick={() => pageNav.setReadingMode(pageNav.readingMode === "booklet" ? "single" : "booklet")}
+                title={pageNav.readingMode === "booklet" ? "Switch to page-by-page" : "Switch to booklet (two pages side by side)"}
+              >
+                <i className="bx bx-book-open" />
+              </button>
+            )}
+            {pageNav.readingMode === "booklet" && (
+              <div id="pdf_page_nav_right">
+                <button onClick={() => pageNav.setBookletRightPage(Math.max(1, (pageNav.bookletRightPage || 1) - 1))} disabled={(pageNav.bookletRightPage || 1) <= 1 || pageNav.disabled} title="Previous page">‹</button>
+                <span id="pdf_page_nav_right_label">{pageNav.bookletRightPage || 1} / {pageNav.pageCount}</span>
+                <button onClick={() => pageNav.setBookletRightPage(Math.min(pageNav.pageCount, (pageNav.bookletRightPage || 1) + 1))} disabled={(pageNav.bookletRightPage || 1) >= pageNav.pageCount || pageNav.disabled} title="Next page">›</button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -181,21 +221,71 @@ const TabStrip = ({
           (even when empty) so it keeps its own grid column, matching the
           center column's own reasoning above. */}
       <div className="pdfw_tabbar_right">
-        {undoRedo && (
+        {(undoRedo || pageNav) && (
           <div id="pdf_annot_right_group" className="pdfw_undo_redo_group">
-            <div id="pdf_annot_actions">
-              <button className="annot_action_btn" onClick={undoRedo.undo} title="Undo last" disabled={!undoRedo.canUndo}><i className="bx bx-undo" /></button>
-              {undoRedo.hasHistory && (
+            {pageNav && (
+              <div id="pdf_search_group">
                 <button
-                  className={`annot_action_btn${undoRedo.historyOpen ? " annot_action_btn--active" : ""}`}
-                  onClick={undoRedo.toggleHistory}
-                  title="Annotation History — every step taken this session"
+                  type="button"
+                  id="pdf_search_toggle_btn"
+                  className={pageNav.searchOpen ? "pdf_search_toggle_btn--active" : undefined}
+                  onClick={() => pageNav.setSearchOpen((v) => !v)}
+                  title="Search text"
                 >
-                  <i className="bx bx-history" />
+                  <i className="bx bx-search" />
                 </button>
-              )}
-              <button className="annot_action_btn" onClick={undoRedo.redo} title="Redo" disabled={!undoRedo.canRedo}><i className="bx bx-redo" /></button>
-            </div>
+                {pageNav.searchOpen && (
+                  <div id="pdf_search_bar">
+                    <div id="pdf_search_bar_row">
+                      <input
+                        type="text"
+                        value={pageNav.searchInputVal}
+                        onChange={(e) => pageNav.setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") { e.preventDefault(); pageNav.goToSearchMatch(e.shiftKey ? -1 : 1); }
+                          else if (e.key === "Escape") { pageNav.setSearchOpen(false); }
+                        }}
+                        placeholder="Search in document…"
+                        autoFocus
+                      />
+                      <span id="pdf_search_count">
+                        {pageNav.searchScanning
+                          ? "…"
+                          : pageNav.searchMatchCount
+                            ? `${pageNav.searchActiveIndex + 1} / ${pageNav.searchMatchCount}`
+                            : pageNav.searchInputVal.trim()
+                              ? "0 / 0"
+                              : ""}
+                      </span>
+                      <button type="button" onClick={() => pageNav.goToSearchMatch(-1)} disabled={!pageNav.searchMatchCount} title="Previous match"><i className="bx bx-chevron-up" /></button>
+                      <button type="button" onClick={() => pageNav.goToSearchMatch(1)} disabled={!pageNav.searchMatchCount} title="Next match"><i className="bx bx-chevron-down" /></button>
+                      <button type="button" onClick={pageNav.closeSearch} title="Close search"><i className="bx bx-x" /></button>
+                    </div>
+                    {pageNav.searchActiveMatchType && pageNav.searchActiveMatchType !== "exact" && (
+                      <div id="pdf_search_confidence">
+                        <i className="bx bx-info-circle" /> Likely match: "{pageNav.searchActiveMatchedText}"
+                        <span id="pdf_search_confidence_pct">{Math.round(pageNav.searchActiveConfidence * 100)}%</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {undoRedo && (
+              <div id="pdf_annot_actions">
+                <button className="annot_action_btn" onClick={undoRedo.undo} title="Undo last" disabled={!undoRedo.canUndo}><i className="bx bx-undo" /></button>
+                {undoRedo.hasHistory && (
+                  <button
+                    className={`annot_action_btn${undoRedo.historyOpen ? " annot_action_btn--active" : ""}`}
+                    onClick={undoRedo.toggleHistory}
+                    title="Annotation History — every step taken this session"
+                  >
+                    <i className="bx bx-history" />
+                  </button>
+                )}
+                <button className="annot_action_btn" onClick={undoRedo.redo} title="Redo" disabled={!undoRedo.canRedo}><i className="bx bx-redo" /></button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -324,12 +414,37 @@ const PDFReaderWorkspace = () => {
   } : null;
 
   // Same pattern as undoRedo above, for the prev/page-number/next row.
-  const [pageNavState, setPageNavState] = useState({ pageNum: 1, pageCount: 0, disabled: false });
-  useEffect(() => { setPageNavState({ pageNum: 1, pageCount: 0, disabled: false }); }, [activeId]);
+  const defaultPageNavState = { pageNum: 1, pageCount: 0, disabled: false, readingMode: "single", bookletRightPage: null, searchOpen: false, searchQuery: "", searchMatchCount: 0, searchActiveIndex: -1, searchScanning: false, searchActiveMatchType: null, searchActiveConfidence: null, searchActiveMatchedText: null };
+  const [pageNavState, setPageNavState] = useState(defaultPageNavState);
+  useEffect(() => { setPageNavState(defaultPageNavState); }, [activeId]); // eslint-disable-line react-hooks/exhaustive-deps -- defaultPageNavState is a fresh literal every render, not a reactive dep
+
+  // The search input's own displayed value is kept LOCAL rather than bound
+  // straight to pageNavState.searchQuery — that value only arrives back
+  // here after a full round trip (PDFPage's real setSearchQuery → its own
+  // render → its onPageNavStateChange effect → this component's re-render),
+  // which is fine for the actual search (already debounced on PDFPage's
+  // side) but too slow to drive a controlled text input directly: fast
+  // typing landed keystrokes out of order against the lagging echoed-back
+  // value and dropped characters ("cardiac" → "cadac"). Typing updates
+  // this local echo instantly AND still forwards to PDFPage in the same
+  // keystroke, so the field itself never waits on the round trip.
+  const [searchInputVal, setSearchInputVal] = useState("");
+  useEffect(() => {
+    if (!pageNavState.searchOpen) setSearchInputVal("");
+  }, [pageNavState.searchOpen, activeId]);
+
   const pageNav = activeId ? {
     ...pageNavState,
     goToPrevPage: () => activePageRef.current?.goToPrevPage(),
     goToNextPage: () => activePageRef.current?.goToNextPage(),
+    setReadingMode: (v) => activePageRef.current?.setReadingMode(v),
+    setBookletRightPage: (v) => activePageRef.current?.setBookletRightPage(v),
+    insertBlankPageAfterCurrent: () => activePageRef.current?.insertBlankPageAfterCurrent(),
+    setSearchOpen: (v) => activePageRef.current?.setSearchOpen(v),
+    searchInputVal,
+    setSearchQuery: (v) => { setSearchInputVal(v); activePageRef.current?.setSearchQuery(v); },
+    goToSearchMatch: (delta) => activePageRef.current?.goToSearchMatch(delta),
+    closeSearch: () => { setSearchInputVal(""); activePageRef.current?.closeSearch(); },
   } : null;
 
   return (
