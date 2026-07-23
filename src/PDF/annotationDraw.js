@@ -380,7 +380,7 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
   // Border style toggle. Dash lengths scale with the stroke's own width
   // so a thicker border still reads as clearly dashed/dotted, not just a
   // faint texture.
-  if (["rect", "circle", "line", "arrow"].includes(ann.type) && ann.borderStyle && ann.borderStyle !== "solid") {
+  if (["rect", "circle", "freeshape", "line", "arrow"].includes(ann.type) && ann.borderStyle && ann.borderStyle !== "solid") {
     const w = ctx.lineWidth;
     ctx.setLineDash(ann.borderStyle === "dotted" ? [w * 0.01, w * 2.2] : [w * 2.4, w * 1.6]);
   }
@@ -466,7 +466,7 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       if (ann.shapeBackground) {
         ctx.save();
         ctx.globalAlpha = 0.25;
-        ctx.fillStyle = ann.shapeBackgroundColor || ann.color;
+        ctx.fillStyle = ann.color; // fill always matches the shape's own border/ink color — no independent fill color
         ctx.fill();
         ctx.restore();
       }
@@ -479,12 +479,42 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       if (ann.shapeBackground) {
         ctx.save();
         ctx.globalAlpha = 0.25;
-        ctx.fillStyle = ann.shapeBackgroundColor || ann.color;
+        ctx.fillStyle = ann.color; // fill always matches the shape's own border/ink color — no independent fill color
         ctx.fill();
         ctx.restore();
       }
       ctx.stroke();
       break;
+    case "freeshape": {
+      // An arbitrary closed outline — captured the same way a pen stroke
+      // is (PDFPage.jsx's onDown/onMove, points pushed + smoothed via
+      // smoothStrokePoint), but drawn CLOSED (last point connects back to
+      // the first) and fillable/strokeable like rect/circle rather than
+      // left open like a pen stroke. Same quadratic-curve smoothing as
+      // drawPolyline above, just closing the path instead of leaving it open.
+      if (!ann.points || ann.points.length < 3) break;
+      const points = ann.points;
+      const [fx, fy] = pt(points[0]);
+      ctx.beginPath();
+      ctx.moveTo(fx, fy);
+      for (let i = 1; i < points.length - 1; i++) {
+        const [x, y] = pt(points[i]);
+        const [nx, ny] = pt(points[i + 1]);
+        ctx.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
+      }
+      const [lx, ly] = pt(points[points.length - 1]);
+      ctx.lineTo(lx, ly);
+      ctx.closePath();
+      if (ann.shapeBackground) {
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = ann.color;
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.stroke();
+      break;
+    }
     case "text":
       ctx.save();
       {

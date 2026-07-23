@@ -1,0 +1,390 @@
+#narrative_view_panel {
+  flex-shrink: 0;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  overflow: hidden;
+}
+
+#narrative_view_header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+#narrative_view_header_title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+#narrative_view_debug_toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-left: auto;
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+#narrative_view_close {
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  line-height: 1;
+  padding: 0.2rem;
+}
+#narrative_view_close:hover { color: var(--color-text); }
+
+#narrative_view_body {
+  flex: 1;
+  overflow: auto;
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+/* ── NOT_SEGMENTED empty state (spec §4/28) ─────────────────────────────── */
+.narrative_empty_state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  padding: 2rem 1rem;
+}
+
+.narrative_primary_btn,
+.narrative_secondary_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 8px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+}
+.narrative_primary_btn {
+  border: 1px solid var(--color-highlight);
+  background: color-mix(in srgb, var(--color-highlight) 14%, transparent);
+  color: var(--color-highlight);
+}
+.narrative_secondary_btn {
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text-muted);
+}
+.narrative_secondary_btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-highlight); }
+.narrative_primary_btn:disabled,
+.narrative_secondary_btn:disabled { opacity: 0.55; cursor: default; }
+
+.narrative_status_banner {
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  background: color-mix(in srgb, var(--color-highlight) 10%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+.narrative_status_banner--active {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--color-highlight);
+  font-weight: 600;
+}
+
+/* ── SEGMENTING (full-panel loader, shown while a page has no draft/saved
+   content to keep showing underneath — see SegmentingLoader/SegmentingBanner
+   in PdfNarrativeView.jsx) ──────────────────────────────────────────────── */
+.narrative_segmenting_loader {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  text-align: center;
+  padding: 2rem 1.25rem;
+}
+.narrative_segmenting_spinner {
+  font-size: 1.8rem;
+  color: var(--color-highlight);
+}
+.narrative_segmenting_title {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 0;
+}
+.narrative_segmenting_progress {
+  width: 100%;
+  max-width: 220px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-highlight) 14%, transparent);
+  overflow: hidden;
+}
+.narrative_segmenting_progress_bar {
+  width: 40%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-highlight);
+  animation: narrative_segmenting_indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes narrative_segmenting_indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+.narrative_segmenting_phase {
+  font-size: 0.76rem;
+  color: var(--color-text-muted);
+  margin: 0;
+  min-height: 1.1em;
+}
+.narrative_segmenting_meta {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  margin: 0;
+}
+.narrative_segmenting_hint {
+  font-size: 0.66rem;
+  color: var(--color-text-muted);
+  opacity: 0.75;
+  line-height: 1.4;
+  margin: 0.4rem 0 0;
+  max-width: 26rem;
+}
+
+.narrative_page_header_strip,
+.narrative_page_footer_strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.6rem;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.narrative_page_header_strip { padding-bottom: 0.4rem; border-bottom: 1px solid var(--color-border); }
+.narrative_page_footer_strip { padding-top: 0.4rem; border-top: 1px solid var(--color-border); justify-content: space-between; }
+.narrative_page_furniture_text { cursor: pointer; }
+.narrative_page_furniture_text:hover { color: var(--color-highlight); }
+
+.narrative_page_type_badge {
+  align-self: flex-start;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  background: color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+/* ── Verbatim / Corrected tabs — pinned above the scrollable body (see
+   PdfNarrativeView.jsx), not inside it, so they stay visible above all
+   the segmented content regardless of scroll position. ──────────────── */
+#narrative_text_mode_tabs {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-self: flex-start;
+  margin: 0.6rem 0.9rem 0;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.15rem;
+  gap: 0.15rem;
+}
+.narrative_text_mode_tab {
+  border: none;
+  background: none;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.narrative_text_mode_tab:hover:not(.narrative_text_mode_tab--active) { color: var(--color-text); }
+.narrative_text_mode_tab--active {
+  background: color-mix(in srgb, var(--color-highlight) 16%, transparent);
+  color: var(--color-highlight);
+}
+
+.narrative_correction_confidence {
+  display: inline-block;
+  /* Several parents this sits inside (.narrative_seg_toc_row, the header/
+     footer furniture strips) are display:flex, where the default
+     align-items: stretch would otherwise stretch this badge to the row's
+     full height — flattening its 999px pill radius into straight edges
+     and clipping the text against them. flex-shrink: 0 keeps its width
+     from being squeezed too. */
+  align-self: center;
+  flex-shrink: 0;
+  margin-left: 0.4rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.narrative_correction_confidence--high {
+  background: color-mix(in srgb, #2fae5c 16%, transparent);
+  color: #2fae5c;
+}
+.narrative_correction_confidence--medium {
+  background: color-mix(in srgb, #d99a1f 18%, transparent);
+  color: #d99a1f;
+}
+.narrative_correction_confidence--low {
+  background: color-mix(in srgb, #e05252 18%, transparent);
+  color: #e05252;
+}
+
+/* ── Segment rendering ───────────────────────────────────────────────────── */
+.narrative_seg_flow { display: flex; flex-direction: column; gap: 0.35rem; }
+.narrative_seg_flow--aside { margin-top: 0.2rem; }
+
+.narrative_seg_heading,
+.narrative_seg_paragraph,
+.narrative_seg_list_item,
+.narrative_seg_caption,
+.narrative_seg_toc_row,
+.narrative_seg_footnote {
+  margin: 0;
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 0.15rem 0.3rem;
+  margin-inline: -0.3rem;
+  color: var(--color-text);
+}
+.narrative_seg_heading:hover,
+.narrative_seg_paragraph:hover,
+.narrative_seg_list_item:hover,
+.narrative_seg_caption:hover,
+.narrative_seg_toc_row:hover,
+.narrative_seg_footnote:hover {
+  background: color-mix(in srgb, var(--color-highlight) 10%, transparent);
+}
+
+.narrative_seg_heading { font-weight: 800; letter-spacing: 0.01em; line-height: 1.35; }
+.narrative_seg_paragraph { font-size: 0.84rem; line-height: 1.55; }
+.narrative_seg_list { margin: 0; padding-left: 1.1rem; }
+.narrative_seg_list_item { font-size: 0.84rem; line-height: 1.5; }
+.narrative_seg_toc_row { font-size: 0.82rem; line-height: 1.6; display: flex; justify-content: space-between; gap: 0.5rem; }
+.narrative_seg_footnote { font-size: 0.72rem; color: var(--color-text-muted); line-height: 1.5; }
+.narrative_seg_caption { font-size: 0.74rem; font-style: italic; color: var(--color-text-muted); line-height: 1.45; }
+
+.narrative_seg_generic { display: flex; flex-direction: column; gap: 0.35rem; }
+
+.narrative_seg_aside,
+.narrative_seg_figure {
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-highlight);
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  background: color-mix(in srgb, var(--color-highlight) 6%, transparent);
+}
+.narrative_seg_aside_label,
+.narrative_seg_figure_label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--color-highlight);
+  margin-bottom: 0.25rem;
+}
+.narrative_seg_aside_text,
+.narrative_seg_figure_text { margin: 0; font-size: 0.8rem; line-height: 1.5; color: var(--color-text); }
+
+/* ── Action bar (pinned above the footer, below the scrollable body) ──── */
+#narrative_view_actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.65rem;
+  border-top: 1px solid var(--color-border);
+}
+#narrative_view_actions .narrative_secondary_btn,
+#narrative_view_actions .narrative_primary_btn { font-size: 0.68rem; padding: 0.4rem 0.6rem; }
+
+.narrative_saved_badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--color-highlight);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.narrative_danger_btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+}
+.narrative_danger_btn:hover:not(:disabled) {
+  color: #e05252;
+  border-color: color-mix(in srgb, #e05252 40%, transparent);
+  background: color-mix(in srgb, #e05252 8%, transparent);
+}
+.narrative_danger_btn:disabled { opacity: 0.55; cursor: default; }
+
+#narrative_view_footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.6rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#narrative_view_footer_model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  opacity: 0.8;
+}
+
+@media (max-width: 900px) {
+  #narrative_view_panel { width: 300px; }
+}

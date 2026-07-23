@@ -62,7 +62,7 @@ const LEVELS = [
         path: "/clinical-schemata",
         icon: "fi-rr-network",
         label: "AMCTOSHS Morphe",
-        description: "Extract or manually define Entities and their Entity Schemas — traces and trace values — across the six biological dimensions",
+        description: "The global structured view of every AMCTOSHS Sub-Entity Schema — browse by AMCTOSHS Domain and inspect each one's timestamped AMCTOSHS Traces and Trace Values",
         color: "#26c6da",
       },
       {
@@ -471,6 +471,14 @@ const App = ({ onLogout }) => {
               <div id="app_scroll_hint_head">
                 <span id="app_domain_flow">Atoms → Molecules → Tissues → Organs → Organ Systems → Humans → Societies</span>
                 <InfoPopupButton info={AMCTOSHS_INTRO_INFO} label="About AMCTOSHS" />
+                <button
+                  type="button"
+                  id="app_amctoshs_model_link"
+                  onClick={() => navigate("/about/amctoshs")}
+                  title="Read the full AMCTOSHS model — ontic patient, traces, modes of access, 3D/4D representation, reasoning"
+                >
+                  The AMCTOSHS Model →
+                </button>
               </div>
               <span id="app_scroll_hint_sub">Scroll to study the hyle and climb the eight biological scales ↓</span>
             </div>

@@ -11,7 +11,7 @@ import DraftTextViewer, { cleanMarkdownToPlainText } from "../components/DraftTe
 import HyleCards from "./HyleCards";
 import SystemMessageModal from "./SystemMessageModal";
 import SmartVideoPanel from "./SmartVideoPanel";
-import NarrativeModePanel from "./NarrativeModePanel";
+import EntityBuilderPanel from "./EntityBuilderPanel";
 import ClinicalVignetteBuilderPanel from "./ClinicalVignetteBuilderPanel";
 import { drawAnnotation, drawMaskedHighlightText } from "./annotationDraw";
 import { PDF_TYPE_ICON } from "./pdfTypeIcon";
@@ -20,6 +20,11 @@ import { createPageIndexCache } from "./pdfSearchIndex.js";
 import { normalizeQuery, searchPageForQuery } from "./pdfFuzzySearch.js";
 import { correctSelectedPdfText } from "./pdfTextCorrection.js";
 import { analyzePageLayout } from "./pdfPageLayout.js";
+import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
+import { resolveDocumentId } from "./pdfPageStructureClient.js";
+import { capturePageImageDataUrl } from "./pdfPageImageCapture.js";
+import { itemIndexesForSegment } from "./pdfSegmentTree.js";
+import PdfNarrativeView from "./PdfNarrativeView";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -120,6 +125,21 @@ const ANNOT_TOOLS = [
   { key: "rect",          icon: "bx bx-rectangle",       label: "Rectangle",     hasSize: false },
   { key: "circle",        icon: "bx bx-circle",          label: "Ellipse",       hasSize: false },
   {
+    key: "freeshape",
+    // Duplicated inline rather than referencing the standalone
+    // FreeshapeToolIcon component further down — same already-established
+    // reasoning as "text"/"underline"/"smartVideo" below: this array is
+    // evaluated at module load, before that component's own const binding
+    // exists.
+    iconSvg: (
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
+        <path d="M12 3c2.4 0 4 1.3 5.4 2.8 1.5 1.6 3.6 2.9 3.6 5.4 0 2.1-1.8 3.1-3.4 4.3-1.5 1.1-2.9 2.5-5.6 2.5-2.5 0-4.3-1.2-5.8-2.6C4.7 14 3 12.7 3 10.6c0-2.3 1.9-3.4 3.6-4.7C8.1 4.6 9.7 3 12 3Zm0 2c-1.5 0-2.7 1.2-4.1 2.3C6.5 8.4 5 9.2 5 10.6c0 1.2 1.1 2.1 2.6 3.2 1.3 1 2.7 2.2 4.4 2.2 1.9 0 3-1 4.3-2 1.2-.9 2.7-1.7 2.7-3.2 0-1.5-1.5-2.5-2.9-3.9C14.9 5.6 13.6 5 12 5Z" />
+      </svg>
+    ),
+    label: "Freeshape",
+    hasSize: false,
+  },
+  {
     key: "text",
     iconSvg: (
       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
@@ -152,7 +172,7 @@ const ANNOT_TOOLS = [
 // "shapes" is a placeholder in the main strip that opens the shared
 // sub-toolbar containing the four SHAPE_TOOL_KEYS below, so they don't each
 // take their own slot in the primary row.
-const SHAPE_TOOL_KEYS = ["line", "arrow", "rect", "circle"];
+const SHAPE_TOOL_KEYS = ["line", "arrow", "rect", "circle", "freeshape"];
 const DRAWING_TOOL_ORDER = [
   "pen",
   "highlight",
@@ -162,8 +182,12 @@ const DRAWING_TOOL_ORDER = [
   "text",
   "drawText",
   "eraser",
-  "smartVideo",
 ];
+// Smart Video is an annotTool (drawn/selected the same way as the drawing
+// tools above) but isn't itself a drawing tool — it renders in the
+// non-drawing "mode" group (.annot_mode_strip) alongside Entity Builder /
+// Clinical Vignette / Narrative Mode, not in .annot_tool_strip.
+const MODE_TOOL_ORDER = ["smartVideo"];
 
 // Open Color (yeun.github.io/open-color) — the standard "professional" web
 // UI palette, three shades (light/mid/deep) per hue family plus a grayscale
@@ -238,6 +262,15 @@ const ShapesToolIcon = () => (
 const ArrowToolIcon = () => (
   <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
     <path d="M6 13h8.09l-3.3 3.29 1.42 1.42 5.7-5.71-5.7-5.71-1.42 1.42 3.3 3.29H6z" />
+  </svg>
+);
+
+// Freeshape — an irregular closed polygon, distinct from the fixed-corner
+// rect/circle shapes: a simple lasso-like blob outline signals "draw any
+// closed outline" rather than a specific geometric primitive.
+const FreeshapeToolIcon = () => (
+  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+    <path d="M12 3c2.4 0 4 1.3 5.4 2.8 1.5 1.6 3.6 2.9 3.6 5.4 0 2.1-1.8 3.1-3.4 4.3-1.5 1.1-2.9 2.5-5.6 2.5-2.5 0-4.3-1.2-5.8-2.6C4.7 14 3 12.7 3 10.6c0-2.3 1.9-3.4 3.6-4.7C8.1 4.6 9.7 3 12 3Zm0 2c-1.5 0-2.7 1.2-4.1 2.3C6.5 8.4 5 9.2 5 10.6c0 1.2 1.1 2.1 2.6 3.2 1.3 1 2.7 2.2 4.4 2.2 1.9 0 3-1 4.3-2 1.2-.9 2.7-1.7 2.7-3.2 0-1.5-1.5-2.5-2.9-3.9C14.9 5.6 13.6 5 12 5Z" />
   </svg>
 );
 
@@ -485,7 +518,7 @@ const distancePointToSegment = (px, py, x1, y1, x2, y2) => {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 };
 const annotationHitByEraser = (ann, x, y, radius) => {
-  if ((ann.type === "pen" || ann.type === "highlight") && Array.isArray(ann.points)) {
+  if ((ann.type === "pen" || ann.type === "highlight" || ann.type === "freeshape") && Array.isArray(ann.points)) {
     return ann.points.some((pt, index, points) => {
       if (Math.hypot(pt.x - x, pt.y - y) <= radius) return true;
       if (index === 0) return false;
@@ -513,7 +546,7 @@ const eraseAnnotationsAtPoint = (annotations, x, y, radius, mode) => {
   let erasedCount = 0;
 
   annotations.forEach((ann) => {
-    if (mode === "precise" && (ann.type === "pen" || ann.type === "highlight") && Array.isArray(ann.points)) {
+    if (mode === "precise" && (ann.type === "pen" || ann.type === "highlight" || ann.type === "freeshape") && Array.isArray(ann.points)) {
       const nextPoints = ann.points.filter((pt, index, points) => {
         const nearPoint = Math.hypot(pt.x - x, pt.y - y) <= hitRadius;
         const prev = points[index - 1];
@@ -582,8 +615,7 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   textPadding: 100,
   shapeBorderStyle: "solid",
   shapeBorderRadius: 0,
-  shapeBackground: false,
-  shapeBackgroundColor: "#FFE066",
+  shapeBackground: false, // fill always uses the shape's own border/ink color — no independent fill color setting
 };
 const isHexColor = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 const readNumberSetting = (value, fallback, min, max) => (
@@ -633,7 +665,6 @@ const loadPdfToolbarSettings = () => {
       shapeBorderStyle: ["solid", "dashed", "dotted"].includes(parsed.shapeBorderStyle) ? parsed.shapeBorderStyle : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderStyle,
       shapeBorderRadius: readNumberSetting(parsed.shapeBorderRadius, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderRadius, 0, 60),
       shapeBackground: readBooleanSetting(parsed.shapeBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackground),
-      shapeBackgroundColor: isHexColor(parsed.shapeBackgroundColor) ? parsed.shapeBackgroundColor : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackgroundColor,
     };
   } catch {
     return DEFAULT_PDF_TOOLBAR_SETTINGS;
@@ -1155,6 +1186,7 @@ const PDFPage = forwardRef(({
   // alongside it, cleared at the same point (loadPdfBytes) on document change.
   const pageIndexCacheRef = useRef(createPageIndexCache());
   const searchCanvasRef = useRef(null);
+  const narrativeCanvasRef = useRef(null);
   const searchRunIdRef = useRef(0);
   const [hasSourceId, setHasSourceId] = useState(false); // mirrors currentSourceIdRef.current — see loadPdfBytes/loadFromSource for why a plain ref isn't enough here
   const [pdfType, setPdfType]       = useState(null);
@@ -1465,6 +1497,55 @@ const PDFPage = forwardRef(({
     setColorMenuOpen(false);
   }, [annotTool]);
 
+  // Shared button renderer for both DRAWING_TOOL_ORDER (.annot_tool_strip)
+  // and MODE_TOOL_ORDER (.annot_mode_strip) — every plain annotTool button
+  // (everything except the "shapes" group-opener, which has its own
+  // active-state logic across all four SHAPE_TOOL_KEYS) follows the exact
+  // same select/toggle/touch-label pattern regardless of which group it
+  // renders in.
+  const renderAnnotToolButton = (key) => {
+    if (key === "shapes") {
+      const shapesActive = SHAPE_TOOL_KEYS.includes(annotTool);
+      return (
+        <button
+          key="shapes"
+          ref={(el) => { toolButtonRefs.current.shapes = el; }}
+          type="button"
+          className={`annot_trigger annot_tool_btn${(shapesActive || annotTool === "shapes") ? " annot_trigger--active" : ""}`}
+          onClick={() => {
+            setAnnotTool((current) => (current === "shapes" ? null : "shapes"));
+            setColorMenuOpen(false);
+          }}
+          title="Shapes"
+          aria-label="Shapes"
+        >
+          <ShapesToolIcon />
+        </button>
+      );
+    }
+    const tool = ANNOT_TOOLS.find((item) => item.key === key);
+    if (!tool) return null;
+    return (
+      <React.Fragment key={key}>
+        {key === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
+        <button
+          ref={(el) => { toolButtonRefs.current[key] = el; }}
+          type="button"
+          className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}`}
+          onPointerDown={(event) => {
+            if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(key, tool.label);
+          }}
+          onClick={() => toggleAnnotTool(key)}
+          title={tool.label}
+          aria-label={tool.label}
+        >
+          {toolbarTouchLabel?.key === key && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
+          {key === "pen" ? <PenToolIcon /> : tool.iconSvg || <i className={tool.icon} />}
+        </button>
+      </React.Fragment>
+    );
+  };
+
   useEffect(() => (
     () => {
       if (toolbarTouchLabelTimerRef.current) clearTimeout(toolbarTouchLabelTimerRef.current);
@@ -1665,11 +1746,11 @@ const PDFPage = forwardRef(({
   // Independent of the annotTool tool-strip. It only builds from explicit
   // user-provided text: the latest manual text selection or text typed into
   // the panel. It intentionally does not read the current page text.
-  const [narrativeModeOpen, setNarrativeModeOpen] = useState(false);
+  const [entityBuilderOpen, setEntityBuilderOpen] = useState(false);
   const [entityBuilderSelectedText, setEntityBuilderSelectedText] = useState("");
 
-  const toggleNarrativeMode = useCallback(() => {
-    setNarrativeModeOpen((open) => !open);
+  const toggleEntityBuilder = useCallback(() => {
+    setEntityBuilderOpen((open) => !open);
   }, []);
 
   // ── AMCTOSHS Clinical Vignette Generator ─────────────────────────────────
@@ -1684,6 +1765,53 @@ const PDFPage = forwardRef(({
     fetchAiProviderModelsOnce();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amctoshsVignetteOpen]);
+
+  // ── Narrative Mode (manual, page-scoped AI structural segmentation) ─────
+  // Shows nothing for a page until the user explicitly clicks "AI Segment
+  // Page" inside the panel (PdfNarrativeView.jsx) — see
+  // back/routes/PdfPageStructureAPI.js for the backend half. This
+  // component's own job is just: resolve a stable documentId once per
+  // loaded PDF (no AI, safe/idempotent get-or-create), capture the
+  // current page as an image on demand, and draw the debug-overlay/
+  // jump-to-source flash from whatever structure the panel reports having
+  // loaded (onStructureChange below) — it does not fetch or drive the
+  // segmentation state machine itself, that lives entirely in the panel.
+  const [narrativeViewOpen, setNarrativeViewOpen] = useState(false);
+  const [narrativeDebugOverlayOn, setNarrativeDebugOverlayOn] = useState(false);
+  const [narrativeActiveStructure, setNarrativeActiveStructure] = useState(null); // {status, draft, saved} as last reported by PdfNarrativeView
+  const [narrativeFlashItemIndexes, setNarrativeFlashItemIndexes] = useState(null); // one-shot "jump to source" flash target
+  const [pdfDocumentId, setPdfDocumentId] = useState(null);
+  const flashTimeoutRef = useRef(null);
+
+  const toggleNarrativeView = useCallback(() => setNarrativeViewOpen((open) => !open), []);
+  const toggleNarrativeDebugOverlay = useCallback(() => setNarrativeDebugOverlayOn((v) => !v), []);
+
+  const flashHighlightForItemIndexes = useCallback((itemIndexes) => {
+    if (!itemIndexes?.length) return;
+    setNarrativeFlashItemIndexes(itemIndexes);
+    window.clearTimeout(flashTimeoutRef.current);
+    flashTimeoutRef.current = window.setTimeout(() => setNarrativeFlashItemIndexes(null), 1600);
+  }, []);
+
+  useEffect(() => () => window.clearTimeout(flashTimeoutRef.current), []);
+
+  // documentId resolution is a get-or-create lookup, not AI — but it's
+  // still only triggered by opening Narrative Mode (not by loading the
+  // PDF itself), keeping "open a PDF" a zero-side-effect operation.
+  useEffect(() => {
+    if (!narrativeViewOpen || !pdfDoc || !filename) return;
+    fetchAiProviderModelsOnce();
+    let cancelled = false;
+    resolveDocumentId({ filename, pageCount: pageCount || 1, type: pdfType || "text-based" })
+      .then((id) => { if (!cancelled) setPdfDocumentId(id); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [narrativeViewOpen, pdfDoc, filename]);
+
+  const captureCurrentPageImage = useCallback(() => (
+    canvasRef.current ? capturePageImageDataUrl(canvasRef.current) : null
+  ), []);
 
   // ── Selection action (selectionOnly mode) ──────────────────────────────────
   const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
@@ -1725,13 +1853,13 @@ const PDFPage = forwardRef(({
   const [shapeBorderRadius, setShapeBorderRadius] = useState(savedToolbarSettings.shapeBorderRadius);
   // Fill for closed shapes only (rect/circle — line/arrow have no
   // interior to fill), same low-alpha wash convention as textBackground.
+  // Always uses the shape's own border/ink color (annotationDraw.js) —
+  // no independent fill color, so just an on/off toggle, not a swatch.
   const [shapeBackground, setShapeBackground] = useState(savedToolbarSettings.shapeBackground);
-  const [shapeBackgroundColor, setShapeBackgroundColor] = useState(savedToolbarSettings.shapeBackgroundColor);
   // Which color the shared floating dropdown (.annot_dd--colors) writes
-  // to when a swatch is clicked — "ink" (annotColor, every tool),
-  // "background" (textBackgroundColor, Text tool's Background swatch),
-  // or "shapeFill" (shapeBackgroundColor, Shapes tool's Background
-  // swatch). Not persisted — always resets to "ink" on reload.
+  // to when a swatch is clicked — "ink" (annotColor, every tool) or
+  // "background" (textBackgroundColor, Text tool's Background swatch).
+  // Not persisted — always resets to "ink" on reload.
   const [colorMenuTarget, setColorMenuTarget] = useState("ink");
   const [drawTextBusy, setDrawTextBusy] = useState(false);
   const [drawTextStatus, setDrawTextStatus] = useState("");
@@ -1797,7 +1925,6 @@ const PDFPage = forwardRef(({
       shapeBorderStyle,
       shapeBorderRadius,
       shapeBackground,
-      shapeBackgroundColor,
     });
   }, [
     annotToolColors,
@@ -1830,7 +1957,6 @@ const PDFPage = forwardRef(({
     shapeBorderStyle,
     shapeBorderRadius,
     shapeBackground,
-    shapeBackgroundColor,
   ]);
   const getOcrWorker = useCallback(async () => {
     if (ocrWorkerRef.current) return ocrWorkerRef.current;
@@ -2835,16 +2961,7 @@ const PDFPage = forwardRef(({
 
     const items = pageTextItemsCacheRef.current[pageNum];
     if (!items) return;
-    const vt    = pageViewport.transform;
-    const scale = Math.hypot(vt[0], vt[1]);
-    const mul   = ([a2, b2, c2, d2, e2, f2]) => [
-      vt[0] * a2 + vt[2] * b2,
-      vt[1] * a2 + vt[3] * b2,
-      vt[0] * c2 + vt[2] * d2,
-      vt[1] * c2 + vt[3] * d2,
-      vt[0] * e2 + vt[2] * f2 + vt[4],
-      vt[1] * e2 + vt[3] * f2 + vt[5],
-    ];
+    const vt = pageViewport.transform;
     searchMatches.forEach((m, idx) => {
       if (m.page !== pageNum) return;
       const isActive = idx === searchActiveIndex;
@@ -2862,20 +2979,89 @@ const PDFPage = forwardRef(({
       // multi-column page, so looping a min..max range could draw the
       // wrong items (or skip real ones) for a match that crosses a
       // reading-order reordering. See originalRangeToItemIndexes.
-      for (const itemIndex of m.itemIndexes || []) {
-        const item = items[itemIndex];
-        if (!item) continue;
-        const tx = mul(item.transform);
-        const fontSize = Math.hypot(tx[0], tx[1]);
-        if (fontSize < 1) continue;
-        const width  = Math.max(2, item.width * scale);
-        const height = fontSize * 1.05;
-        const x = tx[4];
-        const y = tx[5] - fontSize * 0.85;
-        ctx.fillRect(x, y, width, height);
+      for (const rect of computeHighlightRectsForItemIndexes(m.itemIndexes, items, vt)) {
+        ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
     });
   }, [searchOpen, searchMatches, searchActiveIndex, pageNum, pageViewport]);
+
+  // Draws Narrative Mode's layout-debug overlay (one labeled, role-colored
+  // box per AI-produced segment — spec §52) and the one-shot "jump to
+  // source" flash highlight. `narrativeActiveStructure` is whatever
+  // PdfNarrativeView.jsx last reported loading for the current page via
+  // onStructureChange — this effect never fetches segmentation data
+  // itself, it only draws what the panel already has (no independent AI
+  // or GET call lives here). Same canvas-sizing pattern as the
+  // search-highlight effect above — see currentBackingScaleRef — but its
+  // own dedicated canvas (see pdfPage.css's #pdf_narrative_canvas comment
+  // for why).
+  useEffect(() => {
+    const canvas = narrativeCanvasRef.current;
+    if (!canvas || !pageViewport) return;
+    const backingScale = currentBackingScaleRef.current || 1;
+    canvas.width  = Math.max(1, Math.floor(pageViewport.width * backingScale));
+    canvas.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
+    canvas.style.width  = `${pageViewport.width}px`;
+    canvas.style.height = `${pageViewport.height}px`;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
+    const activeStructure = narrativeActiveStructure?.draft || narrativeActiveStructure?.saved;
+    if ((!narrativeDebugOverlayOn || !activeStructure) && !narrativeFlashItemIndexes?.length) return;
+
+    // pageTextItemsCacheRef is normally populated by a search scan — a
+    // user who opens Narrative Mode without ever searching first would
+    // find it empty, so fetch through getPageTextItems (which populates
+    // that same cache) instead of reading it directly.
+    let cancelled = false;
+    const vt = pageViewport.transform;
+    getPageTextItems(pageNum).then((items) => {
+      if (cancelled || !items) return;
+
+      if (narrativeDebugOverlayOn && activeStructure) {
+        // The boxes below are drawn from `rects`, already positioned in
+        // the CURRENT zoom's CSS-pixel space (vt = pageViewport.transform
+        // bakes in fitScale * zoom) — they grow/shrink with zoom exactly
+        // like the real page content. A hardcoded font size does NOT, so
+        // at low zoom the label reads oversized relative to the (shrunk)
+        // boxes/content, and at high zoom it reads undersized relative to
+        // the (enlarged) boxes/content — the inverse of what zooming in
+        // should do. Scaling the font by the same pageViewport.scale
+        // factor keeps the label's size proportional to the content at
+        // any zoom level, same as the boxes themselves; clamped so it
+        // never becomes illegible (too small) or overwhelming (too large)
+        // at extreme zooms.
+        const debugFontPx = Math.max(7, Math.min(16, Math.round(9 * (pageViewport.scale || 1))));
+        ctx.font = `${debugFontPx}px sans-serif`;
+        for (const seg of activeStructure.segments) {
+          const rects = computeHighlightRectsForItemIndexes(itemIndexesForSegment(seg), items, vt);
+          if (!rects.length) continue;
+          ctx.lineWidth = 0.5;
+          ctx.strokeStyle = "rgba(120,120,120,0.4)";
+          for (const r of rects) ctx.strokeRect(r.x, r.y, r.width, r.height);
+
+          const x1 = Math.min(...rects.map((r) => r.x));
+          const y1 = Math.min(...rects.map((r) => r.y));
+          const x2 = Math.max(...rects.map((r) => r.x + r.width));
+          const y2 = Math.max(...rects.map((r) => r.y + r.height));
+          const isHeading = /title|heading/.test(seg.role);
+          ctx.lineWidth = isHeading ? 2 : 1.2;
+          ctx.strokeStyle = isHeading ? "rgba(211,47,47,0.9)" : "rgba(30,136,229,0.7)";
+          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          ctx.fillStyle = isHeading ? "rgba(211,47,47,0.9)" : "rgba(30,136,229,0.9)";
+          ctx.fillText(seg.role, x1 + 2, Math.max(debugFontPx, y1 - 2));
+        }
+      }
+
+      if (narrativeFlashItemIndexes?.length) {
+        ctx.fillStyle = "rgba(255,140,0,0.55)"; // matches the active search-match highlight color
+        for (const r of computeHighlightRectsForItemIndexes(narrativeFlashItemIndexes, items, vt)) {
+          ctx.fillRect(r.x, r.y, r.width, r.height);
+        }
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [pageViewport, pageNum, narrativeDebugOverlayOn, narrativeActiveStructure, narrativeFlashItemIndexes, getPageTextItems]);
 
   const runDrawToTextRecognition = useCallback(async (selection) => {
     const pageCanvas = canvasRef.current;
@@ -3426,7 +3612,7 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = {
           type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
           borderStyle: shapeBorderStyle,
-          shapeBackground, shapeBackgroundColor,
+          shapeBackground,
           ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
         };
       } else if (annotTool === "drawText") {
@@ -3438,6 +3624,19 @@ const PDFPage = forwardRef(({
           type: annotTool, color: strokeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y,
           borderStyle: shapeBorderStyle,
           ...(annotTool === "arrow" ? { lineWidth: arrowSize / getScale() } : {}),
+        };
+      } else if (annotTool === "freeshape") {
+        // Captured the same way as a pen stroke (points pushed + smoothed
+        // in onMove below), but finalized as a CLOSED, fillable/
+        // strokeable shape (annotationDraw.js's "freeshape" case) instead
+        // of an open stroke — border style and fill come from the same
+        // Shapes-tool state rect/circle already use.
+        activeAnnotRef.current = {
+          type: "freeshape",
+          color: strokeColor,
+          borderStyle: shapeBorderStyle,
+          shapeBackground,
+          points: [{ x: p.x, y: p.y }],
         };
       } else if (annotTool === "pen") {
         activeAnnotRef.current = {
@@ -3479,7 +3678,7 @@ const PDFPage = forwardRef(({
       const ann = activeAnnotRef.current;
       if (!ann) return;
       const p = toCanvas(e);
-      if (ann.type === "pen" || ann.type === "highlight") {
+      if (ann.type === "pen" || ann.type === "highlight" || ann.type === "freeshape") {
         if (ann.mode === "line") {
           if (ann.type === "highlight" && ann.autoWidthLocked) {
             // Continuously re-snap to whichever word is now under the
@@ -3513,7 +3712,7 @@ const PDFPage = forwardRef(({
           if (ann.type === "highlight" && ann.points[0]) ann.points[0].y = lockedY;
           ann.points[1] = { x: linePoint.x, y: lockedY };
         } else {
-          const nextPoint = ann.type === "pen"
+          const nextPoint = (ann.type === "pen" || ann.type === "freeshape")
             ? smoothStrokePoint(
                 ann.points,
                 { x: p.x, y: p.y, t: p.t, pressure: p.pressure },
@@ -3592,7 +3791,7 @@ const PDFPage = forwardRef(({
       }
       const tinyDocThreshold = 3 / Math.max(1, fitScaleRef.current * zoomRef.current);
       // ignore accidental tiny marks
-      const tiny = ann.type === "pen"
+      const tiny = (ann.type === "pen" || ann.type === "freeshape")
         ? ann.points.length < 3
         : ["line","arrow"].includes(ann.type)
           ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < tinyDocThreshold
@@ -3649,7 +3848,7 @@ const PDFPage = forwardRef(({
       ac.removeEventListener("contextmenu", preventNativeTouchDrawingGesture);
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, shapeBorderStyle, shapeBorderRadius, shapeBackground, shapeBackgroundColor]);
+  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, shapeBorderStyle, shapeBorderRadius, shapeBackground]);
 
   // Eraser-size cursor circle — a real hit-test-radius preview, not just a
   // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
@@ -4879,7 +5078,8 @@ const PDFPage = forwardRef(({
         // thrown off by DOM timing.
         const measureCtx = document.createElement("canvas").getContext("2d");
 
-        for (const item of content.items) {
+        for (let pdfItemIndex = 0; pdfItemIndex < content.items.length; pdfItemIndex++) {
+          const item = content.items[pdfItemIndex];
           if (!item.str) continue;
           const tx       = mul(item.transform);
           const fontSize = Math.hypot(tx[0], tx[1]);
@@ -4958,6 +5158,7 @@ const PDFPage = forwardRef(({
               text: token, el: span, fontFamily: itemFontFamily, fontWeight: itemFontWeight, fontStyle: itemFontStyle,
               geoLeft: originX, geoRight: originX + tokenWidth,
               geoTop: originY - fontSize * 0.8, geoHeight: fontSize,
+              pdfItemIndex, // which raw content.items entry this token came from — matches pdfPageEvidence.js's `el-{page}-{itemIndex}` id scheme
             });
             span.textContent        = token;
             span.style.position     = "absolute";
@@ -5536,6 +5737,7 @@ const PDFPage = forwardRef(({
     pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
     pageTextItemsCacheRef.current = {};
     pageIndexCacheRef.current.clear();
+    setPdfDocumentId(null); // a new document is loading — the old documentId (if any) no longer applies; re-resolved lazily next time Narrative Mode opens
     setSearchQuery(""); setSearchMatches([]); setSearchActiveIndex(-1); setSearchOpen(false);
     try {
       const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -6630,6 +6832,21 @@ const PDFPage = forwardRef(({
     annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
     annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
     null;
+  // Per-tool title labels for the shared controls below (Ink/color trigger,
+  // the generic hasSize knob) — same "every control gets a title above it"
+  // organization the Pen panel already uses (LabeledPercentKnob), applied
+  // to the controls Pen itself doesn't own.
+  const inkColorLabel =
+    annotTool === "text"     ? "Font color" :
+    annotTool === "highlight" ? "Highlight color" :
+    SHAPE_TOOL_KEYS.includes(annotTool) ? "Border color" :
+    "Ink";
+  const sizeKnobLabel =
+    annotTool === "pen"      ? "Stroke width" :
+    annotTool === "eraser"   ? "Eraser size" :
+    annotTool === "highlight" ? "Highlighter size" :
+    annotTool === "arrow"    ? "Line width" :
+    "Size";
   return (
     <div
       id="pdf_page"
@@ -6784,56 +7001,39 @@ const PDFPage = forwardRef(({
         <div id="pdf_toolbar_left">
           {pdfDoc && !selectionOnly && (
             <>
-            <div className="annot_tool_strip" aria-label="PDF tools">
-              {DRAWING_TOOL_ORDER.map((key) => {
-                if (key === "shapes") {
-                  const shapesActive = SHAPE_TOOL_KEYS.includes(annotTool);
-                  return (
-                    <button
-                      key="shapes"
-                      ref={(el) => { toolButtonRefs.current.shapes = el; }}
-                      type="button"
-                      className={`annot_trigger annot_tool_btn${(shapesActive || annotTool === "shapes") ? " annot_trigger--active" : ""}`}
-                      onClick={() => {
-                        setAnnotTool((current) => (current === "shapes" ? null : "shapes"));
-                        setColorMenuOpen(false);
-                      }}
-                      title="Shapes"
-                      aria-label="Shapes"
-                    >
-                      <ShapesToolIcon />
-                    </button>
-                  );
-                }
-                const tool = ANNOT_TOOLS.find((item) => item.key === key);
-                if (!tool) return null;
-                return (
-                  <React.Fragment key={key}>
-                    {key === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
-                    <button
-                      ref={(el) => { toolButtonRefs.current[key] = el; }}
-                      type="button"
-                      className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}`}
-                      onPointerDown={(event) => {
-                        if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(key, tool.label);
-                      }}
-                      onClick={() => toggleAnnotTool(key)}
-                      title={tool.label}
-                      aria-label={tool.label}
-                    >
-                      {toolbarTouchLabel?.key === key && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
-                      {key === "pen" ? <PenToolIcon /> : tool.iconSvg || <i className={tool.icon} />}
-                    </button>
-                  </React.Fragment>
-                );
-              })}
+            {/* Wraps both groups in one flex ROW so .annot_mode_strip's
+                margin-left: auto actually has a row to push against — the
+                two groups are LEFT vs RIGHT areas of the same row, not a
+                top/bottom stack (#pdf_toolbar_left itself is a plain block
+                container in the default top/bottom dock, only becoming
+                flex-row for the left/right dock — see the dock-aware rules
+                in pdfPage.css — so without this wrapper the two groups
+                would just stack as ordinary block siblings instead). */}
+            <div className="annot_tool_row">
+            <div className="annot_tool_strip" aria-label="Drawing tools">
+              {DRAWING_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
+            </div>
+
+            <span className="annot_tool_separator" aria-hidden="true" />
+
+            {/* Non-drawing "mode" tools — Smart Video is a real annotTool
+                (selected/drawn the same way as the drawing tools above,
+                see MODE_TOOL_ORDER) but isn't itself a drawing tool;
+                Entity Builder / Clinical Vignette / Narrative Mode are
+                each their own boolean-toggle panel, not annotTools at
+                all. Grouped together and pushed to the opposite end of
+                this row (see .annot_mode_strip in pdfPage.css) so the
+                toolbar reads as two areas: draw-on-the-page tools on the
+                left, open-a-panel tools on the right. */}
+            <div className="annot_mode_strip" aria-label="Panel tools">
+              {MODE_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
               {/* AMCTOSHS Entity Builder — not a real annotTool and not
                   page-driven. It only uses selected or entered text. */}
               {pdfDoc && (
                 <button
                   type="button"
-                  className={`annot_trigger annot_tool_btn${narrativeModeOpen ? " annot_trigger--active" : ""}`}
-                  onClick={toggleNarrativeMode}
+                  className={`annot_trigger annot_tool_btn${entityBuilderOpen ? " annot_trigger--active" : ""}`}
+                  onClick={toggleEntityBuilder}
                   title="AMCTOSHS Entity Builder"
                   aria-label="AMCTOSHS Entity Builder"
                 >
@@ -6853,6 +7053,21 @@ const PDFPage = forwardRef(({
                   <i className="bx bx-user-plus" />
                 </button>
               )}
+              {/* Narrative Mode — AI page-structure reading view (manual,
+                  page-scoped segmentation; see PdfNarrativeView.jsx). Same
+                  convention as the two triggers above. */}
+              {pdfDoc && (
+                <button
+                  type="button"
+                  className={`annot_trigger annot_tool_btn${narrativeViewOpen ? " annot_trigger--active" : ""}`}
+                  onClick={toggleNarrativeView}
+                  title="Narrative Mode"
+                  aria-label="Narrative Mode"
+                >
+                  <i className="bx bx-align-left" />
+                </button>
+              )}
+            </div>
             </div>
 
             {/* Color/size/tool-settings for whichever tool is currently
@@ -6891,7 +7106,7 @@ const PDFPage = forwardRef(({
                       aria-label={shapeTool.label}
                     >
                       {toolbarTouchLabel?.key === shapeKey && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
-                      {shapeKey === "arrow" ? <ArrowToolIcon /> : <i className={shapeTool.icon} />}
+                      {shapeKey === "arrow" ? <ArrowToolIcon /> : shapeKey === "freeshape" ? <FreeshapeToolIcon /> : <i className={shapeTool.icon} />}
                     </button>
                   );
                 })}
@@ -6899,7 +7114,9 @@ const PDFPage = forwardRef(({
             )}
 
             {toolActive && annotTool !== "eraser" && annotTool !== "smartVideo" && (
-              <div className="annot_dd_wrap" ref={colorMenuRef}>
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title={inkColorLabel} />
+                <div className="annot_dd_wrap" ref={colorMenuRef}>
                 <button
                   type="button"
                   className="annot_trigger annot_trigger--color"
@@ -6921,10 +7138,9 @@ const PDFPage = forwardRef(({
                       return true;
                     });
                   }}
-                  title="Color"
+                  title={inkColorLabel}
                 >
                   <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
-                  <span className="annot_trigger_label">Ink</span>
                   <i className="bx bx-chevron-down annot_trigger_chevron" />
                 </button>
                 {colorMenuOpen && colorMenuPos && createPortal(
@@ -6932,14 +7148,14 @@ const PDFPage = forwardRef(({
                     <div className="annot_color_preview">
                       <div
                         className="annot_color_preview_chip"
-                        style={{ background: colorMenuTarget === "background" ? textBackgroundColor : colorMenuTarget === "shapeFill" ? shapeBackgroundColor : annotColor }}
+                        style={{ background: colorMenuTarget === "background" ? textBackgroundColor : annotColor }}
                       />
                       <div className="annot_color_preview_text">
                         <span className="annot_color_preview_label">
-                          {colorMenuTarget === "background" ? "Current background" : colorMenuTarget === "shapeFill" ? "Current fill" : "Current ink"}
+                          {colorMenuTarget === "background" ? "Current background" : "Current ink"}
                         </span>
                         <span className="annot_color_preview_hex">
-                          {(colorMenuTarget === "background" ? textBackgroundColor : colorMenuTarget === "shapeFill" ? shapeBackgroundColor : annotColor).toUpperCase()}
+                          {(colorMenuTarget === "background" ? textBackgroundColor : annotColor).toUpperCase()}
                         </span>
                       </div>
                     </div>
@@ -6957,25 +7173,12 @@ const PDFPage = forwardRef(({
                         No background
                       </button>
                     )}
-                    {colorMenuTarget === "shapeFill" && (
-                      <button
-                        type="button"
-                        className="annot_dd_none_btn"
-                        onClick={() => {
-                          setShapeBackground(false);
-                          setColorMenuOpen(false);
-                        }}
-                      >
-                        <span className="annot_swatch_btn annot_swatch_btn--none" aria-hidden="true" />
-                        No background
-                      </button>
-                    )}
                     {ANNOT_COLOR_GROUPS.map(({ label, colors }) => (
                       <div key={label} className="annot_color_group">
                         <div className="annot_color_group_label">{label}</div>
                         <div className="annot_color_group_grid">
                           {colors.map((c) => {
-                            const active = (colorMenuTarget === "background" ? textBackgroundColor : colorMenuTarget === "shapeFill" ? shapeBackgroundColor : annotColor) === c;
+                            const active = (colorMenuTarget === "background" ? textBackgroundColor : annotColor) === c;
                             return (
                               <button
                                 key={c}
@@ -6988,9 +7191,6 @@ const PDFPage = forwardRef(({
                                     setTextBackgroundColor(c);
                                     setTextBackground(true);
                                     updateStyledTextTarget({ textBackgroundColor: c, textBackground: true });
-                                  } else if (colorMenuTarget === "shapeFill") {
-                                    setShapeBackgroundColor(c);
-                                    setShapeBackground(true);
                                   } else {
                                     setAnnotColor(c);
                                   }
@@ -7007,6 +7207,7 @@ const PDFPage = forwardRef(({
                   </div>,
                   document.body,
                 )}
+                </div>
               </div>
             )}
 
@@ -7016,78 +7217,75 @@ const PDFPage = forwardRef(({
                 <OpacityKnob value={annotOpacity} onChange={setAnnotOpacity} color={annotColor} />
               </div>
             )}
-            {annotTool === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
 
             {hasSize && (
-              <SizeKnob
-                min={sizeProps.min} max={sizeProps.max} step={sizeProps.step}
-                value={sizeProps.value}
-                onChange={sizeProps.onChange}
-                color={annotColor}
-                dashed={annotTool === "eraser"}
-                variant={annotTool === "highlight" ? "highlight" : "dot"}
-              />
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title={sizeKnobLabel} />
+                <SizeKnob
+                  min={sizeProps.min} max={sizeProps.max} step={sizeProps.step}
+                  value={sizeProps.value}
+                  onChange={sizeProps.onChange}
+                  color={annotColor}
+                  dashed={annotTool === "eraser"}
+                  variant={annotTool === "highlight" ? "highlight" : "dot"}
+                />
+              </div>
             )}
-            {annotTool === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
 
             {SHAPE_TOOL_KEYS.includes(annotTool) && (
-              <div className="annot_mode_toggle" aria-label="Border style">
-                {SHAPE_BORDER_STYLES.map(({ key, label }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={`annot_mode_btn${shapeBorderStyle === key ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setShapeBorderStyle(key)}
-                    title={`${label} border`}
-                    aria-label={`${label} border`}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Border style" />
+                <div className="annot_mode_toggle" aria-label="Border style">
+                  {SHAPE_BORDER_STYLES.map(({ key, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={`annot_mode_btn${shapeBorderStyle === key ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => setShapeBorderStyle(key)}
+                      title={`${label} border`}
+                      aria-label={`${label} border`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
             {annotTool === "rect" && (
-              <SizeKnob
-                min={0} max={60} step={1}
-                value={shapeBorderRadius}
-                onChange={setShapeBorderRadius}
-                color={annotColor}
-                variant="dot"
-              />
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Corner radius" />
+                <SizeKnob
+                  min={0} max={60} step={1}
+                  value={shapeBorderRadius}
+                  onChange={setShapeBorderRadius}
+                  color={annotColor}
+                  variant="dot"
+                />
+              </div>
             )}
 
-            {["rect", "circle"].includes(annotTool) && (
-              <div className="annot_dd_wrap" ref={bgSwatchRef}>
-                <button
-                  type="button"
-                  className={`annot_mode_btn${shapeBackground ? " annot_mode_btn--active" : ""}`}
-                  onClick={(e) => {
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    setColorMenuTarget("shapeFill");
-                    setColorMenuOpen((wasOpen) => {
-                      if (wasOpen && colorMenuTarget === "shapeFill") return false;
-                      if (toolbarDock.edge === "bottom") {
-                        setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
-                      } else {
-                        setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
-                      }
-                      return true;
-                    });
-                  }}
-                  title="Fill color"
-                  aria-label="Shape background color"
-                >
-                  <span
-                    className="annot_swatch annot_swatch--trigger"
-                    style={{ background: shapeBackgroundColor, opacity: shapeBackground ? 1 : 0.35 }}
-                  />
-                </button>
+            {["rect", "circle", "freeshape"].includes(annotTool) && (
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Fill" />
+                <div className="annot_mode_toggle">
+                  <button
+                    type="button"
+                    className={`annot_mode_btn annot_mode_btn--toggle${shapeBackground ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => setShapeBackground((value) => !value)}
+                    title="Fill always uses this shape's own border color — there is no separate fill color"
+                    aria-label="Fill shape"
+                  >
+                    Fill
+                  </button>
+                </div>
               </div>
             )}
 
             {annotTool === "eraser" && (
-              <div className="annot_mode_toggle annot_mode_toggle--pen" aria-label="Eraser mode">
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Erase mode" />
+                <div className="annot_mode_toggle annot_mode_toggle--pen" aria-label="Eraser mode">
                 {ERASER_MODES.map(({ key, label }) => (
                   <button
                     key={key}
@@ -7100,13 +7298,15 @@ const PDFPage = forwardRef(({
                     {label}
                   </button>
                 ))}
+                </div>
               </div>
             )}
 
-            {annotTool === "text" && <span className="annot_text_separator" aria-hidden="true" />}
 
             {annotTool === "text" && (
               <div className="annot_text_panel">
+                <div className="annot_control">
+                <AnnotControlHeaderInfo title="Alignment" />
                 <div className="annot_mode_toggle annot_mode_toggle--pen">
                   <button
                     type="button"
@@ -7142,8 +7342,10 @@ const PDFPage = forwardRef(({
                     </svg>
                   </button>
                 </div>
-                <span className="annot_text_separator" aria-hidden="true" />
+                </div>
 
+                <div className="annot_control">
+                <AnnotControlHeaderInfo title="Style" />
                 <div className="annot_mode_toggle annot_mode_toggle--pen">
                     <button
                       type="button"
@@ -7225,8 +7427,10 @@ const PDFPage = forwardRef(({
                     </button>
                   </div>
                 </div>
-                <span className="annot_text_separator" aria-hidden="true" />
+                </div>
 
+                <div className="annot_control">
+                <AnnotControlHeaderInfo title="Font family" />
                 <div className="annot_text_font_row">
                   <label className="annot_text_font_label" htmlFor="pdf_text_font_family">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
@@ -7249,9 +7453,11 @@ const PDFPage = forwardRef(({
                     ))}
                   </select>
                 </div>
+                </div>
 
-                <span className="annot_text_separator annot_text_separator--wide" aria-hidden="true" />
 
+                <div className="annot_control">
+                <AnnotControlHeaderInfo title="Font size" />
                 <SizeKnob
                   min={10}
                   max={48}
@@ -7264,8 +7470,8 @@ const PDFPage = forwardRef(({
                   color={annotColor}
                   dashed={false}
                 />
+                </div>
 
-                <span className="annot_text_separator annot_text_separator--wide" aria-hidden="true" />
 
                 <LabeledPercentKnob
                   title="Padding Size"
@@ -7352,7 +7558,9 @@ const PDFPage = forwardRef(({
             )}
 
             {annotTool === "highlight" && (
-              <div className="annot_mode_toggle annot_mode_toggle--pen">
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Style" />
+                <div className="annot_mode_toggle annot_mode_toggle--pen">
                 <button
                   type="button"
                   className={`annot_mode_btn${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
@@ -7371,10 +7579,13 @@ const PDFPage = forwardRef(({
                 >
                   Auto Contrast
                 </button>
+                </div>
               </div>
             )}
             {annotTool === "highlight" && highlightMode === "line" && (
-              <div className="annot_mode_toggle annot_mode_toggle--pen">
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Line options" />
+                <div className="annot_mode_toggle annot_mode_toggle--pen">
                 <button
                   type="button"
                   className={`annot_mode_btn annot_mode_btn--toggle${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
@@ -7391,6 +7602,7 @@ const PDFPage = forwardRef(({
                 >
                   {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
                 </button>
+                </div>
               </div>
             )}
             </div>
@@ -7756,9 +7968,9 @@ const PDFPage = forwardRef(({
         {/* Far left — AMCTOSHS Entity Builder. Same far-left-column
             convention as the other panels above — unlike them, it has its
             own close button since it isn't tied to re-pressing an annotTool. */}
-        {narrativeModeOpen && (
-          <NarrativeModePanel
-            onClose={toggleNarrativeMode}
+        {entityBuilderOpen && (
+          <EntityBuilderPanel
+            onClose={toggleEntityBuilder}
             selectedText={entityBuilderSelectedText}
             verifyBusy={selectionVerifyBusy}
             onVerifySource={verifyEntityBuilderSource}
@@ -7775,13 +7987,31 @@ const PDFPage = forwardRef(({
           />
         )}
 
+        {/* Far left — Narrative Mode. Same far-left-column convention as
+            the panels above. */}
+        {narrativeViewOpen && (
+          <PdfNarrativeView
+            onClose={toggleNarrativeView}
+            pageNumber={pageNum}
+            documentId={pdfDocumentId}
+            getPageTextItems={getPageTextItems}
+            captureCurrentPageImage={captureCurrentPageImage}
+            onJumpToSource={flashHighlightForItemIndexes}
+            debugOverlayOn={narrativeDebugOverlayOn}
+            onToggleDebugOverlay={toggleNarrativeDebugOverlay}
+            onStructureChange={setNarrativeActiveStructure}
+            provider={provider}
+            providerModels={aiProviderModels}
+          />
+        )}
+
         {/* Left — PDF viewer or upload zone */}
         <div
           id="pdf_preview"
           style={{
             width: splitRatio === 0
               ? "0"
-              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (narrativeModeOpen ? 360 : 0) + (amctoshsVignetteOpen ? 360 : 0)}px)`,
+              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (entityBuilderOpen ? 360 : 0) + (amctoshsVignetteOpen ? 360 : 0) + (narrativeViewOpen ? 360 : 0)}px)`,
           }}
           className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${annotTool === "highlight" ? " pdf_preview--highlight-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
         >
@@ -7838,6 +8068,7 @@ const PDFPage = forwardRef(({
                       />
                       <canvas id="pdf_mask_canvas" ref={maskCanvasRef} />
                       <canvas id="pdf_search_canvas" ref={searchCanvasRef} />
+                      <canvas id="pdf_narrative_canvas" ref={narrativeCanvasRef} />
                       {createPortal(
                         <div ref={eraserCursorRef} className="eraser_cursor_circle" />,
                         document.body,

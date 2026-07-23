@@ -266,8 +266,12 @@
   justify-content: flex-start;
 }
 
+#pdf_toolbar.pdf_toolbar--left .annot_tool_row,
+#pdf_toolbar.pdf_toolbar--right .annot_tool_row,
 #pdf_toolbar.pdf_toolbar--left .annot_tool_strip,
-#pdf_toolbar.pdf_toolbar--right .annot_tool_strip {
+#pdf_toolbar.pdf_toolbar--right .annot_tool_strip,
+#pdf_toolbar.pdf_toolbar--left .annot_mode_strip,
+#pdf_toolbar.pdf_toolbar--right .annot_mode_strip {
   flex-direction: column;
   flex-wrap: nowrap;
   align-items: stretch;
@@ -375,11 +379,20 @@
   #pdf_toolbar.pdf_toolbar--right #pdf_toolbar_mainbar {
     flex-direction: row;
   }
+  #pdf_toolbar.pdf_toolbar--left .annot_tool_row,
+  #pdf_toolbar.pdf_toolbar--right .annot_tool_row,
   #pdf_toolbar.pdf_toolbar--left .annot_tool_strip,
-  #pdf_toolbar.pdf_toolbar--right .annot_tool_strip {
+  #pdf_toolbar.pdf_toolbar--right .annot_tool_strip,
+  #pdf_toolbar.pdf_toolbar--left .annot_mode_strip,
+  #pdf_toolbar.pdf_toolbar--right .annot_mode_strip {
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
+  }
+  #pdf_toolbar.pdf_toolbar--left .annot_mode_strip,
+  #pdf_toolbar.pdf_toolbar--right .annot_mode_strip {
+    margin-left: auto;
+    margin-top: 0;
   }
   #pdf_toolbar.pdf_toolbar--left .annot_tool_separator,
   #pdf_toolbar.pdf_toolbar--right .annot_tool_separator {
@@ -1579,6 +1592,23 @@ html.theme-light #pdf_preview_scroll {
   z-index: 3;
 }
 
+/* Narrative Mode's layout-debug overlay + jump-to-source flash — its own
+   canvas (not sharing #pdf_search_canvas) since search highlighting and
+   the debug overlay/flash are independent toggles that can both be active
+   at once; each canvas's own effect fully clears+redraws on its own
+   trigger, so sharing one would let whichever fires last erase the
+   other's drawing. One z-index above search so it stays visible over an
+   active search highlight. */
+#pdf_narrative_canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 4;
+}
+
 /* Matches the "paper" look of #draft_editor in the Draft page (src/Draft) —
    a surface-colored sheet, serif body font, and a highlight-colored caret —
    rather than this tool's own previous dark/high-contrast overlay styling.
@@ -1765,11 +1795,46 @@ html.theme-light #pdf_preview_scroll {
   position: relative;
 }
 
+/* Holds .annot_tool_strip + .annot_mode_strip as a single flex ROW —
+   #pdf_toolbar_left itself is a plain block container in the default
+   top/bottom dock (only becomes flex-row for the left/right dock, see
+   below), so without this wrapper the two groups would stack as ordinary
+   block siblings (top/bottom) instead of sharing one row (left/right). */
+.annot_tool_row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  width: 100%;
+}
+
 .annot_tool_strip {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 0.4rem;
+}
+
+/* Non-drawing "mode" tools (Smart Video / Entity Builder / Clinical
+   Vignette / Narrative Mode) — same button styling as .annot_tool_strip,
+   pushed to the opposite end of .annot_tool_row so the toolbar reads as
+   two distinct areas: draw-on-the-page tools on the left, open-a-panel
+   tools on the right. When the toolbar docks to a vertical edge (see the
+   left/right override below, matching every other dock-aware rule in
+   this file) the row becomes a column, so "push to the far end" instead
+   means "stack below" — the auto margin is dropped and normal DOM
+   order/gap does that on its own. */
+.annot_mode_strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+#pdf_toolbar.pdf_toolbar--left .annot_mode_strip,
+#pdf_toolbar.pdf_toolbar--right .annot_mode_strip {
+  margin-left: 0;
+  margin-top: auto;
 }
 
 .annot_trigger {
@@ -1790,7 +1855,8 @@ html.theme-light #pdf_preview_scroll {
 
 .annot_trigger--active { color: var(--color-text); border-color: var(--color-highlight); }
 .annot_trigger--color {
-  padding: 0.3rem 0.45rem;
+  padding: 0;
+  background: none;
   border: none;
   border-color: transparent;
   box-shadow: none;
@@ -2325,10 +2391,9 @@ html.theme-light #pdf_preview_scroll {
   display: flex;
   flex-direction: row;
   align-items: center;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 0.55rem;
   width: 100%;
-  min-width: max-content;
 }
 
 .annot_text_separator {
@@ -2551,6 +2616,15 @@ html.theme-light #pdf_preview_scroll {
   flex-direction: column;
   gap: 0.35rem;
   min-width: 0;
+  /* Never let a control's own content (e.g. a 3-4 button toggle row) get
+     squeezed below its natural width when several titled controls share
+     one width-capped popover (.annot_tool_options: max-width 520px) — a
+     real bug hit once Text's Alignment/Style groups each got their own
+     .annot_control: without this, the toggle row's buttons wrapped onto
+     their own individual lines instead of staying one row. The panel
+     itself (e.g. .annot_text_panel) wraps to a second line instead of
+     shrinking any one control below what it needs. */
+  flex-shrink: 0;
 }
 
 /* Same "column stacks better narrow, row fits better in a wide horizontal
@@ -2602,7 +2676,7 @@ html.theme-light #pdf_preview_scroll {
 
 /* .annot_control_info_btn / .annot_control_info_popup now live in
    infoPopupButton.css, co-located with the shared <InfoPopupButton>
-   component (also used by NarrativeModePanel.jsx's AMCTOSHS Entity
+   component (also used by EntityBuilderPanel.jsx's AMCTOSHS Entity
    Builder) — imported automatically wherever that component is imported. */
 
 #pdf_annot_right_group {

@@ -1,59 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import "./narrativeModePanel.css";
+import "./entityBuilderPanel.css";
 import { InfoPopupButton } from "./InfoPopupButton";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { AMCTOSHS_ENTITY_INFO, ENTITY_DOMAINS, ENTITY_TYPES, formatEntity } from "./entityBuilderConstants";
+import { listAmctoshsEntities, createAmctoshsEntity, deleteAmctoshsEntity } from "./amctoshsEntitiesClient";
 
-const authHeaders = () => {
+const jsonHeaders = () => {
   const session = readStoredSession();
-  return session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+  return { "Content-Type": "application/json", ...(session?.token ? { Authorization: `Bearer ${session.token}` } : {}) };
 };
-const jsonHeaders = () => ({ "Content-Type": "application/json", ...authHeaders() });
-
-const AMCTOSHS_ENTITY_INFO = "An AMCTOSHS sub-entity is a representation of an aspect of a patient (ontic entity), constructed from the observed traces through which that aspect is known.";
-
-const ENTITY_DOMAINS = [
-  "Atoms",
-  "Molecules",
-  "Tissues",
-  "Organs",
-  "Organ Systems",
-  "Humans",
-  "Societies",
-];
-
-const ENTITY_TYPES = [
-  {
-    key: "schema",
-    label: "Schema",
-    icon: "bx bx-cube-alt",
-    helper: "Points to an ontic object, such as heart.",
-  },
-  {
-    key: "trace",
-    label: "Schema Trace",
-    icon: "bx bx-git-branch",
-    helper: "Nested inside a preexisting Entity Schema.",
-  },
-  {
-    key: "trace_value",
-    label: "Schema Trace Value",
-    icon: "bx bx-ruler",
-    helper: "A value for an existing trace. Unit is required.",
-  },
-  {
-    key: "instance",
-    label: "Schema Instance",
-    icon: "bx bx-layer-plus",
-    helper: "Instantiates a schema via one trace:value pair. Build several for a schema with multiple traces.",
-  },
-  {
-    key: "intervener",
-    label: "Trace Value Changer",
-    icon: "bx bx-transfer-alt",
-    helper: "A.k.a. Entity Intervener.",
-  },
-];
 
 const ENTITY_BUILDER_STORAGE_KEY = "amctoshs_entity_builder_history";
 const ENTITY_BUILDER_MIGRATED_KEY = "amctoshs_entity_builder_migrated";
@@ -85,40 +41,7 @@ const migrateLocalHistoryIfNeeded = async () => {
   localStorage.setItem(ENTITY_BUILDER_MIGRATED_KEY, "1");
 };
 
-const formatEntity = (entry) => {
-  const lines = [
-    "AMCTOSHS Sub-Entity:",
-    `1. Entity Type: ${entry.typeLabel}`,
-  ];
-
-  if (entry.type === "schema") {
-    lines.push(`2. Entity Schema: ${entry.name || "Untitled Schema"}`);
-    lines.push(`3. AMCTOSHS Sub-Entity schema Domain: ${entry.domain}`);
-    lines.push(`4. Ontic Object Text: ${entry.sourceText}`);
-  } else if (entry.type === "trace") {
-    lines.push(`2. Entity Schema Trace: ${entry.name || "Untitled Trace"}`);
-    lines.push(`3. Nested Inside Entity Schema: ${entry.parentSchema || "Not specified"}`);
-    lines.push(`4. Trace Source Text: ${entry.sourceText}`);
-  } else if (entry.type === "trace_value") {
-    lines.push(`2. Entity Schema Trace: ${entry.traceName || "Not specified"}`);
-    lines.push(`3. Entity Schema Trace Value: ${entry.value || entry.sourceText}`);
-    lines.push(`4. Unit: ${entry.unit}`);
-  } else if (entry.type === "instance") {
-    lines.push(`2. Entity Schema Instance: ${entry.name || "Untitled Instance"}`);
-    lines.push(`3. Entity Schema Name: ${entry.parentSchema || "Not specified"}`);
-    lines.push(`4. Entity Schema Trace Name: ${entry.traceName || "Not specified"}`);
-    lines.push(`5. Entity Schema Trace Value Entry: ${entry.value || "Not specified"}`);
-  } else if (entry.type === "intervener") {
-    lines.push(`2. Entity Intervener: ${entry.name || "Untitled Intervener"}`);
-    lines.push(`3. Target Entity Schema Trace Value: ${entry.traceName || "Not specified"}`);
-    lines.push(`4. Change: ${entry.value || entry.sourceText}`);
-    lines.push(`5. Unit: ${entry.unit || "Not specified"}`);
-  }
-
-  return lines.join("\n");
-};
-
-const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, onVerifySource = null }) => {
+const EntityBuilderPanel = ({ onClose, selectedText = "", verifyBusy = false, onVerifySource = null }) => {
   const [entityType, setEntityType] = useState("schema");
   const [name, setName] = useState("");
   const [domain, setDomain] = useState("Organs");
@@ -167,9 +90,8 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
     (async () => {
       await migrateLocalHistoryIfNeeded();
       try {
-        const res = await fetch(apiUrl("/api/amctoshs-entities"), { headers: authHeaders() });
-        const data = await res.json().catch(() => ({}));
-        if (!cancelled && res.ok) setHistory(Array.isArray(data.entities) ? data.entities : []);
+        const entities = await listAmctoshsEntities();
+        if (!cancelled) setHistory(entities);
       } catch {
         // best-effort — leave history empty rather than blocking the panel
       } finally {
@@ -211,20 +133,11 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
       return;
     }
     try {
-      const res = await fetch(apiUrl("/api/amctoshs-entities"), {
-        method: "POST",
-        headers: jsonHeaders(),
-        body: JSON.stringify(draftEntry),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setError(data.error || "Failed to save that entity.");
-        return;
-      }
+      const data = await createAmctoshsEntity(draftEntry);
       setHistory((prev) => [data, ...prev].slice(0, 30));
       setError("");
-    } catch {
-      setError("Failed to save that entity — check your connection.");
+    } catch (err) {
+      setError(err.message || "Failed to save that entity — check your connection.");
     }
   };
 
@@ -232,8 +145,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
     const prev = history;
     setHistory((current) => current.filter((item) => item.id !== id));
     try {
-      const res = await fetch(apiUrl(`/api/amctoshs-entities/${id}`), { method: "DELETE", headers: authHeaders() });
-      if (!res.ok) setHistory(prev);
+      await deleteAmctoshsEntity(id);
     } catch {
       setHistory(prev);
     }
@@ -265,16 +177,16 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   };
 
   return (
-    <div id="narrative_mode_panel" onMouseDown={(event) => event.stopPropagation()}>
-      <div id="narrative_mode_header">
-        <span id="narrative_mode_header_title">
+    <div id="entity_builder_panel" onMouseDown={(event) => event.stopPropagation()}>
+      <div id="entity_builder_header">
+        <span id="entity_builder_header_title">
           <i className="bx bx-network-chart" /> AMCTOSHS Entity Builder
           <InfoPopupButton
             info="Builds only from selected text or text entered here. Page text is not used."
             label="AMCTOSHS Entity Builder info"
           />
         </span>
-        <button type="button" id="narrative_mode_close" onClick={onClose} title="Close">✕</button>
+        <button type="button" id="entity_builder_close" onClick={onClose} title="Close">✕</button>
       </div>
 
       <div id="entity_builder_body">
@@ -351,7 +263,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
           </>
         )}
 
-        {error && <div className="narrative_mode_status narrative_mode_status--error"><i className="bx bx-error" /> {error}</div>}
+        {error && <div className="entity_builder_status entity_builder_status--error"><i className="bx bx-error" /> {error}</div>}
 
         <div id="entity_builder_actions">
           <button type="button" id="entity_builder_build" onClick={buildEntity}>
@@ -396,7 +308,7 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
       </div>
 
       {verifyBusy && (
-        <div id="narrative_mode_footer">
+        <div id="entity_builder_footer">
           <i className="bx bx-loader-circle pdf_icon_spin" /> Using AI to verify this text against the page.
         </div>
       )}
@@ -404,4 +316,4 @@ const NarrativeModePanel = ({ onClose, selectedText = "", verifyBusy = false, on
   );
 };
 
-export default NarrativeModePanel;
+export default EntityBuilderPanel;

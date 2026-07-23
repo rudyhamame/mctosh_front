@@ -22,7 +22,7 @@
 // pageTextItemsCacheRef reset on document load).
 
 import { normalizePdfText } from "./pdfTextNormalizer.js";
-import { analyzePageLayout, itemsFromPdfJs } from "./pdfPageLayout.js";
+import { analyzePageLayout, itemsFromPdfJs, blockToText } from "./pdfPageLayout.js";
 
 const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}'-]*/gu;
 
@@ -46,14 +46,10 @@ const buildOriginalTextFromItems = (textItems) => {
   let originalText = "";
   const itemOffsets = [];
   for (const block of layout.blocks) {
-    for (const spatialItem of block.items) {
-      const str = spatialItem.text || "";
-      if (!str) continue;
-      const start = originalText.length;
-      originalText += str;
-      itemOffsets.push({ start, end: originalText.length, itemIndex: spatialItem.itemIndex });
-      originalText += spatialItem.hasEOL ? "\n" : " ";
-    }
+    const { text, itemOffsets: local } = blockToText(block);
+    const shift = originalText.length;
+    originalText += text;
+    for (const o of local) itemOffsets.push({ start: o.start + shift, end: o.end + shift, itemIndex: o.itemIndex });
     if (originalText && !originalText.endsWith("\n")) originalText += "\n";
   }
   return { originalText, itemOffsets };

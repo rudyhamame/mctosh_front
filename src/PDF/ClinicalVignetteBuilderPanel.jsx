@@ -3,7 +3,7 @@ import "./clinicalVignetteBuilderPanel.css";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 
-// Same domain list as NarrativeModePanel.jsx's ENTITY_DOMAINS (kept in
+// Same domain list as EntityBuilderPanel.jsx's ENTITY_DOMAINS (kept in
 // sync manually — both mirror back/validation/amctoshsVignetteSchemas.js's
 // ENTITY_DOMAINS), plus "Any" for an unscoped goal.
 const GOAL_DOMAINS = ["Any", "Atoms", "Molecules", "Tissues", "Organs", "Organ Systems", "Humans", "Societies"];
@@ -234,7 +234,7 @@ const ClinicalVignetteBuilderPanel = ({ onClose, provider, providerModels }) => 
           {mode === "exam" ? "Silent-domain instances stay hidden until you submit an attempt or reveal them." : "Everything is shown once generated — no scoring."}
         </p>
 
-        {error && <div className="narrative_mode_status narrative_mode_status--error"><i className="bx bx-error" /> {error}</div>}
+        {error && <div className="entity_builder_status entity_builder_status--error"><i className="bx bx-error" /> {error}</div>}
 
         <div id="cvb_actions">
           <button type="button" id="cvb_generate" onClick={generate} disabled={generating}>

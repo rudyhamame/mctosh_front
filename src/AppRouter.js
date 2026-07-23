@@ -26,6 +26,7 @@ const PDFReaderWorkspace = lazy(() => import("./PDF/PDFReaderWorkspace"));
 const CardPage = lazy(() => import("./Card/CardPage"));
 const PhenomenaPage = lazy(() => import("./Phenomena/PhenomenaPage"));
 const AboutPage = lazy(() => import("./About/AboutPage"));
+const AmctoshsAboutPage = lazy(() => import("./About/AmctoshsAboutPage"));
 const PortfolioPage = lazy(() => import("./Portfolio/PortfolioPage"));
 const HylomorphismPage = lazy(() => import("./Hylomorphism/HylomorphismPage"));
 const SourcesPage = lazy(() => import("./Sources/SourcesPage"));
@@ -154,6 +155,7 @@ const AppRouter = () => {
         } />
 
         <Route path="/about"     element={withSuspense(<AboutPage />)} />
+        <Route path="/about/amctoshs" element={withSuspense(<AmctoshsAboutPage />)} />
         <Route path="/portfolio" element={withSuspense(<PortfolioPage />)} />
         <Route path="/mcc/mccqe/objectives" element={withSuspense(<MCCQEObjectivesPage />)} />
 
