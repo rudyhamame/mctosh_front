@@ -338,43 +338,41 @@ export default function ClinicalSchemata() {
                     </select>
                     <div className="cs_edit_form_actions">
                       <button type="button" className="cs_edit_form_save" onClick={() => saveEditSchema(s)}>
-                        <i className="fi fi-rr-check" /> Save
+                        <i className="bx bx-check" /> Save
                       </button>
                       <button type="button" className="cs_edit_form_cancel" onClick={cancelEditSchema}>
-                        <i className="fi fi-rr-cross-small" /> Cancel
+                        <i className="bx bx-x" /> Cancel
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <button
+                  <div
                     key={s.key}
-                    type="button"
                     className={`cs_schema_row${selectedKey === s.key ? " cs_schema_row--active" : ""}`}
-                    onClick={() => selectSchema(s.key)}
                   >
-                    <span className="cs_schema_name">{s.name}</span>
-                    <span className="cs_inst_count" title="AMCTOSHS Traces recorded">{s.traceRows.length}</span>
+                    <button type="button" className="cs_schema_row_open" onClick={() => selectSchema(s.key)}>
+                      <span className="cs_schema_name">{s.name}</span>
+                      <span className="cs_inst_count" title="AMCTOSHS Traces recorded">{s.traceRows.length}</span>
+                    </button>
                     <span className="cs_row_actions">
-                      <span
+                      <button
+                        type="button"
                         className="cs_row_action_btn"
-                        role="button"
-                        tabIndex={0}
                         title="Edit this AMCTOSHS Sub-Entity Schema"
                         onClick={(ev) => startEditSchema(s, ev)}
                       >
-                        <i className="fi fi-rr-pencil" />
-                      </span>
-                      <span
+                        <i className="bx bx-pencil" />
+                      </button>
+                      <button
+                        type="button"
                         className="cs_row_action_btn cs_row_action_btn--danger"
-                        role="button"
-                        tabIndex={0}
                         title="Delete this AMCTOSHS Sub-Entity Schema"
                         onClick={(ev) => deleteSchema(s, ev)}
                       >
-                        <i className="fi fi-rr-trash" />
-                      </span>
+                        <i className="bx bx-trash" />
+                      </button>
                     </span>
-                  </button>
+                  </div>
                 )
               ))
             )}
@@ -409,7 +407,7 @@ export default function ClinicalSchemata() {
       {rowError && (
         <div id="cs_row_error">
           <i className="bx bx-error" /> {rowError}
-          <button type="button" onClick={() => setRowError("")}><i className="fi fi-rr-cross-small" /></button>
+          <button type="button" onClick={() => setRowError("")}><i className="bx bx-x" /></button>
         </div>
       )}
 
@@ -562,10 +560,10 @@ const renderTraces = (groups, selectedTraceName, onSelectTrace, sortOrder, setSo
                         />
                         <div className="cs_edit_form_actions">
                           <button type="button" className="cs_edit_form_save" onClick={() => saveEditValue(v)}>
-                            <i className="fi fi-rr-check" /> Save
+                            <i className="bx bx-check" /> Save
                           </button>
                           <button type="button" className="cs_edit_form_cancel" onClick={cancelEditValue}>
-                            <i className="fi fi-rr-cross-small" /> Cancel
+                            <i className="bx bx-x" /> Cancel
                           </button>
                         </div>
                       </li>
@@ -575,24 +573,22 @@ const renderTraces = (groups, selectedTraceName, onSelectTrace, sortOrder, setSo
                         <span className="cs_value_list_val">{formatTraceValue(v)}</span>
                         <span className="cs_row_type_tag">{v.typeLabel}</span>
                         <span className="cs_row_actions">
-                          <span
+                          <button
+                            type="button"
                             className="cs_row_action_btn"
-                            role="button"
-                            tabIndex={0}
                             title="Edit this AMCTOSHS Trace Value"
                             onClick={() => startEditValue(v)}
                           >
-                            <i className="fi fi-rr-pencil" />
-                          </span>
-                          <span
+                            <i className="bx bx-pencil" />
+                          </button>
+                          <button
+                            type="button"
                             className="cs_row_action_btn cs_row_action_btn--danger"
-                            role="button"
-                            tabIndex={0}
                             title="Delete this AMCTOSHS Trace Value"
                             onClick={() => deleteValue(v)}
                           >
-                            <i className="fi fi-rr-trash" />
-                          </span>
+                            <i className="bx bx-trash" />
+                          </button>
                         </span>
                       </li>
                     )

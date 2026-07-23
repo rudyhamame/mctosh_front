@@ -84,6 +84,30 @@
   border-color: var(--color-border);
 }
 
+/* ── Row-level error banner (edit/delete failures) ── */
+#cs_row_error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1.25rem;
+  background: color-mix(in srgb, #e05353 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, #e05353 35%, transparent);
+  color: #e05353;
+  font-size: 0.78rem;
+  flex-shrink: 0;
+}
+#cs_row_error button {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.75;
+}
+#cs_row_error button:hover { opacity: 1; }
+
 /* ── Body split ── */
 #cs_body {
   display: flex;
@@ -196,15 +220,12 @@
 .cs_schema_row {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.55rem 0.7rem;
+  gap: 0.2rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.7rem;
   border-radius: 7px;
-  cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
   border: 1px solid var(--color-border);
   background: var(--color-surface);
-  font-family: inherit;
-  text-align: left;
   width: 100%;
 }
 .cs_schema_row:hover {
@@ -215,6 +236,109 @@
   background: color-mix(in srgb, var(--color-bg) 55%, #26c6da 12%);
   border-color: color-mix(in srgb, #26c6da 45%, transparent);
 }
+
+/* The clickable name/count part of a schema row — a plain reset button so
+   the sibling Edit/Delete buttons never end up nested inside another
+   interactive element (see .cvb_saved_item in ClinicalVignetteBuilderPanel
+   for the same row/action-sibling convention used elsewhere). */
+.cs_schema_row_open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
+  border: none;
+  padding: 0.15rem 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  color: inherit;
+}
+
+/* Edit/Delete — hidden until the row is hovered/focused so the list stays
+   visually calm; always visible on touch (see the max-width media query). */
+.cs_row_actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.cs_schema_row:hover .cs_row_actions,
+.cs_schema_row:focus-within .cs_row_actions,
+.cs_value_list_row:hover .cs_row_actions,
+.cs_value_list_row:focus-within .cs_row_actions {
+  opacity: 1;
+}
+
+.cs_row_action_btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  flex-shrink: 0;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.76rem;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.cs_row_action_btn:hover {
+  color: #26c6da;
+  background: color-mix(in srgb, #26c6da 12%, transparent);
+  border-color: color-mix(in srgb, #26c6da 30%, transparent);
+}
+.cs_row_action_btn--danger:hover {
+  color: #e05353;
+  background: color-mix(in srgb, #e05353 12%, transparent);
+  border-color: color-mix(in srgb, #e05353 30%, transparent);
+}
+
+/* ── Inline edit form — replaces a schema row or trace-value row in place
+   while editing. Reuses .cs_input for both the text field and (for
+   schemas) the domain <select>. ── */
+.cs_edit_form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, #26c6da 45%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 55%, #26c6da 8%);
+}
+.cs_edit_form .cs_input { flex: 1; min-width: 0; }
+.cs_edit_form--schema .cs_select { flex: 0 0 auto; width: 150px; cursor: pointer; }
+.cs_edit_form--value .cs_edit_form_unit { flex: 0 0 90px; }
+
+.cs_edit_form_actions {
+  display: flex;
+  gap: 0.3rem;
+  flex-shrink: 0;
+}
+.cs_edit_form_save, .cs_edit_form_cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 0.32rem 0.55rem;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.cs_edit_form_save { color: #26c6da; border-color: color-mix(in srgb, #26c6da 40%, transparent); }
+.cs_edit_form_save:hover { background: color-mix(in srgb, #26c6da 14%, transparent); }
+.cs_edit_form_cancel:hover { color: var(--color-text); }
 
 .cs_schema_name {
   flex: 1;
@@ -480,6 +604,8 @@
 .cs_value_list_row:last-child { border-bottom: none; }
 .cs_value_list_row:hover { background: color-mix(in srgb, var(--color-surface) 70%, transparent); }
 
+.cs_edit_form--value { margin: 0.25rem 0.5rem; }
+
 .cs_value_list_val {
   flex: 1;
   min-width: 0;
@@ -600,4 +726,7 @@
   #cs_trace_split { flex-direction: column; }
   #cs_trace_list { width: 100%; flex-direction: row; flex-wrap: wrap; }
   .cs_trace_list_row { width: auto; flex: 1 1 auto; min-width: 140px; }
+
+  /* No hover on touch — Edit/Delete stay visible rather than hidden. */
+  .cs_row_actions { opacity: 1; }
 }
