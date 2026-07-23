@@ -237,6 +237,15 @@ export default function ClinicalSchemata() {
 
   const domainColor = (d) => DOMAIN_COLOR[d] || "#9e9e9e";
 
+  // Bundled so renderTraces (a module-level function, not a component
+  // closure) can reach the AMCTOSHS Trace Value edit/delete state and
+  // handlers without needing a dozen separate positional params.
+  const valueRowHandlers = {
+    editingValueId, editValueText, editValueUnit,
+    setEditValueText, setEditValueUnit,
+    startEditValue, cancelEditValue, saveEditValue, deleteValue,
+  };
+
   // Sits above BOTH #cs_left and #cs_right (the container holding the
   // schema list and the trace-viewing table) — not inside the aside —
   // so it always spans the full page width in one row, regardless of how
@@ -307,15 +316,66 @@ export default function ClinicalSchemata() {
               <div className="cs_empty"><p className="cs_empty_hint">No match for &ldquo;{schemaSearch}&rdquo;</p></div>
             ) : (
               filteredSchemas.map((s) => (
-                <button
-                  key={s.key}
-                  type="button"
-                  className={`cs_schema_row${selectedKey === s.key ? " cs_schema_row--active" : ""}`}
-                  onClick={() => selectSchema(s.key)}
-                >
-                  <span className="cs_schema_name">{s.name}</span>
-                  <span className="cs_inst_count" title="AMCTOSHS Traces recorded">{s.traceRows.length}</span>
-                </button>
+                editingSchemaKey === s.key ? (
+                  <div key={s.key} className="cs_edit_form cs_edit_form--schema">
+                    <input
+                      className="cs_input"
+                      autoFocus
+                      value={editSchemaName}
+                      onChange={(e) => setEditSchemaName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveEditSchema(s);
+                        if (e.key === "Escape") cancelEditSchema();
+                      }}
+                      placeholder="Sub-Entity Schema name"
+                    />
+                    <select
+                      className="cs_input cs_select"
+                      value={editSchemaDomain}
+                      onChange={(e) => setEditSchemaDomain(e.target.value)}
+                    >
+                      {ENTITY_DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    <div className="cs_edit_form_actions">
+                      <button type="button" className="cs_edit_form_save" onClick={() => saveEditSchema(s)}>
+                        <i className="fi fi-rr-check" /> Save
+                      </button>
+                      <button type="button" className="cs_edit_form_cancel" onClick={cancelEditSchema}>
+                        <i className="fi fi-rr-cross-small" /> Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    key={s.key}
+                    type="button"
+                    className={`cs_schema_row${selectedKey === s.key ? " cs_schema_row--active" : ""}`}
+                    onClick={() => selectSchema(s.key)}
+                  >
+                    <span className="cs_schema_name">{s.name}</span>
+                    <span className="cs_inst_count" title="AMCTOSHS Traces recorded">{s.traceRows.length}</span>
+                    <span className="cs_row_actions">
+                      <span
+                        className="cs_row_action_btn"
+                        role="button"
+                        tabIndex={0}
+                        title="Edit this AMCTOSHS Sub-Entity Schema"
+                        onClick={(ev) => startEditSchema(s, ev)}
+                      >
+                        <i className="fi fi-rr-pencil" />
+                      </span>
+                      <span
+                        className="cs_row_action_btn cs_row_action_btn--danger"
+                        role="button"
+                        tabIndex={0}
+                        title="Delete this AMCTOSHS Sub-Entity Schema"
+                        onClick={(ev) => deleteSchema(s, ev)}
+                      >
+                        <i className="fi fi-rr-trash" />
+                      </span>
+                    </span>
+                  </button>
+                )
               ))
             )}
           </div>
@@ -345,6 +405,13 @@ export default function ClinicalSchemata() {
       </div>
 
       {domainTabsBar}
+
+      {rowError && (
+        <div id="cs_row_error">
+          <i className="bx bx-error" /> {rowError}
+          <button type="button" onClick={() => setRowError("")}><i className="fi fi-rr-cross-small" /></button>
+        </div>
+      )}
 
       <div id="cs_body">
         <div id="cs_left">{asideContent}</div>
@@ -377,7 +444,7 @@ export default function ClinicalSchemata() {
                 &ldquo;Heart&rdquo;) before a value was recorded for it. Nothing is discarded; build
                 the missing Schema Trace in the AMCTOSHS Entity Builder to link these in.
               </p>
-              {renderTraces(visibleGroups, selectedTrace, setSelectedTrace, sortOrder, setSortOrder)}
+              {renderTraces(visibleGroups, selectedTrace, setSelectedTrace, sortOrder, setSortOrder, valueRowHandlers)}
             </>
           ) : !selectedSchema ? (
             <div id="cs_no_selection">
@@ -398,7 +465,7 @@ export default function ClinicalSchemata() {
                 <span>AMCTOSHS Domain: <strong>{activeDomain}</strong></span>
                 <span>AMCTOSHS Sub-Entity Schema: <strong>{selectedSchema.name}</strong></span>
               </div>
-              {renderTraces(visibleGroups, selectedTrace, setSelectedTrace, sortOrder, setSortOrder)}
+              {renderTraces(visibleGroups, selectedTrace, setSelectedTrace, sortOrder, setSortOrder, valueRowHandlers)}
             </>
           )}
         </div>
@@ -414,7 +481,12 @@ export default function ClinicalSchemata() {
 // discarded, only de-emphasized, so it stays available as a hover title.
 // Never reduces a trace to its latest value only: every historical value
 // stays visible (spec §10) once its trace is selected.
-const renderTraces = (groups, selectedTraceName, onSelectTrace, sortOrder, setSortOrder) => {
+const renderTraces = (groups, selectedTraceName, onSelectTrace, sortOrder, setSortOrder, valueHandlers) => {
+  const {
+    editingValueId, editValueText, editValueUnit,
+    setEditValueText, setEditValueUnit,
+    startEditValue, cancelEditValue, saveEditValue, deleteValue,
+  } = valueHandlers;
   const selectedGroup = groups.find((g) => g.trace === selectedTraceName) || null;
   return (
     <div id="cs_trace_table_wrap">
@@ -465,11 +537,65 @@ const renderTraces = (groups, selectedTraceName, onSelectTrace, sortOrder, setSo
                 </div>
                 <ul id="cs_value_list">
                   {selectedGroup.values.map((v) => (
-                    <li key={v.id} className="cs_value_list_row">
-                      <span className="cs_trace_order" title={formatTimestamp(v.timestamp)}>{v.order}</span>
-                      <span className="cs_value_list_val">{formatTraceValue(v)}</span>
-                      <span className="cs_row_type_tag">{v.typeLabel}</span>
-                    </li>
+                    editingValueId === v.id ? (
+                      <li key={v.id} className="cs_edit_form cs_edit_form--value">
+                        <input
+                          className="cs_input"
+                          autoFocus
+                          value={editValueText}
+                          onChange={(e) => setEditValueText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEditValue(v);
+                            if (e.key === "Escape") cancelEditValue();
+                          }}
+                          placeholder="Value"
+                        />
+                        <input
+                          className="cs_input cs_edit_form_unit"
+                          value={editValueUnit}
+                          onChange={(e) => setEditValueUnit(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveEditValue(v);
+                            if (e.key === "Escape") cancelEditValue();
+                          }}
+                          placeholder={v.typeKey === "trace_value" ? "Unit (required)" : "Unit"}
+                        />
+                        <div className="cs_edit_form_actions">
+                          <button type="button" className="cs_edit_form_save" onClick={() => saveEditValue(v)}>
+                            <i className="fi fi-rr-check" /> Save
+                          </button>
+                          <button type="button" className="cs_edit_form_cancel" onClick={cancelEditValue}>
+                            <i className="fi fi-rr-cross-small" /> Cancel
+                          </button>
+                        </div>
+                      </li>
+                    ) : (
+                      <li key={v.id} className="cs_value_list_row">
+                        <span className="cs_trace_order" title={formatTimestamp(v.timestamp)}>{v.order}</span>
+                        <span className="cs_value_list_val">{formatTraceValue(v)}</span>
+                        <span className="cs_row_type_tag">{v.typeLabel}</span>
+                        <span className="cs_row_actions">
+                          <span
+                            className="cs_row_action_btn"
+                            role="button"
+                            tabIndex={0}
+                            title="Edit this AMCTOSHS Trace Value"
+                            onClick={() => startEditValue(v)}
+                          >
+                            <i className="fi fi-rr-pencil" />
+                          </span>
+                          <span
+                            className="cs_row_action_btn cs_row_action_btn--danger"
+                            role="button"
+                            tabIndex={0}
+                            title="Delete this AMCTOSHS Trace Value"
+                            onClick={() => deleteValue(v)}
+                          >
+                            <i className="fi fi-rr-trash" />
+                          </span>
+                        </span>
+                      </li>
+                    )
                   ))}
                 </ul>
               </>
