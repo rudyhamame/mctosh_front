@@ -22,10 +22,6 @@ import { correctSelectedPdfText } from "./pdfTextCorrection.js";
 import { analyzePageLayout } from "./pdfPageLayout.js";
 import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
 import { buildRawHyle, buildSegmentedHyle, computeMarkerPosition } from "./pdfHyleStats.js";
-import { resolveDocumentId } from "./pdfPageStructureClient.js";
-import { capturePageImageDataUrl } from "./pdfPageImageCapture.js";
-import { itemIndexesForSegment } from "./pdfSegmentTree.js";
-import PdfNarrativeView from "./PdfNarrativeView";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -1192,7 +1188,6 @@ const PDFPage = forwardRef(({
   // alongside it, cleared at the same point (loadPdfBytes) on document change.
   const pageIndexCacheRef = useRef(createPageIndexCache());
   const searchCanvasRef = useRef(null);
-  const narrativeCanvasRef = useRef(null);
   const hyleCanvasRef = useRef(null);
   const hyleFabRef = useRef(null);
   const hyleIconsLayerRef = useRef(null);
@@ -1776,26 +1771,6 @@ const PDFPage = forwardRef(({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amctoshsVignetteOpen]);
 
-  // ── Narrative Mode (manual, page-scoped AI structural segmentation) ─────
-  // Shows nothing for a page until the user explicitly clicks "AI Segment
-  // Page" inside the panel (PdfNarrativeView.jsx) — see
-  // back/routes/PdfPageStructureAPI.js for the backend half. This
-  // component's own job is just: resolve a stable documentId once per
-  // loaded PDF (no AI, safe/idempotent get-or-create), capture the
-  // current page as an image on demand, and draw the debug-overlay/
-  // jump-to-source flash from whatever structure the panel reports having
-  // loaded (onStructureChange below) — it does not fetch or drive the
-  // segmentation state machine itself, that lives entirely in the panel.
-  const [narrativeViewOpen, setNarrativeViewOpen] = useState(false);
-  const [narrativeDebugOverlayOn, setNarrativeDebugOverlayOn] = useState(false);
-  const [narrativeActiveStructure, setNarrativeActiveStructure] = useState(null); // {status, draft, saved} as last reported by PdfNarrativeView
-  const [narrativeFlashItemIndexes, setNarrativeFlashItemIndexes] = useState(null); // one-shot "jump to source" flash target
-  const [pdfDocumentId, setPdfDocumentId] = useState(null);
-  const flashTimeoutRef = useRef(null);
-
-  const toggleNarrativeView = useCallback(() => setNarrativeViewOpen((open) => !open), []);
-  const toggleNarrativeDebugOverlay = useCallback(() => setNarrativeDebugOverlayOn((v) => !v), []);
-
   // ── AMCTOSHS Hyle layers (floating button, bottom-left of the canvas) ───
   // Per this app's own AMCTOSHS vocabulary — a word/page is Hyle
   // (undifferentiated matter) until form is imposed on it. Two views onto
@@ -1826,33 +1801,6 @@ const PDFPage = forwardRef(({
     setHyleMode((prev) => (prev === mode ? "raw" : mode));
     setHyleFabOpen(false);
   }, []);
-
-  const flashHighlightForItemIndexes = useCallback((itemIndexes) => {
-    if (!itemIndexes?.length) return;
-    setNarrativeFlashItemIndexes(itemIndexes);
-    window.clearTimeout(flashTimeoutRef.current);
-    flashTimeoutRef.current = window.setTimeout(() => setNarrativeFlashItemIndexes(null), 1600);
-  }, []);
-
-  useEffect(() => () => window.clearTimeout(flashTimeoutRef.current), []);
-
-  // documentId resolution is a get-or-create lookup, not AI — but it's
-  // still only triggered by opening Narrative Mode (not by loading the
-  // PDF itself), keeping "open a PDF" a zero-side-effect operation.
-  useEffect(() => {
-    if (!narrativeViewOpen || !pdfDoc || !filename) return;
-    fetchAiProviderModelsOnce();
-    let cancelled = false;
-    resolveDocumentId({ filename, pageCount: pageCount || 1, type: pdfType || "text-based" })
-      .then((id) => { if (!cancelled) setPdfDocumentId(id); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [narrativeViewOpen, pdfDoc, filename]);
-
-  const captureCurrentPageImage = useCallback(() => (
-    canvasRef.current ? capturePageImageDataUrl(canvasRef.current) : null
-  ), []);
 
   // ── Selection action (selectionOnly mode) ──────────────────────────────────
   const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
@@ -3032,84 +2980,6 @@ const PDFPage = forwardRef(({
       }
     });
   }, [searchOpen, searchMatches, searchActiveIndex, pageNum, pageViewport]);
-
-  // Draws Narrative Mode's layout-debug overlay (one labeled, role-colored
-  // box per AI-produced segment — spec §52) and the one-shot "jump to
-  // source" flash highlight. `narrativeActiveStructure` is whatever
-  // PdfNarrativeView.jsx last reported loading for the current page via
-  // onStructureChange — this effect never fetches segmentation data
-  // itself, it only draws what the panel already has (no independent AI
-  // or GET call lives here). Same canvas-sizing pattern as the
-  // search-highlight effect above — see currentBackingScaleRef — but its
-  // own dedicated canvas (see pdfPage.css's #pdf_narrative_canvas comment
-  // for why).
-  useEffect(() => {
-    const canvas = narrativeCanvasRef.current;
-    if (!canvas || !pageViewport) return;
-    const backingScale = currentBackingScaleRef.current || 1;
-    canvas.width  = Math.max(1, Math.floor(pageViewport.width * backingScale));
-    canvas.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
-    canvas.style.width  = `${pageViewport.width}px`;
-    canvas.style.height = `${pageViewport.height}px`;
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
-    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-    const activeStructure = narrativeActiveStructure?.draft || narrativeActiveStructure?.saved;
-    if ((!narrativeDebugOverlayOn || !activeStructure) && !narrativeFlashItemIndexes?.length) return;
-
-    // pageTextItemsCacheRef is normally populated by a search scan — a
-    // user who opens Narrative Mode without ever searching first would
-    // find it empty, so fetch through getPageTextItems (which populates
-    // that same cache) instead of reading it directly.
-    let cancelled = false;
-    const vt = pageViewport.transform;
-    getPageTextItems(pageNum).then((items) => {
-      if (cancelled || !items) return;
-
-      if (narrativeDebugOverlayOn && activeStructure) {
-        // The boxes below are drawn from `rects`, already positioned in
-        // the CURRENT zoom's CSS-pixel space (vt = pageViewport.transform
-        // bakes in fitScale * zoom) — they grow/shrink with zoom exactly
-        // like the real page content. A hardcoded font size does NOT, so
-        // at low zoom the label reads oversized relative to the (shrunk)
-        // boxes/content, and at high zoom it reads undersized relative to
-        // the (enlarged) boxes/content — the inverse of what zooming in
-        // should do. Scaling the font by the same pageViewport.scale
-        // factor keeps the label's size proportional to the content at
-        // any zoom level, same as the boxes themselves; clamped so it
-        // never becomes illegible (too small) or overwhelming (too large)
-        // at extreme zooms.
-        const debugFontPx = Math.max(7, Math.min(16, Math.round(9 * (pageViewport.scale || 1))));
-        ctx.font = `${debugFontPx}px sans-serif`;
-        for (const seg of activeStructure.segments) {
-          const rects = computeHighlightRectsForItemIndexes(itemIndexesForSegment(seg), items, vt);
-          if (!rects.length) continue;
-          ctx.lineWidth = 0.5;
-          ctx.strokeStyle = "rgba(120,120,120,0.4)";
-          for (const r of rects) ctx.strokeRect(r.x, r.y, r.width, r.height);
-
-          const x1 = Math.min(...rects.map((r) => r.x));
-          const y1 = Math.min(...rects.map((r) => r.y));
-          const x2 = Math.max(...rects.map((r) => r.x + r.width));
-          const y2 = Math.max(...rects.map((r) => r.y + r.height));
-          const isHeading = /title|heading/.test(seg.role);
-          ctx.lineWidth = isHeading ? 2 : 1.2;
-          ctx.strokeStyle = isHeading ? "rgba(211,47,47,0.9)" : "rgba(30,136,229,0.7)";
-          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-          ctx.fillStyle = isHeading ? "rgba(211,47,47,0.9)" : "rgba(30,136,229,0.9)";
-          ctx.fillText(seg.role, x1 + 2, Math.max(debugFontPx, y1 - 2));
-        }
-      }
-
-      if (narrativeFlashItemIndexes?.length) {
-        ctx.fillStyle = "rgba(255,140,0,0.55)"; // matches the active search-match highlight color
-        for (const r of computeHighlightRectsForItemIndexes(narrativeFlashItemIndexes, items, vt)) {
-          ctx.fillRect(r.x, r.y, r.width, r.height);
-        }
-      }
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [pageViewport, pageNum, narrativeDebugOverlayOn, narrativeActiveStructure, narrativeFlashItemIndexes, getPageTextItems]);
 
   // Computes the active AMCTOSHS Hyle layer's data (pdfHyleStats.js, pure/
   // client-side) for the current page and, for Segmented Hyle only, draws
@@ -5346,7 +5216,7 @@ const PDFPage = forwardRef(({
               text: token, el: span, fontFamily: itemFontFamily, fontWeight: itemFontWeight, fontStyle: itemFontStyle,
               geoLeft: originX, geoRight: originX + tokenWidth,
               geoTop: originY - fontSize * 0.8, geoHeight: fontSize,
-              pdfItemIndex, // which raw content.items entry this token came from — matches pdfPageEvidence.js's `el-{page}-{itemIndex}` id scheme
+              pdfItemIndex, // which raw content.items entry this token came from
             });
             span.textContent        = token;
             span.style.position     = "absolute";
@@ -5925,7 +5795,6 @@ const PDFPage = forwardRef(({
     pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
     pageTextItemsCacheRef.current = {};
     pageIndexCacheRef.current.clear();
-    setPdfDocumentId(null); // a new document is loading — the old documentId (if any) no longer applies; re-resolved lazily next time Narrative Mode opens
     setSearchQuery(""); setSearchMatches([]); setSearchActiveIndex(-1); setSearchOpen(false);
     try {
       const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -7254,20 +7123,6 @@ const PDFPage = forwardRef(({
                   <i className="bx bx-user-plus" />
                 </button>
               )}
-              {/* Narrative Mode — AI page-structure reading view (manual,
-                  page-scoped segmentation; see PdfNarrativeView.jsx). Same
-                  convention as the two triggers above. */}
-              {pdfDoc && (
-                <button
-                  type="button"
-                  className={`annot_trigger annot_tool_btn${narrativeViewOpen ? " annot_trigger--active" : ""}`}
-                  onClick={toggleNarrativeView}
-                  title="Narrative Mode"
-                  aria-label="Narrative Mode"
-                >
-                  <i className="bx bx-align-left" />
-                </button>
-              )}
             </div>
             </div>
 
@@ -8188,31 +8043,13 @@ const PDFPage = forwardRef(({
           />
         )}
 
-        {/* Far left — Narrative Mode. Same far-left-column convention as
-            the panels above. */}
-        {narrativeViewOpen && (
-          <PdfNarrativeView
-            onClose={toggleNarrativeView}
-            pageNumber={pageNum}
-            documentId={pdfDocumentId}
-            getPageTextItems={getPageTextItems}
-            captureCurrentPageImage={captureCurrentPageImage}
-            onJumpToSource={flashHighlightForItemIndexes}
-            debugOverlayOn={narrativeDebugOverlayOn}
-            onToggleDebugOverlay={toggleNarrativeDebugOverlay}
-            onStructureChange={setNarrativeActiveStructure}
-            provider={provider}
-            providerModels={aiProviderModels}
-          />
-        )}
-
         {/* Left — PDF viewer or upload zone */}
         <div
           id="pdf_preview"
           style={{
             width: splitRatio === 0
               ? "0"
-              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (entityBuilderOpen ? 360 : 0) + (amctoshsVignetteOpen ? 360 : 0) + (narrativeViewOpen ? 360 : 0)}px)`,
+              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (entityBuilderOpen ? 360 : 0) + (amctoshsVignetteOpen ? 360 : 0)}px)`,
           }}
           className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${annotTool === "highlight" ? " pdf_preview--highlight-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
         >
@@ -8269,7 +8106,6 @@ const PDFPage = forwardRef(({
                       />
                       <canvas id="pdf_mask_canvas" ref={maskCanvasRef} />
                       <canvas id="pdf_search_canvas" ref={searchCanvasRef} />
-                      <canvas id="pdf_narrative_canvas" ref={narrativeCanvasRef} />
                       <canvas id="pdf_hyle_canvas" ref={hyleCanvasRef} />
                       {hyleMode === "segmented" && hyleLayerData?.mode === "segmented" && hyleLayerData.pageNum === pageNum && pageViewport && (
                         <div

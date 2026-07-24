@@ -57,6 +57,12 @@
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  /* #pdf_page defaults the whole reader to user-select: none (see its own
+     comment in pdfPage.css) so a long-press only ever triggers the PDF's
+     own text-selection, never a stray toolbar/panel label — Narrative
+     Mode's own text never opted back in until now. */
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* ── NOT_SEGMENTED empty state (spec §4/28) ─────────────────────────────── */
@@ -269,6 +275,18 @@
 /* ── Segment rendering ───────────────────────────────────────────────────── */
 .narrative_seg_flow { display: flex; flex-direction: column; gap: 0.35rem; }
 .narrative_seg_flow--aside { margin-top: 0.2rem; }
+.narrative_seg_flow--figures {
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--color-border);
+}
+.narrative_seg_figures_container_label {
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
 
 .narrative_seg_heading,
 .narrative_seg_paragraph,
@@ -295,10 +313,33 @@
 .narrative_seg_heading { font-weight: 800; letter-spacing: 0.01em; line-height: 1.35; }
 .narrative_seg_paragraph { font-size: 0.84rem; line-height: 1.55; }
 .narrative_seg_list { margin: 0; padding-left: 1.1rem; }
-.narrative_seg_list_item { font-size: 0.84rem; line-height: 1.5; }
+.narrative_seg_list--nested { margin-top: 0.25rem; }
+.narrative_seg_list_item { font-size: 0.84rem; line-height: 1.5; cursor: pointer; }
+.narrative_seg_list_item:hover { color: var(--color-text); }
 .narrative_seg_toc_row { font-size: 0.82rem; line-height: 1.6; display: flex; justify-content: space-between; gap: 0.5rem; }
 .narrative_seg_footnote { font-size: 0.72rem; color: var(--color-text-muted); line-height: 1.5; }
 .narrative_seg_caption { font-size: 0.74rem; font-style: italic; color: var(--color-text-muted); line-height: 1.45; }
+
+/* Real <table> rendering (NarrativeTable.jsx) — replaces the pre-redesign
+   flattened captioned-box treatment for a v2 "table" element. */
+.narrative_seg_table_wrap { overflow-x: auto; margin: 0.2rem 0; }
+.narrative_seg_table_title {
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: var(--color-text-muted);
+  margin-bottom: 0.3rem;
+}
+.narrative_seg_table_title:hover { color: var(--color-highlight); }
+.narrative_seg_table { border-collapse: collapse; width: 100%; font-size: 0.78rem; }
+.narrative_seg_table td {
+  border: 1px solid var(--color-border);
+  padding: 0.3rem 0.5rem;
+  vertical-align: top;
+  cursor: pointer;
+}
+.narrative_seg_table td:hover { background: color-mix(in srgb, var(--color-accent, #7e57c2) 10%, transparent); }
 
 .narrative_seg_generic { display: flex; flex-direction: column; gap: 0.35rem; }
 
@@ -322,6 +363,15 @@
 }
 .narrative_seg_aside_text,
 .narrative_seg_figure_text { margin: 0; font-size: 0.8rem; line-height: 1.5; color: var(--color-text); }
+.narrative_seg_figure_lines {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.narrative_seg_figure_lines li { font-size: 0.78rem; line-height: 1.4; color: var(--color-text); cursor: pointer; }
+.narrative_seg_figure_lines li:hover { color: var(--color-highlight); }
 
 /* ── Action bar (pinned above the footer, below the scrollable body) ──── */
 #narrative_view_actions {

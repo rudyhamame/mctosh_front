@@ -7,6 +7,8 @@
 // Narrative Mode's jump-to-source flash and its layout debug overlay reuse
 // the identical formulas instead of a second/third hand-written copy.
 
+import { canonicalToViewportRect } from "./pdfCoordinateTransform.js";
+
 /** pageViewport.transform × item.transform, same convention used throughout this app's PDF-space math. */
 const multiplyTransform = (viewportTransform, itemTransform) => {
   const vt = viewportTransform;
@@ -72,6 +74,21 @@ export const computeHighlightRectsForItemIndexes = (itemIndexes, pageTextItems, 
     });
   }
   return rects;
+};
+
+/**
+ * v2 structure sibling of computeHighlightRectsForItemIndexes — for
+ * canonical (hybrid-pipeline) bboxes, which have no PDF.js itemIndex to
+ * look up (a Docling-only figure/table region, an OCR'd word, or any
+ * element whose bbox came from server-side fusion rather than a 1:1
+ * client-side PDF.js item). Uses pdfCoordinateTransform.js's pure-scale
+ * mapping (see that module's own comment for why no rotation matrix is
+ * needed here, unlike multiplyTransform above). `bboxes` is an array of
+ * canonical [x1,y1,x2,y2] arrays; returns one rect per bbox, in order.
+ */
+export const computeHighlightRectsForCanonicalBboxes = (bboxes, pageViewport) => {
+  if (!pageViewport || !bboxes?.length) return [];
+  return bboxes.map((bbox) => canonicalToViewportRect(bbox, pageViewport));
 };
 
 /** Transforms a single PDF-space point (e.g. a column-gutter x at some reference y) into viewport space — used by the debug overlay for gutter lines, which aren't tied to any one item. */

@@ -28,29 +28,49 @@ const parseJsonResponse = async (res) => {
   return data;
 };
 
-/** Get-or-create a stable documentId for (user, filename) — no AI, safe to call once per loaded PDF. */
-export const resolveDocumentId = async ({ filename, pageCount, type }) => {
+/**
+ * Get-or-create a stable documentId for (user, filename) — no AI/extraction,
+ * safe to call once per loaded PDF. `sourceId`, when the PDF is backed by
+ * a saved Source, lets the backend resolve real PDF bytes for the hybrid
+ * extraction pipeline (native PyMuPDF/Docling geometry now happens
+ * server-side — see segmentPage's own comment on why it no longer sends
+ * pageImageBase64/elements). A locally-opened PDF with no Source can
+ * still resolve a documentId (to read any structure saved under this
+ * filename previously), it just can't freshly segment — /segment 422s
+ * with a clear message in that case.
+ */
+export const resolveDocumentId = async ({ filename, pageCount, type, sourceId }) => {
   const res = await fetch(apiUrl("/api/pdf-page-structure/resolve-document"), {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ filename, pageCount, type }),
+    body: JSON.stringify({ filename, pageCount, type, sourceId }),
   });
   const data = await parseJsonResponse(res);
   return data.documentId;
 };
 
-/** Read-only — loads existing draft/saved structure. NEVER triggers AI. Safe to call on page navigation / Narrative Mode open. */
+/** Read-only — loads existing draft/saved structure (+ each slot's own schemaVersion/legacy flag). NEVER triggers extraction/AI. Safe to call on page navigation / Narrative Mode open. */
 export const getPageStructure = async (documentId, pageNumber) => {
   const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}`), { headers: authHeaders() });
   return parseJsonResponse(res);
 };
 
-/** The ONLY AI-triggering call. Writes draft only, never saved. */
-export const segmentPage = async (documentId, pageNumber, { pageImageBase64, elements, requestId, provider, model }) => {
+/**
+ * The ONLY extraction-triggering call (native geometry + Docling always;
+ * AI only if the backend's own deterministic fusion pass flags genuine
+ * ambiguities). Writes draft only, never saved. Deliberately does NOT
+ * send pageImageBase64/elements anymore — native extraction now happens
+ * server-side from the source's own real PDF bytes (PyMuPDF), which is
+ * strictly more authoritative than the client's own PDF.js item list, so
+ * sending a redundant client-side extraction added payload/latency for no
+ * benefit. The backend 422s with a clear message if this PDF has no
+ * resolvable Source (see resolveDocumentId's own comment).
+ */
+export const segmentPage = async (documentId, pageNumber, { requestId, provider, model }) => {
   const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/segment`), {
     method: "POST",
     headers: jsonHeaders(),
-    body: JSON.stringify({ pageImageBase64, elements, requestId, provider, model }),
+    body: JSON.stringify({ requestId, provider, model }),
   });
   return parseJsonResponse(res);
 };

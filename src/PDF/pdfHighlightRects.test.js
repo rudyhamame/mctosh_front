@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
+import { computeHighlightRectsForItemIndexes, computeHighlightRectsForCanonicalBboxes } from "./pdfHighlightRects.js";
 
 // Identity viewport transform keeps the on-screen math equal to the raw
 // item transform, so expected rects can be worked out by hand.
@@ -53,5 +53,19 @@ describe("computeHighlightRectsForItemIndexes — substring-only highlighting (i
     expect(rects[0].width).toBe(40);
     expect(rects[1].x).toBe(40);
     expect(rects[1].width).toBeCloseTo(30, 5); // half of the 60-wide item
+  });
+});
+
+describe("computeHighlightRectsForCanonicalBboxes", () => {
+  it("computes one rect per canonical bbox, scaled by pageViewport.scale", () => {
+    const rects = computeHighlightRectsForCanonicalBboxes([[10, 20, 60, 40], [0, 0, 5, 5]], { scale: 2 });
+    expect(rects).toHaveLength(2);
+    expect(rects[0]).toEqual({ x: 20, y: 40, width: 100, height: 40 });
+    expect(rects[1]).toEqual({ x: 0, y: 0, width: 10, height: 10 });
+  });
+
+  it("returns an empty array when given no bboxes or no viewport", () => {
+    expect(computeHighlightRectsForCanonicalBboxes([], { scale: 1 })).toEqual([]);
+    expect(computeHighlightRectsForCanonicalBboxes([[0, 0, 1, 1]], null)).toEqual([]);
   });
 });
