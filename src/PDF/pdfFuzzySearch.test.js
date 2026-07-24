@@ -170,4 +170,23 @@ describe("pdfFuzzySearch — result mapping stays anchored to the real original 
     const r = searchOnce(["myoc", "ardial", "infar", "ction"], "myocardial infarction");
     expect(r[0].itemIndexes).toEqual([0, 1, 2, 3]);
   });
+
+  it("resolves itemRanges to just the matched substring's own span within a longer single item", () => {
+    // "heart" is only the first 5 of this item's 13 characters ("heart failure") —
+    // the highlighter should be told to draw a rect over those 5 characters,
+    // not the whole item's width.
+    const r = searchOnce(["heart failure"], "heart");
+    expect(r[0].itemIndexes).toEqual([0]);
+    expect(r[0].itemRanges).toEqual([{ itemIndex: 0, localStart: 0, localEnd: 5, itemLength: 13 }]);
+  });
+
+  it("resolves itemRanges per-item when a match spans multiple items, not just the outer item indexes", () => {
+    const r = searchOnce(["myoc", "ardial", "infar", "ction"], "myocardial infarction");
+    expect(r[0].itemRanges).toEqual([
+      { itemIndex: 0, localStart: 0, localEnd: 4, itemLength: 4 },
+      { itemIndex: 1, localStart: 0, localEnd: 6, itemLength: 6 },
+      { itemIndex: 2, localStart: 0, localEnd: 5, itemLength: 5 },
+      { itemIndex: 3, localStart: 0, localEnd: 5, itemLength: 5 },
+    ]);
+  });
 });

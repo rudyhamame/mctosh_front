@@ -27,10 +27,27 @@ const multiplyTransform = (viewportTransform, itemTransform) => {
  * pageViewport.transform. Skips (does not throw on) missing items or
  * degenerate font sizes — same tolerant behavior the original inline
  * search-highlight code had.
+ *
+ * `itemRanges` (optional) is the per-item [localStart, localEnd)/
+ * itemLength data from pdfTextMapping.js's originalRangeToItemIndexes —
+ * when an item has an entry there, only the fraction of its width
+ * covered by [localStart, localEnd) is drawn, so a match that's just one
+ * word inside a longer text item (or only partially covers its first/
+ * last item) highlights that word rather than the item's whole line.
+ * Character positions are assumed roughly proportional to on-screen
+ * width (reasonable for the short, mostly-monospaced-enough spans a
+ * search match spans — exact per-glyph advances aren't available from
+ * PDF.js's plain text-content items). Callers that don't pass
+ * `itemRanges` (Narrative Mode's jump-to-source flash, the layout debug
+ * overlay) keep the original whole-item behavior.
  */
-export const computeHighlightRectsForItemIndexes = (itemIndexes, pageTextItems, viewportTransform) => {
+export const computeHighlightRectsForItemIndexes = (itemIndexes, pageTextItems, viewportTransform, itemRanges) => {
   if (!pageTextItems || !viewportTransform || !itemIndexes?.length) return [];
   const scale = Math.hypot(viewportTransform[0], viewportTransform[1]);
+  const rangeByIndex = new Map();
+  if (itemRanges?.length) {
+    for (const r of itemRanges) rangeByIndex.set(r.itemIndex, r);
+  }
   const rects = [];
   for (const itemIndex of itemIndexes) {
     const item = pageTextItems[itemIndex];
@@ -38,10 +55,18 @@ export const computeHighlightRectsForItemIndexes = (itemIndexes, pageTextItems, 
     const tx = multiplyTransform(viewportTransform, item.transform);
     const fontSize = Math.hypot(tx[0], tx[1]);
     if (fontSize < 1) continue;
+
+    let startFrac = 0, endFrac = 1;
+    const range = rangeByIndex.get(itemIndex);
+    if (range && range.itemLength > 0) {
+      startFrac = range.localStart / range.itemLength;
+      endFrac = range.localEnd / range.itemLength;
+    }
+    const fullWidth = item.width * scale;
     rects.push({
-      x: tx[4],
+      x: tx[4] + startFrac * fullWidth,
       y: tx[5] - fontSize * 0.85,
-      width: Math.max(2, item.width * scale),
+      width: Math.max(2, (endFrac - startFrac) * fullWidth),
       height: fontSize * 1.05,
       itemIndex,
     });

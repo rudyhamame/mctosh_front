@@ -209,12 +209,16 @@ const allIndexesOf = (haystack, needle) => {
 };
 
 /**
- * Builds a { start, end, itemIndexes, originalMatchedText,
+ * Builds a { start, end, itemIndexes, itemRanges, originalMatchedText,
  * normalizedMatchedText } result from an original-text range.
  * itemIndexes is every PDF.js item index behind that range, sorted
  * ascending — NOT necessarily numerically contiguous (reading-order
  * reconstruction, see pdfPageLayout.js), so callers must iterate the
  * array rather than assume a [min,max] loop covers exactly the right set.
+ * itemRanges carries each item's own [localStart, localEnd)/itemLength
+ * within that item's text (see originalRangeToItemIndexes), so the
+ * highlighter can draw a rect over just the matched substring of an item
+ * rather than the item's full width.
  */
 const buildResultFromOriginalRange = (pageIndex, origStart, origEnd, extra) => {
   const items = originalRangeToItemIndexes(pageIndex, origStart, origEnd);
@@ -224,6 +228,7 @@ const buildResultFromOriginalRange = (pageIndex, origStart, origEnd, extra) => {
     originalEndIndex: origEnd,
     originalMatchedText: pageIndex.originalText.slice(origStart, origEnd),
     itemIndexes: items?.itemIndexes ?? [],
+    itemRanges: items?.itemRanges ?? [],
     ...extra,
   };
 };

@@ -21,6 +21,7 @@ import { normalizeQuery, searchPageForQuery } from "./pdfFuzzySearch.js";
 import { correctSelectedPdfText } from "./pdfTextCorrection.js";
 import { analyzePageLayout } from "./pdfPageLayout.js";
 import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
+import { buildRawHyle, buildSegmentedHyle } from "./pdfHyleStats.js";
 import { resolveDocumentId } from "./pdfPageStructureClient.js";
 import { capturePageImageDataUrl } from "./pdfPageImageCapture.js";
 import { itemIndexesForSegment } from "./pdfSegmentTree.js";
@@ -1162,11 +1163,16 @@ const PDFPage = forwardRef(({
   const [bookletRightPage, setBookletRightPage] = useState(null);
   const [insertingBlankPage, setInsertingBlankPage] = useState(false);
   const [deletingPage, setDeletingPage] = useState(false);
-  // Page numbers this reading session itself inserted blank via the toolbar
+  // Page numbers this source has ever had inserted blank via the toolbar
   // button — the ONLY pages eligible for the page-corner Delete button
   // (arbitrary real content can't be one-click-deleted, only a blank page
-  // just added can). Client-side/session-only, not persisted — re-derived
-  // fresh each time a page is inserted/deleted, not restored on reload.
+  // added this way can). Backed by Source.blankPages server-side (kept in
+  // sync by insert-page/delete-page in SourcesAPI.js) and re-seeded from
+  // there every time loadFromSource fetches the source's own row, so the
+  // Delete button keeps showing for a blank page across reloads/reopens —
+  // this local Set is just a fast-access mirror, updated optimistically
+  // by insertBlankPageAfterCurrent/deletePageAtCurrent below and then
+  // reconfirmed by that fetch once their own reload completes.
   const [blankInsertedPages, setBlankInsertedPages] = useState(() => new Set());
 
   // ── Document text search ────────────────────────────────────────────────
@@ -1187,7 +1193,10 @@ const PDFPage = forwardRef(({
   const pageIndexCacheRef = useRef(createPageIndexCache());
   const searchCanvasRef = useRef(null);
   const narrativeCanvasRef = useRef(null);
+  const hyleCanvasRef = useRef(null);
+  const hyleFabRef = useRef(null);
   const searchRunIdRef = useRef(0);
+  const hyleRunIdRef = useRef(0);
   const [hasSourceId, setHasSourceId] = useState(false); // mirrors currentSourceIdRef.current — see loadPdfBytes/loadFromSource for why a plain ref isn't enough here
   const [pdfType, setPdfType]       = useState(null);
   useEffect(() => { onPdfTypeChange?.(pdfType); }, [pdfType]); // eslint-disable-line react-hooks/exhaustive-deps -- onPdfTypeChange is a stable-enough callback prop, not a reactive dep
@@ -1785,6 +1794,27 @@ const PDFPage = forwardRef(({
 
   const toggleNarrativeView = useCallback(() => setNarrativeViewOpen((open) => !open), []);
   const toggleNarrativeDebugOverlay = useCallback(() => setNarrativeDebugOverlayOn((v) => !v), []);
+
+  // ── AMCTOSHS Hyle layers (floating button, bottom-left of the canvas) ───
+  // Per this app's own AMCTOSHS vocabulary — a word/page is Hyle
+  // (undifferentiated matter) until form is imposed on it. Two read-only
+  // views onto the CURRENT page's own text, computed purely client-side
+  // from PDF.js's text items (pdfHyleStats.js) — no AI call, no backend
+  // round-trip, unlike Hyles/Narrative Mode:
+  //   "raw"       — every PDF.js item as extracted, no layout imposed.
+  //   "segmented" — the page's own geometric line/column structure, each
+  //                 line's word count and each word's own char count.
+  const [hyleFabOpen, setHyleFabOpen] = useState(false);
+  const [hyleMode, setHyleMode] = useState(null); // null | "raw" | "segmented"
+  // Named distinctly from the existing hyleData/setHyleData state above
+  // (the Hyles noun-extraction feature) — same "Hyle" vocabulary, but a
+  // completely separate, purely client-side view, not to be confused.
+  const [hyleLayerData, setHyleLayerData] = useState(null); // whatever pdfHyleStats.js returned for hyleMode, or null while loading/off
+
+  const selectHyleMode = useCallback((mode) => {
+    setHyleMode((prev) => (prev === mode ? null : mode));
+    setHyleFabOpen(false);
+  }, []);
 
   const flashHighlightForItemIndexes = useCallback((itemIndexes) => {
     if (!itemIndexes?.length) return;
@@ -2893,15 +2923,19 @@ const PDFPage = forwardRef(({
       // -> compact/whitespace-and-hyphen-insensitive -> scientific-alias ->
       // token-aware -> fuzzy, safest first. Every result already carries
       // its exact originalText range mapped back through those stages, so
-      // this still resolves to the same {page, itemIndexes} shape the
-      // highlight-drawing effect below expects, plus matchType/confidence
-      // for the "Likely match" indicator in the search bar (spec: search
-      // the normalized/compact representation, but always highlight the
-      // untouched original PDF text). itemIndexes is every PDF.js item
-      // behind the match, NOT necessarily numerically contiguous — the
-      // search index is now built in true reading order (pdfPageLayout.js),
-      // so a multi-column page's item stream order can differ from
-      // reading order; see originalRangeToItemIndexes's own comment.
+      // this still resolves to the same {page, itemIndexes, itemRanges}
+      // shape the highlight-drawing effect below expects, plus matchType/
+      // confidence for the "Likely match" indicator in the search bar
+      // (spec: search the normalized/compact representation, but always
+      // highlight the untouched original PDF text). itemIndexes is every
+      // PDF.js item behind the match, NOT necessarily numerically
+      // contiguous — the search index is now built in true reading order
+      // (pdfPageLayout.js), so a multi-column page's item stream order can
+      // differ from reading order; see originalRangeToItemIndexes's own
+      // comment. itemRanges is that same function's per-item
+      // [localStart, localEnd) match offset, used to draw a highlight rect
+      // over just the matched substring of an item rather than its whole
+      // width.
       const queryRepr = normalizeQuery(searchQuery);
       const results = [];
       for (let n = 1; n <= pageCount; n++) {
@@ -2915,6 +2949,7 @@ const PDFPage = forwardRef(({
           results.push({
             page: n,
             itemIndexes: r.itemIndexes,
+            itemRanges: r.itemRanges,
             matchType: r.matchType,
             confidence: r.confidence,
             originalMatchedText: r.originalMatchedText,
@@ -2943,9 +2978,11 @@ const PDFPage = forwardRef(({
   // Draws highlight rects for every match on the CURRENT page (the active
   // one in a stronger color, matching browser Ctrl+F conventions) — sized/
   // positioned the same way the Manual-mode text layer above computes a
-  // text item's on-screen box (viewport.transform × item.transform), just
-  // at whole-item granularity rather than split into words, since that's
-  // all a search match needs.
+  // text item's on-screen box (viewport.transform × item.transform), but
+  // clipped to just the matched substring's own share of each item's
+  // width (m.itemRanges) rather than the item's full line, so e.g.
+  // searching "heart" inside a paragraph highlights only "heart", not the
+  // whole sentence it sits in.
   useEffect(() => {
     const canvas = searchCanvasRef.current;
     if (!canvas || !pageViewport) return;
@@ -2979,7 +3016,7 @@ const PDFPage = forwardRef(({
       // multi-column page, so looping a min..max range could draw the
       // wrong items (or skip real ones) for a match that crosses a
       // reading-order reordering. See originalRangeToItemIndexes.
-      for (const rect of computeHighlightRectsForItemIndexes(m.itemIndexes, items, vt)) {
+      for (const rect of computeHighlightRectsForItemIndexes(m.itemIndexes, items, vt, m.itemRanges)) {
         ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
       }
     });
@@ -3062,6 +3099,85 @@ const PDFPage = forwardRef(({
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [pageViewport, pageNum, narrativeDebugOverlayOn, narrativeActiveStructure, narrativeFlashItemIndexes, getPageTextItems]);
+
+  // Computes the active AMCTOSHS Hyle layer's data (pdfHyleStats.js, pure/
+  // client-side) for the current page and draws its overlay boxes on the
+  // dedicated #pdf_hyle_canvas — same canvas-sizing convention as the
+  // search/Narrative-Mode overlays above. Segmented Hyle's bboxes come
+  // back already in viewport-space (buildSegmentedHyle was given
+  // pageViewport.transform), so they're drawn directly with no per-item
+  // rect lookup, unlike the item-index-based overlays elsewhere.
+  useEffect(() => {
+    const canvas = hyleCanvasRef.current;
+    if (!canvas || !pageViewport) return;
+    const backingScale = currentBackingScaleRef.current || 1;
+    canvas.width  = Math.max(1, Math.floor(pageViewport.width * backingScale));
+    canvas.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
+    canvas.style.width  = `${pageViewport.width}px`;
+    canvas.style.height = `${pageViewport.height}px`;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
+    if (!hyleMode) { setHyleLayerData(null); return; }
+
+    const runId = ++hyleRunIdRef.current;
+    const vt = pageViewport.transform;
+    getPageTextItems(pageNum).then((items) => {
+      if (!items || hyleRunIdRef.current !== runId) return;
+
+      if (hyleMode === "raw") {
+        const raw = buildRawHyle(items);
+        setHyleLayerData({ mode: "raw", pageNum, ...raw });
+        // Raw Hyle's visual counterpart: every individual item boxed on
+        // its own, unlabeled and un-merged — the literal unprocessed
+        // substrate, deliberately NOT grouped into lines like Segmented
+        // Hyle's boxes below.
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "rgba(158,158,158,0.7)";
+        for (const rect of computeHighlightRectsForItemIndexes(raw.items.map((it) => it.itemIndex), items, vt)) {
+          ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+        }
+        return;
+      }
+
+      // hyleMode === "segmented"
+      const segmented = buildSegmentedHyle(items, vt);
+      setHyleLayerData({ mode: "segmented", pageNum, ...segmented });
+      // Proportional to pageViewport.scale (= fitScale * zoom, the exact
+      // same factor the boxes' own coordinates already scale by) with only
+      // a bare legibility floor and no ceiling — a tight [7,16] clamp here
+      // previously made the label size diverge from the (unclamped) boxes
+      // at either end of the zoom range: at 50% zoom the floor kept text
+      // from shrinking as much as the content around it (reading oversized
+      // relative to it), and at 200% zoom the ceiling kept it from growing
+      // as much (reading undersized) — confirmed live at both extremes.
+      const debugFontPx = Math.max(4, 9 * (pageViewport.scale || 1));
+      ctx.font = `${debugFontPx}px sans-serif`;
+      segmented.segments.forEach((seg, i) => {
+        const { x, y, width, height } = seg.bbox;
+        if (width <= 0 || height <= 0) return;
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = "rgba(126,87,194,0.8)"; // matches Molecules' domain accent elsewhere in the app
+        ctx.strokeRect(x, y, width, height);
+        ctx.fillStyle = "rgba(126,87,194,0.95)";
+        ctx.fillText(`L${i + 1} · ${seg.wordCount}w/${seg.charCount}c`, x + 2, Math.max(debugFontPx, y - 2));
+      });
+    }).catch(() => {});
+  }, [pageViewport, pageNum, hyleMode, getPageTextItems]);
+
+  // Dismiss the Hyle mode dropup when clicking outside it.
+  useEffect(() => {
+    if (!hyleFabOpen) return;
+    const handler = (e) => {
+      if (hyleFabRef.current && !hyleFabRef.current.contains(e.target)) setHyleFabOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
+  }, [hyleFabOpen]);
 
   const runDrawToTextRecognition = useCallback(async (selection) => {
     const pageCanvas = canvasRef.current;
@@ -5806,9 +5922,20 @@ const PDFPage = forwardRef(({
           const srcData = await srcRes.json();
           const source = srcData.source || {};
           setHasStoredMarkdown(Boolean(source.markdown) || (Array.isArray(source.markdownPages) && source.markdownPages.some((page) => String(page || "").trim())));
+          // Authoritative, server-persisted set of blank pages this source
+          // has ever had inserted (see blankPages on the Source model) —
+          // always applied here (not just on a genuine document switch)
+          // so the page-corner Delete button keeps showing for a blank
+          // page across reloads/reopens, not just for the rest of the
+          // session it was added in. Runs after insert/delete-page's own
+          // reload too, where it just re-confirms the optimistic local
+          // update those handlers already made.
+          setBlankInsertedPages(new Set(Array.isArray(source.blankPages) ? source.blankPages : []));
         }
       } catch {
-        // best-effort — MD button just stays disabled if this check fails
+        // best-effort — MD button just stays disabled if this check fails,
+        // and blankInsertedPages is left at whatever loadFromSource's own
+        // sourceId-change reset (below) already set it to.
       }
 
       // Restore any annotation session previously auto-saved for this source —
@@ -5891,9 +6018,11 @@ const PDFPage = forwardRef(({
   // still always call the LATEST version of this closure.
   useEffect(() => { insertBlankPageRef.current = insertBlankPageAfterCurrent; }, [insertBlankPageAfterCurrent]);
 
-  // Deletes the currently-viewed page outright — but ONLY a page this same
-  // session inserted blank via the button above (blankInsertedPages), so
-  // this is strictly an "undo my own insert," never a way to one-click
+  // Deletes the currently-viewed page outright — but ONLY a page this
+  // source has had inserted blank via the button above (blankInsertedPages,
+  // persisted server-side so it's not limited to the session it was added
+  // in), so this is strictly an "undo a blank insert," never a way to
+  // one-click
   // remove real, pre-existing document content. Same server-side pdf-lib
   // edit + reload shape as insertBlankPageAfterCurrent, just shifting
   // every later page's annotation layer DOWN by one instead of up, and
@@ -8069,6 +8198,7 @@ const PDFPage = forwardRef(({
                       <canvas id="pdf_mask_canvas" ref={maskCanvasRef} />
                       <canvas id="pdf_search_canvas" ref={searchCanvasRef} />
                       <canvas id="pdf_narrative_canvas" ref={narrativeCanvasRef} />
+                      <canvas id="pdf_hyle_canvas" ref={hyleCanvasRef} />
                       {createPortal(
                         <div ref={eraserCursorRef} className="eraser_cursor_circle" />,
                         document.body,
@@ -8325,6 +8455,104 @@ const PDFPage = forwardRef(({
             <div id="pdf_selected_text_preview" title={manualSelection.text}>
               <span id="pdf_selected_text_preview_label">Selected text</span>
               <span id="pdf_selected_text_preview_body">{manualSelection.text}</span>
+            </div>
+          )}
+          {pdfDoc && (
+            <div id="pdf_hyle_fab_wrap" ref={hyleFabRef}>
+              {hyleMode && hyleLayerData && hyleLayerData.mode === hyleMode && hyleLayerData.pageNum === pageNum && (
+                <div id="pdf_hyle_panel">
+                  <div id="pdf_hyle_panel_head">
+                    <span id="pdf_hyle_panel_title">
+                      {hyleMode === "raw" ? "AMCTOSHS Raw Hyle" : "AMCTOSHS Segmented Hyle"}
+                    </span>
+                    <button type="button" id="pdf_hyle_panel_close" onClick={() => setHyleMode(null)} title="Close">
+                      <i className="bx bx-x" />
+                    </button>
+                  </div>
+                  <div id="pdf_hyle_panel_meta">
+                    Page {pageNum}
+                    {hyleMode === "raw"
+                      ? ` · ${hyleLayerData.items.length} item${hyleLayerData.items.length !== 1 ? "s" : ""} · no structure imposed`
+                      : ` · ${hyleLayerData.lineCount} line${hyleLayerData.lineCount !== 1 ? "s" : ""}`}
+                  </div>
+                  <div id="pdf_hyle_panel_body">
+                    {hyleMode === "raw" ? (
+                      hyleLayerData.items.length === 0 ? (
+                        <p className="pdf_hyle_empty">No extractable text on this page.</p>
+                      ) : (
+                        <ol id="pdf_hyle_raw_list">
+                          {hyleLayerData.items.map((it) => (
+                            <li key={it.itemIndex}>
+                              <span className="pdf_hyle_raw_index">{it.itemIndex}</span>
+                              <span className="pdf_hyle_raw_text">{it.text}</span>
+                            </li>
+                          ))}
+                        </ol>
+                      )
+                    ) : (
+                      hyleLayerData.segments.length === 0 ? (
+                        <p className="pdf_hyle_empty">No lines detected on this page.</p>
+                      ) : (
+                        <ol id="pdf_hyle_seg_list">
+                          {hyleLayerData.segments.map((seg, i) => (
+                            <li key={seg.index}>
+                              <div className="pdf_hyle_seg_head">
+                                <span className="pdf_hyle_seg_line">Line {i + 1}</span>
+                                <span className="pdf_hyle_seg_count">{seg.wordCount} word{seg.wordCount !== 1 ? "s" : ""}</span>
+                                <span className="pdf_hyle_seg_count">{seg.charCount} char{seg.charCount !== 1 ? "s" : ""}</span>
+                              </div>
+                              {seg.words.length > 0 && (
+                                <div className="pdf_hyle_seg_words">
+                                  {seg.words.map((w, wi) => (
+                                    <span className="pdf_hyle_word" key={wi}>
+                                      {w.text}<sup>{w.chars}</sup>
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ol>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+              {hyleFabOpen && (
+                <div id="pdf_hyle_menu" role="menu" aria-label="AMCTOSHS Hyle layers">
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={hyleMode === "raw"}
+                    className={hyleMode === "raw" ? "pdf_hyle_menu_item pdf_hyle_menu_item--active" : "pdf_hyle_menu_item"}
+                    onClick={() => selectHyleMode("raw")}
+                  >
+                    <i className="bx bx-shape-square" />
+                    <span>Raw Hyle mode</span>
+                    {hyleMode === "raw" && <i className="bx bx-check pdf_hyle_menu_check" />}
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={hyleMode === "segmented"}
+                    className={hyleMode === "segmented" ? "pdf_hyle_menu_item pdf_hyle_menu_item--active" : "pdf_hyle_menu_item"}
+                    onClick={() => selectHyleMode("segmented")}
+                  >
+                    <i className="bx bx-layer" />
+                    <span>Segmented Hyle mode</span>
+                    {hyleMode === "segmented" && <i className="bx bx-check pdf_hyle_menu_check" />}
+                  </button>
+                </div>
+              )}
+              <button
+                type="button"
+                id="pdf_hyle_fab_btn"
+                className={hyleMode ? "pdf_hyle_fab_btn--active" : undefined}
+                onClick={() => setHyleFabOpen((v) => !v)}
+                title="AMCTOSHS Hyle layers"
+              >
+                <i className="bx bx-shapes" />
+              </button>
             </div>
           )}
           {pdfDoc && pageMinimap.length > 0 && (

@@ -101,17 +101,37 @@ export const compactRangeToOriginal = (pageIndex, start, end) => {
  * different reading-order block), so callers (the search-result ->
  * highlight-rect path) must iterate the actual returned set rather than
  * loop firstIndex..lastIndex.
+ *
+ * Also returns `itemRanges`: for each overlapping item, the match's own
+ * [localStart, localEnd) offset WITHIN that item's text plus the item's
+ * total length (`itemLength`, i.e. `o.end - o.start`, which is always
+ * exactly `item.str.length` — see blockToText in pdfPageLayout.js, which
+ * never trims/splits an item's text before recording its offsets). This
+ * is what lets a highlight rect be drawn over just the matched characters
+ * of an item instead of the item's full width, when an item is only
+ * partially covered by the match (its first/last item in a multi-item
+ * match, or the only item when a short query matches inside one long
+ * item's text).
  */
 export const originalRangeToItemIndexes = (pageIndex, origStart, origEnd) => {
   const offsets = pageIndex?.itemOffsets;
   if (!offsets || !offsets.length) return null;
-  const itemIndexes = [];
+  const ranges = [];
   // Linear scan: item counts per page are small (tens to low hundreds),
   // and this only runs once per surfaced match, not per candidate window.
   for (const o of offsets) {
-    if (origStart < o.end && origEnd > o.start) itemIndexes.push(o.itemIndex);
+    if (origStart < o.end && origEnd > o.start) {
+      const intersStart = Math.max(origStart, o.start);
+      const intersEnd = Math.min(origEnd, o.end);
+      ranges.push({
+        itemIndex: o.itemIndex,
+        localStart: intersStart - o.start,
+        localEnd: intersEnd - o.start,
+        itemLength: o.end - o.start,
+      });
+    }
   }
-  if (!itemIndexes.length) return null;
-  itemIndexes.sort((a, b) => a - b);
-  return { itemIndexes };
+  if (!ranges.length) return null;
+  ranges.sort((a, b) => a.itemIndex - b.itemIndex);
+  return { itemIndexes: ranges.map((r) => r.itemIndex), itemRanges: ranges };
 };
