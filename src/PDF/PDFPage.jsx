@@ -21,7 +21,7 @@ import { normalizeQuery, searchPageForQuery } from "./pdfFuzzySearch.js";
 import { correctSelectedPdfText } from "./pdfTextCorrection.js";
 import { analyzePageLayout } from "./pdfPageLayout.js";
 import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
-import { buildRawHyle, buildSegmentedHyle } from "./pdfHyleStats.js";
+import { buildRawHyle, buildSegmentedHyle, computeMarkerPosition } from "./pdfHyleStats.js";
 import { resolveDocumentId } from "./pdfPageStructureClient.js";
 import { capturePageImageDataUrl } from "./pdfPageImageCapture.js";
 import { itemIndexesForSegment } from "./pdfSegmentTree.js";
@@ -1195,6 +1195,7 @@ const PDFPage = forwardRef(({
   const narrativeCanvasRef = useRef(null);
   const hyleCanvasRef = useRef(null);
   const hyleFabRef = useRef(null);
+  const hyleIconsLayerRef = useRef(null);
   const searchRunIdRef = useRef(0);
   const hyleRunIdRef = useRef(0);
   const [hasSourceId, setHasSourceId] = useState(false); // mirrors currentSourceIdRef.current — see loadPdfBytes/loadFromSource for why a plain ref isn't enough here
@@ -1797,22 +1798,32 @@ const PDFPage = forwardRef(({
 
   // ── AMCTOSHS Hyle layers (floating button, bottom-left of the canvas) ───
   // Per this app's own AMCTOSHS vocabulary — a word/page is Hyle
-  // (undifferentiated matter) until form is imposed on it. Two read-only
-  // views onto the CURRENT page's own text, computed purely client-side
-  // from PDF.js's text items (pdfHyleStats.js) — no AI call, no backend
-  // round-trip, unlike Hyles/Narrative Mode:
-  //   "raw"       — every PDF.js item as extracted, no layout imposed.
+  // (undifferentiated matter) until form is imposed on it. Two views onto
+  // the CURRENT page's own text, computed purely client-side from PDF.js's
+  // text items (pdfHyleStats.js) — no AI call, no backend round-trip,
+  // unlike Hyles/Narrative Mode:
+  //   "raw"       — every PDF.js item exactly as extracted, no layout
+  //                 imposed — and, faithful to that, no visual imposed on
+  //                 the page either: this mode draws NOTHING on the
+  //                 canvas, the page stays exactly as-is. It's the
+  //                 default for that reason — selecting it is a true
+  //                 no-op on the page's own appearance.
   //   "segmented" — the page's own geometric line/column structure, each
-  //                 line's word count and each word's own char count.
+  //                 line's word count and each word's own char count,
+  //                 drawn as boxes + numbered markers (form actually
+  //                 imposed on the page).
   const [hyleFabOpen, setHyleFabOpen] = useState(false);
-  const [hyleMode, setHyleMode] = useState(null); // null | "raw" | "segmented"
+  const [hyleMode, setHyleMode] = useState("raw"); // "raw" | "segmented" (never null — Raw is always the default/active layer)
   // Named distinctly from the existing hyleData/setHyleData state above
   // (the Hyles noun-extraction feature) — same "Hyle" vocabulary, but a
   // completely separate, purely client-side view, not to be confused.
   const [hyleLayerData, setHyleLayerData] = useState(null); // whatever pdfHyleStats.js returned for hyleMode, or null while loading/off
 
+  // "raw" is the resting/default state (draws nothing — see the drawing
+  // effect below), so toggling the active mode off lands back on "raw"
+  // rather than null; hyleMode is never null.
   const selectHyleMode = useCallback((mode) => {
-    setHyleMode((prev) => (prev === mode ? null : mode));
+    setHyleMode((prev) => (prev === mode ? "raw" : mode));
     setHyleFabOpen(false);
   }, []);
 
@@ -3101,12 +3112,20 @@ const PDFPage = forwardRef(({
   }, [pageViewport, pageNum, narrativeDebugOverlayOn, narrativeActiveStructure, narrativeFlashItemIndexes, getPageTextItems]);
 
   // Computes the active AMCTOSHS Hyle layer's data (pdfHyleStats.js, pure/
-  // client-side) for the current page and draws its overlay boxes on the
-  // dedicated #pdf_hyle_canvas — same canvas-sizing convention as the
-  // search/Narrative-Mode overlays above. Segmented Hyle's bboxes come
-  // back already in viewport-space (buildSegmentedHyle was given
-  // pageViewport.transform), so they're drawn directly with no per-item
-  // rect lookup, unlike the item-index-based overlays elsewhere.
+  // client-side) for the current page and, for Segmented Hyle only, draws
+  // its overlay boxes on the dedicated #pdf_hyle_canvas — same canvas-
+  // sizing convention as the search/Narrative-Mode overlays above. Raw
+  // Hyle draws NOTHING: it's the page's raw substrate before any form is
+  // imposed, so — faithful to that — selecting it never changes how the
+  // page itself looks; data is still computed (for whatever reads it),
+  // just never painted. Segmented Hyle's bboxes come back already in
+  // viewport-space (buildSegmentedHyle was given pageViewport.transform),
+  // so they're drawn directly with no per-item rect lookup, unlike the
+  // item-index-based overlays elsewhere. Boxes only, no text labels here —
+  // per-line detail is shown on demand via a clickable numbered marker (a
+  // DOM layer, not canvas — see hyleIconPositions and
+  // #pdf_hyle_icons_layer below), not drawn unconditionally over the
+  // page's own text.
   useEffect(() => {
     const canvas = hyleCanvasRef.current;
     if (!canvas || !pageViewport) return;
@@ -3118,7 +3137,6 @@ const PDFPage = forwardRef(({
     const ctx = canvas.getContext("2d");
     ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
     ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-    if (!hyleMode) { setHyleLayerData(null); return; }
 
     const runId = ++hyleRunIdRef.current;
     const vt = pageViewport.transform;
@@ -3126,44 +3144,83 @@ const PDFPage = forwardRef(({
       if (!items || hyleRunIdRef.current !== runId) return;
 
       if (hyleMode === "raw") {
-        const raw = buildRawHyle(items);
-        setHyleLayerData({ mode: "raw", pageNum, ...raw });
-        // Raw Hyle's visual counterpart: every individual item boxed on
-        // its own, unlabeled and un-merged — the literal unprocessed
-        // substrate, deliberately NOT grouped into lines like Segmented
-        // Hyle's boxes below.
-        ctx.lineWidth = 1;
-        ctx.strokeStyle = "rgba(158,158,158,0.7)";
-        for (const rect of computeHighlightRectsForItemIndexes(raw.items.map((it) => it.itemIndex), items, vt)) {
-          ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
-        }
-        return;
+        setHyleLayerData({ mode: "raw", pageNum, ...buildRawHyle(items) });
+        return; // no drawing — the page stays exactly as-is at this layer
       }
 
       // hyleMode === "segmented"
       const segmented = buildSegmentedHyle(items, vt);
       setHyleLayerData({ mode: "segmented", pageNum, ...segmented });
-      // Proportional to pageViewport.scale (= fitScale * zoom, the exact
-      // same factor the boxes' own coordinates already scale by) with only
-      // a bare legibility floor and no ceiling — a tight [7,16] clamp here
-      // previously made the label size diverge from the (unclamped) boxes
-      // at either end of the zoom range: at 50% zoom the floor kept text
-      // from shrinking as much as the content around it (reading oversized
-      // relative to it), and at 200% zoom the ceiling kept it from growing
-      // as much (reading undersized) — confirmed live at both extremes.
-      const debugFontPx = Math.max(4, 9 * (pageViewport.scale || 1));
-      ctx.font = `${debugFontPx}px sans-serif`;
-      segmented.segments.forEach((seg, i) => {
+
+      // Deliberately line-level only — no paragraph/article grouping
+      // container of any kind (an earlier version drew nested "article"
+      // and "paragraph" tiers around groups of lines; removed at the
+      // user's explicit request — "delete all logic of grouping lines in
+      // containers" — after that grouping repeatedly misgrouped real
+      // content). Each line stands alone as its own container.
+      //
+      // One vertical separator per detected column gutter (see
+      // buildSegmentedHyle's own comment on columnGutterXs) — drawn
+      // FIRST so the line boxes paint on top of it, spanning the full
+      // page height rather than just the content extent, since a gutter
+      // is a page-wide structural feature, not tied to any one line.
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(38,198,218,0.7)"; // cyan — matches the AMCTOSHS Morphe accent elsewhere in the app, distinct from the line boxes below
+      for (const gx of segmented.columnGutterXs || []) {
+        ctx.beginPath();
+        ctx.moveTo(gx, 0);
+        ctx.lineTo(gx, pageViewport.height);
+        ctx.stroke();
+      }
+
+      ctx.setLineDash([]);
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = "rgba(126,87,194,0.8)"; // matches Molecules' domain accent elsewhere in the app
+      for (const seg of segmented.segments) {
         const { x, y, width, height } = seg.bbox;
-        if (width <= 0 || height <= 0) return;
-        ctx.lineWidth = 1.2;
-        ctx.strokeStyle = "rgba(126,87,194,0.8)"; // matches Molecules' domain accent elsewhere in the app
+        if (width <= 0 || height <= 0) continue;
         ctx.strokeRect(x, y, width, height);
-        ctx.fillStyle = "rgba(126,87,194,0.95)";
-        ctx.fillText(`L${i + 1} · ${seg.wordCount}w/${seg.charCount}c`, x + 2, Math.max(debugFontPx, y - 2));
-      });
+      }
     }).catch(() => {});
   }, [pageViewport, pageNum, hyleMode, getPageTextItems]);
+
+  // Where to place each line's numbered marker (a real DOM button, not
+  // canvas — needs to be clickable/focusable). EVERY line gets one, no
+  // exceptions, ALWAYS at the right end of its own line's own container
+  // (see computeMarkerPosition — no per-line above/below/fallback
+  // branching anymore, a numbered marker needs a predictable, scannable
+  // position from one line to the next, unlike an unlabeled dot).
+  // Recomputed whenever the segmented data itself changes; not tied to
+  // the draw effect above since it doesn't touch the canvas.
+  //
+  // The marker is part of the line's own container, not a separate
+  // floating badge beside it: a SQUARE (1:1) exactly as tall as that
+  // line's own box, flush against its right edge (gap 0) — so it reads
+  // as an extension of the container itself rather than an annotation
+  // hovering next to it. Each line's own box.height already scales with
+  // zoom (it comes straight from the SAME display-space bbox the line's
+  // own outline is drawn from), so sizing the marker off it is
+  // automatically zoom-proportional with no separate floor/gap constant
+  // to keep in sync — unlike the old shared fixed-size+gap marker, which
+  // needed its own scale-derived numbers kept perfectly aligned with the
+  // placement math to avoid the zoom-jitter bugs described in this
+  // module's git history.
+  const hyleIconPositions = useMemo(() => {
+    if (hyleMode !== "segmented" || !hyleLayerData || hyleLayerData.mode !== "segmented" || !pageViewport) return [];
+    const boxes = hyleLayerData.segments.map((s) => s.bbox);
+    const positions = [];
+    boxes.forEach((box, i) => {
+      const pos = computeMarkerPosition(i, boxes, pageViewport.width, box.height, 0);
+      if (pos) positions.push({ index: i, size: box.height, ...pos });
+    });
+    return positions;
+  }, [hyleMode, hyleLayerData, pageViewport]);
+
+  // Which line's detail popover is open (index into hyleLayerData.segments,
+  // or null) — one at a time, toggled by clicking its info icon.
+  const [hyleActiveSegment, setHyleActiveSegment] = useState(null);
+  useEffect(() => { setHyleActiveSegment(null); }, [hyleMode, pageNum]);
 
   // Dismiss the Hyle mode dropup when clicking outside it.
   useEffect(() => {
@@ -3178,6 +3235,21 @@ const PDFPage = forwardRef(({
       document.removeEventListener("touchstart", handler);
     };
   }, [hyleFabOpen]);
+
+  // Dismiss the open line-detail popover when clicking outside the icons
+  // layer (which also contains the popover itself).
+  useEffect(() => {
+    if (hyleActiveSegment === null) return;
+    const handler = (e) => {
+      if (hyleIconsLayerRef.current && !hyleIconsLayerRef.current.contains(e.target)) setHyleActiveSegment(null);
+    };
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler, { passive: true });
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
+  }, [hyleActiveSegment]);
 
   const runDrawToTextRecognition = useCallback(async (selection) => {
     const pageCanvas = canvasRef.current;
@@ -8199,6 +8271,59 @@ const PDFPage = forwardRef(({
                       <canvas id="pdf_search_canvas" ref={searchCanvasRef} />
                       <canvas id="pdf_narrative_canvas" ref={narrativeCanvasRef} />
                       <canvas id="pdf_hyle_canvas" ref={hyleCanvasRef} />
+                      {hyleMode === "segmented" && hyleLayerData?.mode === "segmented" && hyleLayerData.pageNum === pageNum && pageViewport && (
+                        <div
+                          id="pdf_hyle_icons_layer"
+                          ref={hyleIconsLayerRef}
+                          style={{ width: pageViewport.width, height: pageViewport.height }}
+                        >
+                          {hyleIconPositions.map(({ index, x, y, size }) => (
+                            <button
+                              key={index}
+                              type="button"
+                              className={`pdf_hyle_info_icon${hyleActiveSegment === index ? " pdf_hyle_info_icon--active" : ""}`}
+                              style={{
+                                left: x, top: y,
+                                width: size, height: size,
+                                fontSize: size * 0.55,
+                              }}
+                              onClick={() => setHyleActiveSegment((prev) => (prev === index ? null : index))}
+                              title={`Line ${index + 1} details`}
+                            >
+                              {index + 1}
+                            </button>
+                          ))}
+                          {hyleActiveSegment !== null && hyleLayerData.segments[hyleActiveSegment] && (() => {
+                            const seg = hyleLayerData.segments[hyleActiveSegment];
+                            const iconPos = hyleIconPositions.find((p) => p.index === hyleActiveSegment);
+                            if (!iconPos) return null;
+                            return (
+                              <div
+                                id="pdf_hyle_line_popover"
+                                style={{ left: iconPos.x, top: iconPos.y }}
+                              >
+                                <div id="pdf_hyle_line_popover_head">
+                                  <span>Line {hyleActiveSegment + 1}</span>
+                                  <span className="pdf_hyle_seg_count">{seg.wordCount} word{seg.wordCount !== 1 ? "s" : ""}</span>
+                                  <span className="pdf_hyle_seg_count">{seg.charCount} char{seg.charCount !== 1 ? "s" : ""}</span>
+                                  <button type="button" onClick={() => setHyleActiveSegment(null)} title="Close">
+                                    <i className="bx bx-x" />
+                                  </button>
+                                </div>
+                                {seg.words.length > 0 && (
+                                  <div className="pdf_hyle_seg_words">
+                                    {seg.words.map((w, wi) => (
+                                      <span className="pdf_hyle_word" key={wi}>
+                                        {w.text}<sup>{w.chars}</sup>
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      )}
                       {createPortal(
                         <div ref={eraserCursorRef} className="eraser_cursor_circle" />,
                         document.body,
@@ -8459,65 +8584,6 @@ const PDFPage = forwardRef(({
           )}
           {pdfDoc && (
             <div id="pdf_hyle_fab_wrap" ref={hyleFabRef}>
-              {hyleMode && hyleLayerData && hyleLayerData.mode === hyleMode && hyleLayerData.pageNum === pageNum && (
-                <div id="pdf_hyle_panel">
-                  <div id="pdf_hyle_panel_head">
-                    <span id="pdf_hyle_panel_title">
-                      {hyleMode === "raw" ? "AMCTOSHS Raw Hyle" : "AMCTOSHS Segmented Hyle"}
-                    </span>
-                    <button type="button" id="pdf_hyle_panel_close" onClick={() => setHyleMode(null)} title="Close">
-                      <i className="bx bx-x" />
-                    </button>
-                  </div>
-                  <div id="pdf_hyle_panel_meta">
-                    Page {pageNum}
-                    {hyleMode === "raw"
-                      ? ` · ${hyleLayerData.items.length} item${hyleLayerData.items.length !== 1 ? "s" : ""} · no structure imposed`
-                      : ` · ${hyleLayerData.lineCount} line${hyleLayerData.lineCount !== 1 ? "s" : ""}`}
-                  </div>
-                  <div id="pdf_hyle_panel_body">
-                    {hyleMode === "raw" ? (
-                      hyleLayerData.items.length === 0 ? (
-                        <p className="pdf_hyle_empty">No extractable text on this page.</p>
-                      ) : (
-                        <ol id="pdf_hyle_raw_list">
-                          {hyleLayerData.items.map((it) => (
-                            <li key={it.itemIndex}>
-                              <span className="pdf_hyle_raw_index">{it.itemIndex}</span>
-                              <span className="pdf_hyle_raw_text">{it.text}</span>
-                            </li>
-                          ))}
-                        </ol>
-                      )
-                    ) : (
-                      hyleLayerData.segments.length === 0 ? (
-                        <p className="pdf_hyle_empty">No lines detected on this page.</p>
-                      ) : (
-                        <ol id="pdf_hyle_seg_list">
-                          {hyleLayerData.segments.map((seg, i) => (
-                            <li key={seg.index}>
-                              <div className="pdf_hyle_seg_head">
-                                <span className="pdf_hyle_seg_line">Line {i + 1}</span>
-                                <span className="pdf_hyle_seg_count">{seg.wordCount} word{seg.wordCount !== 1 ? "s" : ""}</span>
-                                <span className="pdf_hyle_seg_count">{seg.charCount} char{seg.charCount !== 1 ? "s" : ""}</span>
-                              </div>
-                              {seg.words.length > 0 && (
-                                <div className="pdf_hyle_seg_words">
-                                  {seg.words.map((w, wi) => (
-                                    <span className="pdf_hyle_word" key={wi}>
-                                      {w.text}<sup>{w.chars}</sup>
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </li>
-                          ))}
-                        </ol>
-                      )
-                    )}
-                  </div>
-                </div>
-              )}
               {hyleFabOpen && (
                 <div id="pdf_hyle_menu" role="menu" aria-label="AMCTOSHS Hyle layers">
                   <button
@@ -8547,7 +8613,7 @@ const PDFPage = forwardRef(({
               <button
                 type="button"
                 id="pdf_hyle_fab_btn"
-                className={hyleMode ? "pdf_hyle_fab_btn--active" : undefined}
+                className={hyleMode === "segmented" ? "pdf_hyle_fab_btn--active" : undefined}
                 onClick={() => setHyleFabOpen((v) => !v)}
                 title="AMCTOSHS Hyle layers"
               >

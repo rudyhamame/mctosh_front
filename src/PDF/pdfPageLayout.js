@@ -153,12 +153,6 @@ export const buildLines = (items) => {
 // since this is a hard cutoff). 2.5x leaves headroom below that real
 // gutter while staying far above normal intra-word/intra-phrase gaps.
 const GUTTER_MIN_WIDTH_RATIO = 1.7;
-// Exported — pdfDocumentModel.js's low-confidence paragraph detection
-// reuses this exact same floor to flag a block whose OWN internal item
-// gap is wide enough to plausibly be an undetected column boundary that
-// the two-pass rough-gutter assignment (analyzePageLayout) nonetheless
-// grouped into one block, rather than inventing a second, independent
-// threshold that could silently drift out of sync with this one.
 export const computeGutterMinWidth = (avgHeight) => Math.max(16, avgHeight * GUTTER_MIN_WIDTH_RATIO);
 
 /**
@@ -321,12 +315,9 @@ export const classifyBlocks = (lines, gutterInfo) => {
  * Joins one block's own items into LOCAL text (offsets start at 0), using
  * the same convention pdfSearchIndex.js's originalText has always used:
  * "\n" after an item that really ends a line (item.hasEOL), " "
- * otherwise. Shared by pdfSearchIndex.js (which then adds its own forced
- * "\n" between whole blocks — a page-wide convention) and
- * pdfDocumentModel.js (which instead collapses multiple blocks into one
- * flowing paragraph with a single space between them) — only the
- * within-block joining rule is common to both, so only that part lives
- * here.
+ * otherwise. pdfSearchIndex.js then adds its own forced "\n" between
+ * whole blocks — a page-wide convention on top of this shared within-
+ * block joining rule.
  */
 export const blockToText = (block) => {
   let text = "";
