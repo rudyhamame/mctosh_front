@@ -199,35 +199,10 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
     const ribbon = buildStrokeRibbon(points, baseWidth, penType, settings);
     if (!ribbon) return;
     const flowLevel = clamp((settings?.flow ?? 38) / 100, 0, 1);
-    const showBorder = settings?.border !== false;
     ctx.save();
     traceRibbonPath(ribbon.left, ribbon.right);
     ctx.globalAlpha = penType === "fountain" ? 0.92 : 0.97;
     ctx.fill();
-
-    if (showBorder && penType === "ball") {
-      ctx.globalAlpha = 0.16 + flowLevel * 0.18;
-      ctx.lineWidth = Math.max(0.6, baseWidth * (0.14 + flowLevel * 0.1)) * s;
-      drawPolyline(points);
-      ctx.stroke();
-      if (flowLevel > 0.18) {
-        ctx.globalAlpha = 0.04 + flowLevel * 0.08;
-        ctx.lineWidth = Math.max(1, baseWidth * (1.15 + flowLevel * 0.75)) * s;
-        drawPolyline(points);
-        ctx.stroke();
-      }
-    }
-
-    if (showBorder && penType === "fountain") {
-      ctx.globalAlpha = 0.18 + flowLevel * 0.16;
-      ctx.lineWidth = Math.max(0.8, baseWidth * 0.18) * s;
-      drawPolyline(points);
-      ctx.stroke();
-      ctx.globalAlpha = 0.05 + flowLevel * 0.11;
-      ctx.lineWidth = Math.max(1, baseWidth * (1.7 + flowLevel * 1.1)) * s;
-      drawPolyline(points);
-      ctx.stroke();
-    }
     ctx.restore();
   };
   // perfect-freehand's own recommended smoothing recipe (average each
@@ -263,7 +238,6 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
     if (!points || points.length < 2) return;
     const flowLevel = clamp((settings?.flow ?? 38) / 100, 0, 1);
     const taperLevel = clamp((settings?.taper ?? 72) / 100, 0, 1);
-    const showBorder = settings?.border !== false;
     const size = visibleWidth(baseWidth * s, 1.15);
     const strokePoints = points.map((point) => ({
       x: p(point.x),
@@ -285,19 +259,6 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
     traceStrokeOutline(outline);
     ctx.globalAlpha = 0.97;
     ctx.fill();
-
-    if (showBorder) {
-      ctx.globalAlpha = 0.16 + flowLevel * 0.18;
-      ctx.lineWidth = Math.max(0.6, baseWidth * (0.14 + flowLevel * 0.1)) * s;
-      drawPolyline(points);
-      ctx.stroke();
-      if (flowLevel > 0.18) {
-        ctx.globalAlpha = 0.04 + flowLevel * 0.08;
-        ctx.lineWidth = Math.max(1, baseWidth * (1.15 + flowLevel * 0.75)) * s;
-        drawPolyline(points);
-        ctx.stroke();
-      }
-    }
     ctx.restore();
   };
   const drawSimplePen = (points, baseWidth) => {
@@ -426,15 +387,11 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       ctx.beginPath(); ctx.moveTo(p(ann.x1), p(ann.y1)); ctx.lineTo(p(ann.x2), p(ann.y2)); ctx.stroke();
       break;
     case "bbox":
+    case "bboxContainer":
       ctx.save();
-      // Keep bbox border thickness visually stable while zooming. The PDF
-      // page itself is CSS-zoomed, so a plain canvas stroke would appear
-      // thicker/thinner on screen unless we compensate for the current
-      // body zoom here.
-      const bodyZoom = parseFloat(document.body?.style?.zoom) || 1;
-      const borderSize = Math.max(1, ann.lineWidth ?? 2);
-      ctx.setLineDash([8 / bodyZoom, 6 / bodyZoom]);
-      ctx.lineWidth = borderSize / bodyZoom;
+      const borderSize = Math.max(1, ann.lineWidth ?? 2) * s;
+      ctx.setLineDash([8 * s, 6 * s]);
+      ctx.lineWidth = Math.max(0.75, borderSize);
       ctx.globalAlpha = 0.95;
       ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
       ctx.setLineDash([]);

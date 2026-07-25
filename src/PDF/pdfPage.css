@@ -154,7 +154,7 @@
   display: flex;
   align-items: stretch;
   gap: 0.5rem;
-  padding: 0.6rem 1rem;
+  padding: 0.35rem 0.65rem;
   font-size: 0.85rem;
   background: var(--color-surface);
   flex-shrink: 0;
@@ -180,7 +180,11 @@
 #pdf_toolbar_mainbar {
   justify-content: space-between;
 }
-#pdf_toolbar_left { min-width: 0; }
+#pdf_toolbar_left {
+  min-width: 0;
+  width: 100%;
+  flex: 1 1 auto;
+}
 #pdf_toolbar_center { flex-shrink: 0; }
 
 /* The toolbar's own content — a flex sibling of .pdf_toolbar_drag_handle
@@ -258,6 +262,8 @@
   display: flex;
   flex-direction: row;
   align-items: stretch;
+  width: 100%;
+  flex: 1 1 auto;
   gap: 0;
 }
 
@@ -303,56 +309,37 @@
    display:none so nothing renders (not even the border/shadow) when the
    active tool has no options. */
 .annot_tool_options {
-  position: absolute;
+  position: static;
   z-index: 27;
   display: flex;
   gap: 0.5rem;
-  padding: 0.6rem 0.7rem;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
-  box-shadow: 0 10px 28px -6px rgba(15, 23, 42, 0.28), 0 2px 8px rgba(15, 23, 42, 0.14);
-  width: max-content;
-  max-width: min(90vw, 520px);
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
+  max-width: none;
   max-height: min(80vh, 520px);
-  flex-wrap: wrap;
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: nowrap;
   overflow: auto;
   scrollbar-width: thin;
+  align-self: stretch;
+  box-sizing: border-box;
+  margin-top: 0.35rem;
+}
+.annot_bbox_creation_block {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 .annot_tool_options:empty {
   display: none;
-}
-
-/* left/top: 0 here are just the fallback before layout settles — PDFPage.jsx
-   sets the real value inline (toolOptionsOffset), anchoring the dropdown to
-   the active tool's own button position instead of the toolbar's corner. */
-#pdf_toolbar.pdf_toolbar--top .annot_tool_options {
-  top: 100%;
-  left: 0;
-  margin-top: 0.5rem;
-  flex-direction: column;
-  align-items: stretch;
-}
-#pdf_toolbar.pdf_toolbar--bottom .annot_tool_options {
-  bottom: 100%;
-  left: 0;
-  margin-bottom: 0.5rem;
-  flex-direction: column;
-  align-items: stretch;
-}
-#pdf_toolbar.pdf_toolbar--left .annot_tool_options {
-  left: 100%;
-  top: 0;
-  margin-left: 0.5rem;
-  flex-direction: row;
-  align-items: center;
-}
-#pdf_toolbar.pdf_toolbar--right .annot_tool_options {
-  right: 100%;
-  top: 0;
-  margin-right: 0.5rem;
-  flex-direction: row;
-  align-items: center;
 }
 
 /* A vertical toolbar can run taller than the viewport once every tool
@@ -426,35 +413,6 @@
 :where(#pdf_toolbar) button:disabled {
   opacity: 0.3;
   cursor: default;
-}
-
-/* Single drag handle — replaces the 4-button dock pad. Pinned as a
-   fixed-size flex item at the toolbar's own trailing edge (see
-   .pdf_toolbar_scroll's flex: 1 above, which is what leaves this its own
-   fixed space rather than fighting it for room). Press and drag in any
-   direction to redock (see handleToolbarHandlePointerDown in PDFPage.jsx)
-   — no floating/overlay state shown while dragging, it just snaps
-   straight to the flat dock for whichever direction the drag went. */
-.pdf_toolbar_drag_handle {
-  flex-shrink: 0;
-  align-self: center;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.7rem;
-  height: 1.7rem;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 0;
-  background: var(--color-bg);
-  color: var(--color-text-muted);
-  font-size: 0.9rem;
-  line-height: 1;
-  cursor: grab;
-  touch-action: none; /* this button's only job is the drag gesture — no competing native scroll/select to preserve */
-}
-.pdf_toolbar_drag_handle:active {
-  cursor: grabbing;
 }
 
 @keyframes pdf_icon_spin { to { transform: rotate(360deg); } }
@@ -683,6 +641,41 @@
   left: 0;
   z-index: 6; /* above #pdf_hyle_canvas */
   pointer-events: none;
+}
+
+.pdf_bbox_delete_layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 7;
+  pointer-events: none;
+}
+
+.pdf_bbox_delete_btn {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.97);
+  color: rgb(185, 28, 28);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.16);
+  cursor: pointer;
+  pointer-events: auto;
+  padding: 0;
+}
+
+.pdf_bbox_delete_btn:hover {
+  background: rgba(255, 245, 245, 0.98);
+  border-color: rgba(239, 68, 68, 0.42);
+  color: rgb(153, 27, 27);
+}
+
+.pdf_bbox_delete_btn:active {
+  transform: translateY(1px);
 }
 
 .pdf_hyle_info_icon {
@@ -2029,11 +2022,9 @@ html.theme-light #pdf_preview_scroll {
   align-items: center;
   flex-wrap: wrap;
   gap: 0.4rem;
-  margin-left: auto;
 }
 #pdf_toolbar.pdf_toolbar--left .annot_mode_strip,
 #pdf_toolbar.pdf_toolbar--right .annot_mode_strip {
-  margin-left: 0;
   margin-top: auto;
 }
 
@@ -2041,7 +2032,7 @@ html.theme-light #pdf_preview_scroll {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.3rem 0.6rem;
+  padding: 0;
   border: 1px solid var(--color-border);
   border-radius: 7px;
   background: var(--color-bg);
@@ -2072,7 +2063,7 @@ html.theme-light #pdf_preview_scroll {
 }
 
 #pdf_toolbar .annot_trigger {
-  padding: 0.42rem 0.55rem;
+  padding: 0;
 }
 
 #pdf_toolbar .annot_trigger_label {
@@ -2578,6 +2569,7 @@ html.theme-light #pdf_preview_scroll {
   gap: 0.6rem;
   flex-wrap: nowrap;
   padding: 0.15rem 0;
+  border: none;
   overflow-x: auto;
 }
 
@@ -2790,15 +2782,15 @@ html.theme-light #pdf_preview_scroll {
 }
 
 /* Smoothing + (when Dynamic ink is on) Pressure assist/Tip taper/Ink flow
-   — always a column, regardless of the toolbar's own dock. Unlike every
-   other control group here, this one doesn't flip to a row alongside
-   Smoothing when docked top/bottom; it's its own fixed vertical stack
-   nested inside .annot_pen_controls--column's own row. */
+   — now kept as a single horizontal row so it reads like the other pen
+   controls instead of stacking into separate vertical blocks. */
 .annot_pen_stroke_shaping,
 .annot_pen_stroke_shaping_extra {
   display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: nowrap;
 }
 
 /* Every row's own .annot_control_head reserves the same width regardless
@@ -2809,12 +2801,13 @@ html.theme-light #pdf_preview_scroll {
 .annot_pen_stroke_shaping .annot_control_head,
 .annot_pen_stroke_shaping_extra .annot_control_head {
   min-width: 6.6rem;
+  flex: 0 0 auto;
 }
 
 .annot_control {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0;
   min-width: 0;
   /* Never let a control's own content (e.g. a 3-4 button toggle row) get
      squeezed below its natural width when several titled controls share
@@ -2827,17 +2820,6 @@ html.theme-light #pdf_preview_scroll {
   flex-shrink: 0;
 }
 
-/* Same "column stacks better narrow, row fits better in a wide horizontal
-   dock" reasoning as .annot_pen_controls--column above — every
-   LabeledPercentKnob control (title/subtitle above its slider) across
-   Pen/Highlight/Text's dropdowns runs its title next to the slider
-   instead of above it once the toolbar itself is docked top/bottom. */
-#pdf_toolbar.pdf_toolbar--top .annot_control,
-#pdf_toolbar.pdf_toolbar--bottom .annot_control {
-  flex-direction: row;
-  align-items: center;
-}
-
 .annot_control_head {
   display: flex;
   flex-direction: column;
@@ -2845,14 +2827,14 @@ html.theme-light #pdf_preview_scroll {
 }
 
 .annot_control_title {
-  font-size: 0.72rem;
+  font-size: 0.66rem;
   font-weight: 700;
   color: var(--color-text);
   white-space: nowrap;
 }
 
 .annot_control_subtitle {
-  font-size: 0.64rem;
+  font-size: 0.58rem;
   color: var(--color-text-muted);
   max-width: 9rem;
   line-height: 1.25;
