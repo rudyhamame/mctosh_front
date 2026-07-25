@@ -1964,47 +1964,6 @@ const PDFPage = forwardRef(({
     const centerInside = centerX >= bboxLeft && centerX <= bboxRight;
     return overlapY > 0 && (centerInside || overlapX / spanWidth >= 0.65);
   }, []);
-  const bboxCardsForBuilder = useMemo(() => {
-    const spans = spansRef.current;
-    if (!selectionBboxes.length) return [];
-    const extractTextForBBox = (bbox) => {
-      const matches = spans.filter((span) => bboxMatchesSpan(bbox, span));
-      if (!matches.length) return "";
-      const ordered = [...matches].sort((a, b) => (
-        (a.rowIndex ?? 0) - (b.rowIndex ?? 0)
-        || (a.columnIndex ?? 0) - (b.columnIndex ?? 0)
-        || (a.geoTop ?? 0) - (b.geoTop ?? 0)
-        || (a.geoLeft ?? 0) - (b.geoLeft ?? 0)
-      ));
-      const pieces = [];
-      let previous = null;
-      for (const span of ordered) {
-        const text = span.text ?? span.el?.textContent ?? "";
-        if (!text) continue;
-        if (!previous) {
-          pieces.push(text);
-          previous = span;
-          continue;
-        }
-        const sameLine = (previous.rowIndex ?? null) != null && (span.rowIndex ?? null) != null
-          ? previous.rowIndex === span.rowIndex
-          : Math.abs((previous.geoTop ?? 0) - (span.geoTop ?? 0)) < Math.max(8, Math.max(previous.geoHeight ?? 0, span.geoHeight ?? 0) * 0.5);
-        if (sameLine) {
-          const gap = previous.geoRight != null && span.geoLeft != null ? span.geoLeft - previous.geoRight : 0;
-          if (gap > 1) pieces.push(" ");
-        } else {
-          pieces.push("\n");
-        }
-        pieces.push(text);
-        previous = span;
-      }
-      return pieces.join("").trim();
-    };
-    return selectionBboxes.map((bbox) => ({
-      ...bbox,
-      text: bbox.text || extractTextForBBox(bbox),
-    }));
-  }, [bboxMatchesSpan, selectionBboxes, pageViewport]);
   const regionForSpanIndex = useCallback((spanIdx) => {
     const span = spansRef.current[spanIdx];
     if (!span) return null;
@@ -2561,6 +2520,47 @@ const PDFPage = forwardRef(({
   const zoomHoldIntervalRef = useRef(null);
   const selBarRef          = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
+  const bboxCardsForBuilder = useMemo(() => {
+    const spans = spansRef.current;
+    if (!selectionBboxes.length) return [];
+    const extractTextForBBox = (bbox) => {
+      const matches = spans.filter((span) => bboxMatchesSpan(bbox, span));
+      if (!matches.length) return "";
+      const ordered = [...matches].sort((a, b) => (
+        (a.rowIndex ?? 0) - (b.rowIndex ?? 0)
+        || (a.columnIndex ?? 0) - (b.columnIndex ?? 0)
+        || (a.geoTop ?? 0) - (b.geoTop ?? 0)
+        || (a.geoLeft ?? 0) - (b.geoLeft ?? 0)
+      ));
+      const pieces = [];
+      let previous = null;
+      for (const span of ordered) {
+        const text = span.text ?? span.el?.textContent ?? "";
+        if (!text) continue;
+        if (!previous) {
+          pieces.push(text);
+          previous = span;
+          continue;
+        }
+        const sameLine = (previous.rowIndex ?? null) != null && (span.rowIndex ?? null) != null
+          ? previous.rowIndex === span.rowIndex
+          : Math.abs((previous.geoTop ?? 0) - (span.geoTop ?? 0)) < Math.max(8, Math.max(previous.geoHeight ?? 0, span.geoHeight ?? 0) * 0.5);
+        if (sameLine) {
+          const gap = previous.geoRight != null && span.geoLeft != null ? span.geoLeft - previous.geoRight : 0;
+          if (gap > 1) pieces.push(" ");
+        } else {
+          pieces.push("\n");
+        }
+        pieces.push(text);
+        previous = span;
+      }
+      return pieces.join("").trim();
+    };
+    return selectionBboxes.map((bbox) => ({
+      ...bbox,
+      text: bbox.text || extractTextForBBox(bbox),
+    }));
+  }, [bboxMatchesSpan, selectionBboxes, pageViewport]);
   const selectionDraggingEdgeRef = useRef(null); // "start" | "end" | null — which manual-selection handle (if any) is actively being dragged, see the manualSelection highlight effect below
   const selectionHandleDragRef = useRef(null); // { edge, startX, startY, active } — taps on handles must not alter selection, only real drags
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
