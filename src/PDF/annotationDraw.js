@@ -380,7 +380,7 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
   // Border style toggle. Dash lengths scale with the stroke's own width
   // so a thicker border still reads as clearly dashed/dotted, not just a
   // faint texture.
-  if (["rect", "circle", "freeshape", "line", "arrow"].includes(ann.type) && ann.borderStyle && ann.borderStyle !== "solid") {
+  if (["rect", "bbox", "circle", "freeshape", "line", "arrow"].includes(ann.type) && ann.borderStyle && ann.borderStyle !== "solid") {
     const w = ctx.lineWidth;
     ctx.setLineDash(ann.borderStyle === "dotted" ? [w * 0.01, w * 2.2] : [w * 2.4, w * 1.6]);
   }
@@ -425,11 +425,28 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
     case "line":
       ctx.beginPath(); ctx.moveTo(p(ann.x1), p(ann.y1)); ctx.lineTo(p(ann.x2), p(ann.y2)); ctx.stroke();
       break;
+    case "bbox":
+      ctx.save();
+      // Keep bbox border thickness visually stable while zooming. The PDF
+      // page itself is CSS-zoomed, so a plain canvas stroke would appear
+      // thicker/thinner on screen unless we compensate for the current
+      // body zoom here.
+      const bodyZoom = parseFloat(document.body?.style?.zoom) || 1;
+      const borderSize = Math.max(1, ann.lineWidth ?? 2);
+      ctx.setLineDash([8 / bodyZoom, 6 / bodyZoom]);
+      ctx.lineWidth = borderSize / bodyZoom;
+      ctx.globalAlpha = 0.95;
+      ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.12;
+      ctx.fillRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
+      ctx.restore();
+      break;
     case "drawTextSelection":
     case "smartVideoCapture":
       ctx.save();
       ctx.setLineDash([8, 6]);
-      ctx.lineWidth = Math.max(1.5, 2 * s);
+      ctx.lineWidth = 2;
       ctx.globalAlpha = 0.95;
       ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
       ctx.setLineDash([]);

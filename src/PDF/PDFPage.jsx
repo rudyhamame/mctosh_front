@@ -120,6 +120,7 @@ const ANNOT_TOOLS = [
   { key: "line",          icon: "bx bx-minus",           label: "Line",          hasSize: false },
   { key: "arrow",         icon: "bx bx-right-arrow-alt", label: "Arrow",         hasSize: true  },
   { key: "rect",          icon: "bx bx-rectangle",       label: "Rectangle",     hasSize: false },
+  { key: "bbox",          icon: "bx bx-crop",            label: "BBox",          hasSize: false },
   { key: "circle",        icon: "bx bx-circle",          label: "Ellipse",       hasSize: false },
   {
     key: "freeshape",
@@ -178,6 +179,7 @@ const DRAWING_TOOL_ORDER = [
   "shapes",
   "text",
   "drawText",
+  "bbox",
   "eraser",
 ];
 // Smart Video is an annotTool (drawn/selected the same way as the drawing
@@ -220,9 +222,57 @@ const DEFAULT_ANNOT_TOOL_COLORS = {
   line: "#4c6ef5",
   arrow: "#339af0",
   rect: "#20c997",
+  bbox: "#339af0",
   circle: "#fd7e14",
   text: "#212529",
   drawText: "#212529",
+};
+
+const BBOX_MIN_GAP = 6;
+const resolveBBoxSpacing = (candidate, obstacles, gap = BBOX_MIN_GAP) => {
+  if (!candidate) return candidate;
+  const next = { ...candidate };
+  const overlapsWithGap = (a, b) => (
+    a.x < b.x + b.w + gap
+    && a.x + a.w + gap > b.x
+    && a.y < b.y + b.h + gap
+    && a.y + a.h + gap > b.y
+  );
+
+  for (let iter = 0; iter < 12; iter++) {
+    let moved = false;
+    for (const obs of obstacles) {
+      if (!obs || !overlapsWithGap(next, obs)) continue;
+
+      const shifts = [
+        { dx: (obs.x - gap) - (next.x + next.w), dy: 0 },
+        { dx: (obs.x + obs.w + gap) - next.x, dy: 0 },
+        { dx: 0, dy: (obs.y - gap) - (next.y + next.h) },
+        { dx: 0, dy: (obs.y + obs.h + gap) - next.y },
+      ];
+
+      let best = null;
+      for (const shift of shifts) {
+        const test = {
+          x: next.x + shift.dx,
+          y: next.y + shift.dy,
+          w: next.w,
+          h: next.h,
+        };
+        if (overlapsWithGap(test, obs)) continue;
+        const dist = Math.abs(shift.dx) + Math.abs(shift.dy);
+        if (!best || dist < best.dist) best = { ...shift, dist };
+      }
+
+      if (!best) continue;
+      next.x += best.dx;
+      next.y += best.dy;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+
+  return next;
 };
 
 const TEXT_FONT_FAMILIES = [
@@ -612,6 +662,7 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   textPadding: 100,
   shapeBorderStyle: "solid",
   shapeBorderRadius: 0,
+  bboxBorderSize: 2,
   shapeBackground: false, // fill always uses the shape's own border/ink color — no independent fill color setting
 };
 const isHexColor = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
@@ -661,6 +712,7 @@ const loadPdfToolbarSettings = () => {
       textPadding: readNumberSetting(parsed.textPadding, DEFAULT_PDF_TOOLBAR_SETTINGS.textPadding, 0, 300),
       shapeBorderStyle: ["solid", "dashed", "dotted"].includes(parsed.shapeBorderStyle) ? parsed.shapeBorderStyle : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderStyle,
       shapeBorderRadius: readNumberSetting(parsed.shapeBorderRadius, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderRadius, 0, 60),
+      bboxBorderSize: readNumberSetting(parsed.bboxBorderSize, DEFAULT_PDF_TOOLBAR_SETTINGS.bboxBorderSize, 1, 12),
       shapeBackground: readBooleanSetting(parsed.shapeBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackground),
     };
   } catch {
@@ -1840,6 +1892,7 @@ const PDFPage = forwardRef(({
   // shared-dash handling for how these render.
   const [shapeBorderStyle, setShapeBorderStyle] = useState(savedToolbarSettings.shapeBorderStyle);
   const [shapeBorderRadius, setShapeBorderRadius] = useState(savedToolbarSettings.shapeBorderRadius);
+  const [bboxBorderSize, setBBoxBorderSize] = useState(savedToolbarSettings.bboxBorderSize);
   // Fill for closed shapes only (rect/circle — line/arrow have no
   // interior to fill), same low-alpha wash convention as textBackground.
   // Always uses the shape's own border/ink color (annotationDraw.js) —
@@ -1873,6 +1926,94 @@ const PDFPage = forwardRef(({
   const bgSwatchRef = useRef(null);
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
+  const selectionBboxes = useMemo(
+    () => (annotations[pageNum] || []).filter((ann) => ann.type === "bbox"),
+    [annotations, pageNum],
+  );
+  const bboxMatchesSpan = useCallback((bbox, span) => {
+    if (!bbox || !span) return false;
+    const spanRect = span.el?.getBoundingClientRect?.();
+    const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
+    if (!spanRect || !canvasRect) {
+      const left = span.geoLeft ?? 0;
+      const right = span.geoRight ?? 0;
+      const top = span.geoTop ?? 0;
+      const bottom = top + (span.geoHeight ?? 0);
+      const bboxRight = bbox.x + bbox.w;
+      const bboxBottom = bbox.y + bbox.h;
+      const padY = 2;
+      const padX = 1;
+      const overlapX = Math.max(0, Math.min(right, bboxRight + padX) - Math.max(left, bbox.x - padX));
+      const overlapY = Math.max(0, Math.min(bottom, bboxBottom + padY) - Math.max(top, bbox.y - padY));
+      const spanWidth = Math.max(1, right - left);
+      const centerX = (left + right) / 2;
+      const centerInside = centerX >= bbox.x && centerX <= bboxRight;
+      return overlapY > 0 && (centerInside || overlapX / spanWidth >= 0.65);
+    }
+    const scale = fitScaleRef.current * zoomRef.current;
+    const bboxLeft = canvasRect.left + bbox.x * scale;
+    const bboxTop = canvasRect.top + bbox.y * scale;
+    const bboxRight = canvasRect.left + (bbox.x + bbox.w) * scale;
+    const bboxBottom = canvasRect.top + (bbox.y + bbox.h) * scale;
+    const padY = 2;
+    const padX = 1;
+    const overlapX = Math.max(0, Math.min(spanRect.right, bboxRight + padX) - Math.max(spanRect.left, bboxLeft - padX));
+    const overlapY = Math.max(0, Math.min(spanRect.bottom, bboxBottom + padY) - Math.max(spanRect.top, bboxTop - padY));
+    const spanWidth = Math.max(1, spanRect.right - spanRect.left);
+    const centerX = (spanRect.left + spanRect.right) / 2;
+    const centerInside = centerX >= bboxLeft && centerX <= bboxRight;
+    return overlapY > 0 && (centerInside || overlapX / spanWidth >= 0.65);
+  }, []);
+  const bboxCardsForBuilder = useMemo(() => {
+    const spans = spansRef.current;
+    if (!selectionBboxes.length) return [];
+    const extractTextForBBox = (bbox) => {
+      const matches = spans.filter((span) => bboxMatchesSpan(bbox, span));
+      if (!matches.length) return "";
+      const ordered = [...matches].sort((a, b) => (
+        (a.rowIndex ?? 0) - (b.rowIndex ?? 0)
+        || (a.columnIndex ?? 0) - (b.columnIndex ?? 0)
+        || (a.geoTop ?? 0) - (b.geoTop ?? 0)
+        || (a.geoLeft ?? 0) - (b.geoLeft ?? 0)
+      ));
+      const pieces = [];
+      let previous = null;
+      for (const span of ordered) {
+        const text = span.text ?? span.el?.textContent ?? "";
+        if (!text) continue;
+        if (!previous) {
+          pieces.push(text);
+          previous = span;
+          continue;
+        }
+        const sameLine = (previous.rowIndex ?? null) != null && (span.rowIndex ?? null) != null
+          ? previous.rowIndex === span.rowIndex
+          : Math.abs((previous.geoTop ?? 0) - (span.geoTop ?? 0)) < Math.max(8, Math.max(previous.geoHeight ?? 0, span.geoHeight ?? 0) * 0.5);
+        if (sameLine) {
+          const gap = previous.geoRight != null && span.geoLeft != null ? span.geoLeft - previous.geoRight : 0;
+          if (gap > 1) pieces.push(" ");
+        } else {
+          pieces.push("\n");
+        }
+        pieces.push(text);
+        previous = span;
+      }
+      return pieces.join("").trim();
+    };
+    return selectionBboxes.map((bbox) => ({
+      ...bbox,
+      text: bbox.text || extractTextForBBox(bbox),
+    }));
+  }, [bboxMatchesSpan, selectionBboxes, pageViewport]);
+  const regionForSpanIndex = useCallback((spanIdx) => {
+    const span = spansRef.current[spanIdx];
+    if (!span) return null;
+    for (let i = selectionBboxes.length - 1; i >= 0; i--) {
+      const bbox = selectionBboxes[i];
+      if (bboxMatchesSpan(bbox, span)) return bbox;
+    }
+    return null;
+  }, [bboxMatchesSpan, selectionBboxes]);
   const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
     ? (annotToolColors[annotTool] || DEFAULT_ANNOT_TOOL_COLORS[annotTool])
     : "#ffff00";
@@ -1913,6 +2054,7 @@ const PDFPage = forwardRef(({
       textPadding,
       shapeBorderStyle,
       shapeBorderRadius,
+      bboxBorderSize,
       shapeBackground,
     });
   }, [
@@ -1945,6 +2087,7 @@ const PDFPage = forwardRef(({
     textPadding,
     shapeBorderStyle,
     shapeBorderRadius,
+    bboxBorderSize,
     shapeBackground,
   ]);
   const getOcrWorker = useCallback(async () => {
@@ -2082,9 +2225,12 @@ const PDFPage = forwardRef(({
   const [annotTextVal,   setAnnotTextVal]   = useState("");
   const [highlightActionMenu, setHighlightActionMenu] = useState(null); // { vx, vy, editingId }
   const [highlightStyleTargetId, setHighlightStyleTargetId] = useState(null); // id of an existing highlight being style-edited
+  const [bboxActionMenu, setBBoxActionMenu] = useState(null); // { vx, vy, editingId }
+  const [bboxResizeTargetId, setBBoxResizeTargetId] = useState(null); // id of an existing bbox armed for resize
   const annotTextInputRef = useRef(null);
   const textActionMenuRef = useRef(null);
   const highlightActionMenuRef = useRef(null);
+  const bboxActionMenuRef = useRef(null);
   const annotCanvasRef  = useRef(null);
   // Separate, non-multiply-blended layer stacked above #pdf_annot_canvas —
   // see drawMaskedHighlightText's own comment in annotationDraw.js for why
@@ -2111,7 +2257,7 @@ const PDFPage = forwardRef(({
   // on "click" instead means the target's own onClick (attached to the
   // element itself) always runs before this bubbled document-level check.
   useEffect(() => {
-    if (!colorMenuOpen && !textActionMenu && !highlightActionMenu) return;
+    if (!colorMenuOpen && !textActionMenu && !highlightActionMenu && !bboxActionMenu) return;
     const onDocClick = (e) => {
       if (
         colorMenuOpen
@@ -2121,16 +2267,19 @@ const PDFPage = forwardRef(({
       ) setColorMenuOpen(false);
       if (textActionMenu && textActionMenuRef.current && !textActionMenuRef.current.contains(e.target)) setTextActionMenu(null);
       if (highlightActionMenu && highlightActionMenuRef.current && !highlightActionMenuRef.current.contains(e.target)) setHighlightActionMenu(null);
+      if (bboxActionMenu && bboxActionMenuRef.current && !bboxActionMenuRef.current.contains(e.target)) setBBoxActionMenu(null);
     };
     document.addEventListener("click", onDocClick);
     return () => document.removeEventListener("click", onDocClick);
-  }, [colorMenuOpen, textActionMenu, highlightActionMenu]);
+  }, [colorMenuOpen, textActionMenu, highlightActionMenu, bboxActionMenu]);
 
   useEffect(() => {
     if (annotTool !== "text") setTextActionMenu(null);
     if (annotTool !== "text") setTextStyleTargetId(null);
     if (annotTool !== "highlight") setHighlightActionMenu(null);
     if (annotTool !== "highlight") setHighlightStyleTargetId(null);
+    if (annotTool !== "bbox") setBBoxActionMenu(null);
+    if (annotTool !== "bbox") setBBoxResizeTargetId(null);
   }, [annotTool]);
 
   // .annot_tool_options (the sub-toolbar dropdown) opens from the active
@@ -2300,6 +2449,31 @@ const PDFPage = forwardRef(({
     primeHighlightStyleFromAnnotation(hit);
     setHighlightActionMenu(null);
   }, [highlightActionMenu, annotations, pageNum, logAnnotHistory, primeHighlightStyleFromAnnotation]);
+
+  const handleBBoxAction = useCallback((action) => {
+    if (!bboxActionMenu) return;
+    const hit = (annotations[pageNum] || []).find((ann) => ann.id === bboxActionMenu.editingId && ann.type === "bbox");
+    if (!hit) {
+      setBBoxActionMenu(null);
+      setBBoxResizeTargetId(null);
+      return;
+    }
+
+    if (action === "delete") {
+      setAnnotations((prev) => ({
+        ...prev,
+        [pageNum]: (prev[pageNum] || []).filter((ann) => ann.id !== hit.id),
+      }));
+      setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+      logAnnotHistory({ action: "delete", type: "bbox", page: pageNum });
+      setBBoxResizeTargetId(null);
+      setBBoxActionMenu(null);
+      return;
+    }
+
+    setBBoxResizeTargetId(hit.id);
+    setBBoxActionMenu(null);
+  }, [bboxActionMenu, annotations, pageNum, logAnnotHistory]);
 
   // Per-page refs for continuous scroll
   const pageCanvasRefs    = useRef([]);
@@ -3583,6 +3757,49 @@ const PDFPage = forwardRef(({
       }
       const p = toCanvas(e);
       const strokeColor = annotColor;
+      let skipBBoxCreation = false;
+      if (annotTool === "bbox") {
+        const pageBoxes = annotations[pageNum] || [];
+        const hitBBox = (() => {
+          for (let i = pageBoxes.length - 1; i >= 0; i--) {
+            const ann = pageBoxes[i];
+            if (ann.type !== "bbox") continue;
+            const inside = p.x >= ann.x && p.x <= ann.x + ann.w && p.y >= ann.y && p.y <= ann.y + ann.h;
+            if (!inside) continue;
+            const edgePad = 6;
+            const nearEdge =
+              (p.x - ann.x) <= edgePad ||
+              (ann.x + ann.w - p.x) <= edgePad ||
+              (p.y - ann.y) <= edgePad ||
+              (ann.y + ann.h - p.y) <= edgePad;
+            if (nearEdge || (bboxResizeTargetId && ann.id === bboxResizeTargetId)) {
+              return ann;
+            }
+            skipBBoxCreation = true;
+            return null;
+          }
+          return null;
+        })();
+        if (hitBBox) {
+          if (bboxResizeTargetId && hitBBox.id === bboxResizeTargetId) {
+            activeAnnotRef.current = {
+              ...hitBBox,
+              _sx: hitBBox.x,
+              _sy: hitBBox.y,
+              _editingId: hitBBox.id,
+            };
+            setBBoxActionMenu(null);
+            setBBoxResizeTargetId(null);
+            return;
+          }
+          setBBoxActionMenu({
+            vx: p.vx,
+            vy: p.vy,
+            editingId: hitBBox.id,
+          });
+          return;
+        }
+      }
       if (annotTool === "highlight") {
         const hit = findHighlightAnnotationAt(p.x, p.y);
         if (hit) {
@@ -3666,13 +3883,14 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = span
           ? { type: annotTool, color: strokeColor, x: span.left, y: span.top, w: Math.max(1, span.width), h: span.height, _startLeft: span.left, textAligned: true }
           : null;
-      } else if (["rect","circle"].includes(annotTool)) {
-        activeAnnotRef.current = {
-          type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
-          borderStyle: shapeBorderStyle,
-          shapeBackground,
-          ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
-        };
+      } else if (["rect","circle","bbox"].includes(annotTool) && !skipBBoxCreation) {
+          activeAnnotRef.current = {
+            type: annotTool, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
+            ...(annotTool === "bbox" ? { lineWidth: bboxBorderSize } : {}),
+            borderStyle: shapeBorderStyle,
+            shapeBackground,
+            ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
+          };
       } else if (annotTool === "drawText") {
         activeAnnotRef.current = { type: "drawTextSelection", color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (annotTool === "smartVideo" && smartVideoSelecting && !smartVideoCaptureBusy) {
@@ -3797,7 +4015,7 @@ const PDFPage = forwardRef(({
           ann.h = Math.max(ann.h, span.height);
         }
         redraw(ann);
-      } else if (["underline","strikethrough","rect","circle","drawTextSelection","smartVideoCapture"].includes(ann.type)) {
+      } else if (["underline","strikethrough","rect","circle","bbox","drawTextSelection","smartVideoCapture"].includes(ann.type)) {
         ann.x = Math.min(ann._sx, p.x); ann.y = Math.min(ann._sy, p.y);
         ann.w = Math.abs(p.x - ann._sx); ann.h = Math.abs(p.y - ann._sy);
         redraw(ann);
@@ -3840,6 +4058,24 @@ const PDFPage = forwardRef(({
         redraw();
         return;
       }
+      if (ann.type === "bbox") {
+        if (ann.w < 8 || ann.h < 8) return;
+        if (ann._editingId) {
+          setAnnotations((prev) => ({
+            ...prev,
+            [pageNum]: (prev[pageNum] || []).map((item) => (
+              item.id === ann._editingId
+                ? { ...item, x: ann.x, y: ann.y, w: ann.w, h: ann.h }
+                : item
+            )),
+          }));
+          setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+          logAnnotHistory({ action: "edit", type: "bbox", page: pageNum });
+          setBBoxResizeTargetId(null);
+          redraw();
+          return;
+        }
+      }
       if (ann.type === "smartVideoCapture") {
         if (ann.w < 8 || ann.h < 8) return;
         const { _sx, _sy, ...selection } = ann;
@@ -3855,12 +4091,21 @@ const PDFPage = forwardRef(({
           ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < tinyDocThreshold
           : ann.w < tinyDocThreshold && ann.h < tinyDocThreshold;
       if (tiny) return;
-      const { _sx, _sy, _startLeft, textAligned, ...clean } = ann;
+      const { _sx, _sy, _startLeft, textAligned, _editingId, ...clean } = ann;
       if (clean.type === "highlight" && highlightAutoContrast) {
         const maskedText = findSpansOverlappingHighlight(clean.points);
         if (maskedText.length) clean.maskedText = maskedText;
       }
-      setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), { ...clean, id: Date.now() }] }));
+      setAnnotations((prev) => {
+        const pageAnnotations = prev[pageNum] || [];
+        const box = clean.type === "bbox"
+          ? resolveBBoxSpacing(
+              clean,
+              pageAnnotations.filter((ann) => ann.type === "bbox"),
+            )
+          : clean;
+        return { ...prev, [pageNum]: [...pageAnnotations, { ...box, id: Date.now() }] };
+      });
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       logAnnotHistory({
         action: "add",
@@ -4504,27 +4749,95 @@ const PDFPage = forwardRef(({
     // trusts (visuallyConnected, the merge-cap logic, the handle-drag
     // math), so hit-testing against it too keeps every coordinate in this
     // function consistent, regardless of what elementFromPoint does.
+    const layerPointFromClient = (cx, cy) => {
+      const layer = textLayerRef.current;
+      if (!layer) return null;
+      const layerRect = layer.getBoundingClientRect();
+      const bodyZoom = parseFloat(document.body.style.zoom) || 1;
+      return {
+        x: (cx - layerRect.left) / bodyZoom,
+        y: (cy - layerRect.top) / bodyZoom,
+        layerRect,
+        bodyZoom,
+      };
+    };
+
     const spanAtPoint = (cx, cy) => {
+      const point = layerPointFromClient(cx, cy);
+      if (!point) return null;
+      const { x, y, layerRect, bodyZoom } = point;
       let nearest = null;
       let nearestDist = Infinity;
       for (const sp of spansRef.current) {
         const r = sp.el.getBoundingClientRect();
         if (r.width <= 0 || r.height <= 0) continue;
-        if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) return sp.el;
+        const left = (r.left - layerRect.left) / bodyZoom;
+        const top = (r.top - layerRect.top) / bodyZoom;
+        const right = (r.right - layerRect.left) / bodyZoom;
+        const bottom = (r.bottom - layerRect.top) / bodyZoom;
+        if (x >= left && x <= right && y >= top && y <= bottom) return sp.el;
         // Sub-pixel/rounding gaps between adjacent spans can leave a point
         // just outside every rect — track the closest one as a fallback.
-        const dx = Math.max(r.left - cx, 0, cx - r.right);
-        const dy = Math.max(r.top - cy, 0, cy - r.bottom);
+        const dx = Math.max(left - x, 0, x - right);
+        const dy = Math.max(top - y, 0, y - bottom);
         const dist = Math.hypot(dx, dy);
         if (dist < nearestDist) { nearestDist = dist; nearest = sp.el; }
       }
       return nearestDist <= 3 ? nearest : null;
     };
 
+    const bboxMatchesSpan = (bbox, span) => {
+      if (!bbox || !span) return false;
+      const spanRect = span.el?.getBoundingClientRect?.();
+      const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
+      if (!spanRect || !canvasRect) {
+        const left = span.geoLeft ?? 0;
+        const right = span.geoRight ?? 0;
+        const top = span.geoTop ?? 0;
+        const bottom = top + (span.geoHeight ?? 0);
+        const bboxRight = bbox.x + bbox.w;
+        const bboxBottom = bbox.y + bbox.h;
+        const padY = 2;
+        const padX = 1;
+        const overlapX = Math.max(0, Math.min(right, bboxRight + padX) - Math.max(left, bbox.x - padX));
+        const overlapY = Math.max(0, Math.min(bottom, bboxBottom + padY) - Math.max(top, bbox.y - padY));
+        const spanWidth = Math.max(1, right - left);
+        const centerX = (left + right) / 2;
+        const centerInside = centerX >= bbox.x && centerX <= bboxRight;
+        return overlapY > 0 && (centerInside || overlapX / spanWidth >= 0.65);
+      }
+      const scale = fitScaleRef.current * zoomRef.current;
+      const bboxLeft = canvasRect.left + bbox.x * scale;
+      const bboxTop = canvasRect.top + bbox.y * scale;
+      const bboxRight = canvasRect.left + (bbox.x + bbox.w) * scale;
+      const bboxBottom = canvasRect.top + (bbox.y + bbox.h) * scale;
+      const padY = 2;
+      const padX = 1;
+      const overlapX = Math.max(0, Math.min(spanRect.right, bboxRight + padX) - Math.max(spanRect.left, bboxLeft - padX));
+      const overlapY = Math.max(0, Math.min(spanRect.bottom, bboxBottom + padY) - Math.max(spanRect.top, bboxTop - padY));
+      const spanWidth = Math.max(1, spanRect.right - spanRect.left);
+      const centerX = (spanRect.left + spanRect.right) / 2;
+      const centerInside = centerX >= bboxLeft && centerX <= bboxRight;
+      return overlapY > 0 && (centerInside || overlapX / spanWidth >= 0.65);
+    };
+
+    const regionForSpanIndex = (spanIdx) => {
+      const span = spansRef.current[spanIdx];
+      if (!span) return null;
+      for (let i = selectionBboxes.length - 1; i >= 0; i--) {
+        const bbox = selectionBboxes[i];
+        if (bboxMatchesSpan(bbox, span)) return bbox;
+      }
+      return null;
+    };
+
     const selectWordAt = (cx, cy) => {
       const target = spanAtPoint(cx, cy);
       const layer  = textLayerRef.current;
       if (!target || !layer || !layer.contains(target)) return null;
+      const point = layerPointFromClient(cx, cy);
+      if (!point) return null;
+      const { x, layerRect, bodyZoom } = point;
 
       const textNode = target.firstChild;
       if (!textNode || textNode.nodeType !== Node.TEXT_NODE) return null;
@@ -4535,7 +4848,9 @@ const PDFPage = forwardRef(({
       if (spanIdx < 0) return null;
 
       const r     = target.getBoundingClientRect();
-      const ratio = r.width > 0 ? (cx - r.left) / r.width : 0;
+      const left  = (r.left - layerRect.left) / bodyZoom;
+      const width  = r.width / bodyZoom;
+      const ratio = width > 0 ? (x - left) / width : 0;
       let s = Math.round(ratio * text.length);
       let e = s;
       while (s > 0          && /\S/.test(text[s - 1])) s--;
@@ -4543,6 +4858,7 @@ const PDFPage = forwardRef(({
       if (s === e) return null;
 
       const spans = spansRef.current;
+      const selectionRegion = regionForSpanIndex(spanIdx);
       // Only merge neighboring spans when they are visually connected. Some
       // PDFs split normal spaced words into separate text items without an
       // actual whitespace token, so "no literal space" is not enough proof
@@ -4565,6 +4881,7 @@ const PDFPage = forwardRef(({
       // instead sidesteps whatever WebKit does differently, on any device.
       const visuallyConnected = (a, b) => {
         if (!a || !b) return false;
+        if (selectionRegion && (!bboxMatchesSpan(selectionRegion, a) || !bboxMatchesSpan(selectionRegion, b))) return false;
         const h = Math.max(a.geoHeight, b.geoHeight, 1);
         const acy = a.geoTop + a.geoHeight / 2;
         const bcy = b.geoTop + b.geoHeight / 2;
@@ -4643,7 +4960,7 @@ const PDFPage = forwardRef(({
       const lastWidth = parseFloat(lastEl?.style.width || "0") || lastEl?.offsetWidth || 0;
       const bx = (firstLeft + lastLeft + lastWidth) / 2;
       const by = parseFloat(lastEl?.style.top || "0") + (parseFloat(lastEl?.style.height || "0") || lastEl?.offsetHeight || 0) + 8;
-      return { text: word, spanIdx: loIdx, endIdx: hiIdx, x: bx, y: by };
+      return { text: word, spanIdx: loIdx, endIdx: hiIdx, regionId: selectionRegion?.id ?? null, x: bx, y: by };
     };
 
     // Double-click (mouse) / double-tap (touch) entry point — always exactly
@@ -4662,6 +4979,7 @@ const PDFPage = forwardRef(({
           endIdx: exact.endIdx,
           startCharOffset: 0,
           endCharOffset: endSpanText.length,
+          regionId: exact.regionId ?? null,
           text: exact.text,
           x: exact.x,
           y: exact.y,
@@ -5098,7 +5416,6 @@ const PDFPage = forwardRef(({
     if (!pageViewport) return;
     div.innerHTML = "";
     spansRef.current = [];
-    setManualSelection(null);
     let cancelled = false;
 
     pdfDoc.getPage(pageNum).then((page) =>
@@ -5298,6 +5615,12 @@ const PDFPage = forwardRef(({
     }
     const lo = Math.min(manualSelection.startIdx, manualSelection.endIdx);
     const hi = Math.max(manualSelection.startIdx, manualSelection.endIdx);
+    const selectionRegion = manualSelection.regionId
+      ? selectionBboxes.find((bbox) => bbox.id === manualSelection.regionId) || null
+      : regionForSpanIndex(manualSelection.startIdx) || regionForSpanIndex(manualSelection.endIdx);
+    const spanMatchesSelectionRegion = (span) => (
+      !selectionRegion || bboxMatchesSpan(selectionRegion, span)
+    );
 
     // Which char-offset crops the lo-index span vs. the hi-index span —
     // NOT simply startCharOffset/endCharOffset, since start can be either
@@ -5317,15 +5640,22 @@ const PDFPage = forwardRef(({
       }
     }
 
-    for (let i = lo; i <= hi; i++) spans[i]?.el?.classList.add("span_selected");
+    for (let i = lo; i <= hi; i++) {
+      const span = spans[i];
+      if (!span?.el) continue;
+      if (!spanMatchesSelectionRegion(span)) continue;
+      span.el.classList.add("span_selected");
+    }
 
     const layerRect = layer.getBoundingClientRect();
     const bodyZoom  = parseFloat(document.body.style.zoom) || 1;
 
     const lines = [];
     for (let i = lo; i <= hi; i++) {
-      const el = spans[i]?.el;
+      const span = spans[i];
+      const el = span?.el;
       if (!el) continue;
+      if (!spanMatchesSelectionRegion(span)) continue;
 
       // Canvas-local bounds from the span's explicit CSS geometry
       const r      = el.getBoundingClientRect();
@@ -5351,8 +5681,8 @@ const PDFPage = forwardRef(({
       const h      = bottom - top;
 
       // PDF glyphs have ascenders/descenders that extend beyond the em-box.
-      // Pad vertically so the highlight covers the real canvas-rendered glyph height.
-      const padV = h * 0.25;
+      // Keep the pad small so adjacent lines don't visually merge.
+      const padV = Math.min(1.8, Math.max(0.8, h * 0.08));
 
       // Cluster threshold scales with font size
       let line = lines.find((l) => Math.abs(l.refTop - top) < Math.max(8, h * 0.5));
@@ -5408,6 +5738,7 @@ const PDFPage = forwardRef(({
       let previous = null;
       for (let i = rangeLo; i <= rangeHi; i++) {
         const span = spans[i];
+        if (span && !spanMatchesSelectionRegion(span)) continue;
         let token = span?.text ?? span?.el?.textContent ?? "";
         if (hasOffsets && token) {
           if (i === rangeLo && i === rangeHi) token = token.slice(loOffset, hiOffset);
@@ -5420,11 +5751,11 @@ const PDFPage = forwardRef(({
           const h = Math.max(previous.rect.height, rect.height, 1);
           const sameLine = Math.abs(previous.rect.top - rect.top) < h * 0.55;
           const gap = rect.left - previous.rect.right;
+          const paragraphBreak = !sameLine && (rect.top - previous.rect.bottom) > Math.max(10, h * 0.9);
           const needsSpace = sameLine
-            && gap > Math.max(2, h * 0.16)
-            && !/\s$/.test(previous.token)
-            && !/^\s/.test(token);
-          if (!sameLine) text += "\n";
+            ? gap > Math.max(2, h * 0.16)
+            : !paragraphBreak;
+          if (paragraphBreak) text += "\n\n";
           else if (needsSpace) text += " ";
         }
         text += token;
@@ -5448,17 +5779,25 @@ const PDFPage = forwardRef(({
     // elsewhere on the page.
     const SEARCH_WINDOW = 80;
     const nearestSpanIndex = (clientX, clientY, nearIndex = null) => {
+      const point = layerPointFromClient(clientX, clientY);
+      if (!point) return -1;
+      const { x, y, layerRect, bodyZoom } = point;
       let bestIdx = -1;
       let bestDistance = Infinity;
       const lo = nearIndex != null ? Math.max(0, nearIndex - SEARCH_WINDOW) : 0;
       const hi = nearIndex != null ? Math.min(spans.length - 1, nearIndex + SEARCH_WINDOW) : spans.length - 1;
       for (let index = lo; index <= hi; index++) {
         const span = spans[index];
+        if (span && !spanMatchesSelectionRegion(span)) continue;
         const r = span?.el?.getBoundingClientRect?.();
         if (!r) continue;
-        const cx = Math.max(r.left, Math.min(clientX, r.right));
-        const cy = Math.max(r.top, Math.min(clientY, r.bottom));
-        const distance = Math.hypot(clientX - cx, clientY - cy);
+        const left = (r.left - layerRect.left) / bodyZoom;
+        const top = (r.top - layerRect.top) / bodyZoom;
+        const right = (r.right - layerRect.left) / bodyZoom;
+        const bottom = (r.bottom - layerRect.top) / bodyZoom;
+        const cx = Math.max(left, Math.min(x, right));
+        const cy = Math.max(top, Math.min(y, bottom));
+        const distance = Math.hypot(x - cx, y - cy);
         if (distance < bestDistance) {
           bestDistance = distance;
           bestIdx = index;
@@ -5473,13 +5812,18 @@ const PDFPage = forwardRef(({
     };
 
     const charOffsetForSpanPoint = (spanIdx, clientX) => {
+      const point = layerPointFromClient(clientX, 0);
+      if (!point) return 0;
       const span = spans[spanIdx];
       const text = span?.text ?? span?.el?.textContent ?? "";
       const r = span?.el?.getBoundingClientRect?.();
       if (!r || !text) return 0;
-      if (clientX >= r.right - EDGE_SNAP_PX) return text.length;
-      if (clientX <= r.left + EDGE_SNAP_PX) return 0;
-      const ratio = r.width > 0 ? (clientX - r.left) / r.width : 0;
+      const left = (r.left - point.layerRect.left) / point.bodyZoom;
+      const width = r.width / point.bodyZoom;
+      const x = point.x;
+      if (x >= left + width - EDGE_SNAP_PX / point.bodyZoom) return text.length;
+      if (x <= left + EDGE_SNAP_PX / point.bodyZoom) return 0;
+      const ratio = width > 0 ? (x - left) / width : 0;
       return Math.max(0, Math.min(text.length, Math.round(ratio * text.length)));
     };
 
@@ -5503,7 +5847,7 @@ const PDFPage = forwardRef(({
       const seedSpan = spans[seededIndex];
       const allRects = spans
         .map((span, index) => ({ span, index, rect: span?.el?.getBoundingClientRect?.() }))
-        .filter(({ span, rect }) => span && rect);
+        .filter(({ span, rect }) => span && rect && spanMatchesSelectionRegion(span));
       // Scoped to the seed's own column (multi-column layouts, e.g. a
       // two-column TOC) — otherwise "nearest line" is a pure Y-distance
       // search across the WHOLE page width, which favors whichever
@@ -5535,11 +5879,15 @@ const PDFPage = forwardRef(({
       const seedHeight = seedSpan?.el?.getBoundingClientRect?.()?.height || 16;
       const seedLineTop = candidates.length ? Math.min(...candidates.map(({ rect }) => rect.top)) : null;
       const seedLineBottom = candidates.length ? Math.max(...candidates.map(({ rect }) => rect.bottom)) : null;
+      const seedSlack = Math.max(6, seedHeight * 0.35);
+      const pointerPastSeedRow =
+        (edge === "end" && seedLineBottom != null && clientY > seedLineBottom + seedSlack) ||
+        (edge === "start" && seedLineTop != null && clientY < seedLineTop - seedSlack);
       const pointerStillOnSeedLine = candidates.length
-        && clientY >= seedLineTop - seedHeight
-        && clientY <= seedLineBottom + seedHeight;
+        && clientY >= seedLineTop - seedSlack
+        && clientY <= seedLineBottom + seedSlack;
 
-      if (!pointerStillOnSeedLine) {
+      if (!pointerStillOnSeedLine || pointerPastSeedRow) {
         const rowExtent = new Map(); // rowIndex -> { top, bottom }
         for (const { span, rect } of searchPool) {
           if (span.rowIndex == null) continue;
@@ -5550,8 +5898,12 @@ const PDFPage = forwardRef(({
         }
         let nearestRow = null, nearestDist = Infinity;
         for (const [ri, { top, bottom }] of rowExtent) {
+          if (pointerPastSeedRow && ri === seedRow) continue;
           const dist = Math.abs((top + bottom) / 2 - clientY);
           if (dist < nearestDist) { nearestDist = dist; nearestRow = ri; }
+        }
+        if (nearestRow == null && pointerPastSeedRow && seedRow != null) {
+          nearestRow = seedRow;
         }
         candidates = nearestRow != null
           ? searchPool.filter(({ span }) => span.rowIndex === nearestRow).sort((a, b) => a.rect.left - b.rect.left)
@@ -5664,7 +6016,13 @@ const PDFPage = forwardRef(({
       const spanEl = spans[nextIdx]?.el;
       if (spanEl) {
         const r = spanEl.getBoundingClientRect();
+        const clampedX = Math.max(
+          r.left,
+          Math.min(clientX, r.right)
+        );
         handleEl.style.top = `${(r.bottom - layerRect.top) / bodyZoom}px`;
+        handleEl.style.left = `${(clampedX - layerRect.left) / bodyZoom}px`;
+        return;
       }
       handleEl.style.left = `${(clientX - layerRect.left) / bodyZoom}px`;
     };
@@ -5723,7 +6081,7 @@ const PDFPage = forwardRef(({
       handle.className = `sel_selection_handle sel_selection_handle--${edge}`;
       handle.dataset.selectionHandle = edge;
       handle.setAttribute("aria-label", `${edge === "start" ? "Start" : "End"} selection handle`);
-      handle.style.left = `${left}px`;
+      handle.style.left = `${Math.max(0, left)}px`;
       handle.style.top = `${top}px`;
       const onPointerDown = (event) => {
         event.preventDefault();
@@ -5766,7 +6124,7 @@ const PDFPage = forwardRef(({
       window.removeEventListener("pointerup", onWindowPointerEnd);
       window.removeEventListener("pointercancel", onWindowPointerEnd);
     };
-  }, [manualSelection]);
+  }, [manualSelection, pageViewport]);
 
   // ── Clear results on page change ───────────────────────────────────────────
   useEffect(() => {
@@ -6379,7 +6737,7 @@ const PDFPage = forwardRef(({
       const right = (r.right - layerRect.left) / bodyZoom;
       const bottom = (r.bottom - layerRect.top) / bodyZoom;
       const h = bottom - top;
-      const padV = h * 0.25;
+      const padV = Math.min(1.8, Math.max(0.8, h * 0.08));
 
       let line = lines.find((l) => Math.abs(l.refTop - top) < Math.max(8, h * 0.5));
       if (!line) {
@@ -6734,6 +7092,7 @@ const PDFPage = forwardRef(({
     if (!manualSelection) return;
     const handler = (e) => {
       if (e.target.closest?.(".sel_selection_handle")) return;
+      if (previewRef.current && previewRef.current.contains(e.target)) return;
       if (selBarRef.current && !selBarRef.current.contains(e.target)) {
         setManualSelection(null);
         window.getSelection()?.removeAllRanges();
@@ -7305,6 +7664,22 @@ const PDFPage = forwardRef(({
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {annotTool === "bbox" && (
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Border size" />
+                <SizeKnob
+                  min={1}
+                  max={12}
+                  step={1}
+                  value={bboxBorderSize}
+                  onChange={setBBoxBorderSize}
+                  color={annotColor}
+                  dashed={false}
+                  variant="dot"
+                />
               </div>
             )}
 
@@ -8027,9 +8402,8 @@ const PDFPage = forwardRef(({
         {entityBuilderOpen && (
           <EntityBuilderPanel
             onClose={toggleEntityBuilder}
-            selectedText={entityBuilderSelectedText}
-            verifyBusy={selectionVerifyBusy}
-            onVerifySource={verifyEntityBuilderSource}
+            bboxCards={bboxCardsForBuilder}
+            pageNum={pageNum}
           />
         )}
 
@@ -8305,6 +8679,22 @@ const PDFPage = forwardRef(({
                         </div>,
                         document.body,
                       )}
+                      {bboxActionMenu && createPortal(
+                        <div
+                          ref={bboxActionMenuRef}
+                          className="annot_text_action_menu"
+                          style={{
+                            position: "fixed",
+                            left: bboxActionMenu.vx,
+                            top: Math.max(8, bboxActionMenu.vy - 46),
+                          }}
+                        >
+                          <button type="button" className="annot_text_action_btn" onClick={() => handleBBoxAction("resize")}>Resize</button>
+                          <span className="annot_text_action_sep" aria-hidden="true" />
+                          <button type="button" className="annot_text_action_btn annot_text_action_btn--danger" onClick={() => handleBBoxAction("delete")}>Delete</button>
+                        </div>,
+                        document.body,
+                      )}
                       {drawTextBusy && (
                         <div id="pdf_draw_text_status">
                           <span className="pdf_draw_text_status_label">Draw to Text</span>
@@ -8413,7 +8803,13 @@ const PDFPage = forwardRef(({
           <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleInputChange} />
           </div>
           {manualSelection && !manualPopup && (
-            <div id="pdf_selected_text_preview" title={manualSelection.text}>
+            <div
+              id="pdf_selected_text_preview"
+              ref={previewRef}
+              title={manualSelection.text}
+              onMouseDownCapture={(e) => e.stopPropagation()}
+              onTouchStartCapture={(e) => e.stopPropagation()}
+            >
               <span id="pdf_selected_text_preview_label">Selected text</span>
               <span id="pdf_selected_text_preview_body">{manualSelection.text}</span>
             </div>

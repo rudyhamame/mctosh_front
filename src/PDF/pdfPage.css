@@ -564,7 +564,9 @@
   background: color-mix(in srgb, var(--color-surface) 90%, transparent);
   box-shadow: 0 12px 34px rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(12px);
-  pointer-events: none;
+  pointer-events: auto;
+  overflow: hidden;
+  max-height: calc(3 * 1.4em + 2rem);
 }
 
 #pdf_selected_text_preview_label {
@@ -579,7 +581,7 @@
 
 #pdf_selected_text_preview_body {
   min-width: 0;
-  max-height: 22vh;
+  max-height: calc(3 * 1.4em);
   overflow-y: auto;
   overflow-x: hidden;
   white-space: pre-wrap;
