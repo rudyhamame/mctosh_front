@@ -8,6 +8,7 @@ import { createOpenVoiceCloneProvider } from "../Avatar/local3d/services/ttsProv
 import { createKokoroTTSProvider } from "../Avatar/local3d/services/ttsProviders/KokoroTTSProvider";
 import { createSupertonicTTSProvider } from "../Avatar/local3d/services/ttsProviders/SupertonicTTSProvider";
 import { readTtsProviderId, readVoiceSettings, TTS_PROVIDERS } from "../Avatar/local3d/ttsProviderSettings";
+import { useAIProvider } from "../hooks/useAIProvider";
 import "./podcastPage.css";
 
 const PODCAST_PAGE_FETCH_LIMIT = 250;
@@ -41,6 +42,9 @@ const TRANSCRIPT_REWRITE_MODES = [
   { id: "professional", label: "Professional" },
   { id: "technical", label: "Technical" },
 ];
+const TRANSCRIPT_REWRITE_MODE_LABELS = Object.fromEntries(
+  TRANSCRIPT_REWRITE_MODES.map((mode) => [mode.id, mode.label])
+);
 
 const unlockBrowserSpeech = () => {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
@@ -179,6 +183,7 @@ const PodcastPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const params = useParams();
+  const { provider: selectedAiProvider } = useAIProvider();
   const { sourceId: stateSourceId, sourceName, sourceUrl } = location.state || {};
   const sourceId = stateSourceId || params.sourceId || "";
 
@@ -205,6 +210,7 @@ const PodcastPage = () => {
   const [transcriptText, setTranscriptText] = useState("");
   const [transcriptRequestedForUrl, setTranscriptRequestedForUrl] = useState("");
   const [transcriptSaved, setTranscriptSaved] = useState(false);
+  const [transcriptSavedRefinementMode, setTranscriptSavedRefinementMode] = useState("");
   const [transcriptDeleting, setTranscriptDeleting] = useState(false);
   const [transcriptRefining, setTranscriptRefining] = useState(false);
   const [transcriptRewriteMode, setTranscriptRewriteMode] = useState("clean");
@@ -506,6 +512,7 @@ const PodcastPage = () => {
   useEffect(() => {
     if (!sourceId || !transcriptTargetUrl || !activeEpisode?.audioUrl) {
       setTranscriptSaved(false);
+      setTranscriptSavedRefinementMode("");
       return;
     }
     let cancelled = false;
@@ -521,11 +528,19 @@ const PodcastPage = () => {
         if (saved) {
           setTranscriptText(String(data.transcript?.text || "").trim());
           setTranscriptRequestedForUrl(transcriptTargetUrl);
+          setTranscriptSavedRefinementMode(
+            data.transcript?.refinement?.refined
+              ? String(data.transcript?.refinement?.mode || "").trim().toLowerCase()
+              : ""
+          );
           setTranscriptError("");
+        } else {
+          setTranscriptSavedRefinementMode("");
         }
       } catch {
         if (cancelled) return;
         setTranscriptSaved(false);
+        setTranscriptSavedRefinementMode("");
       }
     };
     void run();
@@ -539,6 +554,7 @@ const PodcastPage = () => {
       setTranscriptError("No audio file was found for this episode.");
       setTranscriptText("");
       setTranscriptRequestedForUrl(transcriptTargetUrl);
+      setTranscriptSavedRefinementMode("");
       return;
     }
     setTranscriptLoading(true);
@@ -551,11 +567,17 @@ const PodcastPage = () => {
       setTranscriptText(String(data.transcript?.text || "").trim());
       setTranscriptRequestedForUrl(transcriptTargetUrl);
       setTranscriptSaved(true);
+      setTranscriptSavedRefinementMode(
+        data.transcript?.refinement?.refined
+          ? String(data.transcript?.refinement?.mode || "").trim().toLowerCase()
+          : ""
+      );
     } catch (err) {
       setTranscriptError(err.message || "Failed to transcribe this episode.");
       setTranscriptText("");
       setTranscriptRequestedForUrl(transcriptTargetUrl);
       setTranscriptSaved(false);
+      setTranscriptSavedRefinementMode("");
     } finally {
       setTranscriptLoading(false);
     }
@@ -574,6 +596,7 @@ const PodcastPage = () => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to delete this transcript.");
       setTranscriptSaved(false);
+      setTranscriptSavedRefinementMode("");
       setTranscriptText("");
       setTranscriptRequestedForUrl(transcriptTargetUrl);
     } catch (err) {
@@ -600,6 +623,7 @@ const PodcastPage = () => {
           mode: transcriptRewriteMode,
           preserveParagraphs: true,
           outputFormat: "text",
+          provider: selectedAiProvider === "manual" ? "groq" : selectedAiProvider,
         }),
       });
       const rewriteData = await rewriteRes.json().catch(() => ({}));
@@ -615,13 +639,20 @@ const PodcastPage = () => {
           "Content-Type": "application/json",
           ...authHeader(),
         },
-        body: JSON.stringify({ text: rewrittenText }),
+        body: JSON.stringify({
+          text: rewrittenText,
+          refinement: {
+            refined: true,
+            mode: transcriptRewriteMode,
+          },
+        }),
       });
       const saveData = await saveRes.json().catch(() => ({}));
       if (!saveRes.ok) throw new Error(saveData.error || "Failed to save the refined transcript.");
 
       setTranscriptText(rewrittenText);
       setTranscriptSaved(true);
+      setTranscriptSavedRefinementMode(transcriptRewriteMode);
       setTranscriptRequestedForUrl(transcriptTargetUrl);
       setTranscriptSpokenText("");
     } catch (err) {
@@ -721,6 +752,9 @@ const PodcastPage = () => {
     : transcriptTtsStatus === "speaking"
       ? "Stop"
       : "TTS";
+  const transcriptSavedLabel = transcriptSavedRefinementMode
+    ? `Saved & Refined (${TRANSCRIPT_REWRITE_MODE_LABELS[transcriptSavedRefinementMode] || transcriptSavedRefinementMode})`
+    : "Saved";
 
   useEffect(() => {
     if (!sourceId) return;
@@ -943,7 +977,7 @@ const PodcastPage = () => {
                   ) : null}
                   {transcriptSaved ? (
                     <>
-                      <span id="podcast_transcript_saved">Saved</span>
+                      <span id="podcast_transcript_saved">{transcriptSavedLabel}</span>
                       <button
                         type="button"
                         id="podcast_transcript_delete_btn"

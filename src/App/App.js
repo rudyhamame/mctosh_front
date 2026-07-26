@@ -94,6 +94,13 @@ const LEVELS = [
         color: "#ffca28",
       },
       {
+        path: "/segmentations",
+        icon: "fi-rr-shapes",
+        label: "AMCTOSHS Segmentation",
+        description: "Browse the segments (BBoxes) extracted from a PDF source and extract AMCTOSHS Medical Statements from each one",
+        color: "#4fc3f7",
+      },
+      {
         path: "/freeform",
         icon: "fi-rr-note-sticky",
         label: "Freeform",
