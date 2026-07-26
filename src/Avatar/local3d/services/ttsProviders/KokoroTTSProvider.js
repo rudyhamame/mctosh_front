@@ -13,7 +13,7 @@ import { apiUrl } from "../../../../config/api";
 import { readStoredSession } from "../../../../utils/sessionCleanup";
 
 export const createKokoroTTSProvider = () => ({
-  async synthesize({ text, signal } = {}) {
+  async synthesize({ text, kokoroVoice, signal } = {}) {
     const token = readStoredSession()?.token || "";
     const res = await fetch(apiUrl("/api/tts/kokoro/synthesize"), {
       method: "POST",
@@ -21,7 +21,7 @@ export const createKokoroTTSProvider = () => ({
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, voice: kokoroVoice }),
       signal,
     });
     const data = await res.json().catch(() => ({}));

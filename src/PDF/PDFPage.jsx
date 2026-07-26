@@ -15,7 +15,6 @@ import EntityBuilderPanel from "./EntityBuilderPanel";
 import ClinicalVignetteBuilderPanel from "./ClinicalVignetteBuilderPanel";
 import { drawAnnotation, drawMaskedHighlightText } from "./annotationDraw";
 import { PDF_TYPE_ICON } from "./pdfTypeIcon";
-import { InfoPopupButton } from "./InfoPopupButton";
 import { createPageIndexCache } from "./pdfSearchIndex.js";
 import { normalizeQuery, searchPageForQuery } from "./pdfFuzzySearch.js";
 import { correctSelectedPdfText } from "./pdfTextCorrection.js";
@@ -23,318 +22,54 @@ import { analyzePageLayout } from "./pdfPageLayout.js";
 import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
 import {
   bboxTextMatchesSpan as bboxTextMatchesSpanUtil,
+  buildTextLineRects,
+  buildTightOutlineFromRects,
+  buildTightTextOutline,
   extractBoundingBoxTextParts,
+  selectSpansForBoundingBox,
 } from "./pdfBBoxTextExtraction.js";
 import { buildRawHyle, buildSegmentedHyle, computeMarkerPosition } from "./pdfHyleStats.js";
+import {
+  BBOX_CARD_TYPES,
+  EDITABLE_BBOX_TYPES,
+  bboxTypeHas,
+  clientPointToBBoxPagePoint,
+  createBBoxDraft,
+  getViewportDocumentSize,
+  isBBoxType,
+} from "./pdfBBoxTypes.js";
+import {
+  ANNOT_COLORS,
+  ANNOT_COLOR_GROUPS,
+  ANNOT_HISTORY_META,
+  ANNOT_TOOLS,
+  AnnotControlHeaderInfo,
+  ArrowToolIcon,
+  BBOX_DISTINCT_COLORS,
+  BBOX_MIN_GAP,
+  bendPointAwayFromObstacles,
+  CARDS,
+  DEFAULT_ANNOT_TOOL_COLORS,
+  DeletePageIcon,
+  DRAWING_TOOL_ORDER,
+  FreeshapeToolIcon,
+  HYLE_TYPE_LABELS,
+  HYLE_TYPE_TREE,
+  InsertPageIcon,
+  LabeledPercentKnob,
+  MODE_TOOL_ORDER,
+  OpacityKnob,
+  PDF_TYPE_LABEL,
+  PenToolIcon,
+  resolveBBoxSpacing,
+  SHAPE_TOOL_KEYS,
+  ShapesToolIcon,
+  SizeKnob,
+  SmartVideoIcon,
+  TEXT_FONT_FAMILIES,
+} from "./pdfPageToolbarConfig.jsx";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-
-const InsertPageIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M13 10h-2v3H8v2h3v3h2v-3h3v-2h-3z" />
-    <path d="m19.94 7.68-.03-.09a.8.8 0 0 0-.2-.29l-5-5c-.09-.09-.19-.15-.29-.2l-.09-.03a.8.8 0 0 0-.26-.05c-.02 0-.04-.01-.06-.01H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-12s-.01-.04-.01-.06c0-.09-.02-.17-.05-.26ZM6 20V4h7v4c0 .55.45 1 1 1h4v11z" />
-  </svg>
-);
-
-const DeletePageIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M8 13h8v2H8z" />
-    <path d="m19.94 7.68-.03-.09a.8.8 0 0 0-.2-.29l-5-5c-.09-.09-.19-.15-.29-.2l-.09-.03a.8.8 0 0 0-.26-.05c-.02 0-.04-.01-.06-.01H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-12s-.01-.04-.01-.06c0-.09-.02-.17-.05-.26ZM6 20V4h7v4c0 .55.45 1 1 1h4v11z" />
-  </svg>
-);
-
-const PDF_TYPE_LABEL = {
-  "text-based": "Text-based",
-  "mixed":      "Mixed",
-  "scanned":    "Scanned",
-};
-
-const CARDS = [
-  { key: "entities",  label: "Entities" },
-  { key: "traces",    label: "Traces" },
-  { key: "phenomena", label: "Phenomena" },
-  { key: "concept",   label: "Concept" },
-  { key: "models",    label: "Models" },
-];
-
-const HYLE_TYPE_TREE = [
-  {
-    key: "morpheme", label: "Morpheme",
-    children: [
-      {
-        key: "morpheme.base", label: "Base",
-        children: [
-          { key: "morpheme.base.free",  label: "Free",  note: "simple word" },
-          { key: "morpheme.base.bound", label: "Bound" },
-        ],
-      },
-      {
-        key: "morpheme.affix", label: "Affix",
-        children: [
-          { key: "morpheme.affix.prefix",      label: "Prefix" },
-          { key: "morpheme.affix.connecting",  label: "Connecting vowel" },
-          { key: "morpheme.affix.suffix",      label: "Suffix" },
-        ],
-      },
-    ],
-  },
-  {
-    key: "word", label: "Word",
-    children: [
-      { key: "word.compound", label: "Compound", note: "one or more morphemes" },
-    ],
-  },
-  { key: "syntagm",  label: "Syntagm" },
-  { key: "paradigm", label: "Paradigm" },
-];
-
-// Flat label lookup for selected type display
-const HYLE_TYPE_LABELS = {
-  "morpheme.base.free":       "Free base",
-  "morpheme.base.bound":      "Bound base",
-  "morpheme.affix.prefix":    "Prefix",
-  "morpheme.affix.connecting":"Connecting vowel",
-  "morpheme.affix.suffix":    "Suffix",
-  "word.compound":            "Compound",
-  "syntagm":                  "Syntagm",
-  "paradigm":                 "Paradigm",
-};
-
-// "Navigator" and "Select Text" used to live here as their own tools —
-// both removed. Panning is now a three-finger touch gesture (see
-// touchCentroid/the 3-finger branches in the touch-handling effect below)
-// plus plain mouse-drag/wheel-scroll for non-touch input, available
-// regardless of which drawing tool (if any) is selected, rather than
-// needing "Navigator" picked first. Double-tap/double-click text selection
-// is likewise always on in reading mode now, see textSelectable below.
-const ANNOT_TOOLS = [
-  { key: "highlight",     icon: "bx bx-highlight",       label: "Highlight",     hasSize: true  },
-  {
-    key: "underline",
-    iconSvg: (
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
-        <path d="M5 18h14v2H5zM17 8V4H7v4h2V6h2v8H9v2h6v-2h-2V6h2v2z" />
-      </svg>
-    ),
-    label: "Underline",
-    hasSize: false,
-  },
-  { key: "strikethrough", icon: "bx bx-strikethrough",   label: "Strikethrough", hasSize: false },
-  { key: "pen",           icon: "bx bx-pencil",          label: "Pen",           hasSize: true  },
-  { key: "line",          icon: "bx bx-minus",           label: "Line",          hasSize: false },
-  { key: "arrow",         icon: "bx bx-right-arrow-alt", label: "Arrow",         hasSize: true  },
-  { key: "rect",          icon: "bx bx-rectangle",       label: "Rectangle",     hasSize: false },
-  { key: "bbox",          icon: "bx bx-crop",            label: "BBox",          hasSize: false },
-  { key: "circle",        icon: "bx bx-circle",          label: "Ellipse",       hasSize: false },
-  {
-    key: "freeshape",
-    // Duplicated inline rather than referencing the standalone
-    // FreeshapeToolIcon component further down — same already-established
-    // reasoning as "text"/"underline"/"smartVideo" below: this array is
-    // evaluated at module load, before that component's own const binding
-    // exists.
-    iconSvg: (
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
-        <path d="M12 3c2.4 0 4 1.3 5.4 2.8 1.5 1.6 3.6 2.9 3.6 5.4 0 2.1-1.8 3.1-3.4 4.3-1.5 1.1-2.9 2.5-5.6 2.5-2.5 0-4.3-1.2-5.8-2.6C4.7 14 3 12.7 3 10.6c0-2.3 1.9-3.4 3.6-4.7C8.1 4.6 9.7 3 12 3Zm0 2c-1.5 0-2.7 1.2-4.1 2.3C6.5 8.4 5 9.2 5 10.6c0 1.2 1.1 2.1 2.6 3.2 1.3 1 2.7 2.2 4.4 2.2 1.9 0 3-1 4.3-2 1.2-.9 2.7-1.7 2.7-3.2 0-1.5-1.5-2.5-2.9-3.9C14.9 5.6 13.6 5 12 5Z" />
-      </svg>
-    ),
-    label: "Freeshape",
-    hasSize: false,
-  },
-  {
-    key: "text",
-    iconSvg: (
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
-        <path d="M7 9h10v2H7zm0 4h7v2H7z" />
-        <path d="M12 2C6.49 2 2 6.49 2 12c0 2.12.68 4.19 1.93 5.9l-1.75 2.53c-.21.31-.24.7-.06 1.03.17.33.51.54.89.54h9c5.51 0 10-4.49 10-10S17.51 2 12 2m0 18H4.91L6 18.43c.26-.37.23-.88-.06-1.22A7.98 7.98 0 0 1 4.01 12c0-4.41 3.59-8 8-8s8 3.59 8 8-3.59 8-8 8Z" />
-      </svg>
-    ),
-    label: "Text",
-    hasSize: false,
-  },
-  { key: "drawText",      icon: "bx bx-magic-wand",      label: "Draw to Text",  hasSize: false },
-  { key: "eraser",        icon: "bx bx-eraser",          label: "Eraser",        hasSize: true  },
-  {
-    key: "smartVideo",
-    // Duplicated inline rather than referencing the standalone SmartVideoIcon
-    // component further down (used elsewhere for the sub-toolbar's own
-    // "Find Videos" button) — this array is evaluated at module load, before
-    // that component's own `const` binding exists, matching the same
-    // already-established pattern for "text"/"underline" above.
-    iconSvg: (
-      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20">
-        <path d="M20 3H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h7v3H8v2h8v-2h-3v-3h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M4 15V5h16v10z" />
-        <path d="m10 13 5-3-5-3z" />
-      </svg>
-    ),
-    label: "Extract Eidos and Find Videos",
-    hasSize: false,
-  },
-];
-// "shapes" is a placeholder in the main strip that opens the shared
-// sub-toolbar containing the four SHAPE_TOOL_KEYS below, so they don't each
-// take their own slot in the primary row.
-const SHAPE_TOOL_KEYS = ["line", "arrow", "rect", "circle", "freeshape"];
-const BBOX_LIKE_ANNOT_TYPES = new Set(["bbox", "bboxContainer"]);
-const DRAWING_TOOL_ORDER = [
-  "pen",
-  "highlight",
-  "underline",
-  "strikethrough",
-  "shapes",
-  "text",
-  "drawText",
-  "bbox",
-  "eraser",
-];
-// Smart Video is an annotTool (drawn/selected the same way as the drawing
-// tools above) but isn't itself a drawing tool — it renders in the
-// non-drawing "mode" group (.annot_mode_strip) alongside Entity Builder /
-// Clinical Vignette / Narrative Mode, not in .annot_tool_strip.
-const MODE_TOOL_ORDER = ["smartVideo"];
-
-// Open Color (yeun.github.io/open-color) — the standard "professional" web
-// UI palette, three shades (light/mid/deep) per hue family plus a grayscale
-// anchor set, so annotations always land on a color that already looks
-// intentional next to everything else in the app instead of a raw/neon pick.
-const ANNOT_COLORS = [
-  "#000000", "#212529", "#868e96", "#e9ecef", "#ffffff",
-  "#ff8787", "#fa5252", "#e03131",
-  "#f783ac", "#e64980", "#c2255c",
-  "#da77f2", "#be4bdb", "#9c36b5",
-  "#9775fa", "#7950f2", "#6741d9",
-  "#748ffc", "#4c6ef5", "#3b5bdb",
-  "#74c0fc", "#339af0", "#1c7ed6",
-  "#66d9e8", "#22b8cf", "#1098ad",
-  "#63e6be", "#20c997", "#0ca678",
-  "#8ce99a", "#51cf66", "#37b24d",
-  "#c0eb75", "#94d82d", "#74b816",
-  "#ffe066", "#fcc419", "#f59f00",
-  "#ffa94d", "#fd7e14", "#e8590c",
-];
-const ANNOT_COLOR_GROUPS = [
-  { label: "Neutrals", colors: ANNOT_COLORS.slice(0, 5) },
-  { label: "Warm", colors: ANNOT_COLORS.slice(5, 14) },
-  { label: "Cool", colors: ANNOT_COLORS.slice(14, 29) },
-  { label: "Green", colors: ANNOT_COLORS.slice(29, 38) },
-  { label: "Sun", colors: ANNOT_COLORS.slice(38) },
-];
-const DEFAULT_ANNOT_TOOL_COLORS = {
-  highlight: "#ffe066",
-  pen: "#212529",
-  underline: "#fa5252",
-  strikethrough: "#e03131",
-  line: "#4c6ef5",
-  arrow: "#339af0",
-  rect: "#20c997",
-  bbox: "#339af0",
-  circle: "#fd7e14",
-  text: "#212529",
-  drawText: "#212529",
-};
-
-const BBOX_MIN_GAP = 1;
-const resolveBBoxSpacing = (candidate, obstacles, gap = BBOX_MIN_GAP) => {
-  if (!candidate) return candidate;
-  const next = { ...candidate };
-  const overlapsWithGap = (a, b) => (
-    a.x < b.x + b.w + gap
-    && a.x + a.w + gap > b.x
-    && a.y < b.y + b.h + gap
-    && a.y + a.h + gap > b.y
-  );
-
-  for (let iter = 0; iter < 12; iter++) {
-    let moved = false;
-    for (const obs of obstacles) {
-      if (!obs || !overlapsWithGap(next, obs)) continue;
-
-      const shifts = [
-        { dx: (obs.x - gap) - (next.x + next.w), dy: 0 },
-        { dx: (obs.x + obs.w + gap) - next.x, dy: 0 },
-        { dx: 0, dy: (obs.y - gap) - (next.y + next.h) },
-        { dx: 0, dy: (obs.y + obs.h + gap) - next.y },
-      ];
-
-      let best = null;
-      for (const shift of shifts) {
-        const test = {
-          x: next.x + shift.dx,
-          y: next.y + shift.dy,
-          w: next.w,
-          h: next.h,
-        };
-        if (overlapsWithGap(test, obs)) continue;
-        const dist = Math.abs(shift.dx) + Math.abs(shift.dy);
-        if (!best || dist < best.dist) best = { ...shift, dist };
-      }
-
-      if (!best) continue;
-      next.x += best.dx;
-      next.y += best.dy;
-      moved = true;
-    }
-    if (!moved) break;
-  }
-
-  return next;
-};
-
-const TEXT_FONT_FAMILIES = [
-  { key: "Georgia", label: "Georgia" },
-  { key: "Arial", label: "Arial" },
-  { key: "Verdana", label: "Verdana" },
-  { key: "Trebuchet MS", label: "Trebuchet MS" },
-  { key: "Times New Roman", label: "Times New Roman" },
-  { key: "Courier New", label: "Courier New" },
-];
-
-const ANNOT_HISTORY_META = {
-  add:   { icon: "bx bx-plus",   verb: "Added" },
-  edit:  { icon: "bx bx-edit",   verb: "Edited" },
-  undo:  { icon: "bx bx-undo",   verb: "Undid" },
-  redo:  { icon: "bx bx-redo",   verb: "Redid" },
-  erase: { icon: "bx bx-eraser", verb: "Erased" },
-  clear: { icon: "bx bx-trash",  verb: "Cleared" },
-};
-
-
-const PenToolIcon = () => (
-  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
-    <path d="M19.41 3c-.78-.78-2.05-.78-2.83 0l-2.09 2.09L12.7 3.3a.996.996 0 0 0-1.41 0l-6 6 1.41 1.41 5.29-5.29 1.09 1.09-8.79 8.78c-.13.13-.22.29-.26.46l-1 4c-.08.34.01.7.26.95.19.19.45.29.71.29.08 0 .16 0 .24-.03l4-1c.18-.04.34-.13.46-.26L20.99 7.41c.78-.78.78-2.05 0-2.83L19.4 2.99ZM7.48 18.1l-2.11.53.53-2.11 8.6-8.61 1.59 1.59-8.6 8.6ZM17.49 8.09 15.9 6.5l2.09-2.09 1.59 1.58-2.09 2.09Z" />
-  </svg>
-);
-
-const ShapesToolIcon = () => (
-  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
-    <path d="M20 8h-2.27c-.89-3.47-4.07-6-7.73-6-4.41 0-8 3.59-8 8 0 3.66 2.53 6.84 6 7.73V20c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2M8 10v5.64c-2.34-.83-4-3.08-4-5.64 0-3.31 2.69-6 6-6 2.57 0 4.81 1.66 5.64 4H10c-1.1 0-2 .9-2 2m12 10H10V10h10z" />
-  </svg>
-);
-
-const ArrowToolIcon = () => (
-  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
-    <path d="M6 13h8.09l-3.3 3.29 1.42 1.42 5.7-5.71-5.7-5.71-1.42 1.42 3.3 3.29H6z" />
-  </svg>
-);
-
-// Freeshape — an irregular closed polygon, distinct from the fixed-corner
-// rect/circle shapes: a simple lasso-like blob outline signals "draw any
-// closed outline" rather than a specific geometric primitive.
-const FreeshapeToolIcon = () => (
-  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
-    <path d="M12 3c2.4 0 4 1.3 5.4 2.8 1.5 1.6 3.6 2.9 3.6 5.4 0 2.1-1.8 3.1-3.4 4.3-1.5 1.1-2.9 2.5-5.6 2.5-2.5 0-4.3-1.2-5.8-2.6C4.7 14 3 12.7 3 10.6c0-2.3 1.9-3.4 3.6-4.7C8.1 4.6 9.7 3 12 3Zm0 2c-1.5 0-2.7 1.2-4.1 2.3C6.5 8.4 5 9.2 5 10.6c0 1.2 1.1 2.1 2.6 3.2 1.3 1 2.7 2.2 4.4 2.2 1.9 0 3-1 4.3-2 1.2-.9 2.7-1.7 2.7-3.2 0-1.5-1.5-2.5-2.9-3.9C14.9 5.6 13.6 5 12 5Z" />
-  </svg>
-);
-
-// "smartVideo" tool-strip icon (Extract Eidos and Find Videos) — see the
-// Smart Video Search state/handlers further down, the smartVideoCapture
-// branch in the annotation-drawing effect, and <SmartVideoPanel> in the render.
-const SmartVideoIcon = () => (
-  <svg className="pdf_toolbar_svg_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
-    <path d="M20 3H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h7v3H8v2h8v-2h-3v-3h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2M4 15V5h16v10z" />
-    <path d="m10 13 5-3-5-3z" />
-  </svg>
-);
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
@@ -752,6 +487,284 @@ const smoothStrokePoint = (points, nextPoint, stabilization, scale = 1) => {
   return smoothed;
 };
 
+const pointsToBounds = (points) => {
+  if (!Array.isArray(points) || !points.length) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const point of points) {
+    if (!point) continue;
+    minX = Math.min(minX, point.x ?? Infinity);
+    minY = Math.min(minY, point.y ?? Infinity);
+    maxX = Math.max(maxX, point.x ?? -Infinity);
+    maxY = Math.max(maxY, point.y ?? -Infinity);
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) return null;
+  return { x: minX, y: minY, w: Math.max(0, maxX - minX), h: Math.max(0, maxY - minY) };
+};
+
+const isBBoxOutlineClosed = (annotationLike) => annotationLike?.closed !== false;
+
+const finalizeBBoxFreeformPoints = (points, scale = 1) => {
+  if (!Array.isArray(points) || points.length < 2) return { points: Array.isArray(points) ? points.map((point) => ({ ...point })) : [], closed: false };
+  const nextPoints = points.map((point) => ({ ...point }));
+  if (nextPoints.length < 3) return { points: nextPoints, closed: false };
+  const first = nextPoints[0];
+  const last = nextPoints[nextPoints.length - 1];
+  const safeScale = Math.max(0.25, Number(scale) || 1);
+  const closeThreshold = Math.max(8 / safeScale, 4);
+  const closed = Math.hypot((last.x ?? 0) - (first.x ?? 0), (last.y ?? 0) - (first.y ?? 0)) <= closeThreshold;
+  if (!closed) return { points: nextPoints, closed: false };
+  nextPoints[nextPoints.length - 1] = {
+    ...last,
+    x: first.x,
+    y: first.y,
+  };
+  return { points: nextPoints, closed: true };
+};
+
+const attractBBoxLoopPoint = (points, scale = 1) => {
+  if (!Array.isArray(points) || points.length < 3) return { points: Array.isArray(points) ? points.map((point) => ({ ...point })) : [], closed: false, attraction: 0 };
+  const nextPoints = points.map((point) => ({ ...point }));
+  const first = nextPoints[0];
+  const lastIndex = nextPoints.length - 1;
+  const last = nextPoints[lastIndex];
+  const safeScale = Math.max(0.25, Number(scale) || 1);
+  const snapThreshold = Math.max(8 / safeScale, 4);
+  const attractThreshold = snapThreshold * 3.2;
+  const distance = Math.hypot((last.x ?? 0) - (first.x ?? 0), (last.y ?? 0) - (first.y ?? 0));
+  if (distance <= snapThreshold) {
+    nextPoints[lastIndex] = {
+      ...last,
+      x: first.x,
+      y: first.y,
+    };
+    return { points: nextPoints, closed: true, attraction: 1 };
+  }
+  if (distance >= attractThreshold) return { points: nextPoints, closed: false, attraction: 0 };
+  const ratio = 1 - ((distance - snapThreshold) / Math.max(0.000001, attractThreshold - snapThreshold));
+  const pull = Math.pow(Math.max(0, Math.min(1, ratio)), 1.6) * 0.72;
+  nextPoints[lastIndex] = {
+    ...last,
+    x: last.x + ((first.x ?? 0) - (last.x ?? 0)) * pull,
+    y: last.y + ((first.y ?? 0) - (last.y ?? 0)) * pull,
+  };
+  return { points: nextPoints, closed: false, attraction: pull };
+};
+
+const expandRectBy = (rect, padding) => {
+  if (!rect) return null;
+  const pad = Math.max(0, Number(padding) || 0);
+  return {
+    x: rect.x - pad,
+    y: rect.y - pad,
+    w: rect.w + pad * 2,
+    h: rect.h + pad * 2,
+  };
+};
+
+const scalePointsToBounds = (points, fromBounds, toBounds) => {
+  if (!Array.isArray(points) || points.length < 2 || !fromBounds || !toBounds) return points;
+  const fromW = Math.max(1, fromBounds.w || 0);
+  const fromH = Math.max(1, fromBounds.h || 0);
+  const toW = Math.max(1, toBounds.w || 0);
+  const toH = Math.max(1, toBounds.h || 0);
+  return points.map((point) => ({
+    ...point,
+    x: toBounds.x + ((point.x - fromBounds.x) / fromW) * toW,
+    y: toBounds.y + ((point.y - fromBounds.y) / fromH) * toH,
+  }));
+};
+
+const buildEditableBBoxOutline = (annotation) => {
+  if (Array.isArray(annotation?.points) && annotation.points.length >= 2) {
+    return annotation.points.map((point) => ({
+      x: point.x,
+      y: point.y,
+      t: point.t,
+      pressure: point.pressure,
+      manualControl: point.manualControl,
+    }));
+  }
+  if (!annotation) return [];
+  const left = annotation.x ?? 0;
+  const top = annotation.y ?? 0;
+  const right = left + (annotation.w ?? 0);
+  const bottom = top + (annotation.h ?? 0);
+  return [
+    { x: left, y: top },
+    { x: right, y: top },
+    { x: right, y: bottom },
+    { x: left, y: bottom },
+  ];
+};
+
+const sampleClosedOutlineHandles = (annotation, scale = 1) => {
+  const outline = buildEditableBBoxOutline(annotation);
+  if (outline.length < 2) return [];
+  const closed = isBBoxOutlineClosed(annotation);
+  const safeScale = Math.max(0.25, Number(scale) || 1);
+  const dashLength = 8 / safeScale;
+  const gapLength = 6 / safeScale;
+  const baseStride = dashLength + gapLength;
+  const stride = baseStride * 3.5;
+  const offset = stride / 2;
+  const segments = [];
+  let totalLength = 0;
+  const segmentCount = closed ? outline.length : Math.max(0, outline.length - 1);
+  for (let i = 0; i < segmentCount; i++) {
+    const a = outline[i];
+    const b = outline[(i + 1) % outline.length];
+    const length = Math.hypot((b.x ?? 0) - (a.x ?? 0), (b.y ?? 0) - (a.y ?? 0));
+    if (length <= 0.001) continue;
+    segments.push({ startIndex: i, a, b, length, startLength: totalLength });
+    totalLength += length;
+  }
+  if (!segments.length || totalLength <= 0.001) return [];
+  const maxHandles = 14;
+  const minHandles = 4;
+  const desiredCount = Math.max(minHandles, Math.min(maxHandles, Math.round(totalLength / stride)));
+  const finalStride = desiredCount > 0 ? totalLength / desiredCount : stride;
+  const finalOffset = finalStride / 2;
+  const handles = [];
+  for (let distance = finalOffset; distance < totalLength; distance += finalStride) {
+    const segment = segments.find((item) => distance >= item.startLength && distance <= item.startLength + item.length) || segments[segments.length - 1];
+    const localDistance = distance - segment.startLength;
+    const t = Math.max(0, Math.min(1, localDistance / Math.max(0.001, segment.length)));
+    handles.push({
+      x: segment.a.x + (segment.b.x - segment.a.x) * t,
+      y: segment.a.y + (segment.b.y - segment.a.y) * t,
+      insertAfterIndex: segment.startIndex,
+      t,
+    });
+  }
+  return handles;
+};
+
+const deformClosedOutlineAroundPoint = (points, pointIndex, dx, dy, scale = 1, closed = true) => {
+  if (!Array.isArray(points) || pointIndex == null || pointIndex < 0 || pointIndex >= points.length) return points;
+  const count = points.length;
+  if (count < 2) return points.map((point) => ({ ...point }));
+
+  const segmentCount = closed ? count : Math.max(0, count - 1);
+  const segmentLengths = Array.from({ length: segmentCount }, (_, index) => {
+    const point = points[index];
+    const next = points[index + 1] ?? points[(index + 1) % count];
+    return Math.hypot((next.x ?? 0) - (point.x ?? 0), (next.y ?? 0) - (point.y ?? 0));
+  });
+  const perimeter = segmentLengths.reduce((sum, length) => sum + length, 0);
+  if (perimeter <= 0.001) return points.map((point) => ({ ...point }));
+
+  const safeScale = Math.max(0.25, Number(scale) || 1);
+  const previousIndex = closed ? (pointIndex - 1 + count) % count : Math.max(0, pointIndex - 1);
+  const nextIndex = closed ? pointIndex % count : Math.min(segmentLengths.length - 1, pointIndex);
+  const localSegmentSpan = (segmentLengths[previousIndex] || 0) + (segmentLengths[nextIndex] || 0);
+  // Keep border edits highly local: enough spread to avoid a hard kink,
+  // but never enough to drag distant sides of the shape around.
+  const influenceRadius = Math.max(
+    14 / safeScale,
+    Math.min(
+      Math.max(localSegmentSpan * 1.35, 28 / safeScale),
+      Math.max(18 / safeScale, perimeter * 0.085),
+    ),
+  );
+  const forwardDistances = new Array(count).fill(Infinity);
+  const backwardDistances = new Array(count).fill(Infinity);
+  forwardDistances[pointIndex] = 0;
+  backwardDistances[pointIndex] = 0;
+  let distance = 0;
+  for (let step = 1; step < count; step++) {
+    const previousSegmentIndex = closed ? (pointIndex + step - 1) % count : pointIndex + step - 1;
+    const index = closed ? (pointIndex + step) % count : pointIndex + step;
+    if (!closed && (previousSegmentIndex >= segmentLengths.length || index >= count)) break;
+    distance += segmentLengths[previousSegmentIndex] || 0;
+    forwardDistances[index] = distance;
+  }
+  distance = 0;
+  for (let step = 1; step < count; step++) {
+    const index = closed ? (pointIndex - step + count) % count : pointIndex - step;
+    if (!closed && index < 0) break;
+    const segmentIndex = closed ? index : index;
+    distance += segmentLengths[segmentIndex] || 0;
+    backwardDistances[index] = distance;
+  }
+
+  return points.map((point, index) => {
+    const borderDistance = Math.min(forwardDistances[index], backwardDistances[index]);
+    const ratio = Math.min(1, borderDistance / Math.max(0.001, influenceRadius));
+    const weight = borderDistance >= influenceRadius
+      ? 0
+      : Math.pow(1 - ratio, 2.6);
+    if (weight <= 0) return { ...point };
+    return {
+      ...point,
+      x: point.x + dx * weight,
+      y: point.y + dy * weight,
+    };
+  });
+};
+
+const findNearestOutlinePointIndex = (points, x, y) => {
+  if (!Array.isArray(points) || !points.length) return -1;
+  let bestIndex = 0;
+  let bestDistance = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i];
+    const distance = Math.hypot((point.x ?? 0) - x, (point.y ?? 0) - y);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = i;
+    }
+  }
+  return bestIndex;
+};
+
+const findNearestOutlineSegmentPoint = (points, x, y, closed = true) => {
+  if (!Array.isArray(points) || points.length < 2) return null;
+  let best = null;
+  const segmentCount = closed ? points.length : Math.max(0, points.length - 1);
+  for (let index = 0; index < segmentCount; index++) {
+    const start = points[index];
+    const end = points[(index + 1) % points.length];
+    const dx = (end.x ?? 0) - (start.x ?? 0);
+    const dy = (end.y ?? 0) - (start.y ?? 0);
+    const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared <= 0.000001
+      ? 0
+      : Math.max(0, Math.min(1, (((x - start.x) * dx) + ((y - start.y) * dy)) / lengthSquared));
+    const projectedX = start.x + dx * t;
+    const projectedY = start.y + dy * t;
+    const distance = Math.hypot(projectedX - x, projectedY - y);
+    if (!best || distance < best.distance) {
+      best = { x: projectedX, y: projectedY, insertAfterIndex: index, distance };
+    }
+  }
+  return best;
+};
+
+const buildBBoxOutlinePath = (annotation, scale = 1) => {
+  const points = buildEditableBBoxOutline(annotation);
+  if (points.length < 2) return "";
+  return `${points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x * scale} ${point.y * scale}`).join(" ")}${isBBoxOutlineClosed(annotation) ? " Z" : ""}`;
+};
+
+const stripTitleFromBBoxTextValue = (text, title) => {
+  const bodyText = String(text || "").trim();
+  const titleText = String(title || "").trim();
+  if (!bodyText || !titleText) return bodyText;
+  const escapedTitle = titleText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`^${escapedTitle}[\\s:;-]*`, "i"),
+    new RegExp(`^[\\s:;-]*${escapedTitle}[\\s:;-]*`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const next = bodyText.replace(pattern, "").trim();
+    if (next !== bodyText) return next;
+  }
+  return bodyText;
+};
+
 const distanceBetweenStrokePoints = (a, b) => Math.hypot((b.x ?? 0) - (a.x ?? 0), (b.y ?? 0) - (a.y ?? 0));
 
 const dedupeStrokePoints = (points, minDistance = 0.02) => {
@@ -890,247 +903,6 @@ const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType =
 // Compact draggable "knob" that replaces a native <input type="range"> for
 // annotation size — the preview grows/shrinks live with the value, so it
 // previews the active tool size instead of just pointing at a number.
-const KNOB_MIN_PX  = 8;
-const KNOB_MAX_PX  = 22;
-const KNOB_PAD_PX  = 12;
-const KNOB_TRACK_W = 64;
-const KNOB_LABEL_W  = 44;
-const KNOB_TOTAL_W  = KNOB_TRACK_W + KNOB_LABEL_W;
-
-const SizeKnob = ({ min, max, step, value, onChange, color, dashed, variant = "dot" }) => {
-  const trackRef = useRef(null);
-  const draggingRef = useRef(false);
-
-  const nudgeSize = useCallback((direction) => {
-    const precision = String(step).includes(".") ? String(step).split(".")[1].length : 0;
-    const next = clamp(value + (direction * step), min, max);
-    onChange(Number(next.toFixed(precision)));
-  }, [max, min, onChange, step, value]);
-
-  const updateFromClientX = useCallback((clientX) => {
-    const rect = trackRef.current.getBoundingClientRect();
-    const usable = KNOB_TRACK_W - KNOB_PAD_PX * 2;
-    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
-    frac = Math.min(1, Math.max(0, frac));
-    let val = min + frac * (max - min);
-    val = Math.round(val / step) * step;
-    val = Math.min(max, Math.max(min, val));
-    onChange(val);
-  }, [min, max, step, onChange]);
-
-  const onPointerDown = (e) => {
-    draggingRef.current = true;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    updateFromClientX(e.clientX);
-  };
-  const onPointerMove = (e) => {
-    if (!draggingRef.current) return;
-    updateFromClientX(e.clientX);
-  };
-  const onPointerUp = (e) => {
-    draggingRef.current = false;
-    e.currentTarget.releasePointerCapture(e.pointerId);
-  };
-
-  const frac     = Math.min(1, Math.max(0, (value - min) / (max - min)));
-  const knobSize = KNOB_MIN_PX + frac * (KNOB_MAX_PX - KNOB_MIN_PX);
-  const highlightPreviewHeight = clamp(value * 0.65, 5, 26);
-  const highlightPreviewWidth = clamp(22 + value * 0.55, 28, 54);
-  const centerX  = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
-
-  return (
-    <div className="annot_size_knob">
-      <div className="annot_size_stepper" aria-label="Adjust tool size">
-        <button
-          type="button"
-          className="annot_size_stepper_btn"
-          onClick={() => nudgeSize(1)}
-          disabled={value >= max}
-          title="Increase size"
-        >
-          +
-        </button>
-        <button
-          type="button"
-          className="annot_size_stepper_btn"
-          onClick={() => nudgeSize(-1)}
-          disabled={value <= min}
-          title="Decrease size"
-        >
-          -
-        </button>
-      </div>
-      <div
-        className="annot_size_knob_track"
-        ref={trackRef}
-        style={{ width: KNOB_TOTAL_W }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        title="Size"
-      >
-        <div className="annot_size_knob_fill" style={{ width: centerX }} />
-        {variant === "highlight" ? (
-          <div
-            className="annot_size_highlight_preview"
-            style={{
-              width: highlightPreviewWidth,
-              height: highlightPreviewHeight,
-              left: centerX,
-              color,
-              background: color,
-            }}
-          />
-        ) : (
-          <div
-            className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}`}
-            style={{
-              width: knobSize,
-              height: knobSize,
-              left: centerX,
-              background: dashed ? "transparent" : color,
-            }}
-          />
-        )}
-        <span className="annot_size_label">{Number.isInteger(value) ? value : value.toFixed(1)}pt</span>
-      </div>
-    </div>
-  );
-};
-
-// Same draggable-pill mechanics as SizeKnob, but the dot's diameter stays
-// fixed and its CSS opacity varies instead — previewing highlight opacity
-// directly rather than a size no one asked about.
-const OPACITY_MIN_PCT = 10;
-const OPACITY_MAX_PCT = 90;
-const OpacityKnob = ({ value, onChange, color }) => {
-  const trackRef = useRef(null);
-  const draggingRef = useRef(false);
-
-  const updateFromClientX = useCallback((clientX) => {
-    const rect = trackRef.current.getBoundingClientRect();
-    const usable = rect.width - KNOB_PAD_PX * 2;
-    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
-    frac = Math.min(1, Math.max(0, frac));
-    const val = Math.round(OPACITY_MIN_PCT + frac * (OPACITY_MAX_PCT - OPACITY_MIN_PCT));
-    onChange(val);
-  }, [onChange]);
-
-  const onPointerDown = (e) => {
-    draggingRef.current = true;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    updateFromClientX(e.clientX);
-  };
-  const onPointerMove = (e) => {
-    if (!draggingRef.current) return;
-    updateFromClientX(e.clientX);
-  };
-  const onPointerUp = (e) => {
-    draggingRef.current = false;
-    e.currentTarget.releasePointerCapture(e.pointerId);
-  };
-
-  const frac    = Math.min(1, Math.max(0, (value - OPACITY_MIN_PCT) / (OPACITY_MAX_PCT - OPACITY_MIN_PCT)));
-  const centerX = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
-
-  return (
-    <div
-      className="annot_size_knob_track"
-      ref={trackRef}
-      style={{ width: KNOB_TRACK_W }}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      title={`Opacity: ${value}%`}
-    >
-      <div className="annot_size_knob_fill" style={{ width: centerX }} />
-      <div
-        className="annot_size_knob_dot"
-        style={{ width: 14, height: 14, left: centerX, background: color, opacity: value / 100 }}
-      />
-    </div>
-  );
-};
-
-const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%" }) => {
-  const trackRef = useRef(null);
-  const draggingRef = useRef(false);
-
-  const updateFromClientX = useCallback((clientX) => {
-    const rect = trackRef.current.getBoundingClientRect();
-    const usable = KNOB_TRACK_W - KNOB_PAD_PX * 2;
-    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
-    frac = Math.min(1, Math.max(0, frac));
-    let val = min + frac * (max - min);
-    val = Math.round(val / step) * step;
-    val = Math.min(max, Math.max(min, val));
-    onChange(val);
-  }, [max, min, onChange, step]);
-
-  const onPointerDown = (e) => {
-    draggingRef.current = true;
-    e.currentTarget.setPointerCapture(e.pointerId);
-    updateFromClientX(e.clientX);
-  };
-  const onPointerMove = (e) => {
-    if (!draggingRef.current) return;
-    updateFromClientX(e.clientX);
-  };
-  const onPointerUp = (e) => {
-    draggingRef.current = false;
-    e.currentTarget.releasePointerCapture(e.pointerId);
-  };
-
-  const frac = Math.min(1, Math.max(0, (value - min) / (max - min)));
-  const centerX = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
-
-  return (
-    <div className="annot_size_knob">
-      <div
-        className="annot_size_knob_track"
-        ref={trackRef}
-        style={{ width: KNOB_TOTAL_W }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        title={`${value}${label}`}
-      >
-        <div className="annot_size_knob_fill" style={{ width: centerX }} />
-        <div
-          className="annot_size_knob_dot annot_size_knob_dot--percent"
-          style={{ width: 14, height: 14, left: centerX }}
-        />
-        <span className="annot_size_label">{value}{label}</span>
-      </div>
-    </div>
-  );
-};
-
-const LabeledPercentKnob = ({ title, subtitle, ...props }) => (
-  <div className="annot_control">
-    <div className="annot_control_head annot_control_head--info">
-      <span className="annot_control_title">{title}</span>
-      {subtitle && (
-        <div className="annot_control_info_wrap">
-          <InfoPopupButton info={subtitle} label="More info" />
-        </div>
-      )}
-    </div>
-    <PercentKnob {...props} />
-  </div>
-);
-
-const AnnotControlHeaderInfo = ({ title, info }) => (
-  <div className="annot_control_head annot_control_head--info">
-    <span className="annot_control_title">{title}</span>
-    {info && (
-      <div className="annot_control_info_wrap">
-        <InfoPopupButton info={info} label={`${title} info`} />
-      </div>
-    )}
-  </div>
-);
-
 // Draw a single annotation onto a 2d canvas context.
 // Coordinates are stored in PDF-point space; scale = fitScale * zoom converts to canvas pixels.
 
@@ -1275,6 +1047,10 @@ const PDFPage = forwardRef(({
   const [pinchActive, setPinchActive] = useState(false);
   const [splitRatio,     setSplitRatio]    = useState(1);
   const [mdPanelWidth,   setMdPanelWidth]  = useState(340); // resizable width of the Markdown/Actions left column
+  const [annotHistoryPanelWidth, setAnnotHistoryPanelWidth] = useState(300);
+  const [smartVideoPanelWidth, setSmartVideoPanelWidth] = useState(380);
+  const [entityBuilderPanelWidth, setEntityBuilderPanelWidth] = useState(360);
+  const [amctoshsVignettePanelWidth, setAmctoshsVignettePanelWidth] = useState(360);
   const [extractionOpen, setExtractionOpen] = useState(false);
   const savedRatioRef                 = useRef(0.42);
   const contentRef                    = useRef(null);
@@ -1939,7 +1715,15 @@ const PDFPage = forwardRef(({
   const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
   const selectionBboxes = useMemo(
-    () => (annotations[pageNum] || []).filter((ann) => BBOX_LIKE_ANNOT_TYPES.has(ann.type)),
+    () => (annotations[pageNum] || []).filter((ann) => isBBoxType(ann.type) && !bboxTypeHas(ann.type, "extractsTitle")),
+    [annotations, pageNum],
+  );
+  const managedBboxes = useMemo(
+    () => (annotations[pageNum] || []).filter((ann) => EDITABLE_BBOX_TYPES.has(ann.type)),
+    [annotations, pageNum],
+  );
+  const titleBboxes = useMemo(
+    () => (annotations[pageNum] || []).filter((ann) => bboxTypeHas(ann?.type, "extractsTitle")),
     [annotations, pageNum],
   );
   const bboxTextMatchesSpan = useCallback((bbox, span) => bboxTextMatchesSpanUtil(bbox, span), []);
@@ -2248,8 +2032,10 @@ const PDFPage = forwardRef(({
   const [highlightStyleTargetId, setHighlightStyleTargetId] = useState(null); // id of an existing highlight being style-edited
   const [bboxActionMenu, setBBoxActionMenu] = useState(null); // { vx, vy, editingId }
   const [bboxResizeTargetId, setBBoxResizeTargetId] = useState(null); // id of an existing bbox armed for resize
-  const [bboxCreationArmed, setBBoxCreationArmed] = useState(false);
-  const [bboxContainerCreationArmed, setBBoxContainerCreationArmed] = useState(false);
+  const [activeBBoxCreationType, setActiveBBoxCreationType] = useState(null);
+  const toggleBBoxCreationType = useCallback((type) => {
+    setActiveBBoxCreationType((current) => (current === type ? null : type));
+  }, []);
   const [bboxContainerBBoxTarget, setBBoxContainerBBoxTarget] = useState(null); // { pageNum, containerId } — next bbox should be placed inside this container
   const [entityBuilderPageNum, setEntityBuilderPageNum] = useState(pageNum);
   const entityBuilderWasOpenRef = useRef(false);
@@ -2307,8 +2093,7 @@ const PDFPage = forwardRef(({
     if (annotTool !== "bbox") {
       setBBoxActionMenu(null);
       setBBoxResizeTargetId(null);
-      setBBoxCreationArmed(false);
-      setBBoxContainerCreationArmed(false);
+      setActiveBBoxCreationType(null);
       setBBoxContainerBBoxTarget(null);
     }
   }, [annotTool]);
@@ -2497,7 +2282,7 @@ const PDFPage = forwardRef(({
 
   const handleBBoxAction = useCallback((action) => {
     if (!bboxActionMenu) return;
-    const hit = (annotations[pageNum] || []).find((ann) => ann.id === bboxActionMenu.editingId && BBOX_LIKE_ANNOT_TYPES.has(ann.type));
+    const hit = (annotations[pageNum] || []).find((ann) => ann.id === bboxActionMenu.editingId && EDITABLE_BBOX_TYPES.has(ann.type));
     if (!hit) {
       setBBoxActionMenu(null);
       setBBoxResizeTargetId(null);
@@ -2520,13 +2305,210 @@ const PDFPage = forwardRef(({
     setBBoxActionMenu(null);
   }, [bboxActionMenu, annotations, pageNum, logAnnotHistory]);
 
+  const beginBBoxResize = useCallback((bbox, handle, event) => {
+    if (!bbox || !handle) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const getClientPoint = (inputEvent) => (
+      inputEvent.touches?.[0]
+        ? { x: inputEvent.touches[0].clientX, y: inputEvent.touches[0].clientY }
+        : { x: inputEvent.clientX, y: inputEvent.clientY }
+    );
+    const toCanvasFromClient = (clientX, clientY) => {
+      const rect = annotCanvasRef.current?.getBoundingClientRect?.();
+      const scale = fitScaleRef.current * zoomRef.current;
+      if (!rect || !scale) return null;
+      return {
+        x: (clientX - rect.left) / scale,
+        y: (clientY - rect.top) / scale,
+      };
+    };
+    const startClient = getClientPoint(event);
+    const start = toCanvasFromClient(startClient.x, startClient.y);
+    if (!start) return;
+    const basePoints = buildEditableBBoxOutline(bbox);
+    let workingPoints = basePoints.map((point) => ({ ...point }));
+    let pointIndex = Number.isInteger(handle.pointIndex) ? handle.pointIndex : null;
+    if (pointIndex == null && handle.insertAfterIndex != null) {
+      const insertAt = Math.min(workingPoints.length, Math.max(1, handle.insertAfterIndex + 1));
+      workingPoints.splice(insertAt, 0, { x: handle.x, y: handle.y, manualControl: true });
+      pointIndex = insertAt;
+    }
+    const workingBounds = pointsToBounds(workingPoints) || { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h };
+    activeAnnotRef.current = {
+      ...bbox,
+      closed: isBBoxOutlineClosed(bbox),
+      _editingId: bbox.id,
+      points: workingPoints,
+      x: workingBounds.x,
+      y: workingBounds.y,
+      w: workingBounds.w,
+      h: workingBounds.h,
+      _pointEditIndex: pointIndex,
+      _resizeStartX: start.x,
+      _resizeStartY: start.y,
+      _lastDragX: start.x,
+      _lastDragY: start.y,
+      _dragMoved: false,
+    };
+    setBBoxActionMenu(null);
+    setBBoxResizeTargetId(bbox.id);
+    const onMove = (moveEvent) => {
+      const client = getClientPoint(moveEvent);
+      const next = toCanvasFromClient(client.x, client.y);
+      const ann = activeAnnotRef.current;
+      if (!next || !ann || ann.id !== bbox.id || !Array.isArray(ann.points)) return;
+      moveEvent.preventDefault?.();
+      const dx = next.x - (ann._lastDragX ?? next.x);
+      const dy = next.y - (ann._lastDragY ?? next.y);
+      const draggedIndex = ann._pointEditIndex ?? findNearestOutlinePointIndex(ann.points, next.x, next.y);
+      if (draggedIndex >= 0 && (dx !== 0 || dy !== 0)) {
+        if (!ann._dragMoved && Math.hypot(next.x - ann._resizeStartX, next.y - ann._resizeStartY) < 0.8) return;
+        ann._dragMoved = true;
+        ann.points = deformClosedOutlineAroundPoint(ann.points, draggedIndex, dx, dy, fitScaleRef.current * zoomRef.current, ann.closed !== false);
+        ann._pointEditIndex = draggedIndex;
+        ann._lastDragX = next.x;
+        ann._lastDragY = next.y;
+        const nextBounds = pointsToBounds(ann.points);
+        if (nextBounds) {
+          ann.x = nextBounds.x;
+          ann.y = nextBounds.y;
+          ann.w = nextBounds.w;
+          ann.h = nextBounds.h;
+        }
+        const scale = fitScaleRef.current * zoomRef.current;
+        const ctx = annotCanvasRef.current?.getContext?.("2d");
+        if (ctx && annotCanvasRef.current) {
+          ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
+          for (const savedAnn of (annotations[pageNum] || [])) drawAnnotation(ctx, savedAnn, scale);
+          drawAnnotation(ctx, ann, scale);
+        }
+      }
+    };
+    const onEnd = (endEvent) => {
+      endEvent?.preventDefault?.();
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onEnd);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+      const ann = activeAnnotRef.current;
+      activeAnnotRef.current = null;
+      if (!ann || ann.id !== bbox.id || !ann._editingId) return;
+      if (!ann._dragMoved) {
+        const scale = fitScaleRef.current * zoomRef.current;
+        const ctx = annotCanvasRef.current?.getContext?.("2d");
+        if (ctx && annotCanvasRef.current) {
+          ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
+          for (const savedAnn of (annotations[pageNum] || [])) drawAnnotation(ctx, savedAnn, scale);
+        }
+        return;
+      }
+      setAnnotations((prev) => {
+        const pageAnnotations = prev[pageNum] || [];
+        const childBboxes = bboxTypeHas(ann.type, "containsChildren")
+          ? pageAnnotations.filter((item) => (
+            item.id !== ann._editingId
+            && BBOX_CARD_TYPES.has(item.type)
+            && item.x >= ann.x
+            && item.y >= ann.y
+            && item.x + item.w <= ann.x + ann.w
+            && item.y + item.h <= ann.y + ann.h
+          ))
+          : [];
+        return {
+          ...prev,
+          [pageNum]: pageAnnotations.map((item) => (
+            item.id === ann._editingId
+              ? {
+                  ...item,
+                  x: ann.x,
+                  y: ann.y,
+                  w: ann.w,
+                  h: ann.h,
+                  ...(Array.isArray(ann.points) && ann.points.length >= 2 ? { points: ann.points.map((point) => ({ ...point })) } : {}),
+                  ...(bboxTypeHas(item.type, "extractsText")
+                    ? (() => {
+                        const extracted = extractBoundingBoxTextParts(
+                          spansRef.current,
+                          { x: ann.x, y: ann.y, w: ann.w, h: ann.h },
+                          bboxTextMatchesSpan,
+                        );
+                        return {
+                          title: extracted.title || item.title || "",
+                          text: stripTitleFromBBoxTextValue(extracted.text, item.titleBBox?.text || extracted.title || item.title || ""),
+                        };
+                      })()
+                    : bboxTypeHas(item.type, "extractsContainerTitle")
+                      ? (() => {
+                          const extracted = extractBoundingBoxTextParts(
+                            spansRef.current,
+                            { x: ann.x, y: ann.y, w: ann.w, h: ann.h },
+                            bboxTextMatchesSpan,
+                            childBboxes,
+                          );
+                          return {
+                            title: extracted.title || item.title || "",
+                          };
+                        })()
+                    : {}),
+                }
+              : item
+          )),
+        };
+      });
+      setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+      logAnnotHistory({ action: "edit", type: ann.type, page: pageNum });
+    };
+    window.addEventListener("mousemove", onMove, { passive: false });
+    window.addEventListener("mouseup", onEnd, { passive: false });
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onEnd, { passive: false });
+  }, [annotations, pageNum, logAnnotHistory, bboxTextMatchesSpan]);
+
+  const addBBoxResizePoint = useCallback((bbox, event) => {
+    if (!bbox || bboxResizeTargetId !== bbox.id) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const source = event.touches?.[0] || event;
+    const rect = annotCanvasRef.current?.getBoundingClientRect?.();
+    const viewport = pageViewportsRef.current[pageNum - 1] || pageViewport;
+    if (!rect || !viewport) return;
+    const pagePoint = clientPointToBBoxPagePoint({
+      clientX: source.clientX,
+      clientY: source.clientY,
+      rect,
+      viewport,
+    });
+    const points = buildEditableBBoxOutline(bbox);
+    const projected = findNearestOutlineSegmentPoint(points, pagePoint.x, pagePoint.y, isBBoxOutlineClosed(bbox));
+    if (!projected) return;
+    const insertAt = projected.insertAfterIndex + 1;
+    const nextPoints = points.map((point) => ({ ...point }));
+    nextPoints.splice(insertAt, 0, {
+      x: projected.x,
+      y: projected.y,
+      manualControl: true,
+    });
+    const bounds = pointsToBounds(nextPoints);
+    setAnnotations((prev) => ({
+      ...prev,
+      [pageNum]: (prev[pageNum] || []).map((annotation) => (
+        annotation.id === bbox.id
+          ? { ...annotation, ...bounds, points: nextPoints, closed: isBBoxOutlineClosed(bbox) }
+          : annotation
+      )),
+    }));
+    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+    logAnnotHistory({ action: "edit", type: bbox.type, page: pageNum });
+  }, [bboxResizeTargetId, logAnnotHistory, pageNum, pageViewport]);
+
   const updateBBoxFontSize = useCallback((nextFontSize, targetPage = pageNum) => {
     const fontSize = Math.min(24, Math.max(10, Math.round(Number(nextFontSize) || 12)));
     setAnnotations((prev) => {
       return {
         ...prev,
         [targetPage]: (prev[targetPage] || []).map((ann) => (
-          BBOX_LIKE_ANNOT_TYPES.has(ann.type)
+          EDITABLE_BBOX_TYPES.has(ann.type)
             ? { ...ann, fontSize }
             : ann
         )),
@@ -2542,7 +2524,7 @@ const PDFPage = forwardRef(({
     let nextAnnotations = null;
     setAnnotations((prev) => {
       const nextPageAnnotations = (prev[targetPage] || []).map((ann) => (
-        ann.id === bboxId && BBOX_LIKE_ANNOT_TYPES.has(ann.type)
+        ann.id === bboxId && EDITABLE_BBOX_TYPES.has(ann.type)
           ? { ...ann, title }
           : ann
       ));
@@ -2561,11 +2543,96 @@ const PDFPage = forwardRef(({
     }
   }, [annotHistory, pageNum, logAnnotHistory]);
 
+  const autoFitBBoxToText = useCallback((bbox, targetPage = pageNum) => {
+    if (!bbox || !bboxTypeHas(bbox.type, "autoFitsText")) return;
+    if (bbox.textAutoFitted && bbox.autoFitSourceGeometry) {
+      setAnnotations((prev) => ({
+        ...prev,
+        [targetPage]: (prev[targetPage] || []).map((annotation) => {
+          if (annotation.id !== bbox.id) return annotation;
+          const restored = {
+            ...annotation,
+            ...bbox.autoFitSourceGeometry,
+            textAutoFitted: false,
+            autoFitSourceGeometry: null,
+          };
+          const extracted = extractBoundingBoxTextParts(
+            spansRef.current,
+            { x: restored.x, y: restored.y, w: restored.w, h: restored.h },
+            bboxTextMatchesSpan,
+          );
+          return {
+            ...restored,
+            title: annotation.titleBBox?.text || annotation.title || extracted.title || "",
+            text: stripTitleFromBBoxText(
+              extracted.text || annotation.text || "",
+              annotation.titleBBox?.text || annotation.title || extracted.title || "",
+            ),
+          };
+        }),
+      }));
+      setRedoStacks((prev) => (prev[targetPage]?.length ? { ...prev, [targetPage]: [] } : prev));
+      logAnnotHistory({ action: "edit", type: bbox.type, page: targetPage });
+      return;
+    }
+    const selectedSpans = selectSpansForBoundingBox(spansRef.current, bbox, bboxTextMatchesSpan);
+    let tightPoints = buildTightTextOutline(selectedSpans, 1);
+    if (bbox.titleBBox) {
+      const ownerBorderPad = Math.max(0, (bbox.lineWidth ?? 0) / 2);
+      const titleBorderPad = Math.max(0, (bbox.titleBBox.lineWidth ?? 0) / 2);
+      tightPoints = buildTightOutlineFromRects([
+        ...buildTextLineRects(selectedSpans, 1),
+        expandRectBy(bbox.titleBBox, titleBorderPad + ownerBorderPad),
+      ]);
+    }
+    const tightBounds = pointsToBounds(tightPoints);
+    if (!tightBounds || tightPoints.length < 4) return;
+    setAnnotations((prev) => ({
+      ...prev,
+      [targetPage]: (prev[targetPage] || []).map((annotation) => (
+        annotation.id === bbox.id
+          ? {
+              ...annotation,
+              ...tightBounds,
+              points: tightPoints,
+              textAutoFitted: true,
+              autoFitSourceGeometry: annotation.textAutoFitted && annotation.autoFitSourceGeometry
+                ? annotation.autoFitSourceGeometry
+                : {
+                    x: annotation.x,
+                    y: annotation.y,
+                    w: annotation.w,
+                    h: annotation.h,
+                    closed: annotation.closed,
+                    points: Array.isArray(annotation.points)
+                      ? annotation.points.map((point) => ({ ...point }))
+                      : null,
+                  },
+            }
+          : annotation
+      )),
+    }));
+    setRedoStacks((prev) => (prev[targetPage]?.length ? { ...prev, [targetPage]: [] } : prev));
+    logAnnotHistory({ action: "edit", type: bbox.type, page: targetPage });
+  }, [bboxTextMatchesSpan, logAnnotHistory, pageNum]);
+
   const deleteBBox = useCallback((bboxId, targetPage = pageNum) => {
     let nextAnnotations = null;
     setAnnotations((prev) => {
-      const nextPageAnnotations = (prev[targetPage] || []).filter((ann) => ann.id !== bboxId);
-      nextAnnotations = { ...prev, [targetPage]: nextPageAnnotations };
+      const pageAnnotations = prev[targetPage] || [];
+      const target = pageAnnotations.find((ann) => ann.id === bboxId) || null;
+      const nextPageAnnotations = pageAnnotations.filter((ann) => (
+        ann.id !== bboxId
+        && !(ann.type === "bboxTitle" && (ann.ownerId === bboxId || ann.containerId === bboxId))
+      ));
+      nextAnnotations = {
+        ...prev,
+        [targetPage]: nextPageAnnotations.map((ann) => (
+          target?.type === "bboxTitle" && ann.id === target.ownerId
+            ? { ...ann, titleBBox: null }
+            : ann
+        )),
+      };
       return nextAnnotations;
     });
     setRedoStacks((prev) => (prev[targetPage]?.length ? { ...prev, [targetPage]: [] } : prev));
@@ -2585,12 +2652,12 @@ const PDFPage = forwardRef(({
     let nextAnnotations = null;
     setAnnotations((prev) => {
       const pageAnnotations = [...(prev[targetPage] || [])];
-      const targetIndex = pageAnnotations.findIndex((ann) => ann.id === bboxId && BBOX_LIKE_ANNOT_TYPES.has(ann.type));
+      const targetIndex = pageAnnotations.findIndex((ann) => ann.id === bboxId && EDITABLE_BBOX_TYPES.has(ann.type));
       if (targetIndex < 0) return prev;
       const target = pageAnnotations[targetIndex];
-      const targetContainer = target.type === "bbox"
+      const targetContainer = bboxTypeHas(target.type, "canBeNested")
         ? [...pageAnnotations].reverse().find((ann) => (
-          ann.type === "bboxContainer"
+          bboxTypeHas(ann.type, "containsChildren")
           && target.x >= ann.x
           && target.y >= ann.y
           && target.x + target.w <= ann.x + ann.w
@@ -2600,10 +2667,10 @@ const PDFPage = forwardRef(({
       const sameGroup = pageAnnotations
         .map((ann, index) => ({ ann, index }))
         .filter(({ ann }) => {
-          if (target.type === "bboxContainer") return ann.type === "bboxContainer";
-          if (ann.type !== "bbox") return false;
+          if (bboxTypeHas(target.type, "containsChildren")) return bboxTypeHas(ann.type, "containsChildren");
+          if (!bboxTypeHas(ann.type, "canBeNested")) return false;
           const annContainer = [...pageAnnotations].reverse().find((container) => (
-            container.type === "bboxContainer"
+            bboxTypeHas(container.type, "containsChildren")
             && ann.x >= container.x
             && ann.y >= container.y
             && ann.x + ann.w <= container.x + container.w
@@ -2635,7 +2702,7 @@ const PDFPage = forwardRef(({
 
   const expandContainerToIncludeBBox = useCallback((pageAnnotations, containerId, bbox) => {
     if (!containerId || !bbox) return pageAnnotations;
-    const containerIndex = pageAnnotations.findIndex((ann) => ann.id === containerId && ann.type === "bboxContainer");
+    const containerIndex = pageAnnotations.findIndex((ann) => ann.id === containerId && bboxTypeHas(ann.type, "containsChildren"));
     if (containerIndex < 0) return pageAnnotations;
     const container = pageAnnotations[containerIndex];
     const nextContainer = {
@@ -2650,19 +2717,329 @@ const PDFPage = forwardRef(({
     return next;
   }, []);
 
+  const expandAnnotationToIncludeRect = useCallback((annotation, rect) => {
+    if (!annotation || !rect) return annotation;
+    const currentBounds = {
+      x: annotation.x ?? 0,
+      y: annotation.y ?? 0,
+      w: annotation.w ?? 0,
+      h: annotation.h ?? 0,
+    };
+    const nextBounds = {
+      x: Math.min(currentBounds.x, rect.x),
+      y: Math.min(currentBounds.y, rect.y),
+      w: Math.max(currentBounds.x + currentBounds.w, rect.x + rect.w) - Math.min(currentBounds.x, rect.x),
+      h: Math.max(currentBounds.y + currentBounds.h, rect.y + rect.h) - Math.min(currentBounds.y, rect.y),
+    };
+    const changed = (
+      nextBounds.x !== currentBounds.x
+      || nextBounds.y !== currentBounds.y
+      || nextBounds.w !== currentBounds.w
+      || nextBounds.h !== currentBounds.h
+    );
+    if (!changed) return annotation;
+    const nextAnnotation = {
+      ...annotation,
+      ...nextBounds,
+    };
+    if (Array.isArray(annotation.points) && annotation.points.length >= 2) {
+      const currentRight = currentBounds.x + currentBounds.w;
+      const currentBottom = currentBounds.y + currentBounds.h;
+      const nextRight = nextBounds.x + nextBounds.w;
+      const nextBottom = nextBounds.y + nextBounds.h;
+      const pushLeft = Math.max(0, currentBounds.x - nextBounds.x);
+      const pushRight = Math.max(0, nextRight - currentRight);
+      const pushTop = Math.max(0, currentBounds.y - nextBounds.y);
+      const pushBottom = Math.max(0, nextBottom - currentBottom);
+      const rangePadX = Math.max(6, currentBounds.w * 0.08);
+      const rangePadY = Math.max(6, currentBounds.h * 0.08);
+      const sideDepthX = Math.max(14, currentBounds.w * 0.18);
+      const sideDepthY = Math.max(14, currentBounds.h * 0.18);
+      const clamp01 = (value) => Math.max(0, Math.min(1, value));
+      const smoothstep = (value) => {
+        const t = clamp01(value);
+        return t * t * (3 - 2 * t);
+      };
+      const rangeInfluence = (value, start, end, pad) => {
+        if (value >= start && value <= end) return 1;
+        if (value < start) return smoothstep(1 - ((start - value) / Math.max(1, pad)));
+        return smoothstep(1 - ((value - end) / Math.max(1, pad)));
+      };
+      const movePointSet = annotation.points.map((point) => ({ ...point }));
+      const rectLeft = rect.x;
+      const rectRight = rect.x + rect.w;
+      const rectTop = rect.y;
+      const rectBottom = rect.y + rect.h;
+      const centerY = (rectTop + rectBottom) / 2;
+      const centerX = (rectLeft + rectRight) / 2;
+      const applyDirectionalPush = (predicate, applyDelta, fallbackSelector) => {
+        let affected = 0;
+        movePointSet.forEach((point, index) => {
+          const weight = predicate(point);
+          if (weight <= 0) return;
+          affected += 1;
+          applyDelta(point, weight, index);
+        });
+        if (affected > 0 || !fallbackSelector) return;
+        const nearestIndex = movePointSet.reduce((bestIndex, point, index) => (
+          fallbackSelector(point) < fallbackSelector(movePointSet[bestIndex]) ? index : bestIndex
+        ), 0);
+        applyDelta(movePointSet[nearestIndex], 1, nearestIndex);
+      };
+
+      if (pushLeft > 0) {
+        applyDirectionalPush(
+          (point) => {
+            const sideWeight = smoothstep(1 - ((point.x - currentBounds.x) / sideDepthX));
+            const rangeWeight = rangeInfluence(point.y, rectTop, rectBottom, rangePadY);
+            return sideWeight * rangeWeight;
+          },
+          (point, weight) => { point.x -= pushLeft * weight; },
+          (point) => Math.abs(point.x - currentBounds.x) + Math.abs(point.y - centerY),
+        );
+      }
+      if (pushRight > 0) {
+        applyDirectionalPush(
+          (point) => {
+            const sideWeight = smoothstep(1 - ((currentRight - point.x) / sideDepthX));
+            const rangeWeight = rangeInfluence(point.y, rectTop, rectBottom, rangePadY);
+            return sideWeight * rangeWeight;
+          },
+          (point, weight) => { point.x += pushRight * weight; },
+          (point) => Math.abs(point.x - currentRight) + Math.abs(point.y - centerY),
+        );
+      }
+      if (pushTop > 0) {
+        applyDirectionalPush(
+          (point) => {
+            const sideWeight = smoothstep(1 - ((point.y - currentBounds.y) / sideDepthY));
+            const rangeWeight = rangeInfluence(point.x, rectLeft, rectRight, rangePadX);
+            return sideWeight * rangeWeight;
+          },
+          (point, weight) => { point.y -= pushTop * weight; },
+          (point) => Math.abs(point.y - currentBounds.y) + Math.abs(point.x - centerX),
+        );
+      }
+      if (pushBottom > 0) {
+        applyDirectionalPush(
+          (point) => {
+            const sideWeight = smoothstep(1 - ((currentBottom - point.y) / sideDepthY));
+            const rangeWeight = rangeInfluence(point.x, rectLeft, rectRight, rangePadX);
+            return sideWeight * rangeWeight;
+          },
+          (point, weight) => { point.y += pushBottom * weight; },
+          (point) => Math.abs(point.y - currentBottom) + Math.abs(point.x - centerX),
+        );
+      }
+      let movedBounds = pointsToBounds(movePointSet);
+      const residualBottom = Math.max(0, nextBottom - ((movedBounds?.y ?? 0) + (movedBounds?.h ?? 0)));
+      if (residualBottom > 0.01) {
+        applyDirectionalPush(
+          (point) => {
+            const sideWeight = smoothstep(1 - ((currentBottom - point.y) / sideDepthY));
+            const rangeWeight = rangeInfluence(point.x, rectLeft, rectRight, rangePadX);
+            return Math.max(sideWeight * rangeWeight, sideWeight * 0.6);
+          },
+          (point, weight) => { point.y += residualBottom * weight; },
+          (point) => Math.abs(point.y - currentBottom) + Math.abs(point.x - centerX),
+        );
+        movedBounds = pointsToBounds(movePointSet);
+      }
+      nextAnnotation.points = movePointSet;
+      nextAnnotation.x = Math.min(nextBounds.x, movedBounds?.x ?? nextBounds.x);
+      nextAnnotation.y = Math.min(nextBounds.y, movedBounds?.y ?? nextBounds.y);
+      nextAnnotation.w = Math.max(nextRight, (movedBounds?.x ?? nextAnnotation.x) + (movedBounds?.w ?? 0)) - nextAnnotation.x;
+      nextAnnotation.h = Math.max(nextBottom, (movedBounds?.y ?? nextAnnotation.y) + (movedBounds?.h ?? 0)) - nextAnnotation.y;
+    }
+    return nextAnnotation;
+  }, []);
+
+  const expandOwnerToIncludeTitleBBox = useCallback((pageAnnotations, ownerId, titleBBox) => {
+    if (!ownerId || !titleBBox) return pageAnnotations;
+    const ownerIndex = pageAnnotations.findIndex((ann) => ann?.id === ownerId && EDITABLE_BBOX_TYPES.has(ann.type));
+    if (ownerIndex < 0) return pageAnnotations;
+    const owner = pageAnnotations[ownerIndex];
+    const ownerBorderPad = Math.max(0.5, (owner.lineWidth ?? 0) / 2);
+    const titleBorderPad = Math.max(0.5, (titleBBox.lineWidth ?? 0) / 2);
+    const ownerInnerRect = {
+      x: (owner.x ?? 0) + ownerBorderPad,
+      y: (owner.y ?? 0) + ownerBorderPad,
+      w: Math.max(0, (owner.w ?? 0) - ownerBorderPad * 2),
+      h: Math.max(0, (owner.h ?? 0) - ownerBorderPad * 2),
+    };
+    const visibleTitleRect = expandRectBy(titleBBox, titleBorderPad);
+    const requiredOwnerRect = expandRectBy(visibleTitleRect, ownerBorderPad);
+    const containmentSlack = 0.25;
+    const titleFitsInsideOwner = ownerInnerRect && visibleTitleRect
+      ? (
+          visibleTitleRect.x >= ownerInnerRect.x - containmentSlack
+          && visibleTitleRect.y >= ownerInnerRect.y - containmentSlack
+          && visibleTitleRect.x + visibleTitleRect.w <= ownerInnerRect.x + ownerInnerRect.w + containmentSlack
+          && visibleTitleRect.y + visibleTitleRect.h <= ownerInnerRect.y + ownerInnerRect.h + containmentSlack
+        )
+      : true;
+    if (titleFitsInsideOwner) return pageAnnotations;
+    const expandedOwner = expandAnnotationToIncludeRect(owner, requiredOwnerRect);
+    if (expandedOwner === owner) return pageAnnotations;
+    const next = [...pageAnnotations];
+    next[ownerIndex] = expandedOwner;
+    if (bboxTypeHas(owner.type, "canBeNested")) {
+      const containerIndex = next.findIndex((ann) => (
+        bboxTypeHas(ann?.type, "containsChildren")
+        && ann.id !== owner.id
+        && owner.x >= ann.x
+        && owner.y >= ann.y
+        && owner.x + owner.w <= ann.x + ann.w
+        && owner.y + owner.h <= ann.y + ann.h
+      ));
+      if (containerIndex >= 0) {
+        next[containerIndex] = expandAnnotationToIncludeRect(next[containerIndex], expandedOwner);
+      }
+    }
+    return next;
+  }, [expandAnnotationToIncludeRect]);
+
+  const rehydrateBBoxTitleLayers = useCallback((layers) => {
+    const nextLayers = {};
+    for (const [pageKey, pageAnnotations] of Object.entries(layers || {})) {
+      const nextPageAnnotations = [...(pageAnnotations || [])];
+      for (const owner of nextPageAnnotations) {
+        if (!owner || !EDITABLE_BBOX_TYPES.has(owner.type) || !owner.titleBBox) continue;
+        const hasTitleBBox = nextPageAnnotations.some((ann) => (
+          ann?.type === "bboxTitle" && (ann.ownerId === owner.id || ann.containerId === owner.id)
+        ));
+        if (hasTitleBBox) continue;
+        const titleBBox = owner.titleBBox;
+        if (!titleBBox || typeof titleBBox !== "object") continue;
+        nextPageAnnotations.push({
+          ...titleBBox,
+          type: "bboxTitle",
+          id: titleBBox.id ?? Date.now(),
+          ownerId: owner.id,
+          ownerType: owner.type,
+          containerId: bboxTypeHas(owner.type, "containsChildren") ? owner.id : (titleBBox.containerId ?? null),
+          title: owner.title || titleBBox.title || titleBBox.text || "",
+          text: owner.title || titleBBox.text || titleBBox.title || "",
+          shapeBackground: false,
+        });
+      }
+      nextLayers[pageKey] = nextPageAnnotations;
+    }
+    return nextLayers;
+  }, []);
+
+  const stripTitleFromBBoxText = useCallback((text, title) => stripTitleFromBBoxTextValue(text, title), []);
+
+  const nextDistinctBBoxColor = useCallback((pageAnnotations) => {
+    const used = new Set(
+      (pageAnnotations || [])
+        .filter((ann) => ann && EDITABLE_BBOX_TYPES.has(ann.type))
+        .map((ann) => String(ann.color || "").toLowerCase())
+        .filter(Boolean)
+    );
+    const unused = BBOX_DISTINCT_COLORS.find((color) => !used.has(color.toLowerCase()));
+    if (unused) return unused;
+    const bboxCount = (pageAnnotations || []).filter((ann) => ann && EDITABLE_BBOX_TYPES.has(ann.type)).length;
+    return BBOX_DISTINCT_COLORS[bboxCount % BBOX_DISTINCT_COLORS.length];
+  }, []);
+
+  const findContainingTitleOwner = useCallback((pageAnnotations, rect, anchorPoint = null) => {
+    if (!rect) return null;
+    const rectRight = rect.x + rect.w;
+    const rectBottom = rect.y + rect.h;
+    const candidates = [...(pageAnnotations || [])]
+      .filter((ann) => ann && EDITABLE_BBOX_TYPES.has(ann.type))
+      .map((ann) => {
+        const annRight = ann.x + ann.w;
+        const annBottom = ann.y + ann.h;
+        const anchorInside = !!anchorPoint && (
+          anchorPoint.x >= ann.x
+          && anchorPoint.y >= ann.y
+          && anchorPoint.x <= annRight
+          && anchorPoint.y <= annBottom
+        );
+        const contained = (
+          rect.x >= ann.x
+          && rect.y >= ann.y
+          && rectRight <= annRight
+          && rectBottom <= annBottom
+        );
+        const overlapW = Math.max(0, Math.min(rectRight, annRight) - Math.max(rect.x, ann.x));
+        const overlapH = Math.max(0, Math.min(rectBottom, annBottom) - Math.max(rect.y, ann.y));
+        const overlapArea = overlapW * overlapH;
+        return { ann, contained, overlapArea, anchorInside };
+      })
+      .filter(({ contained, overlapArea }) => contained || overlapArea > 0)
+      .sort((a, b) => {
+        if (a.anchorInside !== b.anchorInside) return a.anchorInside ? -1 : 1;
+        if (a.contained !== b.contained) return a.contained ? -1 : 1;
+        if (a.ann.type !== b.ann.type) return bboxTypeHas(a.ann.type, "canBeNested") ? -1 : 1;
+        if (a.contained) return (a.ann.w * a.ann.h) - (b.ann.w * b.ann.h);
+        if (a.overlapArea !== b.overlapArea) return b.overlapArea - a.overlapArea;
+        return (a.ann.w * a.ann.h) - (b.ann.w * b.ann.h);
+      });
+    return candidates[0]?.ann || null;
+  }, []);
+
+  const findPendingTitleBBoxForOwner = useCallback((pageAnnotations, ownerBox) => {
+    if (!ownerBox) return null;
+    const ownerRight = ownerBox.x + ownerBox.w;
+    const ownerBottom = ownerBox.y + ownerBox.h;
+    return [...(pageAnnotations || [])]
+      .filter((ann) => (
+        ann?.type === "bboxTitle"
+        && !ann.ownerId
+      ))
+      .map((ann) => {
+        const annRight = ann.x + ann.w;
+        const annBottom = ann.y + ann.h;
+        const contained = (
+          ann.x >= ownerBox.x
+          && ann.y >= ownerBox.y
+          && annRight <= ownerRight
+          && annBottom <= ownerBottom
+        );
+        const overlapW = Math.max(0, Math.min(ownerRight, annRight) - Math.max(ownerBox.x, ann.x));
+        const overlapH = Math.max(0, Math.min(ownerBottom, annBottom) - Math.max(ownerBox.y, ann.y));
+        return {
+          ann,
+          contained,
+          overlapArea: overlapW * overlapH,
+        };
+      })
+      .filter(({ contained, overlapArea }) => contained || overlapArea > 0)
+      .sort((a, b) => {
+        if (a.contained !== b.contained) return a.contained ? -1 : 1;
+        if (b.overlapArea !== a.overlapArea) return b.overlapArea - a.overlapArea;
+        return (a.ann.y ?? 0) - (b.ann.y ?? 0) || (a.ann.x ?? 0) - (b.ann.x ?? 0);
+      })[0]?.ann || null;
+  }, []);
+
+  const findContainingBBoxContainer = useCallback((pageAnnotations, rect) => {
+    if (!rect) return null;
+    return [...(pageAnnotations || [])]
+      .filter((ann) => ann && bboxTypeHas(ann.type, "containsChildren"))
+      .filter((container) => (
+        rect.x >= container.x
+        && rect.y >= container.y
+        && rect.x + rect.w <= container.x + container.w
+        && rect.y + rect.h <= container.y + container.h
+      ))
+      .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null;
+  }, []);
+
   const armBBoxInsideContainer = useCallback((containerId, targetPage) => {
     if (!containerId) return;
     const nextPage = Math.min(Math.max(1, Number(targetPage) || pageNum), pageCount || Math.max(1, Number(targetPage) || pageNum));
     const isSameTarget = bboxContainerBBoxTarget?.containerId === containerId && bboxContainerBBoxTarget?.pageNum === nextPage;
     setAnnotTool("bbox");
-    setBBoxContainerCreationArmed(false);
     if (isSameTarget) {
-      setBBoxCreationArmed(false);
+      setActiveBBoxCreationType(null);
       setBBoxContainerBBoxTarget(null);
       return;
     }
     setPageNum(nextPage);
-    setBBoxCreationArmed(true);
+    setActiveBBoxCreationType("bbox");
     setBBoxContainerBBoxTarget({ containerId, pageNum: nextPage });
   }, [bboxContainerBBoxTarget, pageCount, pageNum]);
 
@@ -2762,11 +3139,11 @@ const PDFPage = forwardRef(({
     const entityBuilderPageAnnotations = annotations[entityBuilderPageNum] || [];
     if (!entityBuilderPageAnnotations.length) return [];
     return entityBuilderPageAnnotations
-      .filter((bbox) => BBOX_LIKE_ANNOT_TYPES.has(bbox.type))
+      .filter((bbox) => BBOX_CARD_TYPES.has(bbox.type) || bboxTypeHas(bbox.type, "containsChildren"))
       .map((bbox, index) => ({
         ...bbox,
         _index: index + 1,
-        _displayTitle: bbox.title?.trim() || `BBox ${index + 1}`,
+        _displayTitle: bbox.title?.trim() || (bboxTypeHas(bbox.type, "capturesImage") ? `Image BBox ${index + 1}` : `BBox ${index + 1}`),
         text: bbox.text || "",
       }));
   }, [annotations, entityBuilderPageNum]);
@@ -3684,6 +4061,51 @@ const PDFPage = forwardRef(({
     }
   }, [pageNum, pageViewport, getOcrWorker]);
 
+  const captureImageBBoxSnippet = useCallback((selection) => {
+    const pageCanvas = canvasRef.current;
+    const viewport = pageViewportsRef.current[pageNum - 1] || pageViewport;
+    if (!pageCanvas || !viewport || !selection) return null;
+
+    // Both the freeform points and selection bounds are stored in unscaled
+    // PDF-page space. Convert them to normalized page ratios before touching
+    // the raster canvas; applying the current zoom here a second time made
+    // image crops valid only at a narrow set of zoom levels.
+    const { width: pageDocWidth, height: pageDocHeight } = getViewportDocumentSize(viewport);
+    const leftRatio = clamp(selection.x / pageDocWidth, 0, 1);
+    const topRatio = clamp(selection.y / pageDocHeight, 0, 1);
+    const rightRatio = clamp((selection.x + selection.w) / pageDocWidth, leftRatio, 1);
+    const bottomRatio = clamp((selection.y + selection.h) / pageDocHeight, topRatio, 1);
+    const cropLeft = leftRatio * pageCanvas.width;
+    const cropTop = topRatio * pageCanvas.height;
+    const cropWidth = (rightRatio - leftRatio) * pageCanvas.width;
+    const cropHeight = (bottomRatio - topRatio) * pageCanvas.height;
+    if (cropWidth < 1 || cropHeight < 1) return null;
+
+    const cropCanvas = document.createElement("canvas");
+    cropCanvas.width = Math.max(1, Math.round(cropWidth));
+    cropCanvas.height = Math.max(1, Math.round(cropHeight));
+    const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
+    if (!cropCtx) return null;
+    cropCtx.fillStyle = "#ffffff";
+    cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
+    cropCtx.drawImage(
+      pageCanvas,
+      cropLeft,
+      cropTop,
+      cropWidth,
+      cropHeight,
+      0,
+      0,
+      cropCanvas.width,
+      cropCanvas.height,
+    );
+    return {
+      dataUrl: cropCanvas.toDataURL("image/jpeg", 0.82),
+      width: cropCanvas.width,
+      height: cropCanvas.height,
+    };
+  }, [pageNum, pageViewport]);
+
   const removeSmartVideoScreenshot = useCallback((id) => {
     setSmartVideoScreenshots((prev) => prev.filter((s) => s.id !== id));
   }, []);
@@ -3700,7 +4122,10 @@ const PDFPage = forwardRef(({
     // see currentBackingScaleRef) — `scale` (fitScale*zoom) was calibrated
     // against CSS pixels, so multiplying by a device-pixel-buffer ratio here
     // would inflate every stroke's stored position by that same ratio.
-    const getScale = () => pageViewport?.scale || (fitScaleRef.current * zoomRef.current);
+    // Always use the live fit*zoom value for pointer/doc conversion so
+    // creation math stays aligned with the actually displayed page even
+    // while PDF.js is still catching up after a zoom change.
+    const getScale = () => fitScaleRef.current * zoomRef.current;
     const toCanvas = (e) => {
       const rect  = ac.getBoundingClientRect();
       const scale = getScale();
@@ -3719,6 +4144,30 @@ const PDFPage = forwardRef(({
         t: typeof e.timeStamp === "number" ? e.timeStamp : performance.now(),
         pressure: Math.min(1, Math.max(0, pressure || 0.5)),
       };
+    };
+
+    // Image BBox gestures use page-relative ratios instead of the reader's
+    // zoom value. This keeps pointer mapping valid while a zoom render is in
+    // flight and at fractional/odd zoom percentages where CSS pixel sizes
+    // are not exact multiples of PDF points.
+    const toBBoxPagePoint = (e) => {
+      const rect = ac.getBoundingClientRect();
+      const viewport = pageViewportsRef.current[pageNum - 1] || pageViewport;
+      const cx = e.touches ? e.touches[0].clientX : e.clientX;
+      const cy = e.touches ? e.touches[0].clientY : e.clientY;
+      const pressure = typeof e.pressure === "number"
+        ? e.pressure
+        : typeof e.touches?.[0]?.force === "number"
+          ? e.touches[0].force
+          : 0.5;
+      return clientPointToBBoxPagePoint({
+        clientX: cx,
+        clientY: cy,
+        rect,
+        viewport,
+        time: typeof e.timeStamp === "number" ? e.timeStamp : performance.now(),
+        pressure,
+      });
     };
 
     const findHighlightSpanAt = (clientX, clientY) => {
@@ -3914,6 +4363,29 @@ const PDFPage = forwardRef(({
       ctx.clearRect(0, 0, ac.clientWidth, ac.clientHeight);
       for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
       if (extra) drawAnnotation(ctx, extra, scale);
+      syncLiveBBoxPreview(extra);
+    };
+
+    const clearLiveBBoxPreview = () => {
+      const layer = textLayerRef.current;
+      if (!layer) return;
+      layer.querySelectorAll(".bbox_preview_highlight").forEach((el) => el.remove());
+      spansRef.current.forEach(({ el }) => el?.classList?.remove("bbox_preview_span_selected"));
+    };
+
+    const syncLiveBBoxPreview = (ann = null) => {
+      const layer = textLayerRef.current;
+      if (!layer) return;
+      clearLiveBBoxPreview();
+      if (!ann || !isBBoxType(ann.type) || bboxTypeHas(ann.type, "capturesImage")) return;
+      const previewBox = Array.isArray(ann.points) && ann.points.length >= 2
+        ? pointsToBounds(ann.points)
+        : { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
+      if (!previewBox || previewBox.w < 4 || previewBox.h < 4) return;
+
+      const matchedSpans = spansRef.current.filter((span) => span?.el && bboxTextMatchesSpan(previewBox, span));
+      if (!matchedSpans.length) return;
+      matchedSpans.forEach((span) => span.el.classList.add("bbox_preview_span_selected"));
     };
 
     const preventNativeTouchDrawingGesture = (e) => {
@@ -3967,46 +4439,8 @@ const PDFPage = forwardRef(({
       }
       const p = toCanvas(e);
       const strokeColor = annotColor;
-      let skipBBoxCreation = false;
-      if (annotTool === "bbox" && !bboxContainerCreationArmed) {
-        const pageBoxes = annotations[pageNum] || [];
-        const hitBBox = (() => {
-          for (let i = pageBoxes.length - 1; i >= 0; i--) {
-            const ann = pageBoxes[i];
-            if (!BBOX_LIKE_ANNOT_TYPES.has(ann.type)) continue;
-            const inside = p.x >= ann.x && p.x <= ann.x + ann.w && p.y >= ann.y && p.y <= ann.y + ann.h;
-            if (!inside) continue;
-            const edgePad = 6;
-            const nearEdge =
-              (p.x - ann.x) <= edgePad ||
-              (ann.x + ann.w - p.x) <= edgePad ||
-              (p.y - ann.y) <= edgePad ||
-              (ann.y + ann.h - p.y) <= edgePad;
-            if (nearEdge || (bboxResizeTargetId && ann.id === bboxResizeTargetId)) {
-              return ann;
-            }
-            skipBBoxCreation = true;
-            return null;
-          }
-          return null;
-        })();
-        if (hitBBox) {
-          if (bboxResizeTargetId && hitBBox.id === bboxResizeTargetId) {
-            activeAnnotRef.current = {
-              ...hitBBox,
-              _sx: hitBBox.x,
-              _sy: hitBBox.y,
-              _editingId: hitBBox.id,
-            };
-            setBBoxActionMenu(null);
-            setBBoxResizeTargetId(null);
-            return;
-          }
-          setBBoxResizeTargetId(hitBBox.id);
-          return;
-        }
-        if (!bboxCreationArmed && !bboxContainerCreationArmed) return;
-      }
+      const bboxColor = nextDistinctBBoxColor(annotations[pageNum] || []);
+      if (annotTool === "bbox" && !activeBBoxCreationType) return;
       if (annotTool === "highlight") {
         const hit = findHighlightAnnotationAt(p.x, p.y);
         if (hit) {
@@ -4090,13 +4524,17 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = span
           ? { type: annotTool, color: strokeColor, x: span.left, y: span.top, w: Math.max(1, span.width), h: span.height, _startLeft: span.left, textAligned: true }
           : null;
-      } else if (["rect","circle","bbox"].includes(annotTool) && !skipBBoxCreation) {
-          const bboxType = annotTool === "bbox"
-            ? (bboxContainerCreationArmed ? "bboxContainer" : "bbox")
-            : annotTool;
+      } else if (annotTool === "bbox" && activeBBoxCreationType) {
+          const bboxPoint = toBBoxPagePoint(e);
+          activeAnnotRef.current = createBBoxDraft(activeBBoxCreationType, bboxPoint, {
+            color: bboxTypeHas(activeBBoxCreationType, "extractsTitle") ? strokeColor : bboxColor,
+            lineWidth: bboxBorderSize,
+            borderStyle: shapeBorderStyle,
+          });
+      } else if (["rect","circle"].includes(annotTool)) {
+          const bboxType = annotTool;
           activeAnnotRef.current = {
-            type: bboxType, color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
-            ...(bboxType === "bbox" || bboxType === "bboxContainer" ? { lineWidth: bboxBorderSize } : {}),
+            type: bboxType, color: bboxType === "bbox" || bboxType === "bboxContainer" ? bboxColor : strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
             borderStyle: shapeBorderStyle,
             shapeBackground,
             ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
@@ -4163,7 +4601,7 @@ const PDFPage = forwardRef(({
       }
       const ann = activeAnnotRef.current;
       if (!ann) return;
-      const p = toCanvas(e);
+      const p = isBBoxType(ann.type) ? toBBoxPagePoint(e) : toCanvas(e);
       if (ann.type === "pen" || ann.type === "highlight" || ann.type === "freeshape") {
         if (ann.mode === "line") {
           if (ann.type === "highlight" && ann.autoWidthLocked) {
@@ -4210,6 +4648,60 @@ const PDFPage = forwardRef(({
           ann.points.push(nextPoint);
         }
         redraw(ann);
+      } else if (isBBoxType(ann.type) && ann._editingId && Array.isArray(ann.points)) {
+        const dx = p.x - (ann._lastDragX ?? p.x);
+        const dy = p.y - (ann._lastDragY ?? p.y);
+        const draggedIndex = ann._pointEditIndex ?? findNearestOutlinePointIndex(ann.points, p.x, p.y);
+        if (draggedIndex >= 0 && (dx !== 0 || dy !== 0)) {
+          ann.points = deformClosedOutlineAroundPoint(ann.points, draggedIndex, dx, dy, getScale(), ann.closed !== false);
+          ann._pointEditIndex = draggedIndex;
+          ann._lastDragX = p.x;
+          ann._lastDragY = p.y;
+        }
+        const nextBounds = pointsToBounds(ann.points);
+        if (nextBounds) {
+          ann.x = nextBounds.x;
+          ann.y = nextBounds.y;
+          ann.w = nextBounds.w;
+          ann.h = nextBounds.h;
+        }
+        redraw(ann);
+      } else if (isBBoxType(ann.type) && Array.isArray(ann.points) && !ann._editingId) {
+        const nextPoint = {
+          x: p.x,
+          y: p.y,
+          ...(p.t != null ? { t: p.t } : {}),
+          ...(p.pressure != null ? { pressure: p.pressure } : {}),
+        };
+        const lastPoint = ann.points[ann.points.length - 1];
+        if (lastPoint && Math.hypot((nextPoint.x ?? 0) - (lastPoint.x ?? 0), (nextPoint.y ?? 0) - (lastPoint.y ?? 0)) < 0.6) return;
+        const obstacleGap = BBOX_MIN_GAP;
+        const obstacles = (annotations[pageNum] || []).filter((item) => (
+          item
+          && item.id !== ann.id
+          && bboxTypeHas(item.type, "preventsContact")
+        )).map((item) => ({
+          x: item.x ?? 0,
+          y: item.y ?? 0,
+          w: item.w ?? 0,
+          h: item.h ?? 0,
+        }));
+        const acceptedPoint = bboxTypeHas(ann.type, "bendsAroundObstacles")
+          ? bendPointAwayFromObstacles(nextPoint, obstacles, obstacleGap)
+          : nextPoint;
+        ann.points.push(acceptedPoint);
+        const attracted = attractBBoxLoopPoint(ann.points, getScale());
+        ann.points = attracted.points;
+        ann.closed = attracted.closed;
+        ann._loopAttraction = attracted.attraction;
+        const bounds = pointsToBounds(ann.points);
+        if (bounds) {
+          ann.x = bounds.x;
+          ann.y = bounds.y;
+          ann.w = bounds.w;
+          ann.h = bounds.h;
+        }
+        redraw(ann);
       } else if ((ann.type === "underline" || ann.type === "strikethrough") && ann.textAligned) {
         // Dragging across more words extends the line to cover them,
         // same word-span lookup as onDown — a plain click (no drag)
@@ -4225,7 +4717,7 @@ const PDFPage = forwardRef(({
           ann.h = Math.max(ann.h, span.height);
         }
         redraw(ann);
-      } else if (["underline","strikethrough","rect","circle","bbox","bboxContainer","drawTextSelection","smartVideoCapture"].includes(ann.type)) {
+      } else if (["underline","strikethrough","rect","circle","drawTextSelection","smartVideoCapture"].includes(ann.type)) {
         ann.x = Math.min(ann._sx, p.x); ann.y = Math.min(ann._sy, p.y);
         ann.w = Math.abs(p.x - ann._sx); ann.h = Math.abs(p.y - ann._sy);
         redraw(ann);
@@ -4251,6 +4743,7 @@ const PDFPage = forwardRef(({
       if (!ann) return;
       if (ann.type === "eraser") {
         if (ann.erasedCount > 0) logAnnotHistory({ action: "erase", page: pageNum, count: ann.erasedCount });
+        clearLiveBBoxPreview();
         return;
       }
       if (ann.type === "pen") {
@@ -4266,17 +4759,30 @@ const PDFPage = forwardRef(({
         const { _sx, _sy, ...selection } = ann;
         void runDrawToTextRecognition(selection);
         redraw();
+        clearLiveBBoxPreview();
         return;
       }
-      if (ann.type === "bbox" || ann.type === "bboxContainer") {
+      if (isBBoxType(ann.type) && !bboxTypeHas(ann.type, "extractsTitle")) {
+        if (Array.isArray(ann.points) && !ann._editingId) {
+          const finalized = finalizeBBoxFreeformPoints(ann.points, fitScaleRef.current * zoomRef.current);
+          ann.points = finalized.points;
+          ann.closed = finalized.closed;
+        }
+        const freeformBounds = Array.isArray(ann.points) && !ann._editingId ? pointsToBounds(ann.points) : null;
+        if (freeformBounds) {
+          ann.x = freeformBounds.x;
+          ann.y = freeformBounds.y;
+          ann.w = freeformBounds.w;
+          ann.h = freeformBounds.h;
+        }
         if (ann.w < 8 || ann.h < 8) return;
         if (ann._editingId) {
           setAnnotations((prev) => {
             const pageAnnotations = prev[pageNum] || [];
-            const childBboxes = ann.type === "bboxContainer"
+            const childBboxes = bboxTypeHas(ann.type, "containsChildren")
               ? pageAnnotations.filter((item) => (
                 item.id !== ann._editingId
-                && item.type === "bbox"
+                && BBOX_CARD_TYPES.has(item.type)
                 && item.x >= ann.x
                 && item.y >= ann.y
                 && item.x + item.w <= ann.x + ann.w
@@ -4293,7 +4799,9 @@ const PDFPage = forwardRef(({
                       y: ann.y,
                       w: ann.w,
                       h: ann.h,
-                      ...(item.type === "bbox"
+                      closed: ann.closed !== false,
+                      ...(Array.isArray(ann.points) && ann.points.length >= 2 ? { points: ann.points.map((point) => ({ ...point })) } : {}),
+                      ...(bboxTypeHas(item.type, "extractsText")
                         ? (() => {
                             const extracted = extractBoundingBoxTextParts(
                               spansRef.current,
@@ -4302,10 +4810,10 @@ const PDFPage = forwardRef(({
                             );
                             return {
                               title: extracted.title || item.title || "",
-                              text: extracted.text,
+                              text: stripTitleFromBBoxText(extracted.text, item.titleBBox?.text || extracted.title || item.title || ""),
                             };
                           })()
-                        : item.type === "bboxContainer"
+                        : bboxTypeHas(item.type, "extractsContainerTitle")
                           ? (() => {
                               const extracted = extractBoundingBoxTextParts(
                                 spansRef.current,
@@ -4327,14 +4835,120 @@ const PDFPage = forwardRef(({
           logAnnotHistory({ action: "edit", type: ann.type, page: pageNum });
           setBBoxResizeTargetId(null);
           redraw();
+          clearLiveBBoxPreview();
           return;
         }
+      }
+      if (bboxTypeHas(ann.type, "extractsTitle")) {
+        const finalized = finalizeBBoxFreeformPoints(ann.points, fitScaleRef.current * zoomRef.current);
+        ann.points = finalized.points;
+        ann.closed = finalized.closed;
+        const box = pointsToBounds(ann.points);
+        if (!box || box.w < 8 || box.h < 8) return;
+        const pageAnnotations = annotations[pageNum] || [];
+        const anchorPoint = Array.isArray(ann.points) && ann.points.length ? { x: ann.points[0].x, y: ann.points[0].y } : null;
+        const selectionPad = Math.max(0.5, (ann.lineWidth ?? 0) / 2) + 0.5;
+        const visibleTitleBox = {
+          ...expandRectBy(box, selectionPad),
+          lineWidth: ann.lineWidth,
+        };
+        const targetOwner = findContainingTitleOwner(pageAnnotations, visibleTitleBox, anchorPoint);
+        const extracted = extractBoundingBoxTextParts(spansRef.current, box, bboxTextMatchesSpan);
+        const nextTitle = (extracted.title || extracted.text || "").trim();
+        const titleBBox = {
+          ...box,
+          type: "bboxTitle",
+          id: Date.now(),
+          color: ann.color,
+          lineWidth: ann.lineWidth,
+          borderStyle: ann.borderStyle,
+          shapeBackground: false,
+          closed: ann.closed !== false,
+          points: Array.isArray(ann.points)
+            ? ann.points.map((point) => ({
+                x: point.x,
+                y: point.y,
+                ...(point.t != null ? { t: point.t } : {}),
+                ...(point.pressure != null ? { pressure: point.pressure } : {}),
+              }))
+            : [],
+          ownerId: targetOwner?.id ?? null,
+          ownerType: targetOwner?.type ?? null,
+          containerId: targetOwner
+            ? (
+                bboxTypeHas(targetOwner.type, "containsChildren")
+                  ? targetOwner.id
+                  : findContainingBBoxContainer(pageAnnotations, box)?.id ?? null
+              )
+            : findContainingBBoxContainer(pageAnnotations, box)?.id ?? null,
+          title: nextTitle || "",
+          text: nextTitle || "",
+        };
+        let nextAnnotations = null;
+        setAnnotations((prev) => {
+          if (!targetOwner) {
+            nextAnnotations = {
+              ...prev,
+              [pageNum]: [
+                ...(prev[pageNum] || []).filter((item) => item?.id !== titleBBox.id),
+                titleBBox,
+              ],
+            };
+            return nextAnnotations;
+          }
+          const expandedPageAnnotations = expandOwnerToIncludeTitleBBox(prev[pageNum] || [], targetOwner.id, visibleTitleBox);
+          const expandedOwner = expandedPageAnnotations.find((item) => item?.id === targetOwner.id) || targetOwner;
+          const nextPageAnnotations = [
+            ...(expandedPageAnnotations.filter((item) => !(
+              item.type === "bboxTitle" && (item.ownerId === targetOwner.id || item.containerId === targetOwner.id)
+            ))),
+            titleBBox,
+          ].map((item) => (
+            item.id === targetOwner.id && item.type === targetOwner.type
+              ? {
+                  ...item,
+                  title: nextTitle || item.title || "",
+                  text: bboxTypeHas(item.type, "extractsText")
+                    ? (() => {
+                        const extracted = extractBoundingBoxTextParts(
+                          spansRef.current,
+                          { x: expandedOwner.x, y: expandedOwner.y, w: expandedOwner.w, h: expandedOwner.h },
+                          bboxTextMatchesSpan,
+                        );
+                        return stripTitleFromBBoxText(extracted.text || item.text || "", nextTitle || "");
+                      })()
+                    : item.text,
+                  titleBBox,
+                }
+              : item
+          ));
+          nextAnnotations = {
+            ...prev,
+            [pageNum]: nextPageAnnotations,
+          };
+          return nextAnnotations;
+        });
+        setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+        const sourceId = currentSourceIdRef.current;
+        if (sourceId && nextAnnotations) {
+          authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
+          }).catch(() => {});
+        }
+        logAnnotHistory({ action: "add", type: "bboxTitle", page: pageNum, color: ann.color, size: ann.lineWidth });
+        setActiveBBoxCreationType(null);
+        redraw();
+        clearLiveBBoxPreview();
+        return;
       }
       if (ann.type === "smartVideoCapture") {
         if (ann.w < 8 || ann.h < 8) return;
         const { _sx, _sy, ...selection } = ann;
         void captureSmartVideoScreenshot(selection);
         redraw();
+        clearLiveBBoxPreview();
         return;
       }
       const tinyDocThreshold = 3 / Math.max(1, fitScaleRef.current * zoomRef.current);
@@ -4344,8 +4958,34 @@ const PDFPage = forwardRef(({
         : ["line","arrow"].includes(ann.type)
           ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < tinyDocThreshold
           : ann.w < tinyDocThreshold && ann.h < tinyDocThreshold;
-      if (tiny) return;
-      const { _sx, _sy, _startLeft, textAligned, _editingId, ...clean } = ann;
+      if (tiny) {
+        clearLiveBBoxPreview();
+        return;
+      }
+      const { _sx, _sy, _startLeft, textAligned, _editingId, points, ...clean } = ann;
+      if (isBBoxType(ann.type) && !bboxTypeHas(ann.type, "extractsTitle") && Array.isArray(points) && points.length >= 2 && !_editingId) {
+        const obstacleGap = Math.max(BBOX_MIN_GAP, 1 / Math.max(1, fitScaleRef.current * zoomRef.current));
+        const obstacles = (annotations[pageNum] || []).filter((item) => (
+          item
+          && item.id !== ann.id
+          && bboxTypeHas(item.type, "preventsContact")
+        )).map((item) => ({
+          x: item.x ?? 0,
+          y: item.y ?? 0,
+          w: item.w ?? 0,
+          h: item.h ?? 0,
+        }));
+        const normalizedPoints = points.map((point) => ({
+          x: point.x,
+          y: point.y,
+          ...(point.t != null ? { t: point.t } : {}),
+          ...(point.pressure != null ? { pressure: point.pressure } : {}),
+        }));
+        clean.points = bboxTypeHas(ann.type, "bendsAroundObstacles")
+          ? normalizedPoints.map((point) => bendPointAwayFromObstacles(point, obstacles, obstacleGap))
+          : normalizedPoints;
+        clean.closed = ann.closed !== false;
+      }
       if (clean.type === "highlight" && highlightAutoContrast) {
         const maskedText = findSpansOverlappingHighlight(clean.points);
         if (maskedText.length) clean.maskedText = maskedText;
@@ -4355,51 +4995,83 @@ const PDFPage = forwardRef(({
         : null;
       setAnnotations((prev) => {
         const pageAnnotations = prev[pageNum] || [];
-        const box = clean.type === "bbox"
-          ? resolveBBoxSpacing(
-              clean,
-              pageAnnotations.filter((ann) => BBOX_LIKE_ANNOT_TYPES.has(ann.type)),
-            )
+        const initialBox = isBBoxType(clean.type) && Array.isArray(clean.points) && clean.points.length >= 2
+          ? {
+              ...clean,
+              ...(() => {
+                const bounds = pointsToBounds(clean.points);
+                return bounds ? { x: bounds.x, y: bounds.y, w: bounds.w, h: bounds.h } : {};
+              })(),
+            }
           : clean;
+        const box = initialBox;
+        const pendingTitleBBox = bboxTypeHas(clean.type, "extractsText")
+          ? findPendingTitleBBoxForOwner(pageAnnotations, box)
+          : null;
+        const imageSnippet = bboxTypeHas(clean.type, "capturesImage")
+          ? captureImageBBoxSnippet(box)
+          : null;
+        const nextId = Date.now();
+        const nextTitle = pendingTitleBBox?.text || pendingTitleBBox?.title || "";
+        const newAnnotation = {
+          ...box,
+          ...(imageSnippet ? { imageDataUrl: imageSnippet.dataUrl, imageWidth: imageSnippet.width, imageHeight: imageSnippet.height } : {}),
+          ...(bboxTypeHas(clean.type, "extractsText")
+            ? (() => {
+                const extracted = extractBoundingBoxTextParts(spansRef.current, box, bboxTextMatchesSpan);
+                return {
+                  title: nextTitle || extracted.title,
+                  text: stripTitleFromBBoxText(extracted.text, nextTitle || clean.titleBBox?.text || extracted.title || clean.title || ""),
+                };
+              })()
+            : bboxTypeHas(clean.type, "extractsContainerTitle")
+              ? (() => {
+                  const childBboxes = pageAnnotations.filter((item) => (
+                    BBOX_CARD_TYPES.has(item.type)
+                    && item.x >= box.x
+                    && item.y >= box.y
+                    && item.x + item.w <= box.x + box.w
+                    && item.y + item.h <= box.y + box.h
+                  ));
+                  const extracted = extractBoundingBoxTextParts(
+                    spansRef.current,
+                    box,
+                    bboxTextMatchesSpan,
+                    childBboxes,
+                  );
+                  return {
+                    title: extracted.title,
+                  };
+                })()
+            : {}),
+          ...(pendingTitleBBox ? {
+            titleBBox: {
+              ...pendingTitleBBox,
+              ownerId: nextId,
+              ownerType: clean.type,
+            },
+          } : {}),
+          id: nextId,
+        };
         const nextAnnotations = {
           ...prev,
           [pageNum]: [
-            ...pageAnnotations,
-            {
-              ...box,
-              ...(clean.type === "bbox"
-                ? (() => {
-                    const extracted = extractBoundingBoxTextParts(spansRef.current, box, bboxTextMatchesSpan);
-                    return {
-                      title: extracted.title,
-                      text: extracted.text,
-                    };
-                  })()
-                : clean.type === "bboxContainer"
-                  ? (() => {
-                      const childBboxes = pageAnnotations.filter((item) => (
-                        item.type === "bbox"
-                        && item.x >= box.x
-                        && item.y >= box.y
-                        && item.x + item.w <= box.x + box.w
-                        && item.y + item.h <= box.y + box.h
-                      ));
-                      const extracted = extractBoundingBoxTextParts(
-                        spansRef.current,
-                        box,
-                        bboxTextMatchesSpan,
-                        childBboxes,
-                      );
-                      return {
-                        title: extracted.title,
-                      };
-                    })()
-                : {}),
-              id: Date.now(),
-            },
+            ...pageAnnotations.map((item) => (
+              pendingTitleBBox && item.id === pendingTitleBBox.id
+                ? {
+                    ...item,
+                    ownerId: nextId,
+                    ownerType: clean.type,
+                    containerId: bboxTypeHas(clean.type, "containsChildren")
+                      ? nextId
+                      : (item.containerId ?? findContainingBBoxContainer(pageAnnotations, box)?.id ?? null),
+                  }
+                : item
+            )),
+            newAnnotation,
           ],
         };
-        if (clean.type === "bbox" && insideContainerTarget?.containerId) {
+        if (bboxTypeHas(clean.type, "canBeNested") && insideContainerTarget?.containerId) {
           nextAnnotations[pageNum] = expandContainerToIncludeBBox(
             nextAnnotations[pageNum],
             insideContainerTarget.containerId,
@@ -4409,9 +5081,8 @@ const PDFPage = forwardRef(({
         return nextAnnotations;
       });
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-      if (clean.type === "bbox") setBBoxCreationArmed(false);
-      if (clean.type === "bboxContainer") setBBoxContainerCreationArmed(false);
-      if (clean.type === "bbox" && insideContainerTarget) setBBoxContainerBBoxTarget(null);
+      if (isBBoxType(clean.type)) setActiveBBoxCreationType(null);
+      if (bboxTypeHas(clean.type, "canBeNested") && insideContainerTarget) setBBoxContainerBBoxTarget(null);
       logAnnotHistory({
         action: "add",
         type: clean.type,
@@ -4421,12 +5092,14 @@ const PDFPage = forwardRef(({
           ? Math.round(clean.type === "pen" ? clean.lineWidth : clean.lineWidth * (fitScaleRef.current * zoomRef.current))
           : null,
       });
+      clearLiveBBoxPreview();
     };
 
     const onTouchCancel = (e) => {
       preventNativeTouchDrawingGesture(e);
       const ann = activeAnnotRef.current;
       activeAnnotRef.current = null;
+      clearLiveBBoxPreview();
       if (ann?.type === "highlight") {
         redraw();
         return;
@@ -4454,9 +5127,10 @@ const PDFPage = forwardRef(({
       ac.removeEventListener("touchend",   onUp);
       ac.removeEventListener("touchcancel", onTouchCancel);
       ac.removeEventListener("contextmenu", preventNativeTouchDrawingGesture);
+      clearLiveBBoxPreview();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, shapeBorderStyle, shapeBorderRadius, shapeBackground, bboxCreationArmed, bboxContainerCreationArmed, bboxContainerBBoxTarget, expandContainerToIncludeBBox]);
+  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, captureImageBBoxSnippet, shapeBorderStyle, shapeBorderRadius, shapeBackground, activeBBoxCreationType, bboxContainerBBoxTarget, expandContainerToIncludeBBox, findContainingBBoxContainer, updateBBoxName]);
 
   // Eraser-size cursor circle — a real hit-test-radius preview, not just a
   // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
@@ -6658,7 +7332,7 @@ const PDFPage = forwardRef(({
         if (annRes.ok) {
           const annData = await annRes.json();
           skipNextAnnotationAutosaveRef.current = true; // suppress the autosave effect for this restore
-          setAnnotations(annData.layers || {});
+          setAnnotations(rehydrateBBoxTitleLayers(annData.layers || {}));
           // `time` round-trips through JSON as an ISO string — logAnnotHistory
           // and the history panel's own rendering (.toLocaleTimeString(),
           // day-bucketing) both expect a real Date instance.
@@ -7624,6 +8298,44 @@ const PDFPage = forwardRef(({
     window.addEventListener("touchmove", onMove, { passive: true });
     window.addEventListener("touchend",  onEnd);
   }, [mdPanelWidth]);
+  const createAsideResizeStart = useCallback((startWidth, setWidth, min = 240, max = 720) => (e) => {
+    e.preventDefault();
+    const handleEl = e.currentTarget;
+    const startX = e.touches ? e.touches[0].clientX : e.clientX;
+    handleEl.classList.add("pdf_aside_resize_handle--active");
+    const onMove = (ev) => {
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const next = Math.max(min, Math.min(max, startWidth + (clientX - startX)));
+      setWidth(next);
+    };
+    const onEnd = () => {
+      handleEl.classList.remove("pdf_aside_resize_handle--active");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onEnd);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onEnd);
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend", onEnd);
+  }, []);
+  const handleAnnotHistoryPanelResizeStart = useCallback(
+    createAsideResizeStart(annotHistoryPanelWidth, setAnnotHistoryPanelWidth, 240, 640),
+    [annotHistoryPanelWidth, createAsideResizeStart]
+  );
+  const handleSmartVideoPanelResizeStart = useCallback(
+    createAsideResizeStart(smartVideoPanelWidth, setSmartVideoPanelWidth, 280, 760),
+    [smartVideoPanelWidth, createAsideResizeStart]
+  );
+  const handleEntityBuilderPanelResizeStart = useCallback(
+    createAsideResizeStart(entityBuilderPanelWidth, setEntityBuilderPanelWidth, 280, 760),
+    [entityBuilderPanelWidth, createAsideResizeStart]
+  );
+  const handleAmctoshsVignettePanelResizeStart = useCallback(
+    createAsideResizeStart(amctoshsVignettePanelWidth, setAmctoshsVignettePanelWidth, 280, 760),
+    [amctoshsVignettePanelWidth, createAsideResizeStart]
+  );
 
   const togglePreview = useCallback(() => {
     setSplitRatio((r) => {
@@ -7919,29 +8631,52 @@ const PDFPage = forwardRef(({
                 <div className="annot_bbox_creation_block">
                   <button
                     type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle${bboxCreationArmed ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => {
-                      setBBoxContainerCreationArmed(false);
-                      setBBoxCreationArmed((value) => !value);
-                    }}
-                    title={bboxCreationArmed ? "BBox creation armed" : "Arm new bbox creation"}
+                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bbox" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => toggleBBoxCreationType("bbox")}
+                    title={activeBBoxCreationType === "bbox" ? "BBox creation armed" : "Arm new bbox creation"}
                     aria-label="New bbox"
                   >
-                    <i className="bx bx-crop" />
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M7 3h2v2h6v2H9v10H7V7H5V5h2zm10 4h2v14H7v-2h10z" />
+                    </svg>
                     <span>New BBox</span>
                   </button>
                   <button
                     type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle${bboxContainerCreationArmed ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => {
-                      setBBoxCreationArmed(false);
-                      setBBoxContainerCreationArmed((value) => !value);
-                    }}
-                    title={bboxContainerCreationArmed ? "BBox container creation armed" : "Arm new bbox container creation"}
+                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bboxContainer" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => toggleBBoxCreationType("bboxContainer")}
+                    title={activeBBoxCreationType === "bboxContainer" ? "BBox container creation armed" : "Arm new bbox container creation"}
                     aria-label="New bbox container"
                   >
-                    <i className="bx bx-folder-open" />
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M3 6c0-1.1.9-2 2-2h5l2 2h9c.55 0 1 .45 1 1v11c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2zm2 1v11h14V9H11.2L9.2 7z" />
+                    </svg>
                     <span>Container BBox</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bboxTitle" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => toggleBBoxCreationType("bboxTitle")}
+                    title={activeBBoxCreationType === "bboxTitle" ? "Title BBox armed" : "Arm title BBox selection"}
+                    aria-label="Title BBox"
+                  >
+                    <svg className="annot_mode_btn_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 5h16v2h-7v12h-2V7H4z" />
+                    </svg>
+                    <span>Title BBox</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "imageBBox" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => toggleBBoxCreationType("imageBBox")}
+                    title={activeBBoxCreationType === "imageBBox" ? "Image BBox armed" : "Arm image bbox selection"}
+                    aria-label="Image BBox"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M4 5h16v14H4zm2 2v10h12V7z" />
+                      <path d="M7 15l3-4 2 2 3-4 2 6z" />
+                    </svg>
+                    <span>Image BBox</span>
                   </button>
                 </div>
               )}
@@ -8724,7 +9459,12 @@ const PDFPage = forwardRef(({
 
         {/* Far left — Annotation History column, opened by the toolbar "History" button */}
         {annotHistoryOpen && (
-          <div id="pdf_annot_history_panel">
+          <div id="pdf_annot_history_panel" style={{ width: annotHistoryPanelWidth }}>
+            <div
+              className="pdf_aside_resize_handle"
+              onMouseDown={handleAnnotHistoryPanelResizeStart}
+              onTouchStart={handleAnnotHistoryPanelResizeStart}
+            />
             <div id="pdf_annot_history_header">
               <span>Annotation History</span>
               <button
@@ -8791,6 +9531,8 @@ const PDFPage = forwardRef(({
             convention as the Markdown/Annotation-History panels above. */}
         {smartVideoOpen && (
           <SmartVideoPanel
+            width={smartVideoPanelWidth}
+            onResizeStart={handleSmartVideoPanelResizeStart}
             selecting={smartVideoSelecting}
             onToggleSelecting={() => setSmartVideoSelecting((v) => !v)}
             screenshots={smartVideoScreenshots}
@@ -8830,6 +9572,8 @@ const PDFPage = forwardRef(({
             own close button since it isn't tied to re-pressing an annotTool. */}
         {entityBuilderOpen && (
           <EntityBuilderPanel
+            width={entityBuilderPanelWidth}
+            onResizeStart={handleEntityBuilderPanelResizeStart}
             onClose={toggleEntityBuilder}
             bboxCards={bboxCardsForBuilder}
             pageNum={entityBuilderPageNum}
@@ -8849,6 +9593,8 @@ const PDFPage = forwardRef(({
             column convention as the Entities Builder panel above. */}
         {amctoshsVignetteOpen && (
           <ClinicalVignetteBuilderPanel
+            width={amctoshsVignettePanelWidth}
+            onResizeStart={handleAmctoshsVignettePanelResizeStart}
             onClose={toggleAmctoshsVignette}
             provider={provider}
             providerModels={aiProviderModels}
@@ -8861,7 +9607,7 @@ const PDFPage = forwardRef(({
           style={{
             width: splitRatio === 0
               ? "0"
-              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? 300 : 0) + (smartVideoOpen ? 380 : 0) + (entityBuilderOpen ? 360 : 0) + (amctoshsVignetteOpen ? 360 : 0)}px)`,
+              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? annotHistoryPanelWidth : 0) + (smartVideoOpen ? smartVideoPanelWidth : 0) + (entityBuilderOpen ? entityBuilderPanelWidth : 0) + (amctoshsVignetteOpen ? amctoshsVignettePanelWidth : 0)}px)`,
           }}
           className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${annotTool === "highlight" ? " pdf_preview--highlight-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
         >
@@ -8972,48 +9718,148 @@ const PDFPage = forwardRef(({
                           })()}
                         </div>
                       )}
-                      {pageViewport && selectionBboxes.length > 0 && (
+                      {pageViewport && (managedBboxes.length > 0 || titleBboxes.length > 0) && (
                         <div
                           className="pdf_bbox_delete_layer"
                           style={{ width: pageViewport.width, height: pageViewport.height }}
                           aria-hidden="true"
                         >
-                          {selectionBboxes.map((bbox) => {
-                            const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
-                            const left = Math.min(
-                              Math.max(0, (bbox.x + bbox.w) * scale - 10),
-                              Math.max(0, pageViewport.width - 22),
-                            );
-                            const top = Math.min(
-                              Math.max(0, bbox.y * scale - 12),
-                              Math.max(0, pageViewport.height - 22),
-                            );
-                            return (
-                              <button
-                                key={bbox.id}
-                                type="button"
-                                className="pdf_bbox_delete_btn"
-                                style={{ left, top }}
-                                title={`Delete ${bbox.title?.trim() || "BBox"}`}
-                                aria-label={`Delete ${bbox.title?.trim() || "BBox"}`}
-                                onMouseDown={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                }}
-                                onTouchStart={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                }}
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  deleteBBox(bbox.id);
-                                }}
-                              >
-                                <i className="bx bx-trash" aria-hidden="true" />
-                              </button>
-                            );
-                          })}
+                          {(() => {
+                            return [...managedBboxes, ...titleBboxes].map((bbox) => {
+                              const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
+                              const left = Math.min(
+                                Math.max(0, (bbox.x + bbox.w) * scale - 10),
+                                Math.max(0, pageViewport.width - 22),
+                              );
+                              const top = Math.min(
+                                Math.max(0, bbox.y * scale - 12),
+                                Math.max(0, pageViewport.height - 22),
+                              );
+                              const boxLeft = bbox.x * scale;
+                              const boxTop = bbox.y * scale;
+                              const boxWidth = bbox.w * scale;
+                              const boxHeight = bbox.h * scale;
+                              const isEditing = bboxResizeTargetId === bbox.id;
+                              const generatedHandles = isEditing ? sampleClosedOutlineHandles(bbox, scale) : [];
+                              const manualHandles = isEditing
+                                ? buildEditableBBoxOutline(bbox)
+                                  .map((point, pointIndex) => ({ ...point, pointIndex }))
+                                  .filter((point) => point.manualControl)
+                                : [];
+                              const borderHandles = [...generatedHandles, ...manualHandles];
+                              const handleSize = Math.max(6, Math.min(12, 12 * scale));
+                              return (
+                                <React.Fragment key={bbox.id}>
+                                  <div className="pdf_bbox_action_stack" style={{ left, top }}>
+                                    {bboxTypeHas(bbox.type, "autoFitsText") && (
+                                      <button
+                                        type="button"
+                                        className={`pdf_bbox_action_btn${bbox.textAutoFitted ? " pdf_bbox_action_btn--active" : ""}`}
+                                        title={bbox.textAutoFitted ? "Restore original border shape" : "Fit border to selected text"}
+                                        aria-label={bbox.textAutoFitted ? "Restore original border shape" : "Fit border to selected text"}
+                                        onMouseDown={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                        }}
+                                        onTouchStart={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                        }}
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          autoFitBBoxToText(bbox);
+                                        }}
+                                      >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24" aria-hidden="true">
+                                          <path d="M3 8V3h5M21 8V3h-5M3 16v5h5M21 16v5h-5M8 8l-5-5M16 8l5-5M8 16l-5 5M16 16l5 5" />
+                                        </svg>
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      className={`pdf_bbox_action_btn${isEditing ? " pdf_bbox_action_btn--active" : ""}`}
+                                      title={`Edit ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
+                                      aria-label={`Edit ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                      }}
+                                      onTouchStart={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                      }}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setBBoxActionMenu(null);
+                                        setBBoxResizeTargetId((prev) => (prev === bbox.id ? null : bbox.id));
+                                      }}
+                                    >
+                                      <i className="bx bx-edit-alt" aria-hidden="true" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="pdf_bbox_delete_btn"
+                                      title={`Delete ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
+                                      aria-label={`Delete ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                      }}
+                                      onTouchStart={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                      }}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        deleteBBox(bbox.id);
+                                      }}
+                                    >
+                                      <i className="bx bx-trash" aria-hidden="true" />
+                                    </button>
+                                  </div>
+                                  {isEditing && (
+                                    <svg
+                                      className="pdf_bbox_edit_hit_layer"
+                                      width={pageViewport.width}
+                                      height={pageViewport.height}
+                                      viewBox={`0 0 ${pageViewport.width} ${pageViewport.height}`}
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d={buildBBoxOutlinePath(bbox, scale)}
+                                        className="pdf_bbox_edit_hit_path"
+                                        onMouseDown={(event) => addBBoxResizePoint(bbox, event)}
+                                        onTouchStart={(event) => addBBoxResizePoint(bbox, event)}
+                                      />
+                                    </svg>
+                                  )}
+                                  {borderHandles.map((handle, handleIndex) => (
+                                    <button
+                                      key={`${bbox.id}-border-${handleIndex}`}
+                                      type="button"
+                                      className="pdf_bbox_resize_handle"
+                                      style={{
+                                        left: handle.x * scale,
+                                        top: handle.y * scale,
+                                        width: handleSize,
+                                        height: handleSize,
+                                        marginLeft: -(handleSize / 2),
+                                        marginTop: -(handleSize / 2),
+                                        cursor: "grab",
+                                      }}
+                                      onMouseDown={(e) => beginBBoxResize(bbox, handle, e)}
+                                      onTouchStart={(e) => beginBBoxResize(bbox, handle, e)}
+                                      title="Drag border dot to reshape"
+                                      aria-label="Drag border dot to reshape"
+                                    />
+                                  ))}
+                                </React.Fragment>
+                              );
+                            });
+                          })()}
                         </div>
                       )}
                       {createPortal(
@@ -9050,17 +9896,11 @@ const PDFPage = forwardRef(({
                               width: annotTextInput.width || undefined,
                               height: annotTextInput.height || undefined,
                               fontFamily: textFontFamily,
-                              // textFontSize is canvas-space (matches
-                              // ann.fontSize's own stored semantics — see
-                              // annotationDraw.js's `(ann.fontSize||16)*s`)
-                              // — scale up to the current on-screen size
-                              // here, the one place that actually needs
-                              // it, so the live box matches how the text
-                              // will really look at this zoom instead of
-                              // sitting at a flat, zoom-independent px
-                              // size that reads bigger at 50% and smaller
-                              // at 200% relative to the page around it.
-                              fontSize: `${textFontSize * fitScaleRef.current * zoomRef.current}px`,
+                              // Match the page's current render scale so the
+                              // editor text stays proportional to the PDF at
+                              // every zoom level instead of looking oversized
+                              // when the page is zoomed out.
+                              fontSize: `${textFontSize * (pageViewport?.scale || (fitScaleRef.current * zoomRef.current))}px`,
                               fontWeight: textBold ? 700 : 400,
                               fontStyle: textItalic ? "italic" : "normal",
                               textDecoration: textUnderline ? "underline" : "none",

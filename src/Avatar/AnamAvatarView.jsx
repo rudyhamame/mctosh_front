@@ -15,7 +15,7 @@ import AnamAvatar from "../App/AnamAvatar";
 // today anyway, only isLive/streamChunk/endMessage are ever called.
 const ANAM_VIDEO_ELEMENT_ID = "anam_avatar_video"; // matches AnamAvatar.jsx's own VIDEO_ELEMENT_ID constant
 
-const AnamAvatarView = forwardRef((_props, ref) => {
+const AnamAvatarView = forwardRef(({ onSpeechCaptionChange = null }, ref) => {
   const innerRef = useRef(null);
 
   useImperativeHandle(ref, () => ({
@@ -46,7 +46,7 @@ const AnamAvatarView = forwardRef((_props, ref) => {
     },
   }), []);
 
-  return <AnamAvatar ref={innerRef} />;
+  return <AnamAvatar ref={innerRef} onSpeechCaptionChange={onSpeechCaptionChange} />;
 });
 
 AnamAvatarView.displayName = "AnamAvatarView";

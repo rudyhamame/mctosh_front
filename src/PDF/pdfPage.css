@@ -651,8 +651,15 @@
   pointer-events: none;
 }
 
-.pdf_bbox_delete_btn {
+.pdf_bbox_action_stack {
   position: absolute;
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+
+.pdf_bbox_action_btn,
+.pdf_bbox_delete_btn {
   width: 22px;
   height: 22px;
   display: flex;
@@ -668,14 +675,58 @@
   padding: 0;
 }
 
+.pdf_bbox_action_btn {
+  border-color: rgba(15, 23, 42, 0.12);
+  color: rgb(51, 65, 85);
+}
+
+.pdf_bbox_action_btn--active {
+  background: var(--color-highlight);
+  border-color: color-mix(in srgb, var(--color-highlight) 62%, rgba(15, 23, 42, 0.12));
+  color: var(--color-surface);
+}
+
+.pdf_bbox_action_btn:hover {
+  background: rgba(248, 250, 252, 0.98);
+  border-color: rgba(51, 65, 85, 0.22);
+  color: rgb(15, 23, 42);
+}
+
 .pdf_bbox_delete_btn:hover {
   background: rgba(255, 245, 245, 0.98);
   border-color: rgba(239, 68, 68, 0.42);
   color: rgb(153, 27, 27);
 }
 
+.pdf_bbox_action_btn:active,
 .pdf_bbox_delete_btn:active {
   transform: translateY(1px);
+}
+
+.pdf_bbox_resize_handle {
+  position: absolute;
+  border-radius: 999px;
+  border: 1.5px solid var(--color-surface);
+  background: var(--color-highlight);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.18);
+  pointer-events: auto;
+  padding: 0;
+}
+
+.pdf_bbox_edit_hit_layer {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.pdf_bbox_edit_hit_path {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.001);
+  stroke-width: 14px;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: crosshair;
 }
 
 .pdf_hyle_info_icon {
@@ -958,6 +1009,32 @@
 }
 
 #pdf_md_panel_resize_handle.pdf_md_panel_resize_handle--active::before {
+  width: 4px;
+  background: var(--color-highlight);
+}
+
+.pdf_aside_resize_handle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  bottom: 0;
+  width: 13px;
+  cursor: col-resize;
+  z-index: 5;
+  display: flex;
+  justify-content: center;
+  touch-action: none;
+}
+
+.pdf_aside_resize_handle::before {
+  content: "";
+  width: 3px;
+  height: 100%;
+  background: var(--color-border);
+  transition: background 0.15s, width 0.15s;
+}
+
+.pdf_aside_resize_handle.pdf_aside_resize_handle--active::before {
   width: 4px;
   background: var(--color-highlight);
 }
@@ -1308,6 +1385,7 @@
 
 /* ── Far left: Annotation History column ── */
 #pdf_annot_history_panel {
+  position: relative;
   flex-shrink: 0;
   width: 300px;
   display: flex;
@@ -1549,6 +1627,16 @@ html.theme-light #pdf_preview_scroll {
   -webkit-touch-callout: none !important;
   pointer-events: none !important;
   cursor: crosshair;
+}
+
+.bbox_preview_highlight {
+  background: rgba(255, 212, 59, 0.34);
+  border-radius: 2px;
+  z-index: 1;
+}
+
+.pdf_text_layer span.bbox_preview_span_selected {
+  background: rgba(255, 212, 59, 0.18);
 }
 
 /* ── Resize handle ── */
@@ -2556,6 +2644,13 @@ html.theme-light #pdf_preview_scroll {
 /* Stroke border is icon-only (see StrokeBorderIcon) inside this otherwise
    text-label row — pdf_toolbar_svg_icon's own 24px sizing is tuned for the
    main tool strip's larger buttons, too big for this compact toggle. */
+.annot_mode_btn svg {
+  display: block;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
 .annot_mode_btn .pdf_toolbar_svg_icon {
   display: block;
   width: 16px;

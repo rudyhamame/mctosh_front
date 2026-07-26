@@ -65,7 +65,7 @@ export default function MedicalExamsPage() {
   useEffect(() => {
     fetch(apiUrl("/api/sources"), { headers: authHeaders() })
       .then((r) => r.json())
-      .then((data) => setHyleSources((data.sources || []).filter((s) => s.type !== "youtube")))
+      .then((data) => setHyleSources((data.sources || []).filter((s) => s.type !== "youtube" && s.type !== "podcast")))
       .catch(() => setHyleSources([]));
   }, []);
 

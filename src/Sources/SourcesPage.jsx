@@ -5,12 +5,12 @@ import { apiUrl } from "../config/api";
 import "./sourcesPage.css";
 
 const TYPE_LABELS = {
-  pdf: "PDF", word: "Word", youtube: "YouTube", image: "Image",
+  pdf: "PDF", word: "Word", youtube: "YouTube", podcast: "Podcast", image: "Image",
   textbook: "Textbook", reference: "Reference", review: "Review",
   xray: "X-Ray", ct: "CT Scan", mri: "MRI", ultrasound: "Ultrasound",
 };
 const TYPE_COLORS = {
-  pdf: "#4fc3f7", word: "#4fc3f7", youtube: "#e53935", image: "#81c784",
+  pdf: "#4fc3f7", word: "#4fc3f7", youtube: "#e53935", podcast: "#ff8a65", image: "#81c784",
   textbook: "#4fc3f7", reference: "#a5d6a7", review: "#ce93d8",
   xray: "#b0bec5", ct: "#4dd0e1", mri: "#9575cd", ultrasound: "#4db6ac",
 };
@@ -62,8 +62,8 @@ const SourcesPage = () => {
   const [error,    setError]    = useState(null);
   const [info,     setInfo]     = useState(null);
   const [dropOpen, setDropOpen] = useState(false);
-  const [ytInput,  setYtInput]  = useState(false);
-  const [ytUrl,    setYtUrl]    = useState("");
+  const [linkInputMode, setLinkInputMode] = useState("");
+  const [linkUrl, setLinkUrl] = useState("");
   const [compressionPrompt, setCompressionPrompt] = useState(null);
   const [compressionBusy, setCompressionBusy] = useState(false);
 
@@ -239,19 +239,23 @@ const SourcesPage = () => {
   }, [compressionPrompt]);
 
   /* ── Save YouTube link ── */
-  const saveYoutube = useCallback(async (url) => {
+  const saveLinkSource = useCallback(async (type, url) => {
     setError(null);
     setUploadCount((n) => n + 1);
-    setYtInput(false);
-    setYtUrl("");
+    setLinkInputMode("");
+    setLinkUrl("");
     try {
       const form = new FormData();
-      form.append("type", "youtube");
+      form.append("type", type);
       form.append("name", url);
       form.append("url",  url);
       const res  = await fetch(apiUrl("/api/sources/save"), { method: "POST", headers: authHeader(), body: form });
-      const data = await res.json();
+      const data = await readResponsePayload(res);
       if (!res.ok) throw new Error(data.error || "Save failed.");
+      if (data.duplicate) {
+        setInfo(`"${data.source?.name || url}" is already in your sources.`);
+        return;
+      }
       setSources((prev) => [data.source, ...prev]);
     } catch (e) {
       setError(e.message);
@@ -262,11 +266,17 @@ const SourcesPage = () => {
 
   /* ── Open ── same destination the old separate "Open" column used to
      link to, now reached by clicking the name itself. */
-  const isSourceOpenable = (s) => (s.type === "youtube" ? Boolean(s.url) : Boolean(s.key || s.parts?.length));
+  const isSourceOpenable = (s) => (
+    s.type === "youtube" || s.type === "podcast"
+      ? Boolean(s.url)
+      : Boolean(s.key || s.parts?.length)
+  );
   const openSource = useCallback((s) => {
     if (!isSourceOpenable(s)) return;
     if (s.type === "youtube") {
       navigate("/youtube", { state: { sourceId: s._id, sourceName: s.name, sourceUrl: s.url } });
+    } else if (s.type === "podcast") {
+      navigate(`/podcast/${s._id}`, { state: { sourceId: s._id, sourceName: s.name, sourceUrl: s.url } });
     } else {
       navigate("/pdf-reader", { state: { sourceId: s._id, pdfName: s.name } });
     }
@@ -357,7 +367,7 @@ const SourcesPage = () => {
           <button
             id="sources_add_btn"
             ref={addBtnRef}
-            onClick={() => { setDropOpen((o) => !o); setYtInput(false); }}
+            onClick={() => { setDropOpen((o) => !o); setLinkInputMode(""); }}
           >
             + Add Source
           </button>
@@ -383,10 +393,16 @@ const SourcesPage = () => {
                 <span className="sources_drop_tag">PDF</span>
               </button>
               <button className="sources_drop_item" style={{ "--src-color": "#e53935" }}
-                onClick={() => { setDropOpen(false); setYtInput(true); }}>
+                onClick={() => { setDropOpen(false); setLinkInputMode("youtube"); }}>
                 <i className="fi fi-rr-play-alt sources_drop_icon" />
                 <span className="sources_drop_label">YouTube Link</span>
                 <span className="sources_drop_tag">Transcription</span>
+              </button>
+              <button className="sources_drop_item" style={{ "--src-color": "#ff8a65" }}
+                onClick={() => { setDropOpen(false); setLinkInputMode("podcast"); }}>
+                <i className="fi fi-rr-headphones sources_drop_icon" />
+                <span className="sources_drop_label">Podcast Episode Link</span>
+                <span className="sources_drop_tag">Web Audio</span>
               </button>
               <div className="sources_drop_divider">Radiological Imaging</div>
               <button className="sources_drop_item" style={{ "--src-color": "#b0bec5" }}
@@ -424,16 +440,16 @@ const SourcesPage = () => {
       <input ref={fileImgRef} type="file" accept="image/*,.dcm" multiple style={{ display: "none" }}
         onChange={(e) => handleFile(e, pendingImgType.current)} />
 
-      {/* ── YouTube URL bar ── */}
-      {ytInput && (
+      {/* ── Link source bar ── */}
+      {linkInputMode && (
         <div id="sources_yt_bar">
-          <input id="sources_yt_input" type="url" placeholder="https://www.youtube.com/watch?v=…"
-            value={ytUrl} onChange={(e) => setYtUrl(e.target.value)} autoFocus
-            onKeyDown={(e) => { if (e.key === "Enter" && ytUrl.trim()) saveYoutube(ytUrl.trim()); }}
+          <input id="sources_yt_input" type="url" placeholder={linkInputMode === "podcast" ? "https://divineinterventionpodcasts.com/..." : "https://www.youtube.com/watch?v=…"}
+            value={linkUrl} onChange={(e) => setLinkUrl(e.target.value)} autoFocus
+            onKeyDown={(e) => { if (e.key === "Enter" && linkUrl.trim()) saveLinkSource(linkInputMode, linkUrl.trim()); }}
           />
-          <button id="sources_yt_submit" disabled={!ytUrl.trim()}
-            onClick={() => saveYoutube(ytUrl.trim())}>Add</button>
-          <button id="sources_yt_cancel" onClick={() => { setYtInput(false); setYtUrl(""); }}>Cancel</button>
+          <button id="sources_yt_submit" disabled={!linkUrl.trim()}
+            onClick={() => saveLinkSource(linkInputMode, linkUrl.trim())}>Add</button>
+          <button id="sources_yt_cancel" onClick={() => { setLinkInputMode(""); setLinkUrl(""); }}>Cancel</button>
         </div>
       )}
 

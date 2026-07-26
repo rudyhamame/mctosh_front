@@ -44,9 +44,11 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
   let analyser = null;
   let rafId = null;
   let visemeTimers = [];
+  let spokenWordTimers = [];
   let currentUtterance = null;
   let onAmplitudeCb = null;
   let onVisemeCb = null;
+  let onSpokenTextCb = null;
   // Real network-backed providers (OpenVoiceClone) can take several seconds
   // to synthesize — stop() must be able to cancel a request still in flight,
   // not just audio that already started playing, or an obsolete reply can
@@ -68,9 +70,35 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     visemeTimers = [];
   };
 
+  const clearSpokenWordTimers = () => {
+    spokenWordTimers.forEach(clearTimeout);
+    spokenWordTimers = [];
+  };
+
+  const emitSpokenText = (text) => {
+    onSpokenTextCb?.(String(text || ""));
+  };
+
+  const scheduleEstimatedSpokenText = (text, durationMs) => {
+    clearSpokenWordTimers();
+    const segments = String(text || "").match(/\S+\s*/g) || [];
+    if (!segments.length) {
+      emitSpokenText("");
+      return;
+    }
+    emitSpokenText("");
+    const totalMs = Math.max(400, Number(durationMs) || (segments.length * 320));
+    segments.forEach((_, index) => {
+      const spokenSlice = segments.slice(0, index + 1).join("").trim();
+      const atMs = Math.round((totalMs * index) / segments.length);
+      spokenWordTimers.push(setTimeout(() => emitSpokenText(spokenSlice), atMs));
+    });
+  };
+
   const teardownAudio = () => {
     stopAmplitudeLoop();
     clearVisemeTimers();
+    clearSpokenWordTimers();
     if (bufferSource) {
       bufferSource.onended = null; // about to stop it ourselves — not a natural finish
       try { bufferSource.stop(); } catch { /* already stopped/never started — fine */ }
@@ -117,9 +145,11 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       } else {
         runAmplitudeLoop();
       }
+      scheduleEstimatedSpokenText(result.text || "", result.durationMs);
 
       const finish = () => {
         teardownAudio();
+        emitSpokenText("");
         onVisemeCb?.("mouthClose");
         resolve();
       };
@@ -175,6 +205,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     currentUtterance = utt;
 
     let pulseUntil = 0;
+    emitSpokenText("");
     const pulseLoop = () => {
       if (!currentUtterance) return;
       const now = performance.now();
@@ -184,10 +215,16 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     };
     rafId = requestAnimationFrame(pulseLoop);
 
-    utt.onboundary = () => { pulseUntil = performance.now() + 220; };
+    utt.onboundary = (event) => {
+      pulseUntil = performance.now() + 220;
+      const nextSlice = String(result._text || "").slice(0, Number(event?.charIndex) || 0).trim();
+      emitSpokenText(nextSlice);
+    };
     const finish = () => {
       stopAmplitudeLoop();
+      clearSpokenWordTimers();
       currentUtterance = null;
+      emitSpokenText("");
       onAmplitudeCb?.(0);
       onVisemeCb?.("mouthClose");
       resolve();
@@ -207,21 +244,23 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     // provider (OpenVoiceClone) can take 10-30s+ to return, especially
     // under CPU/memory pressure, and without this the avatar just sits
     // idle with no visible sign anything is happening.
-    async speak(text, { language, voice, voiceProfileId, onAmplitude, onViseme, onSynthesisStart, onPlaybackStart } = {}) {
+    async speak(text, { language, voice, voiceProfileId, kokoroVoice, supertonicVoice, onAmplitude, onViseme, onSpokenText, onSynthesisStart, onPlaybackStart } = {}) {
       onAmplitudeCb = onAmplitude || null;
       onVisemeCb = onViseme || null;
+      onSpokenTextCb = onSpokenText || null;
       currentAbortController = new AbortController();
       const { signal } = currentAbortController;
       onSynthesisStart?.();
       let result;
       try {
-        result = await ttsProvider.synthesize({ text, language, voice, voiceProfileId, signal });
+        result = await ttsProvider.synthesize({ text, language, voice, voiceProfileId, kokoroVoice, supertonicVoice, signal });
       } catch (err) {
         if (err?.name === "AbortError") return; // superseded by a newer speak()/stop() — not a real failure
         throw err;
       }
       if (signal.aborted) return; // synthesis finished but was superseded before playback could start
       onPlaybackStart?.();
+      result.text = text;
       if (result.audioUrl) {
         await speakViaAudioUrl(result, signal);
       } else {
@@ -234,6 +273,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       window.speechSynthesis?.cancel();
       currentUtterance = null;
       teardownAudio();
+      emitSpokenText("");
       onAmplitudeCb?.(0);
       onVisemeCb?.("mouthClose");
     },

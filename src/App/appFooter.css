@@ -16,6 +16,11 @@
   z-index: 950; /* below SplitViewButton/PredictionOverlay's fixed corners, above page content */
 }
 
+body.podcast_footer_theme #app_footer {
+  background: linear-gradient(180deg, rgba(92, 198, 147, 0.3), rgba(54, 152, 103, 0.18)), #ffffff;
+  border-top: 1px solid rgba(46, 125, 90, 0.26);
+}
+
 #app_footer_end {
   margin-left: auto;
   display: flex;

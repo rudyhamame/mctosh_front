@@ -6,6 +6,8 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 /* ── Toolbar trigger button ── sized to sit inline in the thin app footer
@@ -59,93 +61,61 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Floating avatar + live caption + controls ── one vertical stack,
-   centered at the bottom edge of the whole app, above the footer — no
-   card/border/background of its own anywhere in this stack, just the
-   avatar (see anamAvatar.css), its live caption text, and a slim control
-   row floating directly on the page. */
+/* ── Floating avatar + live caption ── one vertical stack,
+   centered on the page's bottom edge with no card/border/background of
+   its own anywhere in this stack, just the avatar (see anamAvatar.css)
+   and its live caption text. */
 #home_avatar_float {
   position: fixed;
   left: 50%;
-  bottom: calc(var(--app-footer-height, 44px) + 0.5rem);
+  bottom: 0;
   transform: translateX(-50%);
   z-index: 1001;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.6rem;
+  justify-content: flex-end;
+  gap: 0.35rem;
   width: min(420px, calc(100vw - 2rem));
+  padding-bottom: calc(var(--app-footer-height, 44px) - 0.3rem);
   animation: chat_slide_up 0.18s ease-out;
+  pointer-events: none;
 }
 
 #home_live_caption {
-  max-width: 100%;
-  text-align: center;
-  font-size: 0.85rem;
-  line-height: 1.5;
-  color: var(--color-text);
-}
-
-#home_voice_ctrls {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-
-.home_chat_ctrl {
-  background: none;
-  border: none;
-  color: var(--color-text-muted);
-  font-size: 0.82rem;
-  cursor: pointer;
-  padding: 0.2rem 0.45rem;
-  display: flex;
-  align-items: center;
-  line-height: 1;
-}
-
-.home_chat_ctrl:hover { color: var(--color-text); }
-.home_chat_ctrl--on   { color: #43a047; }
-.home_chat_ctrl--off  { color: #e53935; }
-.home_chat_ctrl--call { color: #e53935; }
-
-/* ── Type-instead-of-talk fallback ── a plain inline row, not a docked
-   footer — no border/background beyond the input's own small field. */
-#home_voice_input_form {
-  display: flex;
-  gap: 0.4rem;
-  width: 100%;
-}
-
-#home_voice_input_form input {
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
-  padding: 0.5rem 0.8rem;
-  border-radius: 999px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: 0.85rem;
-  outline: none;
-  font-family: inherit;
+  max-width: min(34rem, calc(100vw - 5rem));
+  padding: 0.28rem 0.72rem;
+  margin: 0 auto;
+  text-align: center;
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.08)),
+    rgba(8, 12, 20, 0.78);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
 }
 
-#home_voice_input_form input:focus { border-color: var(--color-highlight); }
-
-.home_chat_send {
-  padding: 0.5rem 0.9rem;
-  border-radius: 999px;
-  border: none;
-  background: var(--color-highlight);
-  color: #fff;
-  font-size: 0.9rem;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  line-height: 1;
-  flex-shrink: 0;
+#home_avatar_float .local3d_avatar,
+#home_avatar_float .anam_avatar_shell,
+#home_avatar_float .anam_avatar,
+#home_avatar_float .anam_avatar_wrap {
+  pointer-events: auto;
 }
 
-.home_chat_send:disabled { opacity: 0.35; cursor: default; }
+#home_avatar_float .local3d_avatar,
+#home_avatar_float .anam_avatar_shell {
+  position: relative;
+  z-index: 2;
+}

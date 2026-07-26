@@ -1,4 +1,7 @@
 import { getStroke } from "perfect-freehand";
+import { isBBoxType } from "./pdfBBoxTypes.js";
+
+const isClosedBBoxPath = (ann) => ann?.closed !== false;
 
 // The highlight tool shares its color palette with every other annotation
 // tool (ANNOT_COLORS in PDFPage.jsx), which includes near-black and other
@@ -341,9 +344,60 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
   // Border style toggle. Dash lengths scale with the stroke's own width
   // so a thicker border still reads as clearly dashed/dotted, not just a
   // faint texture.
-  if (["rect", "bbox", "circle", "freeshape", "line", "arrow"].includes(ann.type) && ann.borderStyle && ann.borderStyle !== "solid") {
+  if ((isBBoxType(ann.type) || ["rect", "circle", "freeshape", "line", "arrow"].includes(ann.type)) && ann.borderStyle && ann.borderStyle !== "solid") {
     const w = ctx.lineWidth;
     ctx.setLineDash(ann.borderStyle === "dotted" ? [w * 0.01, w * 2.2] : [w * 2.4, w * 1.6]);
+  }
+
+  // All registered BBox subtypes share this renderer. A future tableBBox or
+  // figureBBox becomes drawable by registering it; no switch case is needed.
+  if (isBBoxType(ann.type)) {
+    if (Array.isArray(ann.points) && ann.points.length >= 2) {
+      const points = ann.points;
+      const closed = isClosedBBoxPath(ann);
+      const [fx, fy] = pt(points[0]);
+      ctx.beginPath();
+      ctx.moveTo(fx, fy);
+      if (points.length === 2) {
+        const [lx, ly] = pt(points[1]);
+        ctx.lineTo(lx, ly);
+      } else {
+        for (let i = 1; i < points.length - 1; i++) {
+          const [x, y] = pt(points[i]);
+          const [nx, ny] = pt(points[i + 1]);
+          ctx.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
+        }
+        const [lx, ly] = pt(points[points.length - 1]);
+        ctx.lineTo(lx, ly);
+        if (closed) ctx.closePath();
+      }
+      ctx.save();
+      const borderSize = Math.max(1, ann.lineWidth ?? 2) * s;
+      ctx.setLineDash([8 * s, 6 * s]);
+      ctx.lineWidth = Math.max(0.75, borderSize);
+      if (closed) {
+        ctx.globalAlpha = 0.12;
+        ctx.fillStyle = ann.color;
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = ann.color;
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.save();
+      const borderSize = Math.max(1, ann.lineWidth ?? 2) * s;
+      ctx.setLineDash([8 * s, 6 * s]);
+      ctx.lineWidth = Math.max(0.75, borderSize);
+      ctx.globalAlpha = 0.95;
+      ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.12;
+      ctx.fillRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
+      ctx.restore();
+    }
+    ctx.restore();
+    return;
   }
 
   switch (ann.type) {
@@ -385,19 +439,6 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       break;
     case "line":
       ctx.beginPath(); ctx.moveTo(p(ann.x1), p(ann.y1)); ctx.lineTo(p(ann.x2), p(ann.y2)); ctx.stroke();
-      break;
-    case "bbox":
-    case "bboxContainer":
-      ctx.save();
-      const borderSize = Math.max(1, ann.lineWidth ?? 2) * s;
-      ctx.setLineDash([8 * s, 6 * s]);
-      ctx.lineWidth = Math.max(0.75, borderSize);
-      ctx.globalAlpha = 0.95;
-      ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 0.12;
-      ctx.fillRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
-      ctx.restore();
       break;
     case "drawTextSelection":
     case "smartVideoCapture":
@@ -466,19 +507,24 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       // the first) and fillable/strokeable like rect/circle rather than
       // left open like a pen stroke. Same quadratic-curve smoothing as
       // drawPolyline above, just closing the path instead of leaving it open.
-      if (!ann.points || ann.points.length < 3) break;
+      if (!ann.points || ann.points.length < 2) break;
       const points = ann.points;
       const [fx, fy] = pt(points[0]);
       ctx.beginPath();
       ctx.moveTo(fx, fy);
-      for (let i = 1; i < points.length - 1; i++) {
-        const [x, y] = pt(points[i]);
-        const [nx, ny] = pt(points[i + 1]);
-        ctx.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
+      if (points.length === 2) {
+        const [lx, ly] = pt(points[1]);
+        ctx.lineTo(lx, ly);
+      } else {
+        for (let i = 1; i < points.length - 1; i++) {
+          const [x, y] = pt(points[i]);
+          const [nx, ny] = pt(points[i + 1]);
+          ctx.quadraticCurveTo(x, y, (x + nx) / 2, (y + ny) / 2);
+        }
+        const [lx, ly] = pt(points[points.length - 1]);
+        ctx.lineTo(lx, ly);
+        ctx.closePath();
       }
-      const [lx, ly] = pt(points[points.length - 1]);
-      ctx.lineTo(lx, ly);
-      ctx.closePath();
       if (ann.shapeBackground) {
         ctx.save();
         ctx.globalAlpha = 0.25;

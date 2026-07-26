@@ -2,6 +2,7 @@
    #pdf_annot_history_panel in pdfPage.css — see PDFPage.jsx for how its
    width is subtracted from #pdf_preview's own splitRatio calc(). */
 #smart_video_panel {
+  position: relative;
   flex-shrink: 0;
   width: 380px;
   display: flex;

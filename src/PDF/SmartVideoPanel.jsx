@@ -487,6 +487,8 @@ const VideoCard = ({ video, onWatch }) => {
 // switching to a different tool (e.g. Pen) leaves the aside's results and
 // captured screenshots exactly where they were instead of yanking them away.
 const SmartVideoPanel = ({
+  width = null,
+  onResizeStart = null,
   selecting, onToggleSelecting,
   screenshots, captureBusy, onRemoveScreenshot, onClearScreenshots,
   difficulty, onDifficultyChange, onSearch,
@@ -501,7 +503,12 @@ const SmartVideoPanel = ({
   const activeVideo = activeVideoId ? videos.find((v) => v.videoId === activeVideoId) || { videoId: activeVideoId } : null;
 
   return (
-    <div id="smart_video_panel">
+    <div id="smart_video_panel" style={width ? { width } : undefined}>
+      <div
+        className="pdf_aside_resize_handle"
+        onMouseDown={onResizeStart || undefined}
+        onTouchStart={onResizeStart || undefined}
+      />
       <div id="smart_video_header">
         <span id="smart_video_header_title">Smart Video Search</span>
         <button

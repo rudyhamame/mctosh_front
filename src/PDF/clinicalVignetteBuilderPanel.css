@@ -1,4 +1,5 @@
 #cvb_panel {
+  position: relative;
   flex-shrink: 0;
   width: 360px;
   display: flex;

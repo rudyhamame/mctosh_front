@@ -31,6 +31,7 @@ const PortfolioPage = lazy(() => import("./Portfolio/PortfolioPage"));
 const HylomorphismPage = lazy(() => import("./Hylomorphism/HylomorphismPage"));
 const SourcesPage = lazy(() => import("./Sources/SourcesPage"));
 const YouTubePage = lazy(() => import("./YouTube/YouTubePage"));
+const PodcastPage = lazy(() => import("./Podcast/PodcastPage"));
 const YouTubeSourcePage = lazy(() => import("./Hylomorphism/YouTubeSourcePage"));
 const SettingsPage = lazy(() => import("./Settings/SettingsPage"));
 const VoiceProfilePage = lazy(() => import("./VoiceProfile/VoiceProfilePage"));
@@ -59,6 +60,13 @@ const RouteFallback = () => <div id="route_loading" aria-hidden="true" />;
 const PdfCardRedirect = () => {
   const { card } = useParams();
   return <Navigate to={`/card/${card}`} replace />;
+};
+
+const PodcastRedirect = () => {
+  const location = useLocation();
+  const sourceId = location.state?.sourceId;
+  if (!sourceId) return <Navigate to="/sources" replace />;
+  return <Navigate to={`/podcast/${sourceId}`} replace state={location.state} />;
 };
 
 // Home renders its own Dev AI trigger docked inside the 3D canvas (see
@@ -173,6 +181,8 @@ const AppRouter = () => {
         <Route path="/sources"            element={auth(withSuspense(<SourcesPage />))} />
         <Route path="/voice-profile"      element={auth(withSuspense(<VoiceProfilePage />))} />
         <Route path="/youtube"            element={auth(withSuspense(<YouTubePage />))} />
+        <Route path="/podcast"            element={auth(withSuspense(<PodcastRedirect />))} />
+        <Route path="/podcast/:sourceId"  element={auth(withSuspense(<PodcastPage />))} />
         <Route path="/ai"                 element={auth(withSuspense(<AIChat />))} />
         <Route path="/card/:card"         element={auth(withSuspense(<CardPage />))} />
         <Route path="/phenomena"          element={auth(withSuspense(<PhenomenaPage />))} />

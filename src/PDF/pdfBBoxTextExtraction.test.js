@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractBoundingBoxTextParts, extractTextForBoundingBox } from "./pdfBBoxTextExtraction.js";
+import {
+  buildTightTextOutline,
+  extractBoundingBoxTextParts,
+  extractTextForBoundingBox,
+  selectSpansForBoundingBox,
+} from "./pdfBBoxTextExtraction.js";
 
 const span = (text, x, y, width, height, zoom = 1, extra = {}) => ({
   text,
@@ -111,4 +116,24 @@ describe("pdfBBoxTextExtraction", () => {
       text: "",
     });
   });
+
+  it("builds a minimum line-following outline around exactly the extracted spans", () => {
+    const bbox = { x: 0, y: 90, w: 300, h: 70 };
+    const spans = [
+      span("A", 20, 100, 20, 10, 1, { rowIndex: 0, columnIndex: 0 }),
+      span("long first line", 45, 100, 95, 10, 1, { rowIndex: 0, columnIndex: 0 }),
+      span("short line", 20, 120, 60, 10, 1, { rowIndex: 1, columnIndex: 0 }),
+      span("other column", 200, 100, 80, 10, 1, { rowIndex: 0, columnIndex: 1 }),
+    ];
+    const selected = selectSpansForBoundingBox(spans, bbox);
+    const outline = buildTightTextOutline(selected, 1);
+
+    expect(selected.map((item) => item.text)).toEqual(["A", "long first line", "short line"]);
+    expect(Math.min(...outline.map((point) => point.x))).toBe(19);
+    expect(Math.max(...outline.map((point) => point.x))).toBe(141);
+    expect(Math.min(...outline.map((point) => point.y))).toBe(99);
+    expect(Math.max(...outline.map((point) => point.y))).toBe(131);
+    expect(outline.some((point) => point.x === 81)).toBe(true);
+  });
+
 });

@@ -12,7 +12,7 @@ import Local3DAvatarView from "./local3d/Local3DAvatarView";
 // is currently mounted, so HomeChat.jsx's own call sites
 // (streamChunk/endMessage/isLive — unchanged) never need to know which
 // provider is actually active.
-const AvatarContainer = forwardRef((_props, ref) => {
+const AvatarContainer = forwardRef(({ allowViewportControls = true, onSpeechCaptionChange = null }, ref) => {
   const { provider } = useAvatarProvider();
   const innerRef = useRef(null);
 
@@ -30,9 +30,9 @@ const AvatarContainer = forwardRef((_props, ref) => {
   }), [provider]);
 
   if (provider === AVATAR_PROVIDERS.LOCAL3D) {
-    return <Local3DAvatarView ref={innerRef} />;
+    return <Local3DAvatarView ref={innerRef} allowViewportControls={allowViewportControls} onSpeechCaptionChange={onSpeechCaptionChange} />;
   }
-  return <AnamAvatarView ref={innerRef} />;
+  return <AnamAvatarView ref={innerRef} onSpeechCaptionChange={onSpeechCaptionChange} />;
 });
 
 AvatarContainer.displayName = "AvatarContainer";

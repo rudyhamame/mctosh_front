@@ -55,7 +55,7 @@ const TabStrip = ({
     setLoadingSources(true);
     authFetch(apiUrl("/api/sources"))
       .then((r) => r.json())
-      .then((data) => setSources((data.sources || []).filter((s) => s.type !== "youtube")))
+      .then((data) => setSources((data.sources || []).filter((s) => s.type !== "youtube" && s.type !== "podcast")))
       .catch(() => setSources([]))
       .finally(() => setLoadingSources(false));
   }, [pickerOpen]);

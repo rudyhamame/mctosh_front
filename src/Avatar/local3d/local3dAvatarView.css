@@ -1,14 +1,17 @@
 /* Matches .anam_avatar's own sizing/aesthetic (see anamAvatar.css) — the two
    providers sit in the exact same floating slot in HomeChat.jsx, so
    swapping between them shouldn't visibly jump in size. No border, no
-   background beyond the canvas itself. */
+   background beyond the canvas itself, and no circular crop. */
 .local3d_avatar {
   position: relative;
-  width: 168px;
-  height: 168px;
-  border-radius: 50%;
-  overflow: hidden;
+  width: min(220px, calc(100vw - 2rem));
+  height: 248px;
+  border-radius: 0;
+  overflow: visible;
   filter: drop-shadow(0 10px 22px rgba(0, 0, 0, 0.35));
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .local3d_avatar canvas {
@@ -29,4 +32,34 @@
   line-height: 1.4;
   color: rgba(255, 255, 255, 0.85);
   background: rgba(0, 0, 0, 0.55);
+}
+
+.local3d_avatar_frame_actions {
+  position: absolute;
+  left: 50%;
+  bottom: 0.45rem;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  z-index: 4;
+  pointer-events: auto;
+}
+
+.local3d_avatar_frame_btn {
+  padding: 0.28rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(11, 17, 27, 0.76);
+  color: #ffffff;
+  font-size: 0.66rem;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.local3d_avatar_frame_btn--ghost {
+  color: rgba(255, 255, 255, 0.76);
 }

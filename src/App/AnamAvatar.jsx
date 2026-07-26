@@ -44,9 +44,10 @@ export const speakableText = (text) => String(text || "").replace(/AMCTOSHS/gi, 
 // lab.anam.ai persona is used via ANAM_PERSONA_ID, its own brain must be set
 // to "Custom LLM (client-side)" there, or Anam's built-in LLM would also try
 // to answer on top of MCTOSH's reply.
-const AnamAvatar = forwardRef((_props, ref) => {
+const AnamAvatar = forwardRef(({ onSpeechCaptionChange = null }, ref) => {
   const clientRef = useRef(null);
   const talkStreamRef = useRef(null);
+  const pendingCaptionRef = useRef("");
   const greetedRef = useRef(false); // once per mount — a re-render must never repeat the greeting
   const [status, setStatus] = useState("connecting"); // connecting | live | error | unconfigured | trial_expired
   const { setProvider } = useAvatarProvider();
@@ -73,6 +74,8 @@ const AnamAvatar = forwardRef((_props, ref) => {
         }
         if (talkStreamRef.current.isActive()) {
           talkStreamRef.current.streamMessageChunk(speakableText(text), false);
+          pendingCaptionRef.current += text;
+          onSpeechCaptionChange?.(pendingCaptionRef.current);
         }
       } catch {
         // Best-effort — a dropped chunk just means the avatar goes briefly
@@ -88,6 +91,10 @@ const AnamAvatar = forwardRef((_props, ref) => {
         // Non-fatal — stream is discarded either way below.
       }
       talkStreamRef.current = null;
+      pendingCaptionRef.current = "";
+      window.setTimeout(() => {
+        onSpeechCaptionChange?.("");
+      }, 300);
     },
   }), [status]);
 

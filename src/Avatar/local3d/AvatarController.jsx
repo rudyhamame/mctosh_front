@@ -4,6 +4,7 @@ import { useIdleAnimation } from "./hooks/useIdleAnimation";
 import { useEyeMovement } from "./hooks/useEyeMovement";
 import { useFacialExpression } from "./hooks/useFacialExpression";
 import { useLipSync } from "./hooks/useLipSync";
+import { useRelaxedPosture } from "./hooks/useRelaxedPosture";
 
 // Runs every animation hook against the same resolved model — mounted only
 // once AvatarModel has actually loaded and reported its morph-target map
@@ -11,11 +12,12 @@ import { useLipSync } from "./hooks/useLipSync";
 // <Canvas> purely so its hooks can use useFrame. onLipSyncReady hands the
 // {onAmplitude, onViseme} pair up so Local3DAvatarView can wire them into
 // localAvatarSpeechService.speak() calls.
-const AvatarController = ({ root, meshesWithMorphs, standardToReal, expression, onLipSyncReady }) => {
+const AvatarController = ({ root, meshesWithMorphs, standardToReal, expression, speechExpressionRef, postureRef, onLipSyncReady }) => {
+  useRelaxedPosture({ root, enabled: true, postureRef });
   useBlinking({ meshesWithMorphs, standardToReal, enabled: true });
   useIdleAnimation({ root, enabled: true });
   useEyeMovement({ root, enabled: true });
-  useFacialExpression({ meshesWithMorphs, standardToReal, expression });
+  useFacialExpression({ meshesWithMorphs, standardToReal, expression, speechExpressionRef });
   const lipSync = useLipSync({ meshesWithMorphs, standardToReal });
 
   useEffect(() => {

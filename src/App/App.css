@@ -138,7 +138,7 @@
    height — there's no footer here to clear, so it can sit closer to the
    edge. */
 #app_scroll_stage #home_avatar_float {
-  bottom: 1.5rem;
+  bottom: 0;
 }
 
 /* ── Dev AI blends into the canvas ── everywhere else Dev AI lives in the

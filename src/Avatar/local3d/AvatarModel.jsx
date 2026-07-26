@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo } from "react";
 import { useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { resolveMorphTargetMap } from "./config/morphTargetMap";
 
 // Roughly a human head+neck's own share of total standing height — used
@@ -24,19 +25,20 @@ const HEAD_REGION_FRACTION = 0.16;
 // Local3DAvatarView's own Suspense + error boundary, not here.
 const AvatarModel = ({ modelUrl, onReady }) => {
   const gltf = useGLTF(modelUrl);
+  const scene = useMemo(() => cloneSkeleton(gltf.scene), [gltf.scene]);
 
   const { meshesWithMorphs, standardToReal, portraitTarget, modelHeight } = useMemo(() => {
     const meshes = [];
     const allNames = new Set();
-    gltf.scene.traverse((obj) => {
+    scene.traverse((obj) => {
       if (obj.isMesh && obj.morphTargetDictionary && obj.morphTargetInfluences) {
         meshes.push(obj);
         Object.keys(obj.morphTargetDictionary).forEach((name) => allNames.add(name));
       }
     });
 
-    gltf.scene.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(gltf.scene);
+    scene.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(scene);
     const height = Math.max(0.01, box.max.y - box.min.y);
     const headRegionHeight = height * HEAD_REGION_FRACTION;
     // box.max.y is the TRUE top of the head/hair (exact mesh geometry) —
@@ -55,17 +57,17 @@ const AvatarModel = ({ modelUrl, onReady }) => {
       portraitTarget: portrait,
       modelHeight: height,
     };
-  }, [gltf]);
+  }, [scene]);
 
   useEffect(() => {
     const allRealNames = meshesWithMorphs.flatMap((m) => Object.keys(m.morphTargetDictionary || {}));
     console.info("[Local3DAvatar] morph targets found in model:", allRealNames);
     console.info("[Local3DAvatar] resolved standard -> real morph target map:", standardToReal);
     console.info("[Local3DAvatar] portrait target / model height:", portraitTarget, modelHeight);
-    onReady?.({ root: gltf.scene, meshesWithMorphs, standardToReal, portraitTarget, modelHeight });
-  }, [gltf.scene, meshesWithMorphs, standardToReal, portraitTarget, modelHeight, onReady]);
+    onReady?.({ root: scene, meshesWithMorphs, standardToReal, portraitTarget, modelHeight });
+  }, [scene, meshesWithMorphs, standardToReal, portraitTarget, modelHeight, onReady]);
 
-  return <primitive object={gltf.scene} />;
+  return <primitive object={scene} />;
 };
 
 export default AvatarModel;

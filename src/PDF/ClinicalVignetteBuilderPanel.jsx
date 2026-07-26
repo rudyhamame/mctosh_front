@@ -33,7 +33,7 @@ const PROVIDER_LABEL = {
   gemini: "Gemini",
 };
 
-const ClinicalVignetteBuilderPanel = ({ onClose, provider, providerModels }) => {
+const ClinicalVignetteBuilderPanel = ({ onClose, provider, providerModels, width = null, onResizeStart = null }) => {
   const [goalDomain, setGoalDomain] = useState("Any");
   const [interventionType, setInterventionType] = useState("diagnosis");
   const [mode, setMode] = useState("study");
@@ -188,7 +188,12 @@ const ClinicalVignetteBuilderPanel = ({ onClose, provider, providerModels }) => 
   const isExamHidden = activeVignette?.mode === "exam" && !activeVignette?.revealed;
 
   return (
-    <div id="cvb_panel" onMouseDown={(event) => event.stopPropagation()}>
+    <div id="cvb_panel" style={width ? { width } : undefined} onMouseDown={(event) => event.stopPropagation()}>
+      <div
+        className="pdf_aside_resize_handle"
+        onMouseDown={onResizeStart || undefined}
+        onTouchStart={onResizeStart || undefined}
+      />
       <div id="cvb_header">
         <span id="cvb_header_title"><i className="bx bx-user-plus" /> Clinical Vignette Generator</span>
         <button type="button" id="cvb_close" onClick={onClose} title="Close">✕</button>

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import "./homeChat.css";
 import { apiUrl } from "../config/api";
@@ -115,6 +115,12 @@ const stripMd = (text) => text
   .replace(/---+/g, "")
   .replace(/\s+/g, " ")
   .trim();
+
+const rollingSubtitle = (text) => {
+  const clean = stripMd(text);
+  if (!clean) return "";
+  return clean;
+};
 
 // Must be called synchronously inside a user gesture to unlock Safari's audio gate
 const unlockSpeech = () => {
@@ -268,18 +274,11 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
     };
   }, []); // eslint-disable-line
 
-  // The live caption itself: the AI's own reply, but only once streaming
-  // has actually finished — useContextChat's own endMessage() (which
-  // triggers voice synthesis) fires in the same tick streaming flips
-  // false, so this keeps the caption in sync with when the avatar is about
-  // to actually speak, instead of revealing the reply live as it streams
-  // in well before any voice synthesis starts. Until then: the user's own
-  // live interim transcript while they're talking, or a plain state label.
-  const lastMsg = messages[messages.length - 1];
-  const showingReply = !streaming && lastMsg?.role === "assistant" && lastMsg.content;
-  const caption = showingReply ? stripMd(lastMsg.content) : (transcript || CALL_LABELS[callState] || "");
-
-  return <p id="home_live_caption">{caption}</p>;
+// Footer caption should show only the assistant's text, never the user's
+// own live speech transcript. Until the assistant reply is available, keep
+// the footer empty rather than echoing recognition text or call-state
+// labels.
+  return null;
 };
 
 // ── Main panel ────────────────────────────────────────────────────────────────
@@ -316,12 +315,14 @@ const HomeChat = () => {
 
   const selectedModel = providerOptions.find(p => p.id === provider)?.model || "";
   const avatarRef = useRef(null);
-  const { messages, streaming, send, stop, reset } = useContextChat(userId, provider, selectedModel, avatarRef, currentPage);
+  const { messages, streaming, send, stop } = useContextChat(userId, provider, selectedModel, avatarRef, currentPage);
   const [isOpen, setIsOpen]        = useState(false);
-  const [input, setInput]         = useState("");
-  const [showInput, setShowInput] = useState(false);
-  const [ttsOn, setTtsOn]         = useState(false);
   const [inCall, setInCall]       = useState(false);
+  const [avatarCaption, setAvatarCaption] = useState("");
+
+  const handleAvatarCaptionChange = useCallback((text) => {
+    setAvatarCaption(rollingSubtitle(text));
+  }, []);
 
   // Ready to listen the instant the panel opens — no separate "start call"
   // click needed, the avatar greets you and starts the mic itself (see
@@ -334,119 +335,39 @@ const HomeChat = () => {
     setInCall(isOpen);
   }, [isOpen]);
 
+  useEffect(() => {
+    if (streaming) setAvatarCaption("");
+  }, [streaming]);
+
   // TTS for typed (non-call) turns — skipped whenever the avatar is live,
   // since useContextChat's own avatarRef.streamChunk/endMessage calls
   // already speak every reply unconditionally (call or no call, open or
   // not); this is purely the fallback for when there's no live avatar to
   // have covered it, so the two never talk over each other.
   useEffect(() => {
-    if (streaming || !ttsOn || inCall || avatarRef.current?.isLive?.()) return;
+    if (streaming || inCall || avatarRef.current?.isLive?.()) return;
     const last = messages[messages.length - 1];
     if (last?.role !== "assistant" || !last.content) return;
     speak(last.content);
   }, [streaming]); // eslint-disable-line
 
-  // Held back until streaming is actually done — useContextChat's own
-  // endMessage() (which triggers voice synthesis) fires in the same tick
-  // streaming flips false, so gating on it here keeps the caption in sync
-  // with when the avatar is about to actually speak, instead of revealing
-  // the reply live as it streams in well before any voice synthesis starts.
-  // While still streaming, keeps showing whatever was there before (the
-  // prior reply, or the greeting on the very first turn) rather than the
-  // in-progress one.
-  const mainCaption = (() => {
-    if (streaming) {
-      const priorAssistant = [...messages].slice(0, -1).reverse().find((m) => m.role === "assistant");
-      return priorAssistant ? stripMd(priorAssistant.content) : AVATAR_GREETING;
-    }
-    return messages.length === 0 ? AVATAR_GREETING : stripMd(messages[messages.length - 1]?.content || "");
-  })();
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!input.trim()) return;
-    // Synchronous, inside the real submit gesture — cheap/idempotent if
-    // already unlocked earlier (see the panel-open/call/TTS toggle sites
-    // above), and a safety net for whichever gesture happens to be the
-    // FIRST one in a given session.
-    avatarRef.current?.unlockAudio?.();
-    send(input);
-    setInput("");
-  };
+  const mainCaption = avatarCaption || "";
 
   return (
     <div id="home_chat_root">
+      {mainCaption ? <p id="home_live_caption">{mainCaption}</p> : null}
 
       {/* Floats at the bottom-center of the whole app — no boxed chat
-          container anymore, just the avatar, a live caption of whatever's
-          currently being said (either side), a slim control row, and a
-          minimal type-instead-of-talk fallback. No border/background of
-          its own (see homeChat.css/anamAvatar.css). */}
+          container anymore, just the avatar and a live caption of
+          whatever's currently being said (either side). No
+          border/background of its own (see homeChat.css/anamAvatar.css). */}
       {isOpen && (
         <div id="home_avatar_float">
-          <AvatarContainer ref={avatarRef} />
-
           {inCall ? (
             <VoiceCall send={send} streaming={streaming} messages={messages} avatarRef={avatarRef} />
-          ) : (
-            <p id="home_live_caption">{mainCaption}</p>
-          )}
+          ) : null}
 
-          <div id="home_voice_ctrls">
-            {SR && (
-              <button
-                className={`home_chat_ctrl${inCall ? " home_chat_ctrl--call" : ""}`}
-                onClick={() => { if (!inCall) { unlockSpeech(); avatarRef.current?.unlockAudio?.(); } setInCall(v => !v); }}
-                title={inCall ? "Voice call: ON" : "Voice call: OFF"}
-              >
-                <i className={`fi ${inCall ? "fi-rr-phone-slash" : "fi-rr-phone-call"}`} />
-              </button>
-            )}
-            <button
-              className={`home_chat_ctrl${ttsOn ? " home_chat_ctrl--on" : " home_chat_ctrl--off"}`}
-              onClick={() => { setTtsOn(v => { if (!v) { unlockSpeech(); avatarRef.current?.unlockAudio?.(); } else window.speechSynthesis.cancel(); return !v; }); }}
-              title={ttsOn ? "TTS: ON" : "TTS: OFF"}
-            >
-              <i className={`fi ${ttsOn ? "fi-rr-volume" : "fi-rr-volume-mute"}`} />
-            </button>
-            <button
-              className={`home_chat_ctrl${showInput ? " home_chat_ctrl--on" : ""}`}
-              onClick={() => setShowInput(v => {
-                const next = !v;
-                if (!next) setInput("");
-                return next;
-              })}
-              title={showInput ? "Hide text input" : "Show text input"}
-            >
-              <i className={`fi ${showInput ? "fi-rr-keyboard" : "fi-rr-comment-alt"}`} />
-            </button>
-            {messages.length > 0 && !streaming && (
-              <button className="home_chat_ctrl" onClick={() => { window.speechSynthesis.cancel(); reset(); }} title="Clear conversation">
-                <i className="fi fi-rr-trash" />
-              </button>
-            )}
-          </div>
-
-          {showInput && (
-            <form id="home_voice_input_form" onSubmit={handleSubmit}>
-              <input
-                type="text"
-                placeholder="Or type instead…"
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                disabled={streaming}
-              />
-              {streaming ? (
-                <button type="button" className="home_chat_send" onClick={stop}>
-                  <i className="fi fi-rr-stop-circle" />
-                </button>
-              ) : (
-                <button type="submit" className="home_chat_send" disabled={!input.trim()}>
-                  <i className="fi fi-rr-paper-plane-top" />
-                </button>
-              )}
-            </form>
-          )}
+          <AvatarContainer ref={avatarRef} allowViewportControls onSpeechCaptionChange={handleAvatarCaptionChange} />
         </div>
       )}
 

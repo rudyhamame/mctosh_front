@@ -1,9 +1,16 @@
 import React, { useMemo, useState } from "react";
 import "./entityBuilderPanel.css";
+import { BBOX_CARD_TYPES, bboxTypeHas } from "./pdfBBoxTypes.js";
 
 const DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE = 12;
+const ENTITY_BUILDER_TABS = {
+  segments: "segments",
+  units: "units",
+};
 
 const EntityBuilderPanel = ({
+  width = null,
+  onResizeStart = null,
   onClose,
   bboxCards = [],
   pageNum = null,
@@ -17,11 +24,13 @@ const EntityBuilderPanel = ({
   onArmBBoxInsideContainer = null,
   armedBBoxInsideContainer = null,
 }) => {
+  const [activeTab, setActiveTab] = useState(ENTITY_BUILDER_TABS.segments);
   const [editingNameId, setEditingNameId] = useState(null);
   const [editingNameValue, setEditingNameValue] = useState("");
+  const isImageBBox = (bbox) => bboxTypeHas(bbox?.type, "capturesImage");
   const normalizedBboxes = useMemo(() => (
     (Array.isArray(bboxCards) ? bboxCards : [])
-      .filter((bbox) => bbox && bbox.type === "bbox")
+      .filter((bbox) => bbox && BBOX_CARD_TYPES.has(bbox.type))
       .map((bbox, index) => ({
         ...bbox,
         _index: index + 1,
@@ -35,7 +44,7 @@ const EntityBuilderPanel = ({
   const displayedFontSize = sharedFontSize ?? DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE;
   const bboxContainers = useMemo(() => (
     (Array.isArray(bboxCards) ? bboxCards : [])
-      .filter((bbox) => bbox && bbox.type === "bboxContainer")
+      .filter((bbox) => bbox && bboxTypeHas(bbox.type, "containsChildren"))
   ), [bboxCards]);
   const groupedBboxes = useMemo(() => {
     const assigned = new Set();
@@ -56,6 +65,22 @@ const EntityBuilderPanel = ({
     const standalone = normalizedBboxes.filter((bbox) => !assigned.has(bbox.id));
     return { groups, standalone };
   }, [bboxContainers, normalizedBboxes]);
+  const unitRows = useMemo(() => (
+    normalizedBboxes
+      .filter((bbox) => !bboxTypeHas(bbox?.type, "containsChildren") && !isImageBBox(bbox))
+      .flatMap((bbox) => {
+        const lines = String(bbox.text || "")
+          .split(/\r?\n+/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        return lines.map((line, index) => ({
+          id: `${bbox.id}::${index}`,
+          sourceId: bbox.id,
+          sourceTitle: bbox._displayTitle,
+          text: line,
+        }));
+      })
+  ), [normalizedBboxes]);
 
   const startEditName = (bbox) => {
     setEditingNameId(bbox.id);
@@ -149,12 +174,227 @@ const EntityBuilderPanel = ({
   const goPrevPage = () => onPageChange?.(Math.max(1, pageNum - 1));
   const goNextPage = () => onPageChange?.(Math.min(pageCount || pageNum + 1, pageNum + 1));
   const armContainerBBox = (container) => onArmBBoxInsideContainer?.(container.id, pageNum);
+  const renderSegmentsTab = () => (
+    <>
+      <div className="entity_builder_section_title">BBox Cards</div>
+      {normalizedBboxes.length === 0 && bboxContainers.length === 0 ? (
+        <p className="entity_builder_helper">
+          No bbox cards on page {pageNum ?? "?"} yet.
+        </p>
+      ) : (
+        <div id="entity_builder_bbox_cards">
+          {groupedBboxes.groups.map(({ container, contained, _index }) => (
+            <section key={container.id} className="entity_builder_bbox_container">
+              <div className="entity_builder_bbox_container_header">
+                <div className="entity_builder_bbox_name_row">
+                  <strong>{container.title?.trim() || `BBox Container ${_index}`}</strong>
+                  <button
+                    type="button"
+                    className={`entity_builder_bbox_name_btn${armedBBoxInsideContainer?.containerId === container.id && armedBBoxInsideContainer?.pageNum === pageNum ? " entity_builder_bbox_name_btn--active" : ""}`}
+                    onClick={() => armContainerBBox(container)}
+                    aria-label={`Add bbox inside ${container.title?.trim() || `BBox Container ${_index}`}`}
+                    title="Add bbox inside container"
+                    disabled={!onArmBBoxInsideContainer}
+                  >
+                    {containerBBoxIcon}
+                  </button>
+                  <button
+                    type="button"
+                    className="entity_builder_bbox_name_btn"
+                    onClick={() => startEditName(container)}
+                    aria-label={`Edit BBox Container ${_index} name`}
+                    title="Edit name"
+                    >
+                      <i className="bx bx-edit" />
+                    </button>
+                  {renderMoveButtons(container)}
+                </div>
+                <span>{contained.length} card{contained.length !== 1 ? "s" : ""}</span>
+              </div>
+              <div className="entity_builder_bbox_container_body">
+                {contained.map((bbox) => (
+                  <article key={bbox.id} className="entity_builder_bbox_card">
+                    <div className="entity_builder_bbox_top">
+                      {editingNameId === bbox.id ? (
+                        <input
+                          className="entity_builder_bbox_name_input"
+                          value={editingNameValue}
+                          onChange={(e) => setEditingNameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitEditName(bbox);
+                            if (e.key === "Escape") cancelEditName();
+                          }}
+                          onBlur={() => commitEditName(bbox)}
+                          autoFocus
+                        />
+                      ) : (
+                        <div className="entity_builder_bbox_name_row">
+                          <div className="entity_builder_bbox_title">
+                            <strong>{bbox._displayTitle}</strong>
+                          </div>
+                          <div className="entity_builder_bbox_actions">
+                            {renderMoveButtons(bbox)}
+                            <button
+                              type="button"
+                              className="entity_builder_bbox_name_btn"
+                              onClick={() => startEditName(bbox)}
+                              aria-label={`Edit ${bbox._displayTitle}`}
+                              title="Edit name"
+                            >
+                              <i className="bx bx-edit" />
+                            </button>
+                            <button
+                              type="button"
+                              className="entity_builder_bbox_name_btn entity_builder_bbox_name_btn--danger"
+                              onClick={() => handleDeleteBBox(bbox)}
+                              aria-label={`Delete ${bbox._displayTitle}`}
+                              title="Delete bbox"
+                              disabled={!onDeleteBBox}
+                            >
+                              <i className="bx bx-trash" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {isImageBBox(bbox) ? (
+                      <div className="entity_builder_bbox_image_wrap">
+                        {bbox.imageDataUrl ? (
+                          <img
+                            className="entity_builder_bbox_image_preview"
+                            src={bbox.imageDataUrl}
+                            alt={bbox._displayTitle}
+                            loading="lazy"
+                          />
+                        ) : (
+                          <div className="entity_builder_bbox_image_empty">No image extracted yet.</div>
+                        )}
+                        <div className="entity_builder_bbox_image_meta">
+                          {bbox.imageWidth && bbox.imageHeight ? `${bbox.imageWidth} × ${bbox.imageHeight}px` : "Image snippet"}
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        className="entity_builder_bbox_text"
+                        style={{ fontSize: `${bbox.fontSize || DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE}px` }}
+                      >
+                        {bbox.text?.trim() ? bbox.text : "No text extracted yet."}
+                      </div>
+                    )}
+                  </article>
+                ))}
+              </div>
+            </section>
+          ))}
+          {groupedBboxes.standalone.map((bbox) => (
+            <article key={bbox.id} className="entity_builder_bbox_card">
+              <div className="entity_builder_bbox_top">
+                {editingNameId === bbox.id ? (
+                  <input
+                    className="entity_builder_bbox_name_input"
+                    value={editingNameValue}
+                    onChange={(e) => setEditingNameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitEditName(bbox);
+                      if (e.key === "Escape") cancelEditName();
+                    }}
+                    onBlur={() => commitEditName(bbox)}
+                    autoFocus
+                  />
+                ) : (
+                  <div className="entity_builder_bbox_name_row">
+                    <div className="entity_builder_bbox_title">
+                      <strong>{bbox._displayTitle}</strong>
+                    </div>
+                    <div className="entity_builder_bbox_actions">
+                      {renderMoveButtons(bbox)}
+                      <button
+                        type="button"
+                        className="entity_builder_bbox_name_btn"
+                        onClick={() => startEditName(bbox)}
+                        aria-label={`Edit ${bbox._displayTitle}`}
+                        title="Edit name"
+                      >
+                        <i className="bx bx-edit" />
+                      </button>
+                      <button
+                        type="button"
+                        className="entity_builder_bbox_name_btn entity_builder_bbox_name_btn--danger"
+                        onClick={() => handleDeleteBBox(bbox)}
+                        aria-label={`Delete ${bbox._displayTitle}`}
+                        title="Delete bbox"
+                        disabled={!onDeleteBBox}
+                      >
+                        <i className="bx bx-trash" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {isImageBBox(bbox) ? (
+                <div className="entity_builder_bbox_image_wrap">
+                  {bbox.imageDataUrl ? (
+                    <img
+                      className="entity_builder_bbox_image_preview"
+                      src={bbox.imageDataUrl}
+                      alt={bbox._displayTitle}
+                      loading="lazy"
+                    />
+                  ) : (
+                    <div className="entity_builder_bbox_image_empty">No image extracted yet.</div>
+                  )}
+                  <div className="entity_builder_bbox_image_meta">
+                    {bbox.imageWidth && bbox.imageHeight ? `${bbox.imageWidth} × ${bbox.imageHeight}px` : "Image snippet"}
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="entity_builder_bbox_text"
+                  style={{ fontSize: `${bbox.fontSize || DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE}px` }}
+                >
+                  {bbox.text?.trim() ? bbox.text : "No text extracted yet."}
+                </div>
+              )}
+            </article>
+          ))}
+        </div>
+      )}
+    </>
+  );
+  const renderUnitsTab = () => (
+    <>
+      <div className="entity_builder_section_title">AMCTOSHS Units</div>
+      {unitRows.length ? (
+        <div className="entity_builder_units_list">
+          {unitRows.map((unit, index) => (
+            <article key={unit.id} className="entity_builder_unit_row">
+              <div className="entity_builder_unit_row_top">
+                <span className="entity_builder_unit_index">{index + 1}</span>
+                <span className="entity_builder_unit_source">{unit.sourceTitle}</span>
+              </div>
+              <div className="entity_builder_unit_text">{unit.text}</div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="entity_builder_helper">
+          No units stored yet on page {pageNum ?? "?"}. Lines from AMCTOSHS Segments will appear here.
+        </p>
+      )}
+    </>
+  );
 
   return (
     <div
       id="entity_builder_panel"
+      style={width ? { width } : undefined}
       onMouseDown={(event) => event.stopPropagation()}
     >
+      <div
+        className="pdf_aside_resize_handle"
+        onMouseDown={onResizeStart || undefined}
+        onTouchStart={onResizeStart || undefined}
+      />
       <div id="entity_builder_header">
         <span id="entity_builder_header_title">
           <i className="bx bx-network-chart" /> AMCTOSHS Entity Builder
@@ -164,9 +404,6 @@ const EntityBuilderPanel = ({
 
       <div id="entity_builder_body">
         <div className="entity_builder_bbox_meta_row entity_builder_bbox_meta_row--top">
-          <label className="entity_builder_bbox_font_label" htmlFor="entity_builder_bbox_font_all">
-            All Cards Font Size
-          </label>
           <div className="entity_builder_bbox_font_control">
             <button
               type="button"
@@ -193,6 +430,26 @@ const EntityBuilderPanel = ({
             </button>
           </div>
         </div>
+        <div className="entity_builder_tabs" role="tablist" aria-label="AMCTOSHS Entity Builder tabs">
+          <button
+            type="button"
+            className={`entity_builder_tab${activeTab === ENTITY_BUILDER_TABS.segments ? " entity_builder_tab--active" : ""}`}
+            onClick={() => setActiveTab(ENTITY_BUILDER_TABS.segments)}
+            role="tab"
+            aria-selected={activeTab === ENTITY_BUILDER_TABS.segments}
+          >
+            AMCTOSHS Segments
+          </button>
+          <button
+            type="button"
+            className={`entity_builder_tab${activeTab === ENTITY_BUILDER_TABS.units ? " entity_builder_tab--active" : ""}`}
+            onClick={() => setActiveTab(ENTITY_BUILDER_TABS.units)}
+            role="tab"
+            aria-selected={activeTab === ENTITY_BUILDER_TABS.units}
+          >
+            AMCTOSHS UNITS
+          </button>
+        </div>
         <div className="entity_builder_page_nav">
           <button
             type="button"
@@ -218,153 +475,7 @@ const EntityBuilderPanel = ({
             ›
           </button>
         </div>
-        <div className="entity_builder_section_title">BBox Cards</div>
-        {normalizedBboxes.length === 0 && bboxContainers.length === 0 ? (
-          <p className="entity_builder_helper">
-            No bbox cards on page {pageNum ?? "?"} yet.
-          </p>
-        ) : (
-          <div id="entity_builder_bbox_cards">
-            {groupedBboxes.groups.map(({ container, contained, _index }) => (
-              <section key={container.id} className="entity_builder_bbox_container">
-                <div className="entity_builder_bbox_container_header">
-                  <div className="entity_builder_bbox_name_row">
-                    <strong>{container.title?.trim() || `BBox Container ${_index}`}</strong>
-                    <button
-                      type="button"
-                      className={`entity_builder_bbox_name_btn${armedBBoxInsideContainer?.containerId === container.id && armedBBoxInsideContainer?.pageNum === pageNum ? " entity_builder_bbox_name_btn--active" : ""}`}
-                      onClick={() => armContainerBBox(container)}
-                      aria-label={`Add bbox inside ${container.title?.trim() || `BBox Container ${_index}`}`}
-                      title="Add bbox inside container"
-                      disabled={!onArmBBoxInsideContainer}
-                    >
-                      {containerBBoxIcon}
-                    </button>
-                    <button
-                      type="button"
-                      className="entity_builder_bbox_name_btn"
-                      onClick={() => startEditName(container)}
-                      aria-label={`Edit BBox Container ${_index} name`}
-                      title="Edit name"
-                      >
-                        <i className="bx bx-edit" />
-                      </button>
-                    {renderMoveButtons(container)}
-                  </div>
-                  <span>{contained.length} card{contained.length !== 1 ? "s" : ""}</span>
-                </div>
-                <div className="entity_builder_bbox_container_body">
-                  {contained.map((bbox) => (
-                    <article key={bbox.id} className="entity_builder_bbox_card">
-                      <div className="entity_builder_bbox_top">
-                        {editingNameId === bbox.id ? (
-                          <input
-                            className="entity_builder_bbox_name_input"
-                            value={editingNameValue}
-                            onChange={(e) => setEditingNameValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") commitEditName(bbox);
-                              if (e.key === "Escape") cancelEditName();
-                            }}
-                            onBlur={() => commitEditName(bbox)}
-                            autoFocus
-                          />
-                        ) : (
-                          <div className="entity_builder_bbox_name_row">
-                            <div className="entity_builder_bbox_title">
-                              <strong>{bbox._displayTitle}</strong>
-                            </div>
-                            <div className="entity_builder_bbox_actions">
-                              {renderMoveButtons(bbox)}
-                              <button
-                                type="button"
-                                className="entity_builder_bbox_name_btn"
-                                onClick={() => startEditName(bbox)}
-                                aria-label={`Edit ${bbox._displayTitle}`}
-                                title="Edit name"
-                              >
-                                <i className="bx bx-edit" />
-                              </button>
-                              <button
-                                type="button"
-                                className="entity_builder_bbox_name_btn entity_builder_bbox_name_btn--danger"
-                                onClick={() => handleDeleteBBox(bbox)}
-                                aria-label={`Delete ${bbox._displayTitle}`}
-                                title="Delete bbox"
-                                disabled={!onDeleteBBox}
-                              >
-                                <i className="bx bx-trash" />
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <div
-                        className="entity_builder_bbox_text"
-                        style={{ fontSize: `${bbox.fontSize || DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE}px` }}
-                      >
-                        {bbox.text?.trim() ? bbox.text : "No text extracted yet."}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ))}
-            {groupedBboxes.standalone.map((bbox) => (
-              <article key={bbox.id} className="entity_builder_bbox_card">
-                <div className="entity_builder_bbox_top">
-                  {editingNameId === bbox.id ? (
-                    <input
-                      className="entity_builder_bbox_name_input"
-                      value={editingNameValue}
-                      onChange={(e) => setEditingNameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commitEditName(bbox);
-                        if (e.key === "Escape") cancelEditName();
-                      }}
-                      onBlur={() => commitEditName(bbox)}
-                      autoFocus
-                    />
-                  ) : (
-                    <div className="entity_builder_bbox_name_row">
-                      <div className="entity_builder_bbox_title">
-                        <strong>{bbox._displayTitle}</strong>
-                      </div>
-                      <div className="entity_builder_bbox_actions">
-                        {renderMoveButtons(bbox)}
-                        <button
-                          type="button"
-                          className="entity_builder_bbox_name_btn"
-                          onClick={() => startEditName(bbox)}
-                          aria-label={`Edit ${bbox._displayTitle}`}
-                          title="Edit name"
-                        >
-                          <i className="bx bx-edit" />
-                        </button>
-                        <button
-                          type="button"
-                          className="entity_builder_bbox_name_btn entity_builder_bbox_name_btn--danger"
-                          onClick={() => handleDeleteBBox(bbox)}
-                          aria-label={`Delete ${bbox._displayTitle}`}
-                          title="Delete bbox"
-                          disabled={!onDeleteBBox}
-                        >
-                          <i className="bx bx-trash" />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                <div
-                  className="entity_builder_bbox_text"
-                  style={{ fontSize: `${bbox.fontSize || DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE}px` }}
-                >
-                  {bbox.text?.trim() ? bbox.text : "No text extracted yet."}
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
+        {activeTab === ENTITY_BUILDER_TABS.segments ? renderSegmentsTab() : renderUnitsTab()}
       </div>
     </div>
   );

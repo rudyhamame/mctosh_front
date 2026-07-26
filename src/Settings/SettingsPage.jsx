@@ -11,14 +11,18 @@ import CameraPresetTab from "./CameraPresetTab";
 import {
   readVoiceSettings, writeVoiceSettings,
   TTS_PROVIDERS, readTtsProviderId, writeTtsProviderId,
+  KOKORO_VOICE_OPTIONS,
+  SUPERTONIC_VOICE_OPTIONS,
 } from "../Avatar/local3d/ttsProviderSettings";
+import { AVATAR_POSE_CONTROLS, emitAvatarPoseUpdate, readSavedPose, writeSavedPose } from "../Avatar/local3d/avatarPoseSettings";
 import { applyTheme, readStoredTheme } from "../utils/theme";
 import "./settingsPage.css";
 
 const TTS_PROVIDER_OPTIONS = [
   { id: TTS_PROVIDERS.BROWSER, label: "Browser Speech Synthesis", desc: "Free, built into your browser — no setup needed." },
   { id: TTS_PROVIDERS.OPENVOICE, label: "OpenVoiceClone", desc: "Speaks in your own cloned voice — needs a voice profile below." },
-  { id: TTS_PROVIDERS.KOKORO, label: "Kokoro", desc: "Free, self-hosted — a fixed high-quality voice, no setup needed." },
+  { id: TTS_PROVIDERS.KOKORO, label: "Kokoro", desc: "Free, self-hosted — pick the Kokoro voice you want here." },
+  { id: TTS_PROVIDERS.SUPERTONIC, label: "Supertonic", desc: "Fast local TTS with built-in voices — pick the Supertonic voice you want here." },
 ];
 
 const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
@@ -149,6 +153,10 @@ const SettingsPage = () => {
   const [anamTrialLoading, setAnamTrialLoading] = useState(true);
   const [ttsProviderId, setTtsProviderId] = useState(() => readTtsProviderId());
   const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState(() => readVoiceSettings().voiceProfileId);
+  const [selectedKokoroVoice, setSelectedKokoroVoice] = useState(() => readVoiceSettings().kokoroVoice);
+  const [selectedSupertonicVoice, setSelectedSupertonicVoice] = useState(() => readVoiceSettings().supertonicVoice);
+  const [avatarPose, setAvatarPose] = useState(() => readSavedPose());
+  const [savedAvatarPose, setSavedAvatarPose] = useState(() => readSavedPose());
   const [voiceProfiles, setVoiceProfiles] = useState([]);
   const [voiceProfilesLoading, setVoiceProfilesLoading] = useState(true);
   const [defProvider, setDefProvider] = useState(() => localStorage.getItem("mctosh_ai_provider") || "groq");
@@ -404,6 +412,46 @@ const SettingsPage = () => {
     setSelectedVoiceProfileId(id);
     writeVoiceSettings({ voiceProfileId: id || null });
   };
+
+  const handleKokoroVoice = (id) => {
+    const nextVoice = id || KOKORO_VOICE_OPTIONS[0]?.id || "";
+    setSelectedKokoroVoice(nextVoice);
+    writeVoiceSettings({ kokoroVoice: nextVoice });
+    if (ttsProviderId !== TTS_PROVIDERS.KOKORO) {
+      handleTtsProvider(TTS_PROVIDERS.KOKORO);
+    }
+  };
+
+  const handleSupertonicVoice = (id) => {
+    const nextVoice = id || SUPERTONIC_VOICE_OPTIONS[0]?.id || "";
+    setSelectedSupertonicVoice(nextVoice);
+    writeVoiceSettings({ supertonicVoice: nextVoice });
+    if (ttsProviderId !== TTS_PROVIDERS.SUPERTONIC) {
+      handleTtsProvider(TTS_PROVIDERS.SUPERTONIC);
+    }
+  };
+
+  const handleAvatarPose = (key, value) => {
+    const nextPose = { ...avatarPose, [key]: Number(value) };
+    setAvatarPose(nextPose);
+    emitAvatarPoseUpdate(nextPose);
+  };
+
+  const handleSaveAvatarPose = () => {
+    const nextPose = writeSavedPose(avatarPose);
+    setAvatarPose(nextPose);
+    setSavedAvatarPose(nextPose);
+  };
+
+  const handleIgnoreAvatarPose = () => {
+    const nextPose = { ...savedAvatarPose };
+    setAvatarPose(nextPose);
+    emitAvatarPoseUpdate(nextPose);
+  };
+
+  const avatarPoseDirty = AVATAR_POSE_CONTROLS.some(
+    ({ key }) => Math.abs((avatarPose[key] || 0) - (savedAvatarPose[key] || 0)) > 0.0001
+  );
 
   // Live refresh: hits each provider's real /models endpoint on the backend
   // (see ai-status?live=1) instead of just checking whether an env key is
@@ -1072,6 +1120,38 @@ const SettingsPage = () => {
                         {ttsProviderId === opt.id && <span className="sett_provider_active_tag">Active</span>}
                       </div>
                       <div className="sett_provider_status_msg">{opt.desc}</div>
+                      {opt.id === TTS_PROVIDERS.KOKORO && (
+                        <div className="sett_provider_inline_picker" onClick={(e) => e.stopPropagation()}>
+                          <span className="sett_provider_inline_picker_label">Voice</span>
+                          <select
+                            className="sett_provider_inline_select"
+                            value={selectedKokoroVoice || ""}
+                            onChange={(e) => handleKokoroVoice(e.target.value)}
+                          >
+                            {KOKORO_VOICE_OPTIONS.map((voice) => (
+                              <option key={voice.id} value={voice.id}>
+                                {voice.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {opt.id === TTS_PROVIDERS.SUPERTONIC && (
+                        <div className="sett_provider_inline_picker" onClick={(e) => e.stopPropagation()}>
+                          <span className="sett_provider_inline_picker_label">Voice</span>
+                          <select
+                            className="sett_provider_inline_select"
+                            value={selectedSupertonicVoice || ""}
+                            onChange={(e) => handleSupertonicVoice(e.target.value)}
+                          >
+                            {SUPERTONIC_VOICE_OPTIONS.map((voice) => (
+                              <option key={voice.id} value={voice.id}>
+                                {voice.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1111,6 +1191,41 @@ const SettingsPage = () => {
                 >
                   Manage voice profiles
                 </button>
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Local 3D Posture</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.6rem" }}>
+                  Tune the default resting pose for the Local 3D avatar. Save to keep the changes, or ignore to restore the last saved pose.
+                </p>
+                <div className="sett_avatar_pose_grid">
+                  {AVATAR_POSE_CONTROLS.map((control) => (
+                    <label className="sett_avatar_pose_row" key={control.key}>
+                      <span className="sett_avatar_pose_label">{control.label}</span>
+                      <input
+                        type="range"
+                        min={control.min}
+                        max={control.max}
+                        step={control.step}
+                        value={avatarPose[control.key]}
+                        onChange={(e) => handleAvatarPose(control.key, e.target.value)}
+                      />
+                      <span className="sett_avatar_pose_value">{avatarPose[control.key].toFixed(2)}</span>
+                    </label>
+                  ))}
+                </div>
+                {avatarPoseDirty && (
+                  <div className="sett_avatar_pose_actions">
+                    <button type="button" className="sett_btn sett_btn--primary" onClick={handleSaveAvatarPose}>
+                      Save
+                    </button>
+                    <button type="button" className="sett_btn sett_btn--ghost" onClick={handleIgnoreAvatarPose}>
+                      Ignore
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div id="sett_provider_default_row">

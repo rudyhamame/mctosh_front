@@ -1,6 +1,6 @@
 /* No border, no background, no card — just the avatar itself floating on
-   top of whatever's behind it. The video is round (a face, not a rectangle
-   of chrome) since there's no container edge left to crop it to. */
+   top of whatever's behind it. Left intentionally unclipped so the full
+   video frame can show rather than being forced into a circle. */
 .anam_avatar {
   position: relative;
   width: 168px;
@@ -10,8 +10,8 @@
 .anam_avatar_video {
   width: 100%;
   height: 100%;
-  border-radius: 50%;
-  object-fit: cover;
+  border-radius: 0;
+  object-fit: contain;
   display: block;
   /* The only "chrome" left at all — just enough of a shadow to read as
      floating above the page rather than flat against it, since there's no
