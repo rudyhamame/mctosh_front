@@ -34,6 +34,13 @@ const formatPlayerTime = (value) => {
 
 const archivePageLabel = (index) => `Archive Page ${index + 1}`;
 const PODCAST_TTS_MAX_CHARS = 650;
+const TRANSCRIPT_REWRITE_MODES = [
+  { id: "clean", label: "Clean" },
+  { id: "concise", label: "Concise" },
+  { id: "structured", label: "Structured" },
+  { id: "professional", label: "Professional" },
+  { id: "technical", label: "Technical" },
+];
 
 const unlockBrowserSpeech = () => {
   if (typeof window === "undefined" || !window.speechSynthesis) return;
@@ -108,6 +115,66 @@ const formatHostLabel = (value) => {
   }
 };
 
+const normalizeTranscriptText = (text) => String(text || "").replace(/\s+/g, " ").trim();
+
+const buildNormalizedToRawMap = (rawText) => {
+  const raw = String(rawText || "");
+  const map = [];
+  let normalized = "";
+  let pendingSpace = false;
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index];
+    if (/\s/.test(char)) {
+      if (normalized.length) pendingSpace = true;
+      continue;
+    }
+    if (pendingSpace) {
+      normalized += " ";
+      map.push(index);
+      pendingSpace = false;
+    }
+    normalized += char;
+    map.push(index);
+  }
+
+  return { normalized, map };
+};
+
+const getTranscriptHighlightSlices = (rawText, spokenText) => {
+  const raw = String(rawText || "");
+  const spokenNormalized = normalizeTranscriptText(spokenText);
+  if (!raw || !spokenNormalized) {
+    return { before: raw, spoken: "", current: "", after: "" };
+  }
+
+  const { normalized, map } = buildNormalizedToRawMap(raw);
+  const spokenClamped = spokenNormalized.slice(0, normalized.length);
+  const spokenLength = spokenClamped.length;
+  if (!spokenLength) {
+    return { before: raw, spoken: "", current: "", after: "" };
+  }
+
+  const spokenEndRawExclusive = (map[Math.max(0, spokenLength - 1)] ?? -1) + 1;
+  if (spokenEndRawExclusive <= 0) {
+    return { before: raw, spoken: "", current: "", after: "" };
+  }
+
+  let currentWordStart = spokenLength;
+  while (currentWordStart > 0 && spokenClamped[currentWordStart - 1] !== " ") {
+    currentWordStart -= 1;
+  }
+  const currentStartRaw = map[currentWordStart] ?? 0;
+  const currentEndRawExclusive = spokenEndRawExclusive;
+
+  return {
+    before: raw.slice(0, currentStartRaw),
+    spoken: raw.slice(currentStartRaw, currentEndRawExclusive),
+    current: raw.slice(currentStartRaw, currentEndRawExclusive),
+    after: raw.slice(currentEndRawExclusive),
+  };
+};
+
 const PodcastPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -139,8 +206,11 @@ const PodcastPage = () => {
   const [transcriptRequestedForUrl, setTranscriptRequestedForUrl] = useState("");
   const [transcriptSaved, setTranscriptSaved] = useState(false);
   const [transcriptDeleting, setTranscriptDeleting] = useState(false);
+  const [transcriptRefining, setTranscriptRefining] = useState(false);
+  const [transcriptRewriteMode, setTranscriptRewriteMode] = useState("clean");
   const [transcriptFontSize, setTranscriptFontSize] = useState(16);
   const [transcriptTtsStatus, setTranscriptTtsStatus] = useState("idle");
+  const [transcriptSpokenText, setTranscriptSpokenText] = useState("");
   const [playerPlaying, setPlayerPlaying] = useState(false);
   const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
   const [playerDuration, setPlayerDuration] = useState(0);
@@ -380,6 +450,8 @@ const PodcastPage = () => {
     setTranscriptLoading(false);
     setTranscriptError("");
     setTranscriptText("");
+    setTranscriptRefining(false);
+    setTranscriptSpokenText("");
     setTranscriptRequestedForUrl("");
     setTranscriptSaved(false);
     setTranscriptDeleting(false);
@@ -511,6 +583,54 @@ const PodcastPage = () => {
     }
   };
 
+  const refineTranscript = async () => {
+    const currentText = String(transcriptText || "").trim();
+    if (!currentText || transcriptRefining || !sourceId || !transcriptTargetUrl) return;
+    setTranscriptRefining(true);
+    setTranscriptError("");
+    try {
+      const rewriteRes = await fetch(apiUrl("/api/transcripts/rewrite"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeader(),
+        },
+        body: JSON.stringify({
+          text: currentText,
+          mode: transcriptRewriteMode,
+          preserveParagraphs: true,
+          outputFormat: "text",
+        }),
+      });
+      const rewriteData = await rewriteRes.json().catch(() => ({}));
+      if (!rewriteRes.ok) throw new Error(rewriteData.error || "Failed to refine this transcript.");
+
+      const rewrittenText = String(rewriteData.rewrittenText || "").trim();
+      if (!rewrittenText) throw new Error("Transcript refiner returned empty text.");
+
+      const saveQuery = `?pageUrl=${encodeURIComponent(transcriptTargetUrl)}`;
+      const saveRes = await fetch(apiUrl(`/api/sources/${sourceId}/podcast-transcript${saveQuery}`), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeader(),
+        },
+        body: JSON.stringify({ text: rewrittenText }),
+      });
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) throw new Error(saveData.error || "Failed to save the refined transcript.");
+
+      setTranscriptText(rewrittenText);
+      setTranscriptSaved(true);
+      setTranscriptRequestedForUrl(transcriptTargetUrl);
+      setTranscriptSpokenText("");
+    } catch (err) {
+      setTranscriptError(err.message || "Failed to refine this transcript.");
+    } finally {
+      setTranscriptRefining(false);
+    }
+  };
+
   const adjustTranscriptFontSize = (delta) => {
     setTranscriptFontSize((current) => Math.min(24, Math.max(12, current + delta)));
   };
@@ -532,6 +652,7 @@ const PodcastPage = () => {
       transcriptSpeakTokenRef.current += 1;
       transcriptSpeechServiceRef.current.stop();
       setTranscriptTtsStatus("idle");
+      setTranscriptSpokenText("");
       return;
     }
     const speakToken = transcriptSpeakTokenRef.current + 1;
@@ -544,8 +665,10 @@ const PodcastPage = () => {
     speechService.unlockAudio?.();
     setTranscriptTtsStatus("creating");
     setTranscriptError("");
+    setTranscriptSpokenText("");
     speechService.stop();
     void (async () => {
+      let spokenPrefix = "";
       for (const chunk of transcriptChunks) {
         if (transcriptSpeakTokenRef.current !== speakToken) return;
         await speechService.speak(chunk, {
@@ -554,6 +677,10 @@ const PodcastPage = () => {
           voiceProfileId,
           kokoroVoice,
           supertonicVoice,
+          onSpokenText: (spokenText) => {
+            if (transcriptSpeakTokenRef.current !== speakToken) return;
+            setTranscriptSpokenText(`${spokenPrefix}${spokenText}`.trim());
+          },
           onSynthesisStart: () => {
             if (transcriptSpeakTokenRef.current === speakToken) {
               setTranscriptTtsStatus("creating");
@@ -565,6 +692,10 @@ const PodcastPage = () => {
             }
           },
         });
+        spokenPrefix = `${spokenPrefix}${spokenPrefix ? " " : ""}${chunk}`.trim();
+        if (transcriptSpeakTokenRef.current === speakToken) {
+          setTranscriptSpokenText(spokenPrefix);
+        }
       }
     })().catch((error) => {
       console.error("[PodcastTranscriptTTS] failed:", error);
@@ -574,9 +705,15 @@ const PodcastPage = () => {
     }).finally(() => {
       if (transcriptSpeakTokenRef.current === speakToken) {
         setTranscriptTtsStatus("idle");
+        setTranscriptSpokenText("");
       }
     });
   };
+
+  const transcriptHighlightSlices = useMemo(
+    () => getTranscriptHighlightSlices(transcriptText, transcriptSpokenText),
+    [transcriptText, transcriptSpokenText]
+  );
 
   const transcriptTtsBusy = transcriptTtsStatus === "creating" || transcriptTtsStatus === "speaking";
   const transcriptTtsLabel = transcriptTtsStatus === "creating"
@@ -781,6 +918,29 @@ const PodcastPage = () => {
                     <span>{transcriptFontSize}px</span>
                     <button type="button" onClick={() => adjustTranscriptFontSize(1)} aria-label="Increase transcript font size">A+</button>
                   </div>
+                  {transcriptText ? (
+                    <>
+                      <select
+                        id="podcast_transcript_rewrite_mode"
+                        value={transcriptRewriteMode}
+                        onChange={(event) => setTranscriptRewriteMode(event.target.value)}
+                        disabled={transcriptRefining || transcriptLoading}
+                        aria-label="Transcript rewrite mode"
+                      >
+                        {TRANSCRIPT_REWRITE_MODES.map((mode) => (
+                          <option key={mode.id} value={mode.id}>{mode.label}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        id="podcast_transcript_refine_btn"
+                        onClick={refineTranscript}
+                        disabled={transcriptRefining || transcriptLoading || !sourceId || !transcriptTargetUrl}
+                      >
+                        {transcriptRefining ? "Refining..." : "Transcript Refiner"}
+                      </button>
+                    </>
+                  ) : null}
                   {transcriptSaved ? (
                     <>
                       <span id="podcast_transcript_saved">Saved</span>
@@ -819,7 +979,15 @@ const PodcastPage = () => {
                   : transcriptError
                     ? transcriptError
                     : transcriptText
-                      ? transcriptText
+                      ? (
+                        <>
+                          {transcriptHighlightSlices.before}
+                          {transcriptHighlightSlices.current
+                            ? <mark className="podcast_transcript_word_current">{transcriptHighlightSlices.current}</mark>
+                            : null}
+                          {transcriptHighlightSlices.after}
+                        </>
+                      )
                       : transcriptRequestedForUrl === activeEpisode.url
                         ? "No transcript was generated for this episode yet."
                         : "Press Transcribe to generate the episode transcript."}

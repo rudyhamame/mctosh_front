@@ -8,6 +8,7 @@ import objectivesEn from "../MCC/mccqeObjectivesData.json";
 import objectivesAr from "../MCC/mccqeObjectivesArabicData.json";
 import AvatarProviderSelector from "../Avatar/AvatarProviderSelector";
 import CameraPresetTab from "./CameraPresetTab";
+import { readDevAiSettings, writeDevAiSettings } from "../App/devAiSettings";
 import {
   readVoiceSettings, writeVoiceSettings,
   TTS_PROVIDERS, readTtsProviderId, writeTtsProviderId,
@@ -155,6 +156,7 @@ const SettingsPage = () => {
   const [selectedVoiceProfileId, setSelectedVoiceProfileId] = useState(() => readVoiceSettings().voiceProfileId);
   const [selectedKokoroVoice, setSelectedKokoroVoice] = useState(() => readVoiceSettings().kokoroVoice);
   const [selectedSupertonicVoice, setSelectedSupertonicVoice] = useState(() => readVoiceSettings().supertonicVoice);
+  const [interruptOnSpeech, setInterruptOnSpeech] = useState(() => readDevAiSettings().interruptOnSpeech);
   const [avatarPose, setAvatarPose] = useState(() => readSavedPose());
   const [savedAvatarPose, setSavedAvatarPose] = useState(() => readSavedPose());
   const [voiceProfiles, setVoiceProfiles] = useState([]);
@@ -429,6 +431,11 @@ const SettingsPage = () => {
     if (ttsProviderId !== TTS_PROVIDERS.SUPERTONIC) {
       handleTtsProvider(TTS_PROVIDERS.SUPERTONIC);
     }
+  };
+
+  const handleInterruptOnSpeech = (checked) => {
+    setInterruptOnSpeech(Boolean(checked));
+    writeDevAiSettings({ interruptOnSpeech: Boolean(checked) });
   };
 
   const handleAvatarPose = (key, value) => {
@@ -1097,6 +1104,26 @@ const SettingsPage = () => {
 
               <div className="sett_usage_card">
                 <AvatarProviderSelector />
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Dev AI Voice Call</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.6rem" }}>
+                  Let your voice interrupt the avatar mid-reply. When enabled, Dev AI will stop speaking and switch to your new turn as soon as your interruption is recognized.
+                </p>
+                <label className="sett_toggle_row">
+                  <span className="sett_toggle_copy">
+                    <span className="sett_toggle_title">Interrupt avatar on speech</span>
+                    <span className="sett_toggle_desc">Useful for barge-in conversations, but may be more sensitive to speaker bleed from the avatar.</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={interruptOnSpeech}
+                    onChange={(e) => handleInterruptOnSpeech(e.target.checked)}
+                  />
+                </label>
               </div>
 
               <div className="sett_usage_card">

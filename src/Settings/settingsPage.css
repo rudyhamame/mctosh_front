@@ -515,6 +515,45 @@
   flex-wrap: wrap;
 }
 
+.sett_toggle_row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg);
+}
+
+.sett_toggle_copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sett_toggle_title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.sett_toggle_desc {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--color-text-muted);
+}
+
+.sett_toggle_row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-highlight);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
 .sett_usage_minutes {
   font-size: 26px;
   font-weight: 700;

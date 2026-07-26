@@ -777,6 +777,14 @@
   color: #111111;
 }
 
+.podcast_transcript_word_current {
+  padding: 0.08em 0.2em;
+  border-radius: 0.35em;
+  background: rgba(92, 198, 147, 0.34);
+  color: #0d2a1d;
+  box-shadow: 0 0 0 1px rgba(46, 125, 90, 0.18);
+}
+
 #podcast_transcript_loader {
   display: flex;
   align-items: center;

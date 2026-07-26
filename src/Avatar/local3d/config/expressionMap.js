@@ -17,10 +17,20 @@ export const EXPRESSIONS = {
     mouthSmile: 0.3,
     browInnerUp: 0.15,
   },
+  amused: {
+    mouthSmile: 0.58,
+    browInnerUp: 0.22,
+    mouthPucker: 0.08,
+  },
   alert: {
     browInnerUp: 0.6,
     browDownLeft: 0.15,
     browDownRight: 0.15,
+  },
+  relieved: {
+    mouthSmile: 0.18,
+    browInnerUp: 0.18,
+    mouthPucker: 0.12,
   },
   thinking: {
     browDownLeft: 0.25,

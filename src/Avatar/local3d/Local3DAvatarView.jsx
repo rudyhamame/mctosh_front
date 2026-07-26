@@ -419,6 +419,9 @@ const Local3DAvatarView = forwardRef(({ allowViewportControls = true, onSpeechCa
           onSpokenText: (spokenText) => {
             onSpeechCaptionChange?.(spokenText);
           },
+          onExpressionChange: (nextExpression) => {
+            setExpression(nextExpression || "reassuring");
+          },
           onViseme: (name) => lipSyncRef.current?.onViseme(name),
           // Network-backed providers (OpenVoiceClone) can take a long time
           // to return, especially under CPU/memory pressure — without a

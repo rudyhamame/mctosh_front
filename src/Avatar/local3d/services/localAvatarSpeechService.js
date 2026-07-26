@@ -25,6 +25,8 @@
 //      analysis — the platform has no way to provide that for
 //      speechSynthesis output — it's the standard workaround other
 //      browser-TTS-driven avatars use too.
+import { buildExpressionTimeline, stripExpressionTags } from "./expressionTagTimeline";
+
 export const createLocalAvatarSpeechService = (ttsProvider) => {
   let bufferSource = null; // current AudioBufferSourceNode, if a real-audioUrl reply is playing
   let currentBuffer = null; // its decoded AudioBuffer — kept for pause/resume-by-offset
@@ -45,10 +47,12 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
   let rafId = null;
   let visemeTimers = [];
   let spokenWordTimers = [];
+  let expressionTimers = [];
   let currentUtterance = null;
   let onAmplitudeCb = null;
   let onVisemeCb = null;
   let onSpokenTextCb = null;
+  let onExpressionCb = null;
   // Real network-backed providers (OpenVoiceClone) can take several seconds
   // to synthesize — stop() must be able to cancel a request still in flight,
   // not just audio that already started playing, or an obsolete reply can
@@ -75,6 +79,11 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     spokenWordTimers = [];
   };
 
+  const clearExpressionTimers = () => {
+    expressionTimers.forEach(clearTimeout);
+    expressionTimers = [];
+  };
+
   const emitSpokenText = (text) => {
     onSpokenTextCb?.(String(text || ""));
   };
@@ -95,10 +104,19 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     });
   };
 
+  const scheduleExpressionTimeline = (timeline) => {
+    clearExpressionTimers();
+    if (!Array.isArray(timeline) || !timeline.length) return;
+    expressionTimers = timeline.map((event) => setTimeout(() => {
+      onExpressionCb?.(event.expression);
+    }, Math.max(0, Number(event.time) || 0)));
+  };
+
   const teardownAudio = () => {
     stopAmplitudeLoop();
     clearVisemeTimers();
     clearSpokenWordTimers();
+    clearExpressionTimers();
     if (bufferSource) {
       bufferSource.onended = null; // about to stop it ourselves — not a natural finish
       try { bufferSource.stop(); } catch { /* already stopped/never started — fine */ }
@@ -146,6 +164,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
         runAmplitudeLoop();
       }
       scheduleEstimatedSpokenText(result.text || "", result.durationMs);
+      scheduleExpressionTimeline(buildExpressionTimeline(result.rawText || result.text || "", decoded.duration * 1000));
 
       const finish = () => {
         teardownAudio();
@@ -206,6 +225,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
 
     let pulseUntil = 0;
     emitSpokenText("");
+    scheduleExpressionTimeline(buildExpressionTimeline(result.rawText || result._text || "", result.durationMs));
     const pulseLoop = () => {
       if (!currentUtterance) return;
       const now = performance.now();
@@ -244,10 +264,11 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     // provider (OpenVoiceClone) can take 10-30s+ to return, especially
     // under CPU/memory pressure, and without this the avatar just sits
     // idle with no visible sign anything is happening.
-    async speak(text, { language, voice, voiceProfileId, kokoroVoice, supertonicVoice, onAmplitude, onViseme, onSpokenText, onSynthesisStart, onPlaybackStart } = {}) {
+    async speak(text, { language, voice, voiceProfileId, kokoroVoice, supertonicVoice, onAmplitude, onViseme, onSpokenText, onExpressionChange, onSynthesisStart, onPlaybackStart } = {}) {
       onAmplitudeCb = onAmplitude || null;
       onVisemeCb = onViseme || null;
       onSpokenTextCb = onSpokenText || null;
+      onExpressionCb = onExpressionChange || null;
       currentAbortController = new AbortController();
       const { signal } = currentAbortController;
       onSynthesisStart?.();
@@ -260,7 +281,9 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       }
       if (signal.aborted) return; // synthesis finished but was superseded before playback could start
       onPlaybackStart?.();
-      result.text = text;
+      result.rawText = text;
+      result.text = stripExpressionTags(text);
+      if (result._text) result._text = stripExpressionTags(result._text);
       if (result.audioUrl) {
         await speakViaAudioUrl(result, signal);
       } else {
@@ -276,6 +299,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       emitSpokenText("");
       onAmplitudeCb?.(0);
       onVisemeCb?.("mouthClose");
+      onExpressionCb?.(null);
     },
     pause() {
       if (bufferSource && sharedAudioCtx) {

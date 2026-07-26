@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { useLocation } from "react-router-dom";
 import "./homeChat.css";
 import { apiUrl } from "../config/api";
 import { AI_PROVIDERS, useAIProvider } from "../hooks/useAIProvider";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { AVATAR_GREETING, speakableText } from "./AnamAvatar";
+import { readDevAiSettings } from "./devAiSettings";
 import AvatarContainer from "../Avatar/AvatarContainer";
 
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -179,6 +181,15 @@ const CALL_LABELS = {
 // mic re-arming early and picking up the avatar's own trailing voice as if
 // it were the user speaking is the failure mode avoided, not triggered.
 const estimateSpeakingMs = (text) => Math.max(600, String(text || "").length * 55);
+const INTERRUPTION_MIN_WORDS = 2;
+const INTERRUPTION_MIN_CHARS = 10;
+
+const isInterruptingTranscript = (text) => {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  const words = normalized.split(" ").filter(Boolean);
+  return words.length >= INTERRUPTION_MIN_WORDS || normalized.length >= INTERRUPTION_MIN_CHARS;
+};
 
 // No boxed overlay, no controls of its own — just the STT loop, rendering a
 // single live caption line under the avatar (see HomeChat.jsx). Ending the
@@ -190,11 +201,42 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
   const activeRef  = useRef(true);
   const recRef     = useRef(null);
   const sendRef    = useRef(send);
+  const callStateRef = useRef("listening");
+  const speakingTimerRef = useRef(null);
+  const interruptRecRef = useRef(null);
+  const interruptedRef = useRef(false);
 
   useEffect(() => { sendRef.current = send; });
+  useEffect(() => { callStateRef.current = callState; }, [callState]);
+
+  const clearSpeakingTimer = () => {
+    if (speakingTimerRef.current) {
+      clearTimeout(speakingTimerRef.current);
+      speakingTimerRef.current = null;
+    }
+  };
+
+  const stopInterruptRecognizer = () => {
+    const rec = interruptRecRef.current;
+    interruptRecRef.current = null;
+    if (!rec) return;
+    rec.onresult = null;
+    rec.onend = null;
+    rec.onerror = null;
+    try { rec.stop(); } catch {}
+  };
+
+  const stopCurrentReply = () => {
+    clearSpeakingTimer();
+    avatarRef?.current?.stop?.();
+    window.speechSynthesis.cancel();
+  };
 
   const startListening = () => {
     if (!SR || !activeRef.current) return;
+    stopInterruptRecognizer();
+    clearSpeakingTimer();
+    interruptedRef.current = false;
     setCallState("listening");
     setTranscript("");
 
@@ -240,6 +282,59 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
     try { rec.start(); } catch {}
   };
 
+  const startInterruptionListening = () => {
+    if (!SR || !activeRef.current || !avatarRef?.current?.isLive?.()) return;
+    if (!readDevAiSettings().interruptOnSpeech) return;
+    stopInterruptRecognizer();
+    interruptedRef.current = false;
+
+    const rec = new SR();
+    rec.continuous = false;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    let finalText = "";
+
+    rec.onresult = (e) => {
+      const nextText = Array.from(e.results).map((r) => r[0].transcript).join("");
+      if (!isInterruptingTranscript(nextText)) return;
+      setTranscript(nextText);
+
+      if (!interruptedRef.current) {
+        interruptedRef.current = true;
+        stopCurrentReply();
+        setCallState("listening");
+      }
+
+      if (e.results[e.results.length - 1]?.isFinal) {
+        finalText = nextText;
+        try { rec.stop(); } catch {}
+      }
+    };
+
+    rec.onend = () => {
+      interruptRecRef.current = null;
+      if (!activeRef.current) return;
+      if (finalText.trim()) {
+        setCallState("thinking");
+        setTranscript(finalText);
+        sendRef.current(finalText);
+        return;
+      }
+      if (interruptedRef.current) {
+        setTimeout(startListening, 250);
+      }
+    };
+
+    rec.onerror = () => {
+      interruptRecRef.current = null;
+      if (!activeRef.current || !interruptedRef.current) return;
+      setTimeout(startListening, 400);
+    };
+
+    interruptRecRef.current = rec;
+    try { rec.start(); } catch {}
+  };
+
   // When streaming ends → speak the reply → then listen again. If the
   // avatar is live it's already speaking this exact reply itself (see
   // useContextChat's avatarRef.streamChunk/endMessage calls, which run
@@ -254,10 +349,14 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
 
     setCallState("speaking");
     if (avatarRef?.current?.isLive?.()) {
-      const t = setTimeout(() => {
+      speakingTimerRef.current = setTimeout(() => {
         if (activeRef.current) startListening();
       }, estimateSpeakingMs(last.content));
-      return () => clearTimeout(t);
+      startInterruptionListening();
+      return () => {
+        clearSpeakingTimer();
+        stopInterruptRecognizer();
+      };
     }
     speak(last.content, () => {
       if (activeRef.current) startListening();
@@ -269,7 +368,10 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
     startListening();
     return () => {
       activeRef.current = false;
+      clearSpeakingTimer();
+      stopInterruptRecognizer();
       recRef.current?.stop();
+      avatarRef?.current?.stop?.();
       window.speechSynthesis.cancel();
     };
   }, []); // eslint-disable-line
@@ -381,8 +483,13 @@ const HomeChat = () => {
           // (used when the avatar itself isn't live) speak at all; done
           // from an effect instead, Safari silently refuses it since it's
           // no longer inside a real user gesture by then.
-          if (!isOpen) { unlockSpeech(); avatarRef.current?.unlockAudio?.(); }
-          setIsOpen(v => !v);
+          if (!isOpen) {
+            unlockSpeech();
+            flushSync(() => setIsOpen(true));
+            avatarRef.current?.unlockAudio?.();
+            return;
+          }
+          setIsOpen(false);
         }}
         title={isOpen ? "Close AI" : "Dev AI"}
         className={isOpen ? "home_chat_fab--open" : ""}
