@@ -47,6 +47,7 @@ const FreeformListPage = lazy(() => import("./Freeform/FreeformListPage"));
 const ClinicalVignetteGeneratorPage = lazy(() => import("./ClinicalVignetteGenerator/ClinicalVignetteGeneratorPage"));
 const MedicalExamsPage = lazy(() => import("./MedicalExams/MedicalExamsPage"));
 const SegmentationsPage = lazy(() => import("./Segmentations/SegmentationsPage"));
+const ReasoningPage = lazy(() => import("./Reasoning/ReasoningPage"));
 const PatientLoginPage = lazy(() => import("./PatientApp/PatientLoginPage"));
 const PatientSignupPage = lazy(() => import("./PatientApp/PatientSignupPage"));
 const PatientCallPage = lazy(() => import("./PatientApp/PatientCallPage"));
@@ -200,6 +201,7 @@ const AppRouter = () => {
         <Route path="/clinical-vignettes"     element={auth(withSuspense(<ClinicalVignetteGeneratorPage />))} />
         <Route path="/medical-exams"          element={auth(withSuspense(<MedicalExamsPage />))} />
         <Route path="/segmentations"          element={auth(withSuspense(<SegmentationsPage />))} />
+        <Route path="/amctoshs-reasoning"     element={auth(withSuspense(<ReasoningPage />))} />
         <Route path="/freeform/:id"           element={auth(withSuspense(<FreeformPage />))} />
 
         {/* Patient-facing app — separate account system, separate auth

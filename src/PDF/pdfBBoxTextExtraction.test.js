@@ -136,4 +136,15 @@ describe("pdfBBoxTextExtraction", () => {
     expect(outline.some((point) => point.x === 81)).toBe(true);
   });
 
+  it("joins a line-break hyphen into one word in extracted bbox text", () => {
+    const bbox = { x: 0, y: 90, w: 300, h: 70 };
+    const spans = [
+      span("thyro-", 20, 100, 44, 10, 1, { rowIndex: 0, columnIndex: 0 }),
+      span("id", 20, 116, 16, 10, 1, { rowIndex: 1, columnIndex: 0 }),
+      span("gland", 42, 116, 40, 10, 1, { rowIndex: 1, columnIndex: 0 }),
+    ];
+
+    expect(extractTextForBoundingBox(spans, bbox)).toBe("thyroid gland");
+  });
+
 });

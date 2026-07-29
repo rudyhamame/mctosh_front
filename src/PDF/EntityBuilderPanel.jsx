@@ -3,10 +3,6 @@ import "./entityBuilderPanel.css";
 import { BBOX_CARD_TYPES, bboxTypeHas } from "./pdfBBoxTypes.js";
 
 const DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE = 12;
-const ENTITY_BUILDER_TABS = {
-  segments: "segments",
-  units: "units",
-};
 
 const EntityBuilderPanel = ({
   width = null,
@@ -14,9 +10,6 @@ const EntityBuilderPanel = ({
   onClose,
   bboxCards = [],
   pageNum = null,
-  pageCount = 0,
-  onPageChange = null,
-  onUpdateBBoxFontSize = null,
   onUpdateBBoxName = null,
   onDeleteBBox = null,
   onMoveBBoxUp = null,
@@ -24,7 +17,6 @@ const EntityBuilderPanel = ({
   onArmBBoxInsideContainer = null,
   armedBBoxInsideContainer = null,
 }) => {
-  const [activeTab, setActiveTab] = useState(ENTITY_BUILDER_TABS.segments);
   const [editingNameId, setEditingNameId] = useState(null);
   const [editingNameValue, setEditingNameValue] = useState("");
   const isImageBBox = (bbox) => bboxTypeHas(bbox?.type, "capturesImage");
@@ -36,12 +28,6 @@ const EntityBuilderPanel = ({
         _index: index + 1,
       }))
   ), [bboxCards]);
-  const sharedFontSize = useMemo(() => {
-    if (!normalizedBboxes.length) return DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE;
-    const sizes = normalizedBboxes.map((bbox) => Math.min(24, Math.max(10, Math.round(Number(bbox.fontSize) || DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE))));
-    return sizes.every((size) => size === sizes[0]) ? sizes[0] : null;
-  }, [normalizedBboxes]);
-  const displayedFontSize = sharedFontSize ?? DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE;
   const bboxContainers = useMemo(() => (
     (Array.isArray(bboxCards) ? bboxCards : [])
       .filter((bbox) => bbox && bboxTypeHas(bbox.type, "containsChildren"))
@@ -65,22 +51,6 @@ const EntityBuilderPanel = ({
     const standalone = normalizedBboxes.filter((bbox) => !assigned.has(bbox.id));
     return { groups, standalone };
   }, [bboxContainers, normalizedBboxes]);
-  const unitRows = useMemo(() => (
-    normalizedBboxes
-      .filter((bbox) => !bboxTypeHas(bbox?.type, "containsChildren") && !isImageBBox(bbox))
-      .flatMap((bbox) => {
-        const lines = String(bbox.text || "")
-          .split(/\r?\n+/)
-          .map((line) => line.trim())
-          .filter(Boolean);
-        return lines.map((line, index) => ({
-          id: `${bbox.id}::${index}`,
-          sourceId: bbox.id,
-          sourceTitle: bbox._displayTitle,
-          text: line,
-        }));
-      })
-  ), [normalizedBboxes]);
 
   const startEditName = (bbox) => {
     setEditingNameId(bbox.id);
@@ -106,8 +76,6 @@ const EntityBuilderPanel = ({
 
   const canMoveUp = Boolean(onMoveBBoxUp);
   const canMoveDown = Boolean(onMoveBBoxDown);
-  const canGoPrevPage = Boolean(onPageChange) && pageNum > 1;
-  const canGoNextPage = Boolean(onPageChange) && pageNum < pageCount;
   const containerBBoxIcon = (
     <svg
       xmlns="http://www.w3.org/2000/svg"
@@ -153,7 +121,7 @@ const EntityBuilderPanel = ({
         type="button"
         className="entity_builder_bbox_name_btn"
         onClick={() => onMoveBBoxUp?.(bbox.id, pageNum)}
-        aria-label={`Move ${bbox._displayTitle || "bbox"} up`}
+        aria-label={`Move ${bbox._displayTitle || "segment"} up`}
         title="Move up"
         disabled={!canMoveUp}
       >
@@ -163,7 +131,7 @@ const EntityBuilderPanel = ({
         type="button"
         className="entity_builder_bbox_name_btn"
         onClick={() => onMoveBBoxDown?.(bbox.id, pageNum)}
-        aria-label={`Move ${bbox._displayTitle || "bbox"} down`}
+        aria-label={`Move ${bbox._displayTitle || "segment"} down`}
         title="Move down"
         disabled={!canMoveDown}
       >
@@ -171,15 +139,12 @@ const EntityBuilderPanel = ({
       </button>
     </>
   );
-  const goPrevPage = () => onPageChange?.(Math.max(1, pageNum - 1));
-  const goNextPage = () => onPageChange?.(Math.min(pageCount || pageNum + 1, pageNum + 1));
   const armContainerBBox = (container) => onArmBBoxInsideContainer?.(container.id, pageNum);
-  const renderSegmentsTab = () => (
+  const renderSegments = () => (
     <>
-      <div className="entity_builder_section_title">BBox Cards</div>
       {normalizedBboxes.length === 0 && bboxContainers.length === 0 ? (
         <p className="entity_builder_helper">
-          No bbox cards on page {pageNum ?? "?"} yet.
+          No segments on page {pageNum ?? "?"} yet.
         </p>
       ) : (
         <div id="entity_builder_bbox_cards">
@@ -187,13 +152,13 @@ const EntityBuilderPanel = ({
             <section key={container.id} className="entity_builder_bbox_container">
               <div className="entity_builder_bbox_container_header">
                 <div className="entity_builder_bbox_name_row">
-                  <strong>{container.title?.trim() || `BBox Container ${_index}`}</strong>
+                  <strong>{container.title?.trim() || `Segment Container ${_index}`}</strong>
                   <button
                     type="button"
                     className={`entity_builder_bbox_name_btn${armedBBoxInsideContainer?.containerId === container.id && armedBBoxInsideContainer?.pageNum === pageNum ? " entity_builder_bbox_name_btn--active" : ""}`}
                     onClick={() => armContainerBBox(container)}
-                    aria-label={`Add bbox inside ${container.title?.trim() || `BBox Container ${_index}`}`}
-                    title="Add bbox inside container"
+                    aria-label={`Add segment inside ${container.title?.trim() || `Segment Container ${_index}`}`}
+                    title="Add segment inside container"
                     disabled={!onArmBBoxInsideContainer}
                   >
                     {containerBBoxIcon}
@@ -202,7 +167,7 @@ const EntityBuilderPanel = ({
                     type="button"
                     className="entity_builder_bbox_name_btn"
                     onClick={() => startEditName(container)}
-                    aria-label={`Edit BBox Container ${_index} name`}
+                    aria-label={`Edit Segment Container ${_index} name`}
                     title="Edit name"
                     >
                       <i className="bx bx-edit" />
@@ -248,7 +213,7 @@ const EntityBuilderPanel = ({
                               className="entity_builder_bbox_name_btn entity_builder_bbox_name_btn--danger"
                               onClick={() => handleDeleteBBox(bbox)}
                               aria-label={`Delete ${bbox._displayTitle}`}
-                              title="Delete bbox"
+                              title="Delete segment"
                               disabled={!onDeleteBBox}
                             >
                               <i className="bx bx-trash" />
@@ -322,7 +287,7 @@ const EntityBuilderPanel = ({
                         className="entity_builder_bbox_name_btn entity_builder_bbox_name_btn--danger"
                         onClick={() => handleDeleteBBox(bbox)}
                         aria-label={`Delete ${bbox._displayTitle}`}
-                        title="Delete bbox"
+                        title="Delete segment"
                         disabled={!onDeleteBBox}
                       >
                         <i className="bx bx-trash" />
@@ -361,29 +326,6 @@ const EntityBuilderPanel = ({
       )}
     </>
   );
-  const renderUnitsTab = () => (
-    <>
-      <div className="entity_builder_section_title">AMCTOSHS Units</div>
-      {unitRows.length ? (
-        <div className="entity_builder_units_list">
-          {unitRows.map((unit, index) => (
-            <article key={unit.id} className="entity_builder_unit_row">
-              <div className="entity_builder_unit_row_top">
-                <span className="entity_builder_unit_index">{index + 1}</span>
-                <span className="entity_builder_unit_source">{unit.sourceTitle}</span>
-              </div>
-              <div className="entity_builder_unit_text">{unit.text}</div>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <p className="entity_builder_helper">
-          No units stored yet on page {pageNum ?? "?"}. Lines from AMCTOSHS Segments will appear here.
-        </p>
-      )}
-    </>
-  );
-
   return (
     <div
       id="entity_builder_panel"
@@ -397,85 +339,13 @@ const EntityBuilderPanel = ({
       />
       <div id="entity_builder_header">
         <span id="entity_builder_header_title">
-          <i className="bx bx-network-chart" /> AMCTOSHS Entity Builder
+          <i className="bx bx-network-chart" /> AMCTOSHS Segments Builder
         </span>
         <button type="button" id="entity_builder_close" onClick={onClose} title="Close">✕</button>
       </div>
 
       <div id="entity_builder_body">
-        <div className="entity_builder_bbox_meta_row entity_builder_bbox_meta_row--top">
-          <div className="entity_builder_bbox_font_control">
-            <button
-              type="button"
-              className="entity_builder_bbox_font_btn"
-              onClick={() => onUpdateBBoxFontSize?.(displayedFontSize - 1, pageNum)}
-              disabled={!onUpdateBBoxFontSize || displayedFontSize <= 10}
-              aria-label="Decrease bbox font size for all cards"
-              title="Decrease font size for all cards"
-            >
-              <i className="bx bx-minus" />
-            </button>
-            <span className="entity_builder_bbox_font_value">
-              {sharedFontSize == null ? `${displayedFontSize}px*` : `${displayedFontSize}px`}
-            </span>
-            <button
-              type="button"
-              className="entity_builder_bbox_font_btn"
-              onClick={() => onUpdateBBoxFontSize?.(displayedFontSize + 1, pageNum)}
-              disabled={!onUpdateBBoxFontSize || displayedFontSize >= 24}
-              aria-label="Increase bbox font size for all cards"
-              title="Increase font size for all cards"
-            >
-              <i className="bx bx-plus" />
-            </button>
-          </div>
-        </div>
-        <div className="entity_builder_tabs" role="tablist" aria-label="AMCTOSHS Entity Builder tabs">
-          <button
-            type="button"
-            className={`entity_builder_tab${activeTab === ENTITY_BUILDER_TABS.segments ? " entity_builder_tab--active" : ""}`}
-            onClick={() => setActiveTab(ENTITY_BUILDER_TABS.segments)}
-            role="tab"
-            aria-selected={activeTab === ENTITY_BUILDER_TABS.segments}
-          >
-            AMCTOSHS Segments
-          </button>
-          <button
-            type="button"
-            className={`entity_builder_tab${activeTab === ENTITY_BUILDER_TABS.units ? " entity_builder_tab--active" : ""}`}
-            onClick={() => setActiveTab(ENTITY_BUILDER_TABS.units)}
-            role="tab"
-            aria-selected={activeTab === ENTITY_BUILDER_TABS.units}
-          >
-            AMCTOSHS UNITS
-          </button>
-        </div>
-        <div className="entity_builder_page_nav">
-          <button
-            type="button"
-            className="entity_builder_page_nav_btn"
-            onClick={goPrevPage}
-            disabled={!canGoPrevPage}
-            title="Previous builder page"
-            aria-label="Previous builder page"
-          >
-            ‹
-          </button>
-          <span className="entity_builder_page_nav_label">
-            Page {pageNum ?? "?"} / {pageCount || "?"}
-          </span>
-          <button
-            type="button"
-            className="entity_builder_page_nav_btn"
-            onClick={goNextPage}
-            disabled={!canGoNextPage}
-            title="Next builder page"
-            aria-label="Next builder page"
-          >
-            ›
-          </button>
-        </div>
-        {activeTab === ENTITY_BUILDER_TABS.segments ? renderSegmentsTab() : renderUnitsTab()}
+        {renderSegments()}
       </div>
     </div>
   );

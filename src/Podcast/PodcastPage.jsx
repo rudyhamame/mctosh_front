@@ -2,11 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
-import { createLocalAvatarSpeechService } from "../Avatar/local3d/services/localAvatarSpeechService";
-import { createBrowserTTSProvider } from "../Avatar/local3d/services/ttsProviders/BrowserTTSProvider";
-import { createOpenVoiceCloneProvider } from "../Avatar/local3d/services/ttsProviders/OpenVoiceCloneProvider";
-import { createKokoroTTSProvider } from "../Avatar/local3d/services/ttsProviders/KokoroTTSProvider";
-import { createSupertonicTTSProvider } from "../Avatar/local3d/services/ttsProviders/SupertonicTTSProvider";
 import { readTtsProviderId, readVoiceSettings, TTS_PROVIDERS } from "../Avatar/local3d/ttsProviderSettings";
 import { useAIProvider } from "../hooks/useAIProvider";
 import "./podcastPage.css";
@@ -34,7 +29,6 @@ const formatPlayerTime = (value) => {
 };
 
 const archivePageLabel = (index) => `Archive Page ${index + 1}`;
-const PODCAST_TTS_MAX_CHARS = 650;
 const TRANSCRIPT_REWRITE_MODES = [
   { id: "clean", label: "Clean" },
   { id: "concise", label: "Concise" },
@@ -45,70 +39,6 @@ const TRANSCRIPT_REWRITE_MODES = [
 const TRANSCRIPT_REWRITE_MODE_LABELS = Object.fromEntries(
   TRANSCRIPT_REWRITE_MODES.map((mode) => [mode.id, mode.label])
 );
-
-const unlockBrowserSpeech = () => {
-  if (typeof window === "undefined" || !window.speechSynthesis) return;
-  try {
-    const utterance = new SpeechSynthesisUtterance("");
-    window.speechSynthesis.speak(utterance);
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.resume?.();
-  } catch {
-    // Best-effort browser TTS unlock only.
-  }
-};
-
-const createTtsProviderFor = (providerId) => {
-  if (providerId === TTS_PROVIDERS.OPENVOICE) return createOpenVoiceCloneProvider();
-  if (providerId === TTS_PROVIDERS.KOKORO) return createKokoroTTSProvider();
-  if (providerId === TTS_PROVIDERS.SUPERTONIC) return createSupertonicTTSProvider();
-  return createBrowserTTSProvider();
-};
-
-const splitTranscriptForTts = (text) => {
-  const normalized = String(text || "").replace(/\s+/g, " ").trim();
-  if (!normalized) return [];
-  const sentences = normalized.match(/[^.!?]+[.!?]*|.+$/g) || [];
-  const chunks = [];
-  let current = "";
-
-  const pushCurrent = () => {
-    const next = current.trim();
-    if (next) chunks.push(next);
-    current = "";
-  };
-
-  sentences.forEach((sentence) => {
-    const part = sentence.trim();
-    if (!part) return;
-    if (part.length > PODCAST_TTS_MAX_CHARS) {
-      pushCurrent();
-      const words = part.split(/\s+/);
-      let oversizedChunk = "";
-      words.forEach((word) => {
-        const candidate = oversizedChunk ? `${oversizedChunk} ${word}` : word;
-        if (candidate.length > PODCAST_TTS_MAX_CHARS && oversizedChunk) {
-          chunks.push(oversizedChunk);
-          oversizedChunk = word;
-        } else {
-          oversizedChunk = candidate;
-        }
-      });
-      if (oversizedChunk) chunks.push(oversizedChunk);
-      return;
-    }
-    const candidate = current ? `${current} ${part}` : part;
-    if (candidate.length > PODCAST_TTS_MAX_CHARS) {
-      pushCurrent();
-      current = part;
-      return;
-    }
-    current = candidate;
-  });
-
-  pushCurrent();
-  return chunks;
-};
 
 const formatHostLabel = (value) => {
   if (!value) return "";
@@ -215,23 +145,22 @@ const PodcastPage = () => {
   const [transcriptRefining, setTranscriptRefining] = useState(false);
   const [transcriptRewriteMode, setTranscriptRewriteMode] = useState("clean");
   const [transcriptFontSize, setTranscriptFontSize] = useState(16);
-  const [transcriptTtsStatus, setTranscriptTtsStatus] = useState("idle");
-  const [transcriptSpokenText, setTranscriptSpokenText] = useState("");
+  const [transcriptAudioUrl, setTranscriptAudioUrl] = useState("");
+  const [transcriptAudioStatus, setTranscriptAudioStatus] = useState("idle");
   const [playerPlaying, setPlayerPlaying] = useState(false);
   const [playerCurrentTime, setPlayerCurrentTime] = useState(0);
   const [playerDuration, setPlayerDuration] = useState(0);
   const [playerSpeed, setPlayerSpeed] = useState(1);
   const audioRef = useRef(null);
+  const transcriptAudioRef = useRef(null);
+  const transcriptAudioAbortRef = useRef(null);
   const transcriptFontSizeHydratedRef = useRef(false);
-  const transcriptSpeechServiceRef = useRef(createLocalAvatarSpeechService(createTtsProviderFor(readTtsProviderId())));
-  const transcriptSpeechProviderIdRef = useRef(readTtsProviderId());
-  const transcriptSpeakTokenRef = useRef(0);
 
   useEffect(() => {
     document.body.classList.add("podcast_footer_theme");
     return () => {
       document.body.classList.remove("podcast_footer_theme");
-      transcriptSpeechServiceRef.current.stop();
+      transcriptAudioAbortRef.current?.abort?.();
     };
   }, []);
 
@@ -452,17 +381,16 @@ const PodcastPage = () => {
     setPlayerCurrentTime(0);
     setPlayerDuration(0);
     setPlayerSpeed(1);
-    setTranscriptTtsStatus("idle");
+    setTranscriptAudioStatus("idle");
     setTranscriptLoading(false);
     setTranscriptError("");
     setTranscriptText("");
     setTranscriptRefining(false);
-    setTranscriptSpokenText("");
+    setTranscriptAudioUrl("");
     setTranscriptRequestedForUrl("");
     setTranscriptSaved(false);
     setTranscriptDeleting(false);
-    transcriptSpeakTokenRef.current += 1;
-    transcriptSpeechServiceRef.current.stop();
+    transcriptAudioAbortRef.current?.abort?.();
     const audioEl = audioRef.current;
     if (!audioEl) return;
     audioEl.pause();
@@ -513,6 +441,8 @@ const PodcastPage = () => {
     if (!sourceId || !transcriptTargetUrl || !activeEpisode?.audioUrl) {
       setTranscriptSaved(false);
       setTranscriptSavedRefinementMode("");
+      setTranscriptAudioUrl("");
+      setTranscriptAudioStatus("idle");
       return;
     }
     let cancelled = false;
@@ -533,14 +463,20 @@ const PodcastPage = () => {
               ? String(data.transcript?.refinement?.mode || "").trim().toLowerCase()
               : ""
           );
+          setTranscriptAudioUrl(String(data.transcript?.audio?.url || "").trim());
+          setTranscriptAudioStatus("idle");
           setTranscriptError("");
         } else {
           setTranscriptSavedRefinementMode("");
+          setTranscriptAudioUrl("");
+          setTranscriptAudioStatus("idle");
         }
       } catch {
         if (cancelled) return;
         setTranscriptSaved(false);
         setTranscriptSavedRefinementMode("");
+        setTranscriptAudioUrl("");
+        setTranscriptAudioStatus("idle");
       }
     };
     void run();
@@ -555,6 +491,7 @@ const PodcastPage = () => {
       setTranscriptText("");
       setTranscriptRequestedForUrl(transcriptTargetUrl);
       setTranscriptSavedRefinementMode("");
+      setTranscriptAudioUrl("");
       return;
     }
     setTranscriptLoading(true);
@@ -572,12 +509,16 @@ const PodcastPage = () => {
           ? String(data.transcript?.refinement?.mode || "").trim().toLowerCase()
           : ""
       );
+      setTranscriptAudioUrl("");
+      setTranscriptAudioStatus("idle");
     } catch (err) {
       setTranscriptError(err.message || "Failed to transcribe this episode.");
       setTranscriptText("");
       setTranscriptRequestedForUrl(transcriptTargetUrl);
       setTranscriptSaved(false);
       setTranscriptSavedRefinementMode("");
+      setTranscriptAudioUrl("");
+      setTranscriptAudioStatus("idle");
     } finally {
       setTranscriptLoading(false);
     }
@@ -599,6 +540,8 @@ const PodcastPage = () => {
       setTranscriptSavedRefinementMode("");
       setTranscriptText("");
       setTranscriptRequestedForUrl(transcriptTargetUrl);
+      setTranscriptAudioUrl("");
+      setTranscriptAudioStatus("idle");
     } catch (err) {
       setTranscriptError(err.message || "Failed to delete this transcript.");
     } finally {
@@ -654,7 +597,8 @@ const PodcastPage = () => {
       setTranscriptSaved(true);
       setTranscriptSavedRefinementMode(transcriptRewriteMode);
       setTranscriptRequestedForUrl(transcriptTargetUrl);
-      setTranscriptSpokenText("");
+      setTranscriptAudioUrl("");
+      setTranscriptAudioStatus("idle");
     } catch (err) {
       setTranscriptError(err.message || "Failed to refine this transcript.");
     } finally {
@@ -666,92 +610,92 @@ const PodcastPage = () => {
     setTranscriptFontSize((current) => Math.min(24, Math.max(12, current + delta)));
   };
 
-  const getTranscriptSpeechService = () => {
-    const nextProviderId = readTtsProviderId();
-    if (nextProviderId !== transcriptSpeechProviderIdRef.current) {
-      transcriptSpeechServiceRef.current.stop();
-      transcriptSpeechProviderIdRef.current = nextProviderId;
-      transcriptSpeechServiceRef.current = createLocalAvatarSpeechService(createTtsProviderFor(nextProviderId));
+  const playTranscriptAudio = async (audioUrl) => {
+    const audioEl = transcriptAudioRef.current;
+    if (!audioEl || !audioUrl) return;
+    audioEl.pause();
+    audioEl.currentTime = 0;
+    audioEl.src = audioUrl;
+    try {
+      await audioEl.play();
+    } catch (err) {
+      setTranscriptAudioStatus("idle");
+      setTranscriptError(err?.message || "Transcript audio could not be played.");
     }
-    return transcriptSpeechServiceRef.current;
   };
 
-  const toggleTranscriptSpeech = () => {
+  const requestTranscriptAudio = async () => {
     const transcriptBody = String(transcriptText || "").trim();
     if (!transcriptBody) return;
-    if (transcriptTtsStatus === "creating" || transcriptTtsStatus === "speaking") {
-      transcriptSpeakTokenRef.current += 1;
-      transcriptSpeechServiceRef.current.stop();
-      setTranscriptTtsStatus("idle");
-      setTranscriptSpokenText("");
+    const audioEl = transcriptAudioRef.current;
+    if (transcriptAudioStatus === "generating") {
+      transcriptAudioAbortRef.current?.abort?.();
+      transcriptAudioAbortRef.current = null;
+      setTranscriptAudioStatus("idle");
       return;
     }
-    const speakToken = transcriptSpeakTokenRef.current + 1;
-    transcriptSpeakTokenRef.current = speakToken;
-    const speechService = getTranscriptSpeechService();
+    if (transcriptAudioStatus === "playing") {
+      audioEl?.pause?.();
+      setTranscriptAudioStatus("idle");
+      return;
+    }
+
+    if (transcriptAudioUrl) {
+      await playTranscriptAudio(transcriptAudioUrl);
+      return;
+    }
+
     const { language, voiceURI, voiceProfileId, kokoroVoice, supertonicVoice } = readVoiceSettings();
-    const transcriptChunks = splitTranscriptForTts(transcriptBody);
-    if (!transcriptChunks.length) return;
-    unlockBrowserSpeech();
-    speechService.unlockAudio?.();
-    setTranscriptTtsStatus("creating");
+    const providerId = readTtsProviderId();
+    const controller = new AbortController();
+    transcriptAudioAbortRef.current?.abort?.();
+    transcriptAudioAbortRef.current = controller;
+    setTranscriptAudioStatus("generating");
     setTranscriptError("");
-    setTranscriptSpokenText("");
-    speechService.stop();
-    void (async () => {
-      let spokenPrefix = "";
-      for (const chunk of transcriptChunks) {
-        if (transcriptSpeakTokenRef.current !== speakToken) return;
-        await speechService.speak(chunk, {
+    try {
+      const res = await fetch(apiUrl(`/api/sources/${sourceId}/podcast-transcript-audio?pageUrl=${encodeURIComponent(transcriptTargetUrl)}`), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...authHeader(),
+        },
+        body: JSON.stringify({
+          providerId,
           language,
           voice: voiceURI,
           voiceProfileId,
           kokoroVoice,
           supertonicVoice,
-          onSpokenText: (spokenText) => {
-            if (transcriptSpeakTokenRef.current !== speakToken) return;
-            setTranscriptSpokenText(`${spokenPrefix}${spokenText}`.trim());
-          },
-          onSynthesisStart: () => {
-            if (transcriptSpeakTokenRef.current === speakToken) {
-              setTranscriptTtsStatus("creating");
-            }
-          },
-          onPlaybackStart: () => {
-            if (transcriptSpeakTokenRef.current === speakToken) {
-              setTranscriptTtsStatus("speaking");
-            }
-          },
-        });
-        spokenPrefix = `${spokenPrefix}${spokenPrefix ? " " : ""}${chunk}`.trim();
-        if (transcriptSpeakTokenRef.current === speakToken) {
-          setTranscriptSpokenText(spokenPrefix);
-        }
+        }),
+        signal: controller.signal,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to generate transcript audio.");
+      const nextAudioUrl = String(data.transcript?.audio?.url || "").trim();
+      if (!nextAudioUrl) throw new Error("Transcript audio generation returned no file.");
+      setTranscriptAudioUrl(nextAudioUrl);
+      setTranscriptAudioStatus("idle");
+      await playTranscriptAudio(nextAudioUrl);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      console.error("[PodcastTranscriptAudio] failed:", error);
+      setTranscriptAudioStatus("idle");
+      setTranscriptError(error?.message || "Transcript audio generation failed.");
+    } finally {
+      if (transcriptAudioAbortRef.current === controller) {
+        transcriptAudioAbortRef.current = null;
       }
-    })().catch((error) => {
-      console.error("[PodcastTranscriptTTS] failed:", error);
-      if (transcriptSpeakTokenRef.current === speakToken) {
-        setTranscriptError(error?.message || "Transcript TTS failed.");
-      }
-    }).finally(() => {
-      if (transcriptSpeakTokenRef.current === speakToken) {
-        setTranscriptTtsStatus("idle");
-        setTranscriptSpokenText("");
-      }
-    });
+    }
   };
 
-  const transcriptHighlightSlices = useMemo(
-    () => getTranscriptHighlightSlices(transcriptText, transcriptSpokenText),
-    [transcriptText, transcriptSpokenText]
-  );
-
-  const transcriptTtsBusy = transcriptTtsStatus === "creating" || transcriptTtsStatus === "speaking";
-  const transcriptTtsLabel = transcriptTtsStatus === "creating"
-    ? "Creating..."
-    : transcriptTtsStatus === "speaking"
+  const transcriptAudioBusy = transcriptAudioStatus === "generating" || transcriptAudioStatus === "playing";
+  const transcriptAudioLabel = transcriptAudioStatus === "generating"
+    ? "Generating..."
+    : transcriptAudioStatus === "playing"
       ? "Stop"
-      : "TTS";
+      : transcriptAudioUrl
+        ? "Play Audio"
+        : "Generate Audio";
   const transcriptSavedLabel = transcriptSavedRefinementMode
     ? `Saved & Refined (${TRANSCRIPT_REWRITE_MODE_LABELS[transcriptSavedRefinementMode] || transcriptSavedRefinementMode})`
     : "Saved";
@@ -932,20 +876,22 @@ const PodcastPage = () => {
                   <button
                     type="button"
                     id="podcast_transcript_tts_btn"
-                    onClick={toggleTranscriptSpeech}
+                    onClick={requestTranscriptAudio}
                     disabled={!transcriptText || transcriptLoading}
                     aria-label={
-                      transcriptTtsStatus === "creating"
-                        ? "Creating transcript text to speech"
-                        : transcriptTtsStatus === "speaking"
-                          ? "Stop transcript text to speech"
-                          : "Play transcript text to speech"
+                      transcriptAudioStatus === "generating"
+                        ? "Generating transcript audio"
+                        : transcriptAudioStatus === "playing"
+                          ? "Stop transcript audio"
+                          : transcriptAudioUrl
+                            ? "Play transcript audio"
+                            : "Generate transcript audio"
                     }
-                    aria-pressed={transcriptTtsBusy}
-                    data-status={transcriptTtsStatus}
+                    aria-pressed={transcriptAudioBusy}
+                    data-status={transcriptAudioStatus}
                   >
-                    <i className={`bx ${transcriptTtsStatus === "speaking" ? "bx-stop-circle" : "bx-volume-full"} ${transcriptTtsStatus === "creating" ? "podcast_tts_icon_spin" : ""}`} />
-                    <span>{transcriptTtsLabel}</span>
+                    <i className={`bx ${transcriptAudioStatus === "playing" ? "bx-stop-circle" : "bx-volume-full"} ${transcriptAudioStatus === "generating" ? "podcast_tts_icon_spin" : ""}`} />
+                    <span>{transcriptAudioLabel}</span>
                   </button>
                   <div id="podcast_transcript_fontsize" aria-label="Transcript font size">
                     <button type="button" onClick={() => adjustTranscriptFontSize(-1)} aria-label="Decrease transcript font size">A-</button>
@@ -978,6 +924,9 @@ const PodcastPage = () => {
                   {transcriptSaved ? (
                     <>
                       <span id="podcast_transcript_saved">{transcriptSavedLabel}</span>
+                      {transcriptAudioUrl ? (
+                        <span className="podcast_transcript_audio_ready">Audio Ready</span>
+                      ) : null}
                       <button
                         type="button"
                         id="podcast_transcript_delete_btn"
@@ -1013,19 +962,30 @@ const PodcastPage = () => {
                   : transcriptError
                     ? transcriptError
                     : transcriptText
-                      ? (
-                        <>
-                          {transcriptHighlightSlices.before}
-                          {transcriptHighlightSlices.current
-                            ? <mark className="podcast_transcript_word_current">{transcriptHighlightSlices.current}</mark>
-                            : null}
-                          {transcriptHighlightSlices.after}
-                        </>
-                      )
+                      ? transcriptText
                       : transcriptRequestedForUrl === activeEpisode.url
                         ? "No transcript was generated for this episode yet."
                         : "Press Transcribe to generate the episode transcript."}
               </div>
+              <audio
+                ref={transcriptAudioRef}
+                id="podcast_transcript_audio"
+                preload="none"
+                src={transcriptAudioUrl || undefined}
+                hidden
+                onPlay={() => setTranscriptAudioStatus("playing")}
+                onPause={() => {
+                  if (transcriptAudioStatus !== "generating") {
+                    setTranscriptAudioStatus("idle");
+                  }
+                }}
+                onEnded={() => {
+                  setTranscriptAudioStatus("idle");
+                  if (transcriptAudioRef.current) {
+                    transcriptAudioRef.current.currentTime = 0;
+                  }
+                }}
+              />
             </section>
           ) : archiveLoading ? null : (
             <div className="podcast_status">

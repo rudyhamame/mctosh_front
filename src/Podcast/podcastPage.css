@@ -638,7 +638,7 @@
   color: #143927;
 }
 
-#podcast_transcript_tts_btn[data-status="creating"] {
+#podcast_transcript_tts_btn[data-status="generating"] {
   background: linear-gradient(180deg, rgba(92, 198, 147, 0.46), rgba(54, 152, 103, 0.3));
   border-color: rgba(46, 125, 90, 0.42);
 }
@@ -771,6 +771,19 @@
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(92, 198, 147, 0.18), rgba(54, 152, 103, 0.1));
   color: #1f5f42;
+  font-size: 0.74rem;
+  font-weight: 700;
+}
+
+.podcast_transcript_audio_ready {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 0.72rem;
+  border: 1px solid rgba(46, 125, 90, 0.18);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(92, 198, 147, 0.14), rgba(54, 152, 103, 0.08));
+  color: #245f46;
   font-size: 0.74rem;
   font-weight: 700;
 }

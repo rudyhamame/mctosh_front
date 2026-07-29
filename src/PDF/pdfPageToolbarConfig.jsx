@@ -88,7 +88,7 @@ export const ANNOT_TOOLS = [
   { key: "line", icon: "bx bx-minus", label: "Line", hasSize: false },
   { key: "arrow", icon: "bx bx-right-arrow-alt", label: "Arrow", hasSize: true },
   { key: "rect", icon: "bx bx-rectangle", label: "Rectangle", hasSize: false },
-  { key: "bbox", icon: "bx bx-crop", label: "BBox", hasSize: false },
+  { key: "bbox", icon: "bx bx-crop", label: "Segmentation", hasSize: false },
   { key: "circle", icon: "bx bx-circle", label: "Ellipse", hasSize: false },
   {
     key: "freeshape",

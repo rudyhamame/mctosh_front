@@ -1,0 +1,49 @@
+// amctoshsMorpheClient.js
+//
+// Thin fetch wrapper for the AMCTOSHS Morphe backend
+// (back/routes/AmctoshsMorpheAPI.js) — browse/CRUD only. The extraction
+// action ("Extract AMCTOSHS Relations") lives on the AMCTOSHS
+// Segmentation page instead — see
+// ../Segmentations/amctoshsRelationsExtractionClient.js. Same
+// authHeaders/jsonHeaders/parseJsonResponse convention as that file.
+
+import { apiUrl } from "../config/api";
+import { readStoredSession } from "../utils/sessionCleanup";
+
+const authHeaders = () => {
+  const session = readStoredSession();
+  return session?.token ? { Authorization: `Bearer ${session.token}` } : {};
+};
+const jsonHeaders = () => ({ "Content-Type": "application/json", ...authHeaders() });
+
+const parseJsonResponse = async (res) => {
+  const data = await res.json().catch(() => ({}));
+  if (data.error) {
+    const message = data.error.message || data.error || `Request failed (${res.status}).`;
+    throw Object.assign(new Error(message), data);
+  }
+  if (!res.ok) throw new Error(`Request failed (${res.status}).`);
+  return data;
+};
+
+/** Everything this user has SAVED in AMCTOSHS Morphe — {schemas, instances, traceSchemas, traceInstances, relations}. */
+export const listMorphe = async () => {
+  const res = await fetch(apiUrl("/api/amctoshs-morphe/"), { headers: authHeaders() });
+  return parseJsonResponse(res);
+};
+
+const typedCrud = (resource) => ({
+  get: async (id) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}/${id}`), { headers: authHeaders() })),
+  update: async (id, patch) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}/${id}`), {
+    method: "PATCH", headers: jsonHeaders(), body: JSON.stringify(patch),
+  })),
+  remove: async (id) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}/${id}`), {
+    method: "DELETE", headers: authHeaders(),
+  })),
+});
+
+export const morpheSchemas = typedCrud("schemas");
+export const morpheInstances = typedCrud("instances");
+export const morpheTraceSchemas = typedCrud("trace-schemas");
+export const morpheTraceInstances = typedCrud("trace-instances");
+export const morpheTextRelations = typedCrud("text-relations");

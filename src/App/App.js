@@ -36,6 +36,13 @@ const LEVELS = [
         description: "Store and manage PDFs as the hyle source library for AMCTOSHS extraction and analysis",
         color: "#4fc3f7",
       },
+      {
+        path: "/segmentations",
+        icon: "fi-rr-shapes",
+        label: "AMCTOSHS Segmentation",
+        description: "Browse the segments (BBoxes) extracted from a PDF source and extract AMCTOSHS Medical Statements from each one",
+        color: "#4fc3f7",
+      },
     ],
   },
   {
@@ -66,6 +73,13 @@ const LEVELS = [
         color: "#26c6da",
       },
       {
+        path: "/amctoshs-reasoning",
+        icon: "fi-rr-brain",
+        label: "AMCTOSHS Reasoning",
+        description: "Reason over AMCTOSHS Morphe's saved Traces and Sub-Entity Schemata to derive and organize Reasoning-dependent entities and their dependency relations",
+        color: "#ab47bc",
+      },
+      {
         path: "/mcc/mccqe/objectives",
         icon: "fi-rr-document-signed",
         label: "MCCQE Objectives",
@@ -92,13 +106,6 @@ const LEVELS = [
         label: "AMCTOSHS Draft",
         description: "A running scratchpad for notes you find while reading — autosaves as you write",
         color: "#ffca28",
-      },
-      {
-        path: "/segmentations",
-        icon: "fi-rr-shapes",
-        label: "AMCTOSHS Segmentation",
-        description: "Browse the segments (BBoxes) extracted from a PDF source and extract AMCTOSHS Medical Statements from each one",
-        color: "#4fc3f7",
       },
       {
         path: "/freeform",
@@ -192,7 +199,7 @@ export const LEVEL_LABELS = LEVELS.map((level) => level.label);
 // below) — AMCTOSHS Hyle and AMCTOSHS Morphe are the two tools that actually
 // BUILD an AMCTOSHS entity's raw material/structure, so they're grouped
 // under their own heading; every other tool stays a flat, ungrouped list.
-const BUILDING_TOOL_PATHS = ["/sources", "/clinical-schemata"];
+const BUILDING_TOOL_PATHS = ["/sources", "/segmentations", "/clinical-schemata", "/amctoshs-reasoning"];
 
 // How many screens of scrolling each level's own step takes — 1 = today's
 // uniform 100vh-per-level default. Hardcoded here, NOT persisted anywhere

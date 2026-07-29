@@ -1,0 +1,314 @@
+/* ── Shared ── */
+@keyframes mrp_icon_spin { to { transform: rotate(360deg); } }
+.mrp_icon_spin { display: inline-block; animation: mrp_icon_spin 0.9s linear infinite; }
+
+.mrp_panel_label {
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #26c6da;
+}
+
+.mrp_empty_hint {
+  padding: 1rem;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.mrp_dim_badge {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #26c6da;
+  background: color-mix(in srgb, #26c6da 13%, transparent);
+  border: 1px solid color-mix(in srgb, #26c6da 32%, transparent);
+  border-radius: 4px;
+  padding: 0.1rem 0.42rem;
+  white-space: nowrap;
+}
+.mrp_dim_badge--muted {
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-border) 60%, transparent);
+  border-color: var(--color-border);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.mrp_status_chip {
+  display: inline-block;
+  font-size: 0.6rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-border) 55%, transparent);
+  border-radius: 4px;
+  padding: 0.06rem 0.4rem;
+  white-space: nowrap;
+}
+.mrp_status_chip--asserted { color: #4caf50; background: color-mix(in srgb, #4caf50 14%, transparent); }
+.mrp_status_chip--linguistically_presupposed { color: #ffb74d; background: color-mix(in srgb, #ffb74d 14%, transparent); }
+.mrp_status_chip--proposed { color: #9575cd; background: color-mix(in srgb, #9575cd 14%, transparent); }
+.mrp_status_chip--manually_added, .mrp_status_chip--manually_corrected { color: #4fc3f7; background: color-mix(in srgb, #4fc3f7 14%, transparent); }
+
+.mrp_count_chip {
+  font-size: 0.6rem;
+  color: var(--color-text-muted);
+  background: var(--color-border);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+  white-space: nowrap;
+}
+
+.mrp_input {
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 0.8rem;
+  padding: 0.36rem 0.6rem;
+  outline: none;
+  width: 100%;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+.mrp_input:focus { border-color: #26c6da; }
+.mrp_input:disabled { opacity: 0.5; }
+
+/* ── Extraction bar — used by ../Reasoning/ReasoningPage.jsx's own
+   "Extract Reasoning" trigger (AMCTOSHS Morphe itself no longer triggers
+   any extraction — see ClinicalSchemata.jsx's doc comment). ── */
+#mrp_extraction_bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+#mrp_extract_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, #26c6da 45%, transparent);
+  background: color-mix(in srgb, #26c6da 12%, transparent);
+  color: #26c6da;
+  transition: background 0.12s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+#mrp_extract_btn:hover:not(:disabled) { background: color-mix(in srgb, #26c6da 20%, transparent); }
+#mrp_extract_btn:disabled { opacity: 0.6; cursor: default; }
+
+/* ── Review list — reused by ../Segmentations/AmctoshsRelationsReviewList.jsx
+   (imported there alongside this file); fully generic, not Morphe-specific. ── */
+#mrv_root {
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.75rem 1.25rem 1rem;
+  background: color-mix(in srgb, var(--color-bg) 85%, #26c6da 4%);
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+#mrv_head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+.mrv_warning_count {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.68rem;
+  color: #e08a2b;
+  cursor: default;
+}
+#mrv_list { display: flex; flex-direction: column; gap: 0.3rem; }
+.mrv_row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+}
+.mrv_row--accepted, .mrv_row--edited_accepted { border-color: color-mix(in srgb, #4caf50 40%, transparent); }
+.mrv_row--rejected { opacity: 0.55; border-color: color-mix(in srgb, #e05353 35%, transparent); }
+.mrv_row_body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+.mrv_row_title { font-size: 0.8rem; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mrv_row_detail { font-size: 0.66rem; color: var(--color-text-muted); }
+.mrv_row_actions { display: flex; align-items: center; gap: 0.25rem; flex-shrink: 0; }
+.mrv_btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.7rem;
+  height: 1.7rem;
+  padding: 0 0.4rem;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+.mrv_btn--accept:hover, .mrv_btn--accept.mrv_btn--active { color: #4caf50; border-color: color-mix(in srgb, #4caf50 45%, transparent); background: color-mix(in srgb, #4caf50 12%, transparent); }
+.mrv_btn--reject:hover, .mrv_btn--reject.mrv_btn--active { color: #e05353; border-color: color-mix(in srgb, #e05353 45%, transparent); background: color-mix(in srgb, #e05353 12%, transparent); }
+.mrv_btn:disabled { opacity: 0.5; cursor: default; }
+#mrv_save_accepted_btn {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, #4caf50 45%, transparent);
+  background: color-mix(in srgb, #4caf50 12%, transparent);
+  color: #4caf50;
+  font-family: inherit;
+}
+#mrv_save_accepted_btn:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Middle panel: Sub-Entity Schema / Instance / Trace list ── */
+#mrp_middle {
+  width: 340px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#mrp_entity_nav { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+#mrp_entity_tabs { display: flex; border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
+.mrp_entity_tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.5rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+.mrp_entity_tab--active { color: #26c6da; border-bottom-color: #26c6da; }
+.mrp_entity_tab_count { font-size: 0.6rem; background: var(--color-border); border-radius: 999px; padding: 0.02rem 0.35rem; }
+#mrp_entity_list { flex: 1; overflow-y: auto; padding: 0.5rem; display: flex; flex-direction: column; gap: 0.3rem; }
+.mrp_entity_row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.mrp_entity_row:hover { background: color-mix(in srgb, var(--color-surface) 60%, #26c6da 8%); }
+.mrp_entity_row--active { background: color-mix(in srgb, var(--color-bg) 55%, #26c6da 12%); border-color: color-mix(in srgb, #26c6da 45%, transparent); }
+.mrp_entity_row_name { font-size: 0.8rem; font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mrp_entity_row_meta { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+
+/* ── Domain panel (left) ── */
+#mrp_domain_panel { display: flex; flex-direction: column; gap: 0.25rem; padding: 0.75rem 0.6rem; overflow-y: auto; height: 100%; }
+.mrp_domain_row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-family: inherit;
+  text-align: left;
+}
+.mrp_domain_row:hover { background: color-mix(in srgb, var(--color-surface) 60%, #26c6da 8%); }
+.mrp_domain_row--active { color: #26c6da; background: color-mix(in srgb, var(--color-bg) 55%, #26c6da 12%); border-color: color-mix(in srgb, #26c6da 45%, transparent); }
+.mrp_domain_name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mrp_domain_count { font-size: 0.65rem; background: var(--color-border); border-radius: 999px; padding: 0.05rem 0.42rem; flex-shrink: 0; }
+
+/* ── Editor panel (right) ── */
+#mrp_no_selection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  color: var(--color-text-muted);
+  font-size: 0.88rem;
+  text-align: center;
+  padding: 1rem;
+}
+#mrp_no_selection i { font-size: 2.2rem; opacity: 0.2; }
+#mrp_no_selection p { margin: 0; }
+
+#mrp_editor { padding: 1rem 1.25rem 1.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1.1rem; }
+.mrp_editor_form { display: flex; flex-direction: column; gap: 0.7rem; }
+.mrp_editor_head { display: flex; align-items: center; gap: 0.5rem; }
+.mrp_field { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.7rem; color: var(--color-text-muted); flex: 1; }
+.mrp_field_row { display: flex; gap: 0.6rem; }
+.mrp_save_btn {
+  align-self: flex-start;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, #26c6da 45%, transparent);
+  background: color-mix(in srgb, #26c6da 12%, transparent);
+  color: #26c6da;
+  font-family: inherit;
+}
+.mrp_save_btn:disabled { opacity: 0.5; cursor: default; }
+.mrp_row_error { color: #e05353; font-size: 0.76rem; }
+
+.mrp_editor_section { display: flex; flex-direction: column; gap: 0.5rem; }
+.mrp_relation_list { display: flex; flex-direction: column; gap: 0.6rem; }
+.mrp_relation_group_label { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); margin-bottom: 0.3rem; }
+.mrp_relation_row { display: flex; align-items: center; gap: 0.4rem; font-size: 0.76rem; padding: 0.3rem 0; flex-wrap: wrap; }
+.mrp_relation_predicate { color: var(--color-text-muted); font-style: italic; }
+.mrp_relation_target { color: var(--color-text); font-weight: 600; }
+.mrp_relation_status { font-size: 0.6rem; text-transform: uppercase; border-radius: 4px; padding: 0.05rem 0.35rem; }
+.mrp_relation_status--asserted { color: #4caf50; background: color-mix(in srgb, #4caf50 14%, transparent); }
+.mrp_relation_status--proposed { color: #9575cd; background: color-mix(in srgb, #9575cd 14%, transparent); }
+
+.mrp_evidence_block { border-top: 1px solid var(--color-border); padding-top: 0.75rem; }
+.mrp_evidence_label { font-size: 0.64rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); margin-bottom: 0.4rem; }
+.mrp_evidence_list { margin: 0; padding-left: 1.1rem; font-size: 0.78rem; color: var(--color-text); line-height: 1.6; }
+.mrp_evidence_list mark { background: color-mix(in srgb, #26c6da 25%, transparent); color: inherit; border-radius: 3px; padding: 0 0.15rem; }
+.mrp_evidence_source { font-size: 0.68rem; color: var(--color-text-muted); margin: 0.4rem 0 0; }
+
+#mrp_delete_btn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.38rem 0.7rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, #e05353 40%, transparent);
+  background: color-mix(in srgb, #e05353 10%, transparent);
+  color: #e05353;
+  font-family: inherit;
+}
+
+@media (max-width: 860px) {
+  #mrp_middle { display: none; }
+}

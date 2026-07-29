@@ -62,19 +62,188 @@
   text-overflow: ellipsis;
 }
 
-#segp_source_select {
+#segp_header_meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   flex-shrink: 0;
-  max-width: 260px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  color: var(--color-text);
+}
+
+.segp_count_badge {
+  font-size: 0.68rem;
+  color: #4fc3f7;
+  background: color-mix(in srgb, #4fc3f7 12%, transparent);
+  border: 1px solid color-mix(in srgb, #4fc3f7 28%, transparent);
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.segp_count_badge--inst {
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-border) 60%, transparent);
+  border-color: var(--color-border);
+}
+
+/* ── Selection bar: multi-select segments -> "Extract AMCTOSHS Relations" ── */
+#segp_selection_bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 1.25rem;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, #4fc3f7 6%, transparent);
+  flex-shrink: 0;
+}
+.segp_selection_count {
   font-size: 0.78rem;
-  padding: 0.36rem 0.6rem;
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+}
+#segp_selection_clear_btn {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
   font-family: inherit;
+  padding: 0.2rem 0.4rem;
+}
+#segp_selection_clear_btn:hover { color: var(--color-text); }
+
+.segp_segment_checkbox {
+  flex-shrink: 0;
+  margin-top: 0.2rem;
+  width: 0.95rem;
+  height: 0.95rem;
+  accent-color: #4fc3f7;
   cursor: pointer;
 }
-#segp_source_select:focus { outline: none; border-color: #4fc3f7; }
+
+/* AmctoshsRelationsReviewList.jsx's inline subject/predicate/object/
+   extraction-logic edit form — stacked inputs inside the shared
+   .mrv_row_body slot (see ../ClinicalSchemata/morphePanels.css for that +
+   the rest of .mrv_*). */
+.arv_edit_fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.arv_logic_input {
+  resize: vertical;
+  font-family: inherit;
+  min-height: 2.4rem;
+}
+.arv_row_logic {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+  line-height: 1.4;
+}
+/* Reference number at the start of each relation's raw-sentence title
+   (mrv_row_title), rendered as a superscript — same numbered-footnote
+   convention as academic citations. */
+.arv_row_ref {
+  color: #4fc3f7;
+  font-weight: 700;
+  margin-right: 0.2rem;
+}
+.arv_sor_hard_error {
+  font-size: 0.68rem;
+  color: #e05353;
+  margin: 0;
+}
+
+/* Subject of Relation (SOR) collapsible panel — see SORPanel in
+   AmctoshsRelationsReviewList.jsx. Reuses .mrp_input/.mrp_status_chip/
+   .mrp_empty_hint/.mrv_btn from ../ClinicalSchemata/morphePanels.css. */
+.arv_sor_panel {
+  margin-top: 0.3rem;
+  border-top: 1px dashed var(--color-border);
+  padding-top: 0.3rem;
+}
+.arv_sor_toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.1rem 0;
+  font-family: inherit;
+}
+.arv_sor_toggle:hover { color: var(--color-text); }
+.arv_sor_flag {
+  color: #e08a2b;
+  font-size: 0.64rem;
+}
+.arv_sor_body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.3rem 0.2rem 1.1rem;
+}
+.arv_sor_field_row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+}
+.arv_sor_label {
+  flex-shrink: 0;
+  width: 8rem;
+  color: var(--color-text-muted);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.arv_sor_value { color: var(--color-text); }
+.arv_sor_warning_text {
+  font-size: 0.66rem;
+  color: #e08a2b;
+  margin: 0;
+}
+.arv_sor_section { display: flex; flex-direction: column; gap: 0.3rem; }
+.arv_sor_list_row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+}
+.arv_sor_evidence {
+  font-size: 0.64rem;
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+#segp_relations_section {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+}
+#segp_relations_section_error {
+  color: #e05353;
+  font-size: 0.78rem;
+  margin: 0.4rem 0 0;
+}
+/* ── Page footer: resolved AI provider/model in use ── */
+#segp_footer {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 1.25rem;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+}
+#segp_footer i {
+  font-size: 0.85rem;
+}
 
 /* ── Row-level error banner ── */
 #segp_row_error {
@@ -154,19 +323,49 @@
   gap: 0.6rem;
 }
 
-.segp_page_group {
+.segp_source_group {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
 }
 
-.segp_page_group_label {
-  font-size: 0.62rem;
+.segp_source_group_head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.4rem;
+}
+.segp_source_group_head > i:first-child { font-size: 0.72rem; color: var(--color-text-muted); flex-shrink: 0; }
+.segp_source_group_name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.68rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
   color: var(--color-text-muted);
-  padding: 0.2rem 0.4rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.segp_source_open_btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  flex-shrink: 0;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.68rem;
+  transition: color 0.12s, background 0.12s, border-color 0.12s;
+}
+.segp_source_open_btn:hover {
+  color: #4fc3f7;
+  background: color-mix(in srgb, #4fc3f7 12%, transparent);
+  border-color: color-mix(in srgb, #4fc3f7 30%, transparent);
 }
 
 .segp_segment_row {
@@ -215,6 +414,25 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.segp_segment_row_page {
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-muted);
+  background: var(--color-border);
+  border-radius: 999px;
+  padding: 0.06rem 0.4rem;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.segp_inst_count {
+  font-size: 0.62rem;
+  color: var(--color-text-muted);
+  background: var(--color-border);
+  border-radius: 999px;
+  padding: 0.02rem 0.4rem;
+  flex-shrink: 0;
 }
 
 /* ── Right: selected segment + AMCTOSHS Medical Statements ── */
@@ -280,6 +498,35 @@
   white-space: nowrap;
 }
 .segp_dim_badge--type { color: var(--color-text-muted); background: color-mix(in srgb, var(--color-border) 60%, transparent); border-color: var(--color-border); }
+.segp_dim_badge--source {
+  text-transform: none;
+  letter-spacing: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 260px;
+}
+.segp_dim_badge--source span,
+.segp_dim_badge--source { overflow: hidden; text-overflow: ellipsis; }
+
+#segp_open_source_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.32rem 0.6rem;
+  cursor: pointer;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  transition: color 0.12s, border-color 0.12s;
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+#segp_open_source_btn:hover { color: #4fc3f7; border-color: color-mix(in srgb, #4fc3f7 40%, transparent); }
 
 #segp_seg_body {
   flex: 1;
@@ -303,18 +550,15 @@
   color: var(--color-text);
   white-space: pre-wrap;
 }
+/* Marks where each numbered relation's evidence sits within the raw
+   segment text — same reference numbering as .arv_row_ref in
+   AmctoshsRelationsReviewList.jsx's row titles below. */
+.segp_seg_text_ref {
+  color: #4fc3f7;
+  font-weight: 700;
+  margin: 0 0.05rem;
+}
 #segp_seg_image { max-width: 100%; border-radius: 6px; display: block; }
-
-#segp_statements_section {
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-}
-#segp_statements_head {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
 
 #segp_extract_btn {
   display: inline-flex;
@@ -335,35 +579,6 @@
 #segp_extract_btn:hover:not(:disabled) { background: color-mix(in srgb, #4fc3f7 20%, transparent); }
 #segp_extract_btn:disabled { opacity: 0.65; cursor: default; }
 
-#segp_statement_list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  overflow: hidden;
-  background: var(--color-bg);
-}
-.segp_statement_row {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
-  padding: 0.55rem 0.85rem;
-  border-bottom: 1px solid var(--color-border);
-  font-size: 0.82rem;
-}
-.segp_statement_row:last-child { border-bottom: none; }
-.segp_statement_row:hover { background: color-mix(in srgb, var(--color-surface) 70%, transparent); }
-.segp_statement_index {
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-  font-size: 0.74rem;
-  color: var(--color-text-muted);
-  flex-shrink: 0;
-  min-width: 1.3rem;
-}
-.segp_statement_text { flex: 1; min-width: 0; color: var(--color-text); }
-
 /* ── Empty states ── */
 .segp_empty {
   display: flex;
@@ -379,14 +594,154 @@
 .segp_empty i { font-size: 1.6rem; opacity: 0.2; }
 .segp_empty p { margin: 0; }
 .segp_empty_hint { font-size: 0.7rem; opacity: 0.6; }
-.segp_statements_empty {
-  border: 1px dashed var(--color-border);
-  border-radius: 10px;
-  padding: 1.5rem 1rem;
-}
 
 @keyframes segp_icon_spin { to { transform: rotate(360deg); } }
 .segp_icon_spin { display: inline-block; animation: segp_icon_spin 0.9s linear infinite; }
+
+/* ── "Extract Predicates" / "Analyze Predicates" — a second, strictly
+   linguistic pipeline parallel to the Relations one above. Two own review
+   lists (AmctoshsPredicateExtractionReviewList.jsx,
+   AmctoshsPredicateAnalysisReviewList.jsx) render alongside the Relations
+   list on this same page, so they use their OWN ids (pev_*/pav_*) rather
+   than reusing #mrv_root/#mrv_head/#mrv_list/#mrv_save_accepted_btn from
+   morphePanels.css — those are already claimed by the always-mounted
+   AmctoshsRelationsReviewList and duplicate DOM ids would be a real bug
+   once all three lists are visible at once. The rules below duplicate
+   that same small set of layout rules under the new ids instead of
+   editing the shared file. ── */
+#segp_extract_predicates_btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.4rem 0.75rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, #4fc3f7 45%, transparent);
+  background: color-mix(in srgb, #4fc3f7 12%, transparent);
+  color: #4fc3f7;
+  transition: background 0.12s, border-color 0.12s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+#segp_extract_predicates_btn:hover:not(:disabled) { background: color-mix(in srgb, #4fc3f7 20%, transparent); }
+#segp_extract_predicates_btn:disabled { opacity: 0.65; cursor: default; }
+
+#segp_predicates_section {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+#pev_root, #pav_root {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0.75rem;
+}
+#pav_root { border-bottom: none; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
+#pev_head, #pav_head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+#pev_list, #pav_list { display: flex; flex-direction: column; gap: 0.3rem; }
+
+#pev_analyze_btn {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, #4fc3f7 45%, transparent);
+  background: color-mix(in srgb, #4fc3f7 12%, transparent);
+  color: #4fc3f7;
+  font-family: inherit;
+}
+#pev_analyze_btn:disabled { opacity: 0.5; cursor: default; }
+
+#pav_save_accepted_btn {
+  margin-top: 0.6rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  border-radius: 7px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  border: 1px solid color-mix(in srgb, #4caf50 45%, transparent);
+  background: color-mix(in srgb, #4caf50 12%, transparent);
+  color: #4caf50;
+  font-family: inherit;
+}
+#pav_save_accepted_btn:disabled { opacity: 0.5; cursor: default; }
+
+/* Argument chips shown under each Predicate Extraction row — read-only,
+   just the grammatical_role/mention pairs (full linguistic decomposition
+   is Predicate Analysis's job, not this stage's). */
+.pev_arguments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+.pev_argument_chip {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+}
+.pev_argument_chip strong { color: var(--color-text); font-weight: 600; }
+
+/* Per-argument collapsible linguistic breakdown in Predicate Analysis
+   review rows (ArgumentPanel) — same collapsible/field-row pattern as
+   .arv_sor_* above, one panel PER argument instead of one SOR panel per
+   relation. */
+.pav_arguments { display: flex; flex-direction: column; gap: 0.2rem; margin-top: 0.3rem; }
+.pav_arg_panel {
+  border-top: 1px dashed var(--color-border);
+  padding-top: 0.3rem;
+}
+.pav_arg_toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.1rem 0;
+  font-family: inherit;
+}
+.pav_arg_toggle:hover { color: var(--color-text); }
+.pav_arg_body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.3rem 0.2rem 1.1rem;
+}
+.pav_arg_field_row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.72rem;
+}
+.pav_arg_label {
+  flex-shrink: 0;
+  width: 9rem;
+  color: var(--color-text-muted);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.pav_arg_value { color: var(--color-text); }
+.pav_arg_section { display: flex; flex-direction: column; gap: 0.3rem; }
+.pav_arg_list_row {
+  font-size: 0.72rem;
+  color: var(--color-text);
+  padding-left: 9rem;
+}
 
 /* ── Mobile drawer ── */
 #segp_drawer_backdrop { display: none; }

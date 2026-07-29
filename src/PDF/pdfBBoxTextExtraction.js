@@ -28,6 +28,11 @@ const spanPageRight = (span) => span.pageRight ?? span.geoRight ?? 0;
 const spanPageTop = (span) => span.pageTop ?? span.geoTop ?? 0;
 const spanPageHeight = (span) => span.pageHeight ?? span.geoHeight ?? 0;
 
+const isLowercaseContinuation = (text) => {
+  const first = String(text || "").trimStart().match(/^\p{Ll}/u)?.[0] || "";
+  return !!first;
+};
+
 const getLineText = (spans) => {
   const pieces = [];
   let previous = null;
@@ -55,6 +60,25 @@ const getLineText = (spans) => {
     previous = span;
   }
   return pieces.join("").replace(/\s+/g, " ").trim();
+};
+
+const joinLineTexts = (lineTexts) => {
+  const pieces = [];
+  for (const rawText of lineTexts || []) {
+    const text = String(rawText || "").trim();
+    if (!text) continue;
+    if (!pieces.length) {
+      pieces.push(text);
+      continue;
+    }
+    const previous = pieces[pieces.length - 1];
+    if (previous.endsWith("-") && isLowercaseContinuation(text)) {
+      pieces[pieces.length - 1] = previous.slice(0, -1) + text;
+      continue;
+    }
+    pieces.push(text);
+  }
+  return pieces.join(" ").replace(/\s+/g, " ").trim();
 };
 
 const groupSpansIntoLines = (inputSpans) => {
@@ -186,7 +210,8 @@ export const orderSpansForTextExtraction = (inputSpans) => {
 
 export const extractTextFromOrderedSpans = (spans) => {
   const ordered = orderSpansForTextExtraction(spans);
-  return getLineText(ordered);
+  const lines = groupSpansIntoLines(ordered);
+  return joinLineTexts(lines.map((line) => getLineText(line.spans || [])));
 };
 
 export const selectSpansForBoundingBox = (spans, bbox, matchSpan = bboxTextMatchesSpan, excludedBboxes = []) => {
@@ -207,8 +232,25 @@ export const selectSpansForBoundingBox = (spans, bbox, matchSpan = bboxTextMatch
     : selected.filter((span) => span.columnIndex == null || span.columnIndex === dominantColumn);
 };
 
-export const buildTightTextOutline = (spans, padding = 1) => {
-  const bounds = buildTextLineRects(spans, padding);
+/**
+ * A "staircase" outline hugging an arbitrary top-to-bottom-ordered list of
+ * rects (one per text line, each free to have its own left/right extent) —
+ * left edge walked top-to-bottom, right edge walked bottom-to-top. Every
+ * rect passed in contributes its own step to the outline regardless of
+ * whether it touches its neighbors, which is exactly what text lines need
+ * (consecutive lines almost never touch pixel-for-pixel once real
+ * line-height spacing is accounted for) — nothing is merged or discarded.
+ *
+ * Callers are responsible for passing rects that don't vertically overlap
+ * (see autoFitBBoxToText in PDFPage.jsx for how it reconciles a padded
+ * title row against the first body line) — this function trusts the given
+ * top-to-bottom order and geometry as-is rather than second-guessing it,
+ * since which rect "should" give way on an overlap is caller-specific
+ * (e.g. a title row's padding exists to fully enclose its own border
+ * stroke and must never be the one trimmed).
+ */
+export const buildTightOutlineFromLineRects = (rects) => {
+  const bounds = (rects || []).filter(Boolean);
   if (!bounds.length) return [];
   const leftEdge = [];
   const rightEdge = [];
@@ -228,102 +270,9 @@ export const buildTightTextOutline = (spans, padding = 1) => {
   return [...leftEdge, ...rightEdge];
 };
 
-export const buildTightOutlineFromRects = (rects) => {
-  const bounds = (rects || [])
-    .filter(Boolean)
-    .map((rect) => ({
-      x: rect.x ?? 0,
-      y: rect.y ?? 0,
-      w: Math.max(0, rect.w ?? 0),
-      h: Math.max(0, rect.h ?? 0),
-    }))
-    .filter((rect) => rect.w > 0 && rect.h > 0);
-  if (!bounds.length) return [];
-
-  const xs = [...new Set(bounds.flatMap((rect) => [rect.x, rect.x + rect.w]))].sort((a, b) => a - b);
-  const ys = [...new Set(bounds.flatMap((rect) => [rect.y, rect.y + rect.h]))].sort((a, b) => a - b);
-  if (xs.length < 2 || ys.length < 2) return [];
-
-  const filled = Array.from({ length: ys.length - 1 }, () => Array(xs.length - 1).fill(false));
-  for (let row = 0; row < ys.length - 1; row++) {
-    const cy = (ys[row] + ys[row + 1]) / 2;
-    for (let col = 0; col < xs.length - 1; col++) {
-      const cx = (xs[col] + xs[col + 1]) / 2;
-      filled[row][col] = bounds.some((rect) => (
-        cx >= rect.x
-        && cx <= rect.x + rect.w
-        && cy >= rect.y
-        && cy <= rect.y + rect.h
-      ));
-    }
-  }
-
-  const segmentMap = new Map();
-  const addSegment = (from, to) => {
-    const key = `${from.x},${from.y}`;
-    const existing = segmentMap.get(key) || [];
-    existing.push(to);
-    segmentMap.set(key, existing);
-  };
-
-  for (let row = 0; row < ys.length - 1; row++) {
-    for (let col = 0; col < xs.length - 1; col++) {
-      if (!filled[row][col]) continue;
-      const x0 = xs[col];
-      const x1 = xs[col + 1];
-      const y0 = ys[row];
-      const y1 = ys[row + 1];
-      if (row === 0 || !filled[row - 1][col]) addSegment({ x: x0, y: y0 }, { x: x1, y: y0 });
-      if (col === xs.length - 2 || !filled[row][col + 1]) addSegment({ x: x1, y: y0 }, { x: x1, y: y1 });
-      if (row === ys.length - 2 || !filled[row + 1][col]) addSegment({ x: x1, y: y1 }, { x: x0, y: y1 });
-      if (col === 0 || !filled[row][col - 1]) addSegment({ x: x0, y: y1 }, { x: x0, y: y0 });
-    }
-  }
-
-  const takeNext = (point) => {
-    const key = `${point.x},${point.y}`;
-    const nextPoints = segmentMap.get(key) || [];
-    if (!nextPoints.length) return null;
-    const next = nextPoints.shift();
-    if (!nextPoints.length) segmentMap.delete(key);
-    else segmentMap.set(key, nextPoints);
-    return next;
-  };
-
-  const polygonArea = (points) => {
-    let area = 0;
-    for (let i = 0; i < points.length; i++) {
-      const a = points[i];
-      const b = points[(i + 1) % points.length];
-      area += (a.x * b.y) - (b.x * a.y);
-    }
-    return area / 2;
-  };
-
-  const loops = [];
-  while (segmentMap.size) {
-    const [startKey] = segmentMap.keys();
-    const [sx, sy] = startKey.split(",").map(Number);
-    const start = { x: sx, y: sy };
-    const loop = [start];
-    let current = start;
-    let guard = 0;
-    while (guard < 10000) {
-      guard++;
-      const next = takeNext(current);
-      if (!next) break;
-      if (next.x === start.x && next.y === start.y) {
-        break;
-      }
-      loop.push(next);
-      current = next;
-    }
-    if (loop.length >= 4) loops.push(loop);
-  }
-
-  if (!loops.length) return [];
-  return loops.sort((a, b) => Math.abs(polygonArea(b)) - Math.abs(polygonArea(a)))[0];
-};
+export const buildTightTextOutline = (spans, padding = 1) => (
+  buildTightOutlineFromLineRects(buildTextLineRects(spans, padding))
+);
 
 export const extractBoundingBoxTextParts = (spans, bbox, matchSpan = bboxTextMatchesSpan, excludedBboxes = []) => {
   const narrowed = selectSpansForBoundingBox(spans, bbox, matchSpan, excludedBboxes);
@@ -342,8 +291,10 @@ export const extractBoundingBoxTextParts = (spans, bbox, matchSpan = bboxTextMat
   );
   const titleLine = (looksLikeTitleLine(lines[0], lines.slice(1)) && lineMostlyInsideBBox(lines[0], bbox)) || loneLineLooksLikeTitle ? lines[0] : null;
   const title = titleLine ? getLineText(titleLine.spans) : "";
-  const bodySpans = titleLine ? lines.slice(1).flatMap((line) => line.spans) : narrowed;
-  const text = bodySpans.length ? extractTextFromOrderedSpans(bodySpans) : "";
+  const bodyLines = titleLine ? lines.slice(1) : lines;
+  const text = bodyLines.length
+    ? joinLineTexts(bodyLines.map((line) => getLineText(line.spans || [])))
+    : "";
   return { title, text };
 };
 

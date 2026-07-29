@@ -23,7 +23,7 @@ import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
 import {
   bboxTextMatchesSpan as bboxTextMatchesSpanUtil,
   buildTextLineRects,
-  buildTightOutlineFromRects,
+  buildTightOutlineFromLineRects,
   buildTightTextOutline,
   extractBoundingBoxTextParts,
   selectSpansForBoundingBox,
@@ -1587,16 +1587,24 @@ const PDFPage = forwardRef(({
     }
   }, [smartVideoSavedId, fetchSmartVideoSaved]);
 
-  // ── AMCTOSHS Entity Builder ────────────────────────────────────────────
-  // Independent of the annotTool tool-strip. It only builds from explicit
-  // user-provided text: the latest manual text selection or text typed into
-  // the panel. It intentionally does not read the current page text.
+  // ── AMCTOSHS Segments Builder (formerly "AMCTOSHS Entity Builder") ──────
+  // It only builds from explicit user-provided text: the latest manual
+  // text selection or text typed into the panel. It intentionally does not
+  // read the current page text.
   const [entityBuilderOpen, setEntityBuilderOpen] = useState(false);
   const [entityBuilderSelectedText, setEntityBuilderSelectedText] = useState("");
 
   const toggleEntityBuilder = useCallback(() => {
     setEntityBuilderOpen((open) => !open);
   }, []);
+
+  // Mount the aside the moment the Segmentation tool (annotTool "bbox",
+  // formerly labeled "BBox") is picked — same convention as Smart Video's
+  // own annotTool effect above — rather than requiring the separate
+  // toolbar trigger that used to open this panel (now removed).
+  useEffect(() => {
+    if (annotTool === "bbox") setEntityBuilderOpen(true);
+  }, [annotTool]);
 
   // ── AMCTOSHS Clinical Vignette Generator ─────────────────────────────────
   // Also independent of the annotTool tool-strip — generates a clinical
@@ -1722,10 +1730,9 @@ const PDFPage = forwardRef(({
     () => (annotations[pageNum] || []).filter((ann) => EDITABLE_BBOX_TYPES.has(ann.type)),
     [annotations, pageNum],
   );
-  const titleBboxes = useMemo(
-    () => (annotations[pageNum] || []).filter((ann) => bboxTypeHas(ann?.type, "extractsTitle")),
-    [annotations, pageNum],
-  );
+  const drawAnnotationWithOwnerClip = useCallback((ctx, ann, scale, pageAnnotations = []) => {
+    drawAnnotation(ctx, ann, scale);
+  }, []);
   const bboxTextMatchesSpan = useCallback((bbox, span) => bboxTextMatchesSpanUtil(bbox, span), []);
   const bboxCreationMatchesSpan = useCallback((selectionRect, span) => {
     if (!selectionRect || !span) return false;
@@ -2037,8 +2044,6 @@ const PDFPage = forwardRef(({
     setActiveBBoxCreationType((current) => (current === type ? null : type));
   }, []);
   const [bboxContainerBBoxTarget, setBBoxContainerBBoxTarget] = useState(null); // { pageNum, containerId } — next bbox should be placed inside this container
-  const [entityBuilderPageNum, setEntityBuilderPageNum] = useState(pageNum);
-  const entityBuilderWasOpenRef = useRef(false);
   const annotTextInputRef = useRef(null);
   const textActionMenuRef = useRef(null);
   const highlightActionMenuRef = useRef(null);
@@ -2097,20 +2102,6 @@ const PDFPage = forwardRef(({
       setBBoxContainerBBoxTarget(null);
     }
   }, [annotTool]);
-
-  useEffect(() => {
-    if (entityBuilderOpen && !entityBuilderWasOpenRef.current) {
-      setEntityBuilderPageNum(pageNum);
-    }
-    entityBuilderWasOpenRef.current = entityBuilderOpen;
-  }, [entityBuilderOpen, pageNum]);
-
-  useEffect(() => {
-    setEntityBuilderPageNum((prev) => {
-      if (!pageCount) return prev;
-      return Math.min(Math.max(1, prev || 1), pageCount);
-    });
-  }, [pageCount]);
 
   // .annot_tool_options (the sub-toolbar dropdown) opens from the active
   // tool's OWN button position, not the toolbar's fixed corner — any of
@@ -2380,8 +2371,9 @@ const PDFPage = forwardRef(({
         const ctx = annotCanvasRef.current?.getContext?.("2d");
         if (ctx && annotCanvasRef.current) {
           ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
-          for (const savedAnn of (annotations[pageNum] || [])) drawAnnotation(ctx, savedAnn, scale);
-          drawAnnotation(ctx, ann, scale);
+          const pageAnnotations = annotations[pageNum] || [];
+          for (const savedAnn of pageAnnotations) drawAnnotationWithOwnerClip(ctx, savedAnn, scale, pageAnnotations);
+          drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
         }
       }
     };
@@ -2399,7 +2391,8 @@ const PDFPage = forwardRef(({
         const ctx = annotCanvasRef.current?.getContext?.("2d");
         if (ctx && annotCanvasRef.current) {
           ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
-          for (const savedAnn of (annotations[pageNum] || [])) drawAnnotation(ctx, savedAnn, scale);
+          const pageAnnotations = annotations[pageNum] || [];
+          for (const savedAnn of pageAnnotations) drawAnnotationWithOwnerClip(ctx, savedAnn, scale, pageAnnotations);
         }
         return;
       }
@@ -2415,9 +2408,7 @@ const PDFPage = forwardRef(({
             && item.y + item.h <= ann.y + ann.h
           ))
           : [];
-        return {
-          ...prev,
-          [pageNum]: pageAnnotations.map((item) => (
+        const resizedPageAnnotations = pageAnnotations.map((item) => (
             item.id === ann._editingId
               ? {
                   ...item,
@@ -2450,10 +2441,13 @@ const PDFPage = forwardRef(({
                             title: extracted.title || item.title || "",
                           };
                         })()
-                    : {}),
+                  : {}),
                 }
               : item
-          )),
+          ));
+        return {
+          ...prev,
+          [pageNum]: resizedPageAnnotations,
         };
       });
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
@@ -2501,22 +2495,6 @@ const PDFPage = forwardRef(({
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
     logAnnotHistory({ action: "edit", type: bbox.type, page: pageNum });
   }, [bboxResizeTargetId, logAnnotHistory, pageNum, pageViewport]);
-
-  const updateBBoxFontSize = useCallback((nextFontSize, targetPage = pageNum) => {
-    const fontSize = Math.min(24, Math.max(10, Math.round(Number(nextFontSize) || 12)));
-    setAnnotations((prev) => {
-      return {
-        ...prev,
-        [targetPage]: (prev[targetPage] || []).map((ann) => (
-          EDITABLE_BBOX_TYPES.has(ann.type)
-            ? { ...ann, fontSize }
-            : ann
-        )),
-      };
-    });
-    setRedoStacks((prev) => (prev[targetPage]?.length ? { ...prev, [targetPage]: [] } : prev));
-    logAnnotHistory({ action: "edit", type: "bbox", page: targetPage });
-  }, [pageNum, logAnnotHistory]);
 
   const updateBBoxName = useCallback((bboxId, nextName, targetPage = pageNum) => {
     const title = typeof nextName === "string" ? nextName.trim() : "";
@@ -2578,11 +2556,26 @@ const PDFPage = forwardRef(({
     const selectedSpans = selectSpansForBoundingBox(spansRef.current, bbox, bboxTextMatchesSpan);
     let tightPoints = buildTightTextOutline(selectedSpans, 1);
     if (bbox.titleBBox) {
+      // Title row + every body line, each contributing its own step to the
+      // outline (buildTightOutlineFromLineRects never merges/discards rects
+      // the way the old grid-based buildTightOutlineFromRects did — that
+      // one silently kept only its single largest-area loop, which is why
+      // resizing a titled bbox used to snap tight around just the title
+      // plus the first line and drop every line after it).
       const ownerBorderPad = Math.max(0, (bbox.lineWidth ?? 0) / 2);
       const titleBorderPad = Math.max(0, (bbox.titleBBox.lineWidth ?? 0) / 2);
-      tightPoints = buildTightOutlineFromRects([
-        ...buildTextLineRects(selectedSpans, 1),
+      // Padded out on every side so the owner's new border fully encloses
+      // the title's OWN rendered border stroke — that padding must never
+      // be trimmed away, or the title's border spills past the owner's
+      // (every edge except the top, which nothing above it can encroach
+      // on). If the first body line's rect reaches up into this padded
+      // region instead, it's that line's own top that gives way — raised
+      // to meet the title row's padded bottom exactly, which also keeps
+      // the connecting edge between them horizontal instead of a diagonal
+      // cut through the line's text.
+      tightPoints = buildTightOutlineFromLineRects([
         expandRectBy(bbox.titleBBox, titleBorderPad + ownerBorderPad),
+        ...buildTextLineRects(selectedSpans, 1),
       ]);
     }
     const tightBounds = pointsToBounds(tightPoints);
@@ -2854,76 +2847,16 @@ const PDFPage = forwardRef(({
     return nextAnnotation;
   }, []);
 
-  const expandOwnerToIncludeTitleBBox = useCallback((pageAnnotations, ownerId, titleBBox) => {
-    if (!ownerId || !titleBBox) return pageAnnotations;
-    const ownerIndex = pageAnnotations.findIndex((ann) => ann?.id === ownerId && EDITABLE_BBOX_TYPES.has(ann.type));
-    if (ownerIndex < 0) return pageAnnotations;
-    const owner = pageAnnotations[ownerIndex];
-    const ownerBorderPad = Math.max(0.5, (owner.lineWidth ?? 0) / 2);
-    const titleBorderPad = Math.max(0.5, (titleBBox.lineWidth ?? 0) / 2);
-    const ownerInnerRect = {
-      x: (owner.x ?? 0) + ownerBorderPad,
-      y: (owner.y ?? 0) + ownerBorderPad,
-      w: Math.max(0, (owner.w ?? 0) - ownerBorderPad * 2),
-      h: Math.max(0, (owner.h ?? 0) - ownerBorderPad * 2),
-    };
-    const visibleTitleRect = expandRectBy(titleBBox, titleBorderPad);
-    const requiredOwnerRect = expandRectBy(visibleTitleRect, ownerBorderPad);
-    const containmentSlack = 0.25;
-    const titleFitsInsideOwner = ownerInnerRect && visibleTitleRect
-      ? (
-          visibleTitleRect.x >= ownerInnerRect.x - containmentSlack
-          && visibleTitleRect.y >= ownerInnerRect.y - containmentSlack
-          && visibleTitleRect.x + visibleTitleRect.w <= ownerInnerRect.x + ownerInnerRect.w + containmentSlack
-          && visibleTitleRect.y + visibleTitleRect.h <= ownerInnerRect.y + ownerInnerRect.h + containmentSlack
-        )
-      : true;
-    if (titleFitsInsideOwner) return pageAnnotations;
-    const expandedOwner = expandAnnotationToIncludeRect(owner, requiredOwnerRect);
-    if (expandedOwner === owner) return pageAnnotations;
-    const next = [...pageAnnotations];
-    next[ownerIndex] = expandedOwner;
-    if (bboxTypeHas(owner.type, "canBeNested")) {
-      const containerIndex = next.findIndex((ann) => (
-        bboxTypeHas(ann?.type, "containsChildren")
-        && ann.id !== owner.id
-        && owner.x >= ann.x
-        && owner.y >= ann.y
-        && owner.x + owner.w <= ann.x + ann.w
-        && owner.y + owner.h <= ann.y + ann.h
-      ));
-      if (containerIndex >= 0) {
-        next[containerIndex] = expandAnnotationToIncludeRect(next[containerIndex], expandedOwner);
-      }
-    }
-    return next;
-  }, [expandAnnotationToIncludeRect]);
-
   const rehydrateBBoxTitleLayers = useCallback((layers) => {
     const nextLayers = {};
     for (const [pageKey, pageAnnotations] of Object.entries(layers || {})) {
-      const nextPageAnnotations = [...(pageAnnotations || [])];
-      for (const owner of nextPageAnnotations) {
-        if (!owner || !EDITABLE_BBOX_TYPES.has(owner.type) || !owner.titleBBox) continue;
-        const hasTitleBBox = nextPageAnnotations.some((ann) => (
-          ann?.type === "bboxTitle" && (ann.ownerId === owner.id || ann.containerId === owner.id)
+      nextLayers[pageKey] = (pageAnnotations || [])
+        .filter((ann) => ann?.type !== "bboxTitle")
+        .map((ann) => (
+          ann?.titleBBox
+            ? { ...ann, titleBBox: null }
+            : ann
         ));
-        if (hasTitleBBox) continue;
-        const titleBBox = owner.titleBBox;
-        if (!titleBBox || typeof titleBBox !== "object") continue;
-        nextPageAnnotations.push({
-          ...titleBBox,
-          type: "bboxTitle",
-          id: titleBBox.id ?? Date.now(),
-          ownerId: owner.id,
-          ownerType: owner.type,
-          containerId: bboxTypeHas(owner.type, "containsChildren") ? owner.id : (titleBBox.containerId ?? null),
-          title: owner.title || titleBBox.title || titleBBox.text || "",
-          text: owner.title || titleBBox.text || titleBBox.title || "",
-          shapeBackground: false,
-        });
-      }
-      nextLayers[pageKey] = nextPageAnnotations;
     }
     return nextLayers;
   }, []);
@@ -2979,40 +2912,6 @@ const PDFPage = forwardRef(({
         return (a.ann.w * a.ann.h) - (b.ann.w * b.ann.h);
       });
     return candidates[0]?.ann || null;
-  }, []);
-
-  const findPendingTitleBBoxForOwner = useCallback((pageAnnotations, ownerBox) => {
-    if (!ownerBox) return null;
-    const ownerRight = ownerBox.x + ownerBox.w;
-    const ownerBottom = ownerBox.y + ownerBox.h;
-    return [...(pageAnnotations || [])]
-      .filter((ann) => (
-        ann?.type === "bboxTitle"
-        && !ann.ownerId
-      ))
-      .map((ann) => {
-        const annRight = ann.x + ann.w;
-        const annBottom = ann.y + ann.h;
-        const contained = (
-          ann.x >= ownerBox.x
-          && ann.y >= ownerBox.y
-          && annRight <= ownerRight
-          && annBottom <= ownerBottom
-        );
-        const overlapW = Math.max(0, Math.min(ownerRight, annRight) - Math.max(ownerBox.x, ann.x));
-        const overlapH = Math.max(0, Math.min(ownerBottom, annBottom) - Math.max(ownerBox.y, ann.y));
-        return {
-          ann,
-          contained,
-          overlapArea: overlapW * overlapH,
-        };
-      })
-      .filter(({ contained, overlapArea }) => contained || overlapArea > 0)
-      .sort((a, b) => {
-        if (a.contained !== b.contained) return a.contained ? -1 : 1;
-        if (b.overlapArea !== a.overlapArea) return b.overlapArea - a.overlapArea;
-        return (a.ann.y ?? 0) - (b.ann.y ?? 0) || (a.ann.x ?? 0) - (b.ann.x ?? 0);
-      })[0]?.ann || null;
   }, []);
 
   const findContainingBBoxContainer = useCallback((pageAnnotations, rect) => {
@@ -3136,7 +3035,7 @@ const PDFPage = forwardRef(({
   const selBarRef          = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
   const bboxCardsForBuilder = useMemo(() => {
-    const entityBuilderPageAnnotations = annotations[entityBuilderPageNum] || [];
+    const entityBuilderPageAnnotations = annotations[pageNum] || [];
     if (!entityBuilderPageAnnotations.length) return [];
     return entityBuilderPageAnnotations
       .filter((bbox) => BBOX_CARD_TYPES.has(bbox.type) || bboxTypeHas(bbox.type, "containsChildren"))
@@ -3146,7 +3045,7 @@ const PDFPage = forwardRef(({
         _displayTitle: bbox.title?.trim() || (bboxTypeHas(bbox.type, "capturesImage") ? `Image BBox ${index + 1}` : `BBox ${index + 1}`),
         text: bbox.text || "",
       }));
-  }, [annotations, entityBuilderPageNum]);
+  }, [annotations, pageNum]);
   const selectionDraggingEdgeRef = useRef(null); // "start" | "end" | null — which manual-selection handle (if any) is actively being dragged, see the manualSelection highlight effect below
   const selectionHandleDragRef = useRef(null); // { edge, startX, startY, active } — taps on handles must not alter selection, only real drags
   const selectionHandleLivePosRef = useRef(null); // { edge, x, y } live visual handle position while dragging
@@ -3590,7 +3489,8 @@ const PDFPage = forwardRef(({
     // the canvas itself.
     ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
     ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-    for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
+    const pageAnnotations = annotations[pageNum] || [];
+    for (const ann of pageAnnotations) drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
 
     const mc = maskCanvasRef.current;
     if (mc) {
@@ -4361,8 +4261,9 @@ const PDFPage = forwardRef(({
       // here needs to stay in the same post-transform CSS-pixel space
       // everything else in this function draws in.
       ctx.clearRect(0, 0, ac.clientWidth, ac.clientHeight);
-      for (const ann of (annotations[pageNum] || [])) drawAnnotation(ctx, ann, scale);
-      if (extra) drawAnnotation(ctx, extra, scale);
+      const pageAnnotations = annotations[pageNum] || [];
+      for (const ann of pageAnnotations) drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
+      if (extra) drawAnnotationWithOwnerClip(ctx, extra, scale, pageAnnotations);
       syncLiveBBoxPreview(extra);
     };
 
@@ -4853,57 +4754,16 @@ const PDFPage = forwardRef(({
           lineWidth: ann.lineWidth,
         };
         const targetOwner = findContainingTitleOwner(pageAnnotations, visibleTitleBox, anchorPoint);
+        if (!targetOwner) {
+          redraw();
+          clearLiveBBoxPreview();
+          return;
+        }
         const extracted = extractBoundingBoxTextParts(spansRef.current, box, bboxTextMatchesSpan);
         const nextTitle = (extracted.title || extracted.text || "").trim();
-        const titleBBox = {
-          ...box,
-          type: "bboxTitle",
-          id: Date.now(),
-          color: ann.color,
-          lineWidth: ann.lineWidth,
-          borderStyle: ann.borderStyle,
-          shapeBackground: false,
-          closed: ann.closed !== false,
-          points: Array.isArray(ann.points)
-            ? ann.points.map((point) => ({
-                x: point.x,
-                y: point.y,
-                ...(point.t != null ? { t: point.t } : {}),
-                ...(point.pressure != null ? { pressure: point.pressure } : {}),
-              }))
-            : [],
-          ownerId: targetOwner?.id ?? null,
-          ownerType: targetOwner?.type ?? null,
-          containerId: targetOwner
-            ? (
-                bboxTypeHas(targetOwner.type, "containsChildren")
-                  ? targetOwner.id
-                  : findContainingBBoxContainer(pageAnnotations, box)?.id ?? null
-              )
-            : findContainingBBoxContainer(pageAnnotations, box)?.id ?? null,
-          title: nextTitle || "",
-          text: nextTitle || "",
-        };
         let nextAnnotations = null;
         setAnnotations((prev) => {
-          if (!targetOwner) {
-            nextAnnotations = {
-              ...prev,
-              [pageNum]: [
-                ...(prev[pageNum] || []).filter((item) => item?.id !== titleBBox.id),
-                titleBBox,
-              ],
-            };
-            return nextAnnotations;
-          }
-          const expandedPageAnnotations = expandOwnerToIncludeTitleBBox(prev[pageNum] || [], targetOwner.id, visibleTitleBox);
-          const expandedOwner = expandedPageAnnotations.find((item) => item?.id === targetOwner.id) || targetOwner;
-          const nextPageAnnotations = [
-            ...(expandedPageAnnotations.filter((item) => !(
-              item.type === "bboxTitle" && (item.ownerId === targetOwner.id || item.containerId === targetOwner.id)
-            ))),
-            titleBBox,
-          ].map((item) => (
+          const nextPageAnnotations = (prev[pageNum] || []).map((item) => (
             item.id === targetOwner.id && item.type === targetOwner.type
               ? {
                   ...item,
@@ -4912,13 +4772,13 @@ const PDFPage = forwardRef(({
                     ? (() => {
                         const extracted = extractBoundingBoxTextParts(
                           spansRef.current,
-                          { x: expandedOwner.x, y: expandedOwner.y, w: expandedOwner.w, h: expandedOwner.h },
+                          { x: item.x, y: item.y, w: item.w, h: item.h },
                           bboxTextMatchesSpan,
                         );
                         return stripTitleFromBBoxText(extracted.text || item.text || "", nextTitle || "");
                       })()
                     : item.text,
-                  titleBBox,
+                  titleBBox: null,
                 }
               : item
           ));
@@ -4937,7 +4797,7 @@ const PDFPage = forwardRef(({
             body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
           }).catch(() => {});
         }
-        logAnnotHistory({ action: "add", type: "bboxTitle", page: pageNum, color: ann.color, size: ann.lineWidth });
+        logAnnotHistory({ action: "edit", type: targetOwner.type, page: pageNum });
         setActiveBBoxCreationType(null);
         redraw();
         clearLiveBBoxPreview();
@@ -5005,14 +4865,10 @@ const PDFPage = forwardRef(({
             }
           : clean;
         const box = initialBox;
-        const pendingTitleBBox = bboxTypeHas(clean.type, "extractsText")
-          ? findPendingTitleBBoxForOwner(pageAnnotations, box)
-          : null;
         const imageSnippet = bboxTypeHas(clean.type, "capturesImage")
           ? captureImageBBoxSnippet(box)
           : null;
         const nextId = Date.now();
-        const nextTitle = pendingTitleBBox?.text || pendingTitleBBox?.title || "";
         const newAnnotation = {
           ...box,
           ...(imageSnippet ? { imageDataUrl: imageSnippet.dataUrl, imageWidth: imageSnippet.width, imageHeight: imageSnippet.height } : {}),
@@ -5020,8 +4876,8 @@ const PDFPage = forwardRef(({
             ? (() => {
                 const extracted = extractBoundingBoxTextParts(spansRef.current, box, bboxTextMatchesSpan);
                 return {
-                  title: nextTitle || extracted.title,
-                  text: stripTitleFromBBoxText(extracted.text, nextTitle || clean.titleBBox?.text || extracted.title || clean.title || ""),
+                  title: extracted.title,
+                  text: stripTitleFromBBoxText(extracted.text, extracted.title || clean.title || ""),
                 };
               })()
             : bboxTypeHas(clean.type, "extractsContainerTitle")
@@ -5044,30 +4900,12 @@ const PDFPage = forwardRef(({
                   };
                 })()
             : {}),
-          ...(pendingTitleBBox ? {
-            titleBBox: {
-              ...pendingTitleBBox,
-              ownerId: nextId,
-              ownerType: clean.type,
-            },
-          } : {}),
           id: nextId,
         };
         const nextAnnotations = {
           ...prev,
           [pageNum]: [
-            ...pageAnnotations.map((item) => (
-              pendingTitleBBox && item.id === pendingTitleBBox.id
-                ? {
-                    ...item,
-                    ownerId: nextId,
-                    ownerType: clean.type,
-                    containerId: bboxTypeHas(clean.type, "containsChildren")
-                      ? nextId
-                      : (item.containerId ?? findContainingBBoxContainer(pageAnnotations, box)?.id ?? null),
-                  }
-                : item
-            )),
+            ...pageAnnotations,
             newAnnotation,
           ],
         };
@@ -8582,21 +8420,11 @@ const PDFPage = forwardRef(({
                 left, open-a-panel tools on the right. */}
             <div className="annot_mode_strip" aria-label="Panel tools">
               {MODE_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
-              {/* AMCTOSHS Entity Builder — not a real annotTool and not
-                  page-driven. It only uses selected or entered text. */}
-              {pdfDoc && (
-                <button
-                  type="button"
-                  className={`annot_trigger annot_tool_btn${entityBuilderOpen ? " annot_trigger--active" : ""}`}
-                  onClick={toggleEntityBuilder}
-                  title="AMCTOSHS Entity Builder"
-                  aria-label="AMCTOSHS Entity Builder"
-                >
-                  <i className="bx bx-network-chart" />
-                </button>
-              )}
               {/* AMCTOSHS Clinical Vignette Generator — same convention as
-                  the Entities Builder trigger above. */}
+                  the (now removed) Segments Builder trigger used to be;
+                  the Segments Builder aside now opens from the
+                  Segmentation drawing tool itself instead (see the
+                  annotTool === "bbox" effect near entityBuilderOpen). */}
               {pdfDoc && (
                 <button
                   type="button"
@@ -8657,7 +8485,7 @@ const PDFPage = forwardRef(({
                     type="button"
                     className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bboxTitle" ? " annot_mode_btn--active" : ""}`}
                     onClick={() => toggleBBoxCreationType("bboxTitle")}
-                    title={activeBBoxCreationType === "bboxTitle" ? "Title BBox armed" : "Arm title BBox selection"}
+                    title={activeBBoxCreationType === "bboxTitle" ? "Title selection armed" : "Arm title selection"}
                     aria-label="Title BBox"
                   >
                     <svg className="annot_mode_btn_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -8707,7 +8535,7 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
-            {toolActive && annotTool !== "eraser" && annotTool !== "smartVideo" && (
+            {toolActive && annotTool !== "eraser" && annotTool !== "smartVideo" && annotTool !== "bbox" && (
               <div className="annot_control">
                 <div className="annot_dd_wrap" ref={colorMenuRef}>
                 <button
@@ -8842,22 +8670,6 @@ const PDFPage = forwardRef(({
                     </button>
                   ))}
                 </div>
-              </div>
-            )}
-
-            {annotTool === "bbox" && (
-              <div className="annot_control">
-                <AnnotControlHeaderInfo title="Border size" />
-                <SizeKnob
-                  min={1}
-                  max={12}
-                  step={1}
-                  value={bboxBorderSize}
-                  onChange={setBBoxBorderSize}
-                  color={annotColor}
-                  dashed={false}
-                  variant="dot"
-                />
               </div>
             )}
 
@@ -9567,23 +9379,22 @@ const PDFPage = forwardRef(({
           />
         )}
 
-        {/* Far left — AMCTOSHS Entity Builder. Same far-left-column
+        {/* Far left — AMCTOSHS Segments Builder. Same far-left-column
             convention as the other panels above — unlike them, it has its
-            own close button since it isn't tied to re-pressing an annotTool. */}
+            own close button since it isn't tied to re-pressing an annotTool.
+            Always follows the PDF Reader's own current page (pageNum) now —
+            no separate page navigator of its own. */}
         {entityBuilderOpen && (
           <EntityBuilderPanel
             width={entityBuilderPanelWidth}
             onResizeStart={handleEntityBuilderPanelResizeStart}
             onClose={toggleEntityBuilder}
             bboxCards={bboxCardsForBuilder}
-            pageNum={entityBuilderPageNum}
-            pageCount={pageCount}
-            onPageChange={setEntityBuilderPageNum}
-            onUpdateBBoxFontSize={updateBBoxFontSize}
+            pageNum={pageNum}
             onUpdateBBoxName={updateBBoxName}
             onDeleteBBox={deleteBBox}
-            onMoveBBoxUp={(bboxId) => moveBBoxInGroup(bboxId, -1, entityBuilderPageNum)}
-            onMoveBBoxDown={(bboxId) => moveBBoxInGroup(bboxId, 1, entityBuilderPageNum)}
+            onMoveBBoxUp={(bboxId) => moveBBoxInGroup(bboxId, -1, pageNum)}
+            onMoveBBoxDown={(bboxId) => moveBBoxInGroup(bboxId, 1, pageNum)}
             onArmBBoxInsideContainer={armBBoxInsideContainer}
             armedBBoxInsideContainer={bboxContainerBBoxTarget}
           />
@@ -9718,14 +9529,14 @@ const PDFPage = forwardRef(({
                           })()}
                         </div>
                       )}
-                      {pageViewport && (managedBboxes.length > 0 || titleBboxes.length > 0) && (
+                      {pageViewport && managedBboxes.length > 0 && (
                         <div
                           className="pdf_bbox_delete_layer"
                           style={{ width: pageViewport.width, height: pageViewport.height }}
                           aria-hidden="true"
                         >
                           {(() => {
-                            return [...managedBboxes, ...titleBboxes].map((bbox) => {
+                            return managedBboxes.map((bbox) => {
                               const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
                               const left = Math.min(
                                 Math.max(0, (bbox.x + bbox.w) * scale - 10),
@@ -9779,8 +9590,8 @@ const PDFPage = forwardRef(({
                                     <button
                                       type="button"
                                       className={`pdf_bbox_action_btn${isEditing ? " pdf_bbox_action_btn--active" : ""}`}
-                                      title={`Edit ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
-                                      aria-label={`Edit ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
+                                      title={bbox.title?.trim() || "BBox"}
+                                      aria-label={bbox.title?.trim() || "BBox"}
                                       onMouseDown={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -9801,8 +9612,8 @@ const PDFPage = forwardRef(({
                                     <button
                                       type="button"
                                       className="pdf_bbox_delete_btn"
-                                      title={`Delete ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
-                                      aria-label={`Delete ${bbox.type === "bboxTitle" ? "Title BBox" : (bbox.title?.trim() || "BBox")}`}
+                                      title={`Delete ${bbox.title?.trim() || "BBox"}`}
+                                      aria-label={`Delete ${bbox.title?.trim() || "BBox"}`}
                                       onMouseDown={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
