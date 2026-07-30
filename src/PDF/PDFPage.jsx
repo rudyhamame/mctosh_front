@@ -2095,7 +2095,9 @@ const PDFPage = forwardRef(({
     if (annotTool !== "text") setTextStyleTargetId(null);
     if (annotTool !== "highlight") setHighlightActionMenu(null);
     if (annotTool !== "highlight") setHighlightStyleTargetId(null);
-    if (annotTool !== "bbox") {
+    if (annotTool === "bbox") {
+      setActiveBBoxCreationType((current) => current || "bbox");
+    } else {
       setBBoxActionMenu(null);
       setBBoxResizeTargetId(null);
       setActiveBBoxCreationType(null);
