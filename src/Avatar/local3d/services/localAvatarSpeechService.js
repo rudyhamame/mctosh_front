@@ -53,6 +53,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
   let onVisemeCb = null;
   let onSpokenTextCb = null;
   let onExpressionCb = null;
+  let onPlaybackStartCb = null;
   // Real network-backed providers (OpenVoiceClone) can take several seconds
   // to synthesize — stop() must be able to cancel a request still in flight,
   // not just audio that already started playing, or an obsolete reply can
@@ -148,23 +149,25 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
   const speakViaAudioUrl = (result, signal) => new Promise((resolve, reject) => {
     const audioCtx = getAudioContext();
 
-    const startPlayback = (decoded) => {
+    const startPlayback = async (decoded) => {
       if (signal?.aborted) { resolve(); return; } // superseded while we were fetching/decoding
+      try {
+        await audioCtx.resume();
+      } catch (err) {
+        console.warn("[Local3DAvatar] AudioContext.resume() failed — playback will be silent:", err);
+      }
+      if (signal?.aborted) { resolve(); return; }
+      if (audioCtx.state !== "running") {
+        console.warn("[Local3DAvatar] AudioContext did not reach 'running' after resume() — state:", audioCtx.state, "(likely blocked by the browser's autoplay policy; playback will remain pending until a direct user gesture)");
+        reject(new Error("Audio playback is blocked by the browser. Tap the voice call button and try again."));
+        return;
+      }
       currentBuffer = decoded;
       pausedOffset = 0;
 
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
       analyser.connect(audioCtx.destination);
-
-      if (result.visemes?.length) {
-        visemeTimers = result.visemes.map((v) =>
-          setTimeout(() => onVisemeCb?.(v.viseme), Math.max(0, v.time)));
-      } else {
-        runAmplitudeLoop();
-      }
-      scheduleEstimatedSpokenText(result.text || "", result.durationMs);
-      scheduleExpressionTimeline(buildExpressionTimeline(result.rawText || result.text || "", decoded.duration * 1000));
 
       const finish = () => {
         teardownAudio();
@@ -179,23 +182,17 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       source.onended = finish;
       bufferSource = source;
       playStartedAtCtxTime = audioCtx.currentTime;
-
-      // A suspended context produces dead-silent output with no error and
-      // no visible symptom other than "nothing happened" — logged
-      // explicitly (not swallowed) so a resume failure is actually
-      // diagnosable instead of indistinguishable from every other kind of
-      // silent failure.
-      audioCtx.resume()
-        .then(() => {
-          if (audioCtx.state !== "running") {
-            console.warn("[Local3DAvatar] AudioContext did not reach 'running' after resume() — state:", audioCtx.state, "(likely blocked by the browser's autoplay policy; playback will be silent until the page gets a direct user gesture, e.g. a tap on the chat panel)");
-          }
-        })
-        .catch((err) => {
-          console.warn("[Local3DAvatar] AudioContext.resume() failed — playback will be silent:", err);
-        });
       try {
         source.start(0);
+        onPlaybackStartCb?.();
+        if (result.visemes?.length) {
+          visemeTimers = result.visemes.map((v) =>
+            setTimeout(() => onVisemeCb?.(v.viseme), Math.max(0, v.time)));
+        } else {
+          runAmplitudeLoop();
+        }
+        scheduleEstimatedSpokenText(result.text || "", result.durationMs || (decoded.duration * 1000));
+        scheduleExpressionTimeline(buildExpressionTimeline(result.rawText || result.text || "", decoded.duration * 1000));
       } catch (err) {
         console.error("[Local3DAvatar] AudioBufferSourceNode.start() failed:", err);
         finish();
@@ -216,7 +213,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       });
   });
 
-  const speakViaBrowserSynthesis = (result) => new Promise((resolve) => {
+  const speakViaBrowserSynthesis = (result) => new Promise((resolve, reject) => {
     window.speechSynthesis.cancel();
     const utt = new SpeechSynthesisUtterance(result._text);
     utt.lang = result._language;
@@ -240,17 +237,25 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       const nextSlice = String(result._text || "").slice(0, Number(event?.charIndex) || 0).trim();
       emitSpokenText(nextSlice);
     };
-    const finish = () => {
+    const cleanup = () => {
       stopAmplitudeLoop();
       clearSpokenWordTimers();
       currentUtterance = null;
       emitSpokenText("");
       onAmplitudeCb?.(0);
       onVisemeCb?.("mouthClose");
+    };
+    utt.onstart = () => onPlaybackStartCb?.();
+    utt.onend = () => {
+      cleanup();
       resolve();
     };
-    utt.onend = finish;
-    utt.onerror = finish;
+    utt.onerror = (event) => {
+      const interrupted = event?.error === "interrupted" || event?.error === "canceled";
+      cleanup();
+      if (interrupted) resolve();
+      else reject(new Error(`Browser speech failed${event?.error ? `: ${event.error}` : "."}`));
+    };
     window.speechSynthesis.speak(utt);
   });
 
@@ -269,6 +274,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       onVisemeCb = onViseme || null;
       onSpokenTextCb = onSpokenText || null;
       onExpressionCb = onExpressionChange || null;
+      onPlaybackStartCb = onPlaybackStart || null;
       currentAbortController = new AbortController();
       const { signal } = currentAbortController;
       onSynthesisStart?.();
@@ -280,7 +286,6 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
         throw err;
       }
       if (signal.aborted) return; // synthesis finished but was superseded before playback could start
-      onPlaybackStart?.();
       result.rawText = text;
       result.text = stripExpressionTags(text);
       if (result._text) result._text = stripExpressionTags(result._text);
@@ -300,6 +305,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       onAmplitudeCb?.(0);
       onVisemeCb?.("mouthClose");
       onExpressionCb?.(null);
+      onPlaybackStartCb = null;
     },
     pause() {
       if (bufferSource && sharedAudioCtx) {

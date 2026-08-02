@@ -261,7 +261,17 @@ export const detectGutters = (lines, avgHeight) => {
   // the real gutter), but it's essentially never wider than genuine
   // inter-column whitespace. Vote count still GATES candidacy (a
   // one-off wide gap is noise, not a gutter) — it just doesn't rank it.
-  qualifying.sort((a, b) => (b.widthSum / b.count) - (a.widthSum / a.count));
+  const crossingMargin = Math.max(2, avgHeight * 0.25);
+  const crossingItemCount = (bucket) => {
+    const center = bucket.sum / bucket.count;
+    return lines.reduce((count, line) => count + line.items.filter((item) => (
+      item.x1 < center - crossingMargin && item.x2 > center + crossingMargin
+    )).length, 0);
+  };
+  qualifying.sort((a, b) => (
+    crossingItemCount(a) - crossingItemCount(b)
+    || (b.widthSum / b.count) - (a.widthSum / a.count)
+  ));
   const top = qualifying[0];
   const runnerUp = qualifying[1];
   // A genuine 3-column page has a SECOND gutter roughly as strong as the
@@ -269,7 +279,20 @@ export const detectGutters = (lines, avgHeight) => {
   // real share of the winner's vote count avoids manufacturing a third
   // column out of a much weaker secondary signal.
   const SECOND_GUTTER_MIN_RATIO = 0.6;
-  const acceptedBuckets = top && runnerUp && runnerUp.count >= top.count * SECOND_GUTTER_MIN_RATIO
+  const pageMinX = Math.min(...lines.flatMap((line) => line.items.map((item) => item.x1)));
+  const pageMaxX = Math.max(...lines.flatMap((line) => line.items.map((item) => item.x2)));
+  const pageContentWidth = Math.max(1, pageMaxX - pageMinX);
+  const gutterSeparation = top && runnerUp
+    ? Math.abs((top.sum / top.count) - (runnerUp.sum / runnerUp.count))
+    : 0;
+  // Two nearby recurring gaps usually describe indentation or a narrow
+  // sidebar, not three readable columns. Requiring a meaningful middle
+  // column prevents left-column lines from alternating between column and
+  // full-width tracks on medical textbook pages.
+  const hasRealMiddleColumn = gutterSeparation >= Math.max(avgHeight * 6, pageContentWidth * 0.14);
+  const acceptedBuckets = top && runnerUp
+    && runnerUp.count >= top.count * SECOND_GUTTER_MIN_RATIO
+    && hasRealMiddleColumn
     ? [top, runnerUp]
     : (top ? [top] : []);
   const gutters = acceptedBuckets.map((b) => b.sum / b.count).sort((a, b) => a - b);

@@ -34,10 +34,45 @@ import { readStoredSession } from "../../utils/sessionCleanup";
 // sitting right there in public/.
 const LOCAL_3D_AVATAR_MODEL_URL = `${import.meta.env.BASE_URL}models/avatar/avatar.glb`;
 const SPEECH_ACTIVITY_DECAY_MS = 220;
+const MAX_STREAMED_SENTENCE_LENGTH = 260;
 const VIEWPORT_PAN_SCALE = 0.005;
 const FRAME_EPSILON = 0.0001;
 
 const clamp01 = (value) => Math.max(0, Math.min(1, value));
+
+const takeReadySpeechSegments = (value, flush = false) => {
+  let remaining = String(value || "");
+  const segments = [];
+  while (remaining.trim()) {
+    const sentenceMatch = remaining.match(/^([\s\S]*?[.!?](?:["')\]]+)?)(?=\s|$)/);
+    const lineBreakAt = remaining.indexOf("\n");
+    if (lineBreakAt >= 0 && (!sentenceMatch || lineBreakAt < sentenceMatch[1].length)) {
+      const line = remaining.slice(0, lineBreakAt).trim();
+      remaining = remaining.slice(lineBreakAt + 1).trimStart();
+      if (line) segments.push(line);
+      continue;
+    }
+    if (sentenceMatch) {
+      segments.push(sentenceMatch[1].trim());
+      remaining = remaining.slice(sentenceMatch[1].length).trimStart();
+      continue;
+    }
+    if (remaining.length >= MAX_STREAMED_SENTENCE_LENGTH) {
+      const searchArea = remaining.slice(0, MAX_STREAMED_SENTENCE_LENGTH);
+      const splitAt = Math.max(searchArea.lastIndexOf(", "), searchArea.lastIndexOf("; "), searchArea.lastIndexOf(" "));
+      const safeSplit = splitAt > 80 ? splitAt + 1 : MAX_STREAMED_SENTENCE_LENGTH;
+      segments.push(remaining.slice(0, safeSplit).trim());
+      remaining = remaining.slice(safeSplit).trimStart();
+      continue;
+    }
+    if (flush) {
+      segments.push(remaining.trim());
+      remaining = "";
+    }
+    break;
+  }
+  return { segments, remaining };
+};
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
 const framesMatch = (a, b) => (
@@ -120,6 +155,10 @@ const Local3DAvatarView = forwardRef(({ allowViewportControls = true, onSpeechCa
   const activeTtsProviderIdRef = useRef(readTtsProviderId());
   const speechServiceRef = useRef(createLocalAvatarSpeechService(createTtsProviderFor(activeTtsProviderIdRef.current)));
   const pendingTextRef = useRef("");  // buffered across streamChunk() calls until endMessage() flushes it
+  const sentenceStreamRef = useRef(false);
+  const speechQueueRef = useRef(Promise.resolve());
+  const speechQueueGenerationRef = useRef(0);
+  const spokenPrefixRef = useRef("");
   const mutedRef = useRef(false);
   const viewportFrameRef = useRef(readSavedViewportFrame());
   const savedViewportFrameRef = useRef({ ...viewportFrameRef.current });
@@ -382,92 +421,131 @@ const Local3DAvatarView = forwardRef(({ allowViewportControls = true, onSpeechCa
     });
   }, [allowViewportControls, applyViewportFrame]);
 
+  const speakText = useCallback(async (text, captionPrefix = "") => {
+    if (!text || mutedRef.current) return false;
+    const { language, voiceURI, voiceProfileId, kokoroVoice, supertonicVoice } = readVoiceSettings();
+    const speechService = getSpeechService();
+    let playbackStarted = false;
+    setExpression("reassuring");
+    try {
+      await speechService.speak(text, {
+        language,
+        voice: voiceURI,
+        voiceProfileId,
+        kokoroVoice,
+        supertonicVoice,
+        onAmplitude: (value) => {
+          lipSyncRef.current?.onAmplitude(value);
+          const speakingAmount = clamp01(value);
+          updateSpeechExpression({
+            isSpeaking: speakingAmount > 0.02,
+            speakingAmount,
+            emphasis: Math.max(speechExpressionRef.current.emphasis * 0.82, speakingAmount),
+          });
+        },
+        onSpokenText: (spokenText) => {
+          if (!playbackStarted) return;
+          const current = String(spokenText || "").trim();
+          if (!current) return;
+          const separator = captionPrefix && current ? " " : "";
+          onSpeechCaptionChange?.(`${captionPrefix}${separator}${current}`.trim());
+        },
+        onExpressionChange: (nextExpression) => setExpression(nextExpression || "reassuring"),
+        onViseme: (name) => lipSyncRef.current?.onViseme(name),
+        onSynthesisStart: () => {
+          setStatus("synthesizing");
+          setExpression("thinking");
+          updateSpeechExpression({ isSynthesizing: true, isSpeaking: false, speakingAmount: 0, emphasis: 0 });
+        },
+        onPlaybackStart: () => {
+          playbackStarted = true;
+          setStatus("speaking");
+          setExpression("reassuring");
+          updateSpeechExpression({ isSynthesizing: false, isSpeaking: true, speakingAmount: 0.16, emphasis: 0.16 });
+        },
+      });
+      return playbackStarted;
+    } catch (err) {
+      console.error("[Local3DAvatar] speech failed:", err);
+      return false;
+    }
+  }, [getSpeechService, onSpeechCaptionChange, updateSpeechExpression]);
+
+  const settleSpeechState = useCallback((clearCaption = true) => {
+    if (clearCaption) onSpeechCaptionChange?.("");
+    const finishedAt = performance.now();
+    const settleSpeechFace = () => {
+      if ((performance.now() - finishedAt) < SPEECH_ACTIVITY_DECAY_MS) {
+        requestAnimationFrame(settleSpeechFace);
+        return;
+      }
+      updateSpeechExpression({ isSynthesizing: false, isSpeaking: false, speakingAmount: 0, emphasis: 0 });
+      setExpression("attentive");
+    };
+    requestAnimationFrame(settleSpeechFace);
+    setStatus((s) => (s === "speaking" || s === "synthesizing" ? "ready" : s));
+  }, [onSpeechCaptionChange, updateSpeechExpression]);
+
+  const enqueueSpeechSegments = useCallback((segments) => {
+    const generation = speechQueueGenerationRef.current;
+    segments.filter(Boolean).forEach((segment) => {
+      speechQueueRef.current = speechQueueRef.current.then(async () => {
+        if (generation !== speechQueueGenerationRef.current) return;
+        const prefix = spokenPrefixRef.current;
+        const spoken = await speakText(segment, prefix);
+        if (!spoken || generation !== speechQueueGenerationRef.current) return;
+        spokenPrefixRef.current = `${prefix}${prefix ? " " : ""}${segment}`.trim();
+        onSpeechCaptionChange?.(spokenPrefixRef.current);
+      });
+    });
+  }, [onSpeechCaptionChange, speakText]);
+
   useImperativeHandle(ref, () => ({
     isLive: () => status === "ready" || status === "speaking" || status === "synthesizing" || status === "paused",
     streamChunk: (text) => {
       if (text) pendingTextRef.current += text;
     },
+    streamSpeechChunk: (text) => {
+      if (!text || mutedRef.current) return;
+      if (!sentenceStreamRef.current) {
+        const speechService = getSpeechService();
+        speechService.stop();
+        speechQueueGenerationRef.current += 1;
+        speechQueueRef.current = Promise.resolve();
+        spokenPrefixRef.current = "";
+        pendingTextRef.current = "";
+        sentenceStreamRef.current = true;
+        onSpeechCaptionChange?.("");
+      }
+      pendingTextRef.current += text;
+      const ready = takeReadySpeechSegments(pendingTextRef.current);
+      pendingTextRef.current = ready.remaining;
+      enqueueSpeechSegments(ready.segments);
+    },
     endMessage: async () => {
+      if (sentenceStreamRef.current) {
+        const ready = takeReadySpeechSegments(pendingTextRef.current, true);
+        pendingTextRef.current = "";
+        sentenceStreamRef.current = false;
+        enqueueSpeechSegments(ready.segments);
+        await speechQueueRef.current;
+        settleSpeechState(false);
+        return;
+      }
       const text = pendingTextRef.current.trim();
       pendingTextRef.current = "";
       onSpeechCaptionChange?.("");
       if (!text || mutedRef.current) return;
-      const { language, voiceURI, voiceProfileId, kokoroVoice, supertonicVoice } = readVoiceSettings();
       const speechService = getSpeechService();
       // A newer reply always wins — cancels both any still-playing audio AND
       // (via localAvatarSpeechService's AbortController) any synthesis
       // request still in flight, so an obsolete OpenVoiceClone call can
       // never finish speaking over this one.
       speechService.stop();
-      setExpression("reassuring");
       try {
-        await speechService.speak(text, {
-          language,
-          voice: voiceURI,
-          voiceProfileId,
-          kokoroVoice,
-          supertonicVoice,
-          onAmplitude: (value) => {
-            lipSyncRef.current?.onAmplitude(value);
-            const speakingAmount = clamp01(value);
-            updateSpeechExpression({
-              isSpeaking: speakingAmount > 0.02,
-              speakingAmount,
-              emphasis: Math.max(speechExpressionRef.current.emphasis * 0.82, speakingAmount),
-            });
-          },
-          onSpokenText: (spokenText) => {
-            onSpeechCaptionChange?.(spokenText);
-          },
-          onExpressionChange: (nextExpression) => {
-            setExpression(nextExpression || "reassuring");
-          },
-          onViseme: (name) => lipSyncRef.current?.onViseme(name),
-          // Network-backed providers (OpenVoiceClone) can take a long time
-          // to return, especially under CPU/memory pressure — without a
-          // distinct status here the avatar just sits idle with no visible
-          // sign anything is happening, easy to mistake for broken/stuck.
-          onSynthesisStart: () => {
-            setStatus("synthesizing");
-            setExpression("thinking");
-            updateSpeechExpression({
-              isSynthesizing: true,
-              isSpeaking: false,
-              speakingAmount: 0,
-              emphasis: 0,
-            });
-          },
-          onPlaybackStart: () => {
-            setStatus("speaking");
-            setExpression("reassuring");
-            updateSpeechExpression({
-              isSynthesizing: false,
-              isSpeaking: true,
-              speakingAmount: 0.16,
-              emphasis: 0.16,
-            });
-          },
-        });
-      } catch (err) {
-        console.error("[Local3DAvatar] speech failed:", err);
+        await speakText(text);
       } finally {
-        onSpeechCaptionChange?.("");
-        const finishedAt = performance.now();
-        const settleSpeechFace = () => {
-          if ((performance.now() - finishedAt) < SPEECH_ACTIVITY_DECAY_MS) {
-            requestAnimationFrame(settleSpeechFace);
-            return;
-          }
-          updateSpeechExpression({
-            isSynthesizing: false,
-            isSpeaking: false,
-            speakingAmount: 0,
-            emphasis: 0,
-          });
-          setExpression("attentive");
-        };
-        requestAnimationFrame(settleSpeechFace);
-        setStatus((s) => (s === "speaking" || s === "synthesizing" ? "ready" : s));
+        settleSpeechState(true);
       }
     },
     initialize: async () => {
@@ -477,6 +555,10 @@ const Local3DAvatarView = forwardRef(({ allowViewportControls = true, onSpeechCa
     pause: () => { speechServiceRef.current.pause(); setStatus("paused"); },
     resume: () => { speechServiceRef.current.resume(); setStatus("speaking"); },
     stop: () => {
+      speechQueueGenerationRef.current += 1;
+      speechQueueRef.current = Promise.resolve();
+      spokenPrefixRef.current = "";
+      sentenceStreamRef.current = false;
       speechServiceRef.current.stop();
       pendingTextRef.current = "";
       updateSpeechExpression({
@@ -498,7 +580,7 @@ const Local3DAvatarView = forwardRef(({ allowViewportControls = true, onSpeechCa
     destroy: () => {
       speechServiceRef.current.stop();
     },
-  }), [status, getSpeechService, onSpeechCaptionChange, updateSpeechExpression]);
+  }), [status, enqueueSpeechSegments, getSpeechService, onSpeechCaptionChange, settleSpeechState, speakText, updateSpeechExpression]);
 
   return (
     <div

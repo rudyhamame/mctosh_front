@@ -26,6 +26,9 @@ const CLOUDINARY_RAW_LIMIT_BYTES = 10 * 1024 * 1024;
 const formatMb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 const isPdfFile = (file) =>
   file?.type === "application/pdf" || /\.pdf$/i.test(String(file?.name || ""));
+const withQueuedOcr = (source) => String(source?.format || "").toLowerCase() === "pdf"
+  ? { ...source, ocrStatus: ["completed", "processing", "uploading"].includes(source.ocrStatus) ? source.ocrStatus : "queued" }
+  : source;
 
 const isCloudinarySizeError = (message = "", status = 0) => {
   if (status === 413) return true;
@@ -78,6 +81,41 @@ const SourcesPage = () => {
       setLoading(false);
     })();
   }, []);
+
+  useEffect(() => {
+    const activeSources = sources.filter((source) => ["queued", "uploading", "processing"].includes(source.ocrStatus));
+    if (!activeSources.length) return undefined;
+    const timer = window.setInterval(async () => {
+      try {
+        const statuses = await Promise.all(activeSources.map(async (source) => {
+          const response = await fetch(apiUrl(`/api/sources/${source._id}/ocr/status`), { headers: authHeader() });
+          const data = await response.json();
+          return response.ok ? { id: source._id, status: data.status, progress: data.job?.progress || 0 } : null;
+        }));
+        const statusById = new Map(statuses.filter(Boolean).map((item) => [item.id, item]));
+        setSources((current) => current.map((source) => {
+          const update = statusById.get(source._id);
+          return update ? { ...source, ocrStatus: update.status, ocrProgress: update.progress } : source;
+        }));
+      } catch {}
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [sources]);
+
+  const retryOcr = async (sourceId) => {
+    try {
+      const response = await fetch(apiUrl(`/api/sources/${sourceId}/ocr/reprocess`), {
+        method: "POST",
+        headers: authHeader(),
+      });
+      if (!response.ok) throw new Error("Failed to queue OCR.");
+      setSources((current) => current.map((source) => (
+        source._id === sourceId ? { ...source, ocrStatus: "queued" } : source
+      )));
+    } catch {
+      setError("Could not queue document OCR. Please try again.");
+    }
+  };
 
   /* ── Close dropdown on outside click ── */
   useEffect(() => {
@@ -175,7 +213,7 @@ const SourcesPage = () => {
         setInfo(`"${file.name}" is already in your sources.`);
         return;
       }
-      setSources((prev) => [data.source, ...prev]);
+      setSources((prev) => [withQueuedOcr(data.source), ...prev]);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -224,7 +262,7 @@ const SourcesPage = () => {
       if (data.duplicate) {
         setInfo(`"${prompt.file.name}" is already in your sources.`);
       } else {
-        setSources((prev) => [data.source, ...prev]);
+        setSources((prev) => [withQueuedOcr(data.source), ...prev]);
         setInfo(
           `Uploaded "${prompt.file.name}" as one source, stored behind the scenes as ${data.partCount} parts` +
           (data.oversizedParts ? ` (${data.oversizedParts} part${data.oversizedParts > 1 ? "s" : ""} still over the limit even after compressing).` : ".")
@@ -614,8 +652,18 @@ const SourcesPage = () => {
                       </button>
                     </span>
                   )}
+                  {String(s.format || "").toLowerCase() === "pdf" && (
+                    <span className={`sources_ocr_status sources_ocr_status--${s.ocrStatus || "not_started"}`}>
+                      <i className="fi fi-rr-scanner-image" aria-hidden="true" />
+                      OCR {String(s.ocrStatus || "not_started").replace(/_/g, " ")}
+                      {["uploading", "processing"].includes(s.ocrStatus) && Number(s.ocrProgress) > 0 ? ` ${Math.round(s.ocrProgress * 100)}%` : ""}
+                    </span>
+                  )}
                 </td>
                 <td className="sources_td_actions">
+                  {String(s.format || "").toLowerCase() === "pdf" && ["failed", "not_started"].includes(s.ocrStatus || "not_started") && (
+                    <button className="sources_ocr_retry_btn" onClick={() => retryOcr(s._id)} title="Process this PDF with Mistral OCR">OCR</button>
+                  )}
                   <button className="sources_del_btn" onClick={() => deleteSource(s._id)}>✕</button>
                 </td>
               </tr>

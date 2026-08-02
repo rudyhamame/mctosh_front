@@ -15,6 +15,11 @@ import {
   KOKORO_VOICE_OPTIONS,
   SUPERTONIC_VOICE_OPTIONS,
 } from "../Avatar/local3d/ttsProviderSettings";
+import {
+  readSttSettings,
+  writeSttSettings,
+  STT_PROVIDER_OPTIONS,
+} from "../Avatar/local3d/sttProviderSettings";
 import { AVATAR_POSE_CONTROLS, emitAvatarPoseUpdate, readSavedPose, writeSavedPose } from "../Avatar/local3d/avatarPoseSettings";
 import { applyTheme, readStoredTheme } from "../utils/theme";
 import "./settingsPage.css";
@@ -27,6 +32,28 @@ const TTS_PROVIDER_OPTIONS = [
 ];
 
 const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
+
+const DEFAULT_SEMANTIC_DETECTION_SETTINGS = {
+  enabled: true,
+  provider: "openai",
+  model: "gpt-5.6-terra",
+  reasoningEffort: "medium",
+  sendOriginalPdf: true,
+  sendPageImage: true,
+  includeAdjacentPages: true,
+  confidenceThreshold: 0.85,
+  preserveExistingAnnotations: true,
+  usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, runs: 0, lastRunAt: null },
+};
+
+const DEFAULT_MISTRAL_OCR_SETTINGS = {
+  enabled: true,
+  automaticallyProcessOnUpload: true,
+  model: "mistral-ocr-4-0",
+  includeImages: true,
+  persistRawResponse: true,
+  retryFailedJobs: true,
+};
 
 const readApiError = (data, fallback) => (
   typeof data?.error === "string" ? data.error : data?.error?.message || fallback
@@ -145,6 +172,11 @@ const SettingsPage = () => {
   const [theme,     setTheme]     = useState(() => readStoredTheme());
   const [pdfTranslateLang, setPdfTranslateLang] = useState(() => localStorage.getItem("mctosh_pdf_translate_lang") || "English");
   const [providers, setProviders] = useState([]);
+  const [semanticDetectionSettings, setSemanticDetectionSettings] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS);
+  const [semanticDetectionUsage, setSemanticDetectionUsage] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS.usage);
+  const [semanticDetectionSaving, setSemanticDetectionSaving] = useState(false);
+  const [mistralOcrSettings, setMistralOcrSettings] = useState(DEFAULT_MISTRAL_OCR_SETTINGS);
+  const [mistralOcrSaving, setMistralOcrSaving] = useState(false);
   const [aiLoading, setAiLoading] = useState(true);
   const [aiRefreshing, setAiRefreshing] = useState(false);
   const [anamUsage, setAnamUsage] = useState(null);
@@ -157,6 +189,7 @@ const SettingsPage = () => {
   const [selectedKokoroVoice, setSelectedKokoroVoice] = useState(() => readVoiceSettings().kokoroVoice);
   const [selectedSupertonicVoice, setSelectedSupertonicVoice] = useState(() => readVoiceSettings().supertonicVoice);
   const [interruptOnSpeech, setInterruptOnSpeech] = useState(() => readDevAiSettings().interruptOnSpeech);
+  const [sttSettings, setSttSettings] = useState(() => readSttSettings());
   const [avatarPose, setAvatarPose] = useState(() => readSavedPose());
   const [savedAvatarPose, setSavedAvatarPose] = useState(() => readSavedPose());
   const [voiceProfiles, setVoiceProfiles] = useState([]);
@@ -438,6 +471,16 @@ const SettingsPage = () => {
     writeDevAiSettings({ interruptOnSpeech: Boolean(checked) });
   };
 
+  const handleSttProvider = (provider) => {
+    const next = writeSttSettings({ provider });
+    setSttSettings(next);
+  };
+
+  const handleSttModel = (model) => {
+    const next = writeSttSettings({ model });
+    setSttSettings(next);
+  };
+
   const handleAvatarPose = (key, value) => {
     const nextPose = { ...avatarPose, [key]: Number(value) };
     setAvatarPose(nextPose);
@@ -486,6 +529,23 @@ const SettingsPage = () => {
 
   useEffect(() => {
     void loadSocialConfig();
+  }, []);
+
+  useEffect(() => {
+    fetch(apiUrl("/api/settings/semantic-detection"), { headers: authHeader() })
+      .then((response) => response.json())
+      .then((data) => {
+        setSemanticDetectionSettings({ ...DEFAULT_SEMANTIC_DETECTION_SETTINGS, ...(data.settings || {}) });
+        setSemanticDetectionUsage({ ...DEFAULT_SEMANTIC_DETECTION_SETTINGS.usage, ...(data.settings?.usage || {}) });
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch(apiUrl("/api/settings/mistral-ocr"), { headers: authHeader() })
+      .then((response) => response.json())
+      .then((data) => setMistralOcrSettings({ ...DEFAULT_MISTRAL_OCR_SETTINGS, ...(data.settings || {}), model: "mistral-ocr-4-0" }))
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -578,6 +638,44 @@ const SettingsPage = () => {
   const handleProvider = (id) => {
     setDefProvider(id);
     localStorage.setItem("mctosh_ai_provider", id);
+  };
+
+  const updateSemanticDetectionSettings = async (patch) => {
+    const next = { ...semanticDetectionSettings, ...patch };
+    setSemanticDetectionSettings(next);
+    setSemanticDetectionSaving(true);
+    try {
+      const response = await fetch(apiUrl("/api/settings/semantic-detection"), {
+        method: "PATCH",
+        headers: authHeader(),
+        body: JSON.stringify(next),
+      });
+      if (!response.ok) throw new Error("Failed to save settings.");
+    } catch {
+      // Keep the optimistic value; a later refresh will restore the server value.
+    } finally {
+      setSemanticDetectionSaving(false);
+    }
+  };
+
+  const updateMistralOcrSettings = async (patch) => {
+    const next = { ...mistralOcrSettings, ...patch, model: "mistral-ocr-4-0" };
+    setMistralOcrSettings(next);
+    setMistralOcrSaving(true);
+    try {
+      const response = await fetch(apiUrl("/api/settings/mistral-ocr"), {
+        method: "PATCH",
+        headers: authHeader(),
+        body: JSON.stringify(next),
+      });
+      if (!response.ok) throw new Error("Failed to save OCR settings.");
+      const data = await response.json();
+      setMistralOcrSettings({ ...DEFAULT_MISTRAL_OCR_SETTINGS, ...(data.settings || {}), model: "mistral-ocr-4-0" });
+    } catch {
+      // A refresh restores the persisted value if this optimistic save failed.
+    } finally {
+      setMistralOcrSaving(false);
+    }
   };
 
   // Persists the chosen model for one provider (overrides its env-var
@@ -1056,6 +1154,82 @@ const SettingsPage = () => {
 
               <div className="sett_usage_card">
                 <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Document OCR Cache</span>
+                  {mistralOcrSaving && <span className="sett_usage_card_period">Saving…</span>}
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
+                  Process each unique PDF version once after upload, store its page structure, and reuse it for BBoxes, search, semantic detection, and the PDF assistant.
+                </p>
+                <div className="sett_stt_model_row">
+                  <span><strong>Provider / exact model</strong><small>The model version is part of the persistent cache key.</small></span>
+                  <span>Mistral · <code>{mistralOcrSettings.model}</code></span>
+                </div>
+                {[
+                  ["enabled", "Enable document OCR"],
+                  ["automaticallyProcessOnUpload", "Process PDFs after upload"],
+                  ["includeImages", "Include figures and images"],
+                  ["persistRawResponse", "Persist raw provider pages"],
+                  ["retryFailedJobs", "Retry failed jobs"],
+                ].map(([key, label]) => (
+                  <label className="sett_toggle_row" key={key}>
+                    <span className="sett_toggle_copy"><span className="sett_toggle_title">{label}</span></span>
+                    <input type="checkbox" checked={mistralOcrSettings[key]} onChange={(event) => updateMistralOcrSettings({ [key]: event.target.checked })} />
+                  </label>
+                ))}
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Semantic Document Detection</span>
+                  {semanticDetectionSaving && <span className="sett_usage_card_period">Saving…</span>}
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
+                  Classify document structure with candidate geometry and OpenAI. This is separate from Smart Segmenting.
+                </p>
+                <div className="sett_usage_card_body" aria-label="Semantic detection token usage">
+                  <span className="sett_usage_minutes">{Number(semanticDetectionUsage.totalTokens || 0).toLocaleString()}</span>
+                  <span className="sett_usage_unit">tokens consumed</span>
+                  <span className="sett_usage_sessions">
+                    ${Number(semanticDetectionUsage.costUsd || 0).toFixed(6)} estimated API cost · {Number(semanticDetectionUsage.runs || 0).toLocaleString()} run{semanticDetectionUsage.runs === 1 ? "" : "s"}
+                  </span>
+                </div>
+                <div className="sett_section_desc" style={{ margin: "0.45rem 0 0.8rem" }}>
+                  Input: {Number(semanticDetectionUsage.promptTokens || 0).toLocaleString()} · Output: {Number(semanticDetectionUsage.completionTokens || 0).toLocaleString()} tokens
+                  {semanticDetectionUsage.lastRunAt ? ` · Last run ${new Date(semanticDetectionUsage.lastRunAt).toLocaleString()}` : ""}
+                </div>
+                <label className="sett_toggle_row">
+                  <span className="sett_toggle_copy"><span className="sett_toggle_title">Enable Semantic Detect</span></span>
+                  <input type="checkbox" checked={semanticDetectionSettings.enabled} onChange={(event) => updateSemanticDetectionSettings({ enabled: event.target.checked })} />
+                </label>
+                <div className="sett_stt_model_row">
+                  <span><strong>Provider / model</strong><small>Credentials stay on the application backend.</small></span>
+                  <span>OpenAI · <code>gpt-5.6-terra</code></span>
+                </div>
+                <label className="sett_stt_model_row">
+                  <span><strong>Reasoning effort</strong></span>
+                  <select value={semanticDetectionSettings.reasoningEffort} onChange={(event) => updateSemanticDetectionSettings({ reasoningEffort: event.target.value })}>
+                    <option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option>
+                  </select>
+                </label>
+                {[
+                  ["sendOriginalPdf", "Send original PDF"],
+                  ["sendPageImage", "Send current page as PNG"],
+                  ["includeAdjacentPages", "Include adjacent pages as context"],
+                  ["preserveExistingAnnotations", "Preserve existing annotations"],
+                ].map(([key, label]) => (
+                  <label className="sett_toggle_row" key={key}>
+                    <span className="sett_toggle_copy"><span className="sett_toggle_title">{label}</span></span>
+                    <input type="checkbox" checked={semanticDetectionSettings[key]} onChange={(event) => updateSemanticDetectionSettings({ [key]: event.target.checked })} />
+                  </label>
+                ))}
+                <label className="sett_stt_model_row">
+                  <span><strong>Minimum confidence</strong></span>
+                  <input type="number" min="0" max="1" step="0.01" value={semanticDetectionSettings.confidenceThreshold} onChange={(event) => updateSemanticDetectionSettings({ confidenceThreshold: Number(event.target.value) })} />
+                </label>
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
                   <span className="sett_usage_card_title">Dev AI Avatar (Anam)</span>
                   {anamUsage?.monthStart && (
                     <span className="sett_usage_card_period">
@@ -1123,6 +1297,43 @@ const SettingsPage = () => {
                     checked={interruptOnSpeech}
                     onChange={(e) => handleInterruptOnSpeech(e.target.checked)}
                   />
+                </label>
+              </div>
+
+              <div className="sett_usage_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Speech-to-Text</span>
+                  <span className="sett_usage_card_period">Voice input</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
+                  Choose how your microphone audio is converted to text during PDF Agent voice calls.
+                </p>
+                <div id="sett_stt_provider_grid">
+                  {STT_PROVIDER_OPTIONS.map((option) => (
+                    <button
+                      type="button"
+                      key={option.id}
+                      className={`sett_provider_card sett_stt_provider_card${sttSettings.provider === option.id ? " sett_provider_card--active" : ""}`}
+                      onClick={() => handleSttProvider(option.id)}
+                    >
+                      <div className="sett_provider_top">
+                        <span className="sett_provider_name">{option.label}</span>
+                        {sttSettings.provider === option.id && <span className="sett_stt_active_mark"><i className="fi fi-rr-check" /> Active</span>}
+                      </div>
+                      <span className="sett_provider_status_msg">{option.description}</span>
+                    </button>
+                  ))}
+                </div>
+                <label className="sett_stt_model_row">
+                  <span>
+                    <strong>Transcription model</strong>
+                    <small>{sttSettings.provider === "openai" ? "Audio is securely sent through your backend OpenAI connection." : "Managed by your browser and operating system."}</small>
+                  </span>
+                  <select value={sttSettings.model} onChange={(event) => handleSttModel(event.target.value)}>
+                    {STT_PROVIDER_OPTIONS.find((option) => option.id === sttSettings.provider)?.models.map((item) => (
+                      <option key={item.id} value={item.id}>{item.label}</option>
+                    ))}
+                  </select>
                 </label>
               </div>
 

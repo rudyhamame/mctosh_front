@@ -1,4 +1,4 @@
-import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { useAIProvider } from "../hooks/useAIProvider";
@@ -9,7 +9,7 @@ import { readStoredSession } from "../utils/sessionCleanup";
 import { useLongPressSelect } from "../utils/longPressSelect";
 import DraftTextViewer, { cleanMarkdownToPlainText } from "../components/DraftTextViewer";
 import HyleCards from "./HyleCards";
-import SystemMessageModal from "./SystemMessageModal";
+import PDFTextAssistant from "./PDFTextAssistant";
 import SmartVideoPanel from "./SmartVideoPanel";
 import EntityBuilderPanel from "./EntityBuilderPanel";
 import ClinicalVignetteBuilderPanel from "./ClinicalVignetteBuilderPanel";
@@ -18,23 +18,42 @@ import { PDF_TYPE_ICON } from "./pdfTypeIcon";
 import { createPageIndexCache } from "./pdfSearchIndex.js";
 import { normalizeQuery, searchPageForQuery } from "./pdfFuzzySearch.js";
 import { correctSelectedPdfText } from "./pdfTextCorrection.js";
+import { BBOX_TEXT_CORRECTION_VERSION, correctBBoxText } from "./bboxTextCorrection.js";
 import { analyzePageLayout } from "./pdfPageLayout.js";
+import { buildParagraphMergePlan } from "./pdfParagraphMerge.js";
+import { removeParagraphTitleFromText, removeParagraphTitleLine } from "./pdfParagraphTitle.js";
+import { normalizePagePartitionHierarchy } from "./pdfBBoxHierarchy.js";
 import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
 import {
   bboxTextMatchesSpan as bboxTextMatchesSpanUtil,
+  buildPartitionOrderedTextLines,
   buildTextLineRects,
+  buildTextLines,
   buildTightOutlineFromLineRects,
   buildTightTextOutline,
   extractBoundingBoxTextParts,
   selectSpansForBoundingBox,
 } from "./pdfBBoxTextExtraction.js";
 import { buildRawHyle, buildSegmentedHyle, computeMarkerPosition } from "./pdfHyleStats.js";
+import { segmentPageIntoParagraphBBoxes } from "./pdfSmartSegment.js";
+import { extractPlacedImageRects } from "./pdfImageGeometry.js";
+import {
+  SEMANTIC_DETECTION_SCOPE,
+  buildSemanticCandidates,
+  unionCandidateBoxes,
+  semanticTypeToBBoxType,
+} from "./pdfSemanticDetection.js";
 import {
   BBOX_CARD_TYPES,
+  canBBoxContain,
   EDITABLE_BBOX_TYPES,
   bboxTypeHas,
   clientPointToBBoxPagePoint,
   createBBoxDraft,
+  getSemanticHyleBBoxId,
+  buildHyleBBoxIdMap,
+  getBBoxTypeAbbreviation,
+  getBBoxTypeDefinition,
   getViewportDocumentSize,
   isBBoxType,
 } from "./pdfBBoxTypes.js";
@@ -46,8 +65,6 @@ import {
   AnnotControlHeaderInfo,
   ArrowToolIcon,
   BBOX_DISTINCT_COLORS,
-  BBOX_MIN_GAP,
-  bendPointAwayFromObstacles,
   CARDS,
   DEFAULT_ANNOT_TOOL_COLORS,
   DeletePageIcon,
@@ -61,7 +78,6 @@ import {
   OpacityKnob,
   PDF_TYPE_LABEL,
   PenToolIcon,
-  resolveBBoxSpacing,
   SHAPE_TOOL_KEYS,
   ShapesToolIcon,
   SizeKnob,
@@ -86,6 +102,13 @@ const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const roundZoom = (value) => Math.round(value * 100) / 100;
 const normalizeZoom = (value) => clamp(roundZoom(value), MIN_ZOOM, MAX_ZOOM);
 const normalizePinchZoom = (value) => Math.max(PINCH_ZOOM_FLOOR, roundZoom(value));
+// Mirrors PDF.js TextLayer's own ascent fallback. Using a fixed 0.8 ratio
+// shifts boxes vertically for fonts whose embedded metrics differ.
+const getPdfTextAscentRatio = (style) => {
+  if (Number.isFinite(style?.ascent)) return style.ascent;
+  if (Number.isFinite(style?.descent)) return 1 + style.descent;
+  return 0.8;
+};
 // Effort scales with how far the CURRENT zoom already is from the natural
 // 1.0 (100%) point — like a real lens/zoom ring, each further step gets
 // progressively harder to turn rather than staying uniformly sensitive
@@ -154,6 +177,16 @@ const stopLivePan = (stateRef) => {
   }
 };
 
+const PAN_SMOOTHING = 0.30;
+const PAN_EPSILON = 0.1;
+const PAN_EDGE_RESISTANCE = 0.18;
+
+const applyPanEdgeResistance = (value, min, max) => {
+  if (value < min) return min + (value - min) * PAN_EDGE_RESISTANCE;
+  if (value > max) return max + (value - max) * PAN_EDGE_RESISTANCE;
+  return value;
+};
+
 const syncLivePan = (el, stateRef) => {
   const state = stateRef.current;
   const maxL = Math.max(0, el.scrollWidth - el.clientWidth);
@@ -173,23 +206,22 @@ const runLivePan = (el, stateRef) => {
     state.lastT = t;
     const maxL = Math.max(0, el.scrollWidth - el.clientWidth);
     const maxT = Math.max(0, el.scrollHeight - el.clientHeight);
-    state.targetL = clamp(state.targetL, 0, maxL);
-    state.targetT = clamp(state.targetT, 0, maxT);
+    state.targetL = applyPanEdgeResistance(state.targetL, 0, maxL);
+    state.targetT = applyPanEdgeResistance(state.targetT, 0, maxT);
 
-    // Follow the pointer aggressively enough to feel direct, but with a
-    // frame-smoothed glide between input events so panning does not advance
-    // in visibly stepped chunks on lower-rate touch streams.
-    const ease = 1 - Math.pow(0.12, dt / 16);
+    // Keep pan tighter than pinch: responsive enough to stay attached to the
+    // fingers, but with a small amount of weighted interpolation.
+    const ease = 1 - Math.pow(1 - PAN_SMOOTHING, dt / 16);
     state.currentL += (state.targetL - state.currentL) * ease;
     state.currentT += (state.targetT - state.currentT) * ease;
 
-    if (Math.abs(state.targetL - state.currentL) < 0.18) state.currentL = state.targetL;
-    if (Math.abs(state.targetT - state.currentT) < 0.18) state.currentT = state.targetT;
+    if (Math.abs(state.targetL - state.currentL) < PAN_EPSILON) state.currentL = state.targetL;
+    if (Math.abs(state.targetT - state.currentT) < PAN_EPSILON) state.currentT = state.targetT;
 
     el.scrollLeft = state.currentL;
     el.scrollTop = state.currentT;
 
-    if (state.active || Math.abs(state.targetL - state.currentL) > 0.18 || Math.abs(state.targetT - state.currentT) > 0.18) {
+    if (state.active || Math.abs(state.targetL - state.currentL) > PAN_EPSILON || Math.abs(state.targetT - state.currentT) > PAN_EPSILON) {
       stateRef.current.frame = requestAnimationFrame(step);
     } else {
       stateRef.current.frame = 0;
@@ -360,8 +392,22 @@ const eraseAnnotationsAtPoint = (annotations, x, y, radius, mode) => {
   return { kept, erasedCount };
 };
 const PDF_TOOLBAR_SETTINGS_STORAGE_KEY = "mctoshs_pdf_toolbar_tool_settings";
+const COLOR_PRESET_SLOT_COUNT = 4;
+const buildDefaultAnnotToolColorPresets = () => (
+  Object.fromEntries(
+    Object.entries(DEFAULT_ANNOT_TOOL_COLORS).map(([key, color]) => [key, [color, null, null, null]])
+  )
+);
+const DEFAULT_SHAPE_TOOL_SETTINGS = {
+  line: { strokeWidth: 2, borderStyle: "solid", background: false, borderRadius: 0 },
+  arrow: { strokeWidth: 3, borderStyle: "solid", background: false, borderRadius: 0 },
+  rect: { strokeWidth: 2, borderStyle: "solid", background: false, borderRadius: 0 },
+  circle: { strokeWidth: 2, borderStyle: "solid", background: false, borderRadius: 0 },
+  freeshape: { strokeWidth: 2, borderStyle: "solid", background: false, borderRadius: 0 },
+};
 const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   annotToolColors: DEFAULT_ANNOT_TOOL_COLORS,
+  annotToolColorPresets: buildDefaultAnnotToolColorPresets(),
   annotSize: 16,
   penSize: 2,
   arrowSize: 3,
@@ -404,6 +450,7 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   shapeBorderRadius: 0,
   bboxBorderSize: 2,
   shapeBackground: false, // fill always uses the shape's own border/ink color — no independent fill color setting
+  shapeToolSettings: DEFAULT_SHAPE_TOOL_SETTINGS,
 };
 const isHexColor = (value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 const readNumberSetting = (value, fallback, min, max) => (
@@ -412,49 +459,98 @@ const readNumberSetting = (value, fallback, min, max) => (
     : fallback
 );
 const readBooleanSetting = (value, fallback) => (typeof value === "boolean" ? value : fallback);
+// Shared by the synchronous localStorage load below (instant, offline-safe
+// first paint) AND the async server hydration effect further down in the
+// component (GET /api/user/me/pdf-toolbar-settings — the account-level
+// source of truth, so these controls follow a user across browsers/
+// devices instead of resetting every time localStorage doesn't have them).
+// Same clamping either way, so a value from either source is equally safe.
+const normalizePdfToolbarSettings = (parsed) => {
+  if (!parsed || typeof parsed !== "object") return DEFAULT_PDF_TOOLBAR_SETTINGS;
+  const colors = { ...DEFAULT_ANNOT_TOOL_COLORS };
+  const colorPresets = buildDefaultAnnotToolColorPresets();
+  if (parsed.annotToolColors && typeof parsed.annotToolColors === "object") {
+    Object.keys(DEFAULT_ANNOT_TOOL_COLORS).forEach((key) => {
+      if (isHexColor(parsed.annotToolColors[key])) colors[key] = parsed.annotToolColors[key];
+    });
+  }
+  if (parsed.annotToolColorPresets && typeof parsed.annotToolColorPresets === "object") {
+    Object.keys(DEFAULT_ANNOT_TOOL_COLORS).forEach((key) => {
+      const slots = parsed.annotToolColorPresets[key];
+      if (!Array.isArray(slots)) return;
+      colorPresets[key] = Array.from({ length: COLOR_PRESET_SLOT_COUNT }, (_, index) => (
+        isHexColor(slots[index]) ? slots[index] : null
+      ));
+      if (!colorPresets[key].some(Boolean)) colorPresets[key][0] = colors[key];
+    });
+  }
+  const shapeToolSettings = Object.fromEntries(SHAPE_TOOL_KEYS.map((toolKey) => {
+    const defaults = DEFAULT_SHAPE_TOOL_SETTINGS[toolKey];
+    const saved = parsed.shapeToolSettings?.[toolKey];
+    return [toolKey, {
+      strokeWidth: readNumberSetting(
+        saved?.strokeWidth,
+        toolKey === "arrow"
+          ? readNumberSetting(parsed.arrowSize, defaults.strokeWidth, 1, 20)
+          : defaults.strokeWidth,
+        1,
+        20,
+      ),
+      borderStyle: SHAPE_BORDER_STYLES.some(({ key }) => key === saved?.borderStyle)
+        ? saved.borderStyle
+        : SHAPE_BORDER_STYLES.some(({ key }) => key === parsed.shapeBorderStyle)
+          ? parsed.shapeBorderStyle
+          : defaults.borderStyle,
+      background: readBooleanSetting(saved?.background, readBooleanSetting(parsed.shapeBackground, defaults.background)),
+      borderRadius: readNumberSetting(
+        saved?.borderRadius,
+        toolKey === "rect"
+          ? readNumberSetting(parsed.shapeBorderRadius, defaults.borderRadius, 0, 60)
+          : defaults.borderRadius,
+        0,
+        60,
+      ),
+    }];
+  }));
+  return {
+    annotToolColors: colors,
+    annotToolColorPresets: colorPresets,
+    annotSize: readNumberSetting(parsed.annotSize, DEFAULT_PDF_TOOLBAR_SETTINGS.annotSize, 4, 96),
+    penSize: readNumberSetting(parsed.penSize, DEFAULT_PDF_TOOLBAR_SETTINGS.penSize, 1, 36),
+    arrowSize: readNumberSetting(parsed.arrowSize, DEFAULT_PDF_TOOLBAR_SETTINGS.arrowSize, 1, 20),
+    penStabilization: readNumberSetting(parsed.penStabilization, DEFAULT_PDF_TOOLBAR_SETTINGS.penStabilization, 0, 100),
+    penPressureAssist: readNumberSetting(parsed.penPressureAssist, DEFAULT_PDF_TOOLBAR_SETTINGS.penPressureAssist, 0, 100),
+    penTaper: readNumberSetting(parsed.penTaper, DEFAULT_PDF_TOOLBAR_SETTINGS.penTaper, 0, 100),
+    penFlow: readNumberSetting(parsed.penFlow, DEFAULT_PDF_TOOLBAR_SETTINGS.penFlow, 0, 100),
+    penNibAngle: readNumberSetting(parsed.penNibAngle, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibAngle, 0, 180),
+    penNibSpread: readNumberSetting(parsed.penNibSpread, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibSpread, 0, 100),
+    penType: ["ball", "fountain"].includes(parsed.penType) ? parsed.penType : DEFAULT_PDF_TOOLBAR_SETTINGS.penType,
+    eraserSize: readNumberSetting(parsed.eraserSize, DEFAULT_PDF_TOOLBAR_SETTINGS.eraserSize, 6, 72),
+    eraserMode: ERASER_MODES.some(({ key }) => key === parsed.eraserMode) ? parsed.eraserMode : DEFAULT_PDF_TOOLBAR_SETTINGS.eraserMode,
+    highlightMode: ["freehand", "line"].includes(parsed.highlightMode) ? parsed.highlightMode : DEFAULT_PDF_TOOLBAR_SETTINGS.highlightMode,
+    highlightAutoWidth: readBooleanSetting(parsed.highlightAutoWidth, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoWidth),
+    highlightTaperEnds: readBooleanSetting(parsed.highlightTaperEnds, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightTaperEnds),
+    highlightAutoContrast: readBooleanSetting(parsed.highlightAutoContrast, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoContrast),
+    annotOpacity: readNumberSetting(parsed.annotOpacity, DEFAULT_PDF_TOOLBAR_SETTINGS.annotOpacity, OPACITY_MIN_PCT, OPACITY_MAX_PCT),
+    textFontFamily: TEXT_FONT_FAMILIES.some(({ key }) => key === parsed.textFontFamily) ? parsed.textFontFamily : DEFAULT_PDF_TOOLBAR_SETTINGS.textFontFamily,
+    textFontSize: readNumberSetting(parsed.textFontSize, DEFAULT_PDF_TOOLBAR_SETTINGS.textFontSize, 10, 48),
+    textAlign: ["left", "center", "right"].includes(parsed.textAlign) ? parsed.textAlign : DEFAULT_PDF_TOOLBAR_SETTINGS.textAlign,
+    textBold: readBooleanSetting(parsed.textBold, DEFAULT_PDF_TOOLBAR_SETTINGS.textBold),
+    textItalic: readBooleanSetting(parsed.textItalic, DEFAULT_PDF_TOOLBAR_SETTINGS.textItalic),
+    textUnderline: readBooleanSetting(parsed.textUnderline, DEFAULT_PDF_TOOLBAR_SETTINGS.textUnderline),
+    textBackground: readBooleanSetting(parsed.textBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.textBackground),
+    textBackgroundColor: isHexColor(parsed.textBackgroundColor) ? parsed.textBackgroundColor : DEFAULT_PDF_TOOLBAR_SETTINGS.textBackgroundColor,
+    textPadding: readNumberSetting(parsed.textPadding, DEFAULT_PDF_TOOLBAR_SETTINGS.textPadding, 0, 300),
+    shapeBorderStyle: ["solid", "dashed", "dotted"].includes(parsed.shapeBorderStyle) ? parsed.shapeBorderStyle : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderStyle,
+    shapeBorderRadius: readNumberSetting(parsed.shapeBorderRadius, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderRadius, 0, 60),
+    bboxBorderSize: readNumberSetting(parsed.bboxBorderSize, DEFAULT_PDF_TOOLBAR_SETTINGS.bboxBorderSize, 1, 12),
+    shapeBackground: readBooleanSetting(parsed.shapeBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackground),
+    shapeToolSettings,
+  };
+};
 const loadPdfToolbarSettings = () => {
   try {
-    const parsed = JSON.parse(localStorage.getItem(PDF_TOOLBAR_SETTINGS_STORAGE_KEY) || "null");
-    if (!parsed || typeof parsed !== "object") return DEFAULT_PDF_TOOLBAR_SETTINGS;
-    const colors = { ...DEFAULT_ANNOT_TOOL_COLORS };
-    if (parsed.annotToolColors && typeof parsed.annotToolColors === "object") {
-      Object.keys(DEFAULT_ANNOT_TOOL_COLORS).forEach((key) => {
-        if (isHexColor(parsed.annotToolColors[key])) colors[key] = parsed.annotToolColors[key];
-      });
-    }
-    return {
-      annotToolColors: colors,
-      annotSize: readNumberSetting(parsed.annotSize, DEFAULT_PDF_TOOLBAR_SETTINGS.annotSize, 4, 96),
-      penSize: readNumberSetting(parsed.penSize, DEFAULT_PDF_TOOLBAR_SETTINGS.penSize, 1, 36),
-      arrowSize: readNumberSetting(parsed.arrowSize, DEFAULT_PDF_TOOLBAR_SETTINGS.arrowSize, 1, 20),
-      penStabilization: readNumberSetting(parsed.penStabilization, DEFAULT_PDF_TOOLBAR_SETTINGS.penStabilization, 0, 100),
-      penPressureAssist: readNumberSetting(parsed.penPressureAssist, DEFAULT_PDF_TOOLBAR_SETTINGS.penPressureAssist, 0, 100),
-      penTaper: readNumberSetting(parsed.penTaper, DEFAULT_PDF_TOOLBAR_SETTINGS.penTaper, 0, 100),
-      penFlow: readNumberSetting(parsed.penFlow, DEFAULT_PDF_TOOLBAR_SETTINGS.penFlow, 0, 100),
-      penNibAngle: readNumberSetting(parsed.penNibAngle, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibAngle, 0, 180),
-      penNibSpread: readNumberSetting(parsed.penNibSpread, DEFAULT_PDF_TOOLBAR_SETTINGS.penNibSpread, 0, 100),
-      penType: ["ball", "fountain"].includes(parsed.penType) ? parsed.penType : DEFAULT_PDF_TOOLBAR_SETTINGS.penType,
-      eraserSize: readNumberSetting(parsed.eraserSize, DEFAULT_PDF_TOOLBAR_SETTINGS.eraserSize, 6, 72),
-      eraserMode: ERASER_MODES.some(({ key }) => key === parsed.eraserMode) ? parsed.eraserMode : DEFAULT_PDF_TOOLBAR_SETTINGS.eraserMode,
-      highlightMode: ["freehand", "line"].includes(parsed.highlightMode) ? parsed.highlightMode : DEFAULT_PDF_TOOLBAR_SETTINGS.highlightMode,
-      highlightAutoWidth: readBooleanSetting(parsed.highlightAutoWidth, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoWidth),
-      highlightTaperEnds: readBooleanSetting(parsed.highlightTaperEnds, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightTaperEnds),
-      highlightAutoContrast: readBooleanSetting(parsed.highlightAutoContrast, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoContrast),
-      annotOpacity: readNumberSetting(parsed.annotOpacity, DEFAULT_PDF_TOOLBAR_SETTINGS.annotOpacity, OPACITY_MIN_PCT, OPACITY_MAX_PCT),
-      textFontFamily: TEXT_FONT_FAMILIES.some(({ key }) => key === parsed.textFontFamily) ? parsed.textFontFamily : DEFAULT_PDF_TOOLBAR_SETTINGS.textFontFamily,
-      textFontSize: readNumberSetting(parsed.textFontSize, DEFAULT_PDF_TOOLBAR_SETTINGS.textFontSize, 10, 48),
-      textAlign: ["left", "center", "right"].includes(parsed.textAlign) ? parsed.textAlign : DEFAULT_PDF_TOOLBAR_SETTINGS.textAlign,
-      textBold: readBooleanSetting(parsed.textBold, DEFAULT_PDF_TOOLBAR_SETTINGS.textBold),
-      textItalic: readBooleanSetting(parsed.textItalic, DEFAULT_PDF_TOOLBAR_SETTINGS.textItalic),
-      textUnderline: readBooleanSetting(parsed.textUnderline, DEFAULT_PDF_TOOLBAR_SETTINGS.textUnderline),
-      textBackground: readBooleanSetting(parsed.textBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.textBackground),
-      textBackgroundColor: isHexColor(parsed.textBackgroundColor) ? parsed.textBackgroundColor : DEFAULT_PDF_TOOLBAR_SETTINGS.textBackgroundColor,
-      textPadding: readNumberSetting(parsed.textPadding, DEFAULT_PDF_TOOLBAR_SETTINGS.textPadding, 0, 300),
-      shapeBorderStyle: ["solid", "dashed", "dotted"].includes(parsed.shapeBorderStyle) ? parsed.shapeBorderStyle : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderStyle,
-      shapeBorderRadius: readNumberSetting(parsed.shapeBorderRadius, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderRadius, 0, 60),
-      bboxBorderSize: readNumberSetting(parsed.bboxBorderSize, DEFAULT_PDF_TOOLBAR_SETTINGS.bboxBorderSize, 1, 12),
-      shapeBackground: readBooleanSetting(parsed.shapeBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackground),
-    };
+    return normalizePdfToolbarSettings(JSON.parse(localStorage.getItem(PDF_TOOLBAR_SETTINGS_STORAGE_KEY) || "null"));
   } catch {
     return DEFAULT_PDF_TOOLBAR_SETTINGS;
   }
@@ -470,6 +566,14 @@ const distToSegment = (px, py, x1, y1, x2, y2) => {
   if (lenSq === 0) return Math.hypot(px - x1, py - y1);
   const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+};
+const polylineLength = (points) => {
+  if (!Array.isArray(points) || points.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    total += Math.hypot((points[i]?.x ?? 0) - (points[i - 1]?.x ?? 0), (points[i]?.y ?? 0) - (points[i - 1]?.y ?? 0));
+  }
+  return total;
 };
 const smoothStrokePoint = (points, nextPoint, stabilization, scale = 1) => {
   if (!points.length) return nextPoint;
@@ -504,25 +608,178 @@ const pointsToBounds = (points) => {
   return { x: minX, y: minY, w: Math.max(0, maxX - minX), h: Math.max(0, maxY - minY) };
 };
 
-const isBBoxOutlineClosed = (annotationLike) => annotationLike?.closed !== false;
+const crossProduct = (origin, a, b) => (
+  (a.x - origin.x) * (b.y - origin.y)
+  - (a.y - origin.y) * (b.x - origin.x)
+);
 
-const finalizeBBoxFreeformPoints = (points, scale = 1) => {
-  if (!Array.isArray(points) || points.length < 2) return { points: Array.isArray(points) ? points.map((point) => ({ ...point })) : [], closed: false };
-  const nextPoints = points.map((point) => ({ ...point }));
-  if (nextPoints.length < 3) return { points: nextPoints, closed: false };
-  const first = nextPoints[0];
-  const last = nextPoints[nextPoints.length - 1];
-  const safeScale = Math.max(0.25, Number(scale) || 1);
-  const closeThreshold = Math.max(8 / safeScale, 4);
-  const closed = Math.hypot((last.x ?? 0) - (first.x ?? 0), (last.y ?? 0) - (first.y ?? 0)) <= closeThreshold;
-  if (!closed) return { points: nextPoints, closed: false };
-  nextPoints[nextPoints.length - 1] = {
-    ...last,
-    x: first.x,
-    y: first.y,
-  };
-  return { points: nextPoints, closed: true };
+const convexHull = (points) => {
+  const unique = Array.from(
+    new Map(
+      (Array.isArray(points) ? points : [])
+        .filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y))
+        .map((point) => [`${point.x}:${point.y}`, { x: point.x, y: point.y }]),
+    ).values(),
+  ).sort((a, b) => a.x - b.x || a.y - b.y);
+  if (unique.length <= 2) return unique;
+  const lower = [];
+  for (const point of unique) {
+    while (lower.length >= 2 && crossProduct(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop();
+    lower.push(point);
+  }
+  const upper = [];
+  for (let index = unique.length - 1; index >= 0; index -= 1) {
+    const point = unique[index];
+    while (upper.length >= 2 && crossProduct(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop();
+    upper.push(point);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
 };
+
+const minimumAreaRectangle = (points) => {
+  const hull = convexHull(points);
+  if (hull.length < 3) {
+    const bounds = pointsToBounds(hull);
+    if (!bounds) return null;
+    const { x, y, w, h } = bounds;
+    return [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
+  }
+
+  let best = null;
+  for (let index = 0; index < hull.length; index += 1) {
+    const start = hull[index];
+    const end = hull[(index + 1) % hull.length];
+    const edgeX = end.x - start.x;
+    const edgeY = end.y - start.y;
+    const edgeLength = Math.hypot(edgeX, edgeY);
+    if (edgeLength <= 0.0001) continue;
+    const ux = edgeX / edgeLength;
+    const uy = edgeY / edgeLength;
+    const vx = -uy;
+    const vy = ux;
+    let minU = Infinity;
+    let maxU = -Infinity;
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const point of hull) {
+      const projectedU = point.x * ux + point.y * uy;
+      const projectedV = point.x * vx + point.y * vy;
+      minU = Math.min(minU, projectedU);
+      maxU = Math.max(maxU, projectedU);
+      minV = Math.min(minV, projectedV);
+      maxV = Math.max(maxV, projectedV);
+    }
+    const width = maxU - minU;
+    const height = maxV - minV;
+    const area = width * height;
+    if (!best || area < best.area) {
+      const pointAt = (u, v) => ({ x: u * ux + v * vx, y: u * uy + v * vy });
+      best = {
+        area,
+        points: [
+          pointAt(minU, minV),
+          pointAt(maxU, minV),
+          pointAt(maxU, maxV),
+          pointAt(minU, maxV),
+        ],
+      };
+    }
+  }
+  return best?.points || null;
+};
+
+const rectanglePointsFromBounds = ({ x, y, w, h }) => [
+  { x, y },
+  { x: x + w, y },
+  { x: x + w, y: y + h },
+  { x, y: y + h },
+];
+
+const getSpanBounds = (span) => {
+  const x = span?.pageLeft ?? span?.geoLeft;
+  const y = span?.pageTop ?? span?.geoTop;
+  const right = span?.pageRight ?? span?.geoRight;
+  const bottom = span?.pageBottom ?? (y != null ? y + (span?.pageHeight ?? span?.geoHeight ?? 0) : null);
+  if (![x, y, right, bottom].every(Number.isFinite)) return null;
+  return { x, y, w: Math.max(0, right - x), h: Math.max(0, bottom - y) };
+};
+
+const getSelectedTextSpanEntries = (points, spans, expandToSelectedLines = false) => {
+  const drawnBounds = pointsToBounds(points);
+  if (!drawnBounds || !Array.isArray(spans)) return [];
+  const intersected = spans.map((source) => ({ source, bounds: getSpanBounds(source) })).filter(({ bounds }) => bounds).filter(({ bounds: span }) => {
+    const overlapX = Math.max(0, Math.min(drawnBounds.x + drawnBounds.w, span.x + span.w) - Math.max(drawnBounds.x, span.x));
+    const overlapY = Math.max(0, Math.min(drawnBounds.y + drawnBounds.h, span.y + span.h) - Math.max(drawnBounds.y, span.y));
+    // PDF.js text spans are word-level in many documents. Any genuine
+    // intersection selects the complete word span, never a partial word.
+    return overlapX > 0.01 && overlapY > 0.01;
+  });
+  if (!intersected.length) return [];
+  const lineKey = (source, bounds) => source.rowIndex != null
+    ? `${source.columnIndex ?? "full"}:${source.rowIndex}`
+    : `${source.columnIndex ?? "full"}:${Math.round((bounds.y + bounds.h / 2) * 2) / 2}`;
+  const selectedLineKeys = new Set(intersected.map(({ source, bounds }) => lineKey(source, bounds)));
+  return expandToSelectedLines
+    ? spans
+      .map((source) => ({ source, bounds: getSpanBounds(source) }))
+      .filter(({ source, bounds }) => bounds && selectedLineKeys.has(lineKey(source, bounds)))
+    : intersected;
+};
+
+const unionSelectedTextLines = (points, spans, expandToSelectedLines = false, selectedEntries = null, clipToDrawnBounds = false) => {
+  const drawnBounds = clipToDrawnBounds ? pointsToBounds(points) : null;
+  const selected = (selectedEntries || getSelectedTextSpanEntries(points, spans, expandToSelectedLines))
+    .map(({ bounds }) => bounds)
+    .filter(Boolean)
+    .map((bounds) => {
+      if (!drawnBounds) return bounds;
+      const right = Math.min(bounds.x + bounds.w, drawnBounds.x + drawnBounds.w);
+      const left = Math.max(bounds.x, drawnBounds.x);
+      return {
+        ...bounds,
+        x: left,
+        w: Math.max(0, right - left),
+      };
+    })
+    .filter((bounds) => bounds.w > 0);
+  if (!selected.length) return null;
+  const left = Math.min(...selected.map((line) => line.x));
+  const top = Math.min(...selected.map((line) => line.y));
+  const right = Math.max(...selected.map((span) => span.x + span.w));
+  const bottom = Math.max(...selected.map((span) => span.y + span.h));
+  return { x: left, y: top, w: Math.max(0, right - left), h: Math.max(0, bottom - top) };
+};
+
+// Keep the live selection freeform, then commit a tight geometric rectangle
+// when the pointer is released. Text-oriented BBoxes use the actual PDF text
+// line geometry; image/blank selections fall back to the minimum-area shape.
+const finalizeBBoxAsRectangle = (points, type, spans, selectedEntries = null) => {
+  const drawnBounds = pointsToBounds(points);
+  const selectedLineBounds = type !== "imageBBox"
+    ? unionSelectedTextLines(
+        points,
+        spans,
+        ["bbox", "subLineBBox", "columnBBox"].includes(type),
+        selectedEntries,
+        ["bbox", "columnBBox"].includes(type),
+      )
+    : null;
+  const rectangle = type === "pageBBox"
+    ? (selectedLineBounds ? rectanglePointsFromBounds(selectedLineBounds) : drawnBounds ? rectanglePointsFromBounds(drawnBounds) : null)
+    : selectedLineBounds
+    ? rectanglePointsFromBounds(selectedLineBounds)
+    : minimumAreaRectangle(points);
+  if (!rectangle) return { points: [], closed: false };
+  return {
+    points: rectangle,
+    closed: true,
+    geometry: "rectangle",
+  };
+};
+
+const isBBoxOutlineClosed = (annotationLike) => annotationLike?.closed !== false;
 
 const attractBBoxLoopPoint = (points, scale = 1) => {
   if (!Array.isArray(points) || points.length < 3) return { points: Array.isArray(points) ? points.map((point) => ({ ...point })) : [], closed: false, attraction: 0 };
@@ -929,6 +1186,34 @@ const authFetch = (url, options = {}) => {
 const initStatus   = () => ({ value: "pending", at: new Date().toISOString() });
 const currentStatus = (item) => item.status?.value || "pending";
 
+const BBOX_TYPE_ABBREVIATIONS = Object.freeze({
+  bbox: "P",
+  subLineBBox: "SL",
+  columnBBox: "Part",
+  pageBBox: "Pg",
+  bboxTitle: "T",
+  imageBBox: "Fig",
+});
+
+const SEMANTIC_TYPE_ABBREVIATIONS = Object.freeze({
+  chapter_title: "Ch",
+  section_title: "S",
+  subsection_title: "SubS",
+  paragraph_title: "PT",
+  body_paragraph: "P",
+  figure: "Fig",
+  figure_caption: "FigCap",
+  table: "Tbl",
+  table_caption: "TblCap",
+  table_of_contents: "ToC",
+  list: "List",
+  equation: "Eq",
+  header: "Hdr",
+  footer: "Ftr",
+  page_number: "Pg",
+  unknown: "?",
+});
+
 // "objects" was the card name before the Entities rename — extractions saved
 // before that rename still have nouns tagged "objects" in the database, so
 // reads alias it to "entities" here rather than losing that historical data.
@@ -976,6 +1261,7 @@ const PDFPage = forwardRef(({
   onPageNavStateChange = null,     // (state) => void — fired whenever pageNum/pageCount/disabled change
   fitToContainer = false,          // force the fit-to-container initial zoom even though embedded is true — PDFReaderWorkspace's own reading pane is a full dedicated area, unlike a genuinely cramped embedding (e.g. Units Extraction), so it opts into this instead of "embedded" defaulting to native/1:1 scale for it too
   disableZoom = false,             // disable all zoom controls/gestures for fixed-size reader views like /pdf-reader
+  toolbarHost = null,              // optional external DOM mount for this instance's real toolbar
 }, ref) => {
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
@@ -988,6 +1274,7 @@ const PDFPage = forwardRef(({
   // used for pageNum, just without the interactive canvas layers.
   const [readingMode, setReadingMode] = useState("single"); // "single" | "booklet"
   const [bookletRightPage, setBookletRightPage] = useState(null);
+  const pendingReaderRestoreRef = useRef(null);
   const [insertingBlankPage, setInsertingBlankPage] = useState(false);
   const [deletingPage, setDeletingPage] = useState(false);
   // Page numbers this source has ever had inserted blank via the toolbar
@@ -1014,6 +1301,7 @@ const PDFPage = forwardRef(({
   const [searchActiveIndex, setSearchActiveIndex] = useState(-1);
   const [searchScanning, setSearchScanning] = useState(false);
   const pageTextItemsCacheRef = useRef({}); // { [pageNum]: pdf.js text-content items[] } — raw getTextContent() results, independent of zoom/scale
+  const pdfAssistantPagesCacheRef = useRef({ document: null, promise: null, pages: null });
   // Per-page normalized/compact/tokenized search index (pdfSearchIndex.js) —
   // built once per page from pageTextItemsCacheRef's items and cached
   // alongside it, cleared at the same point (loadPdfBytes) on document change.
@@ -1035,15 +1323,8 @@ const PDFPage = forwardRef(({
   const zoomingDisabled = disableZoom;
   // True for the duration of an actual (primed) pinch gesture — used to
   // lock out everything else a stray second/third contact point could
-  // otherwise trigger while the user's fingers are still down: page-nav
-  // buttons/minimap (real React state so they can be declaratively
-  // disabled) plus text selection (touchInteractionActive below, which
-  // onSelectStart already checks). Declared up here, not down by the rest
-  // of the pinch/zoom state, because startMinimapDrag/panFromMinimapPoint
-  // (defined earlier in the component) already read it in their own
-  // useCallback dependency arrays — those arrays evaluate every render, so
-  // referencing pinchActive before its declaration threw "Cannot access
-  // 'pinchActive' before initialization" the instant the component rendered.
+  // otherwise trigger while the user's fingers are still down, especially
+  // text selection (touchInteractionActive below already checks it).
   const [pinchActive, setPinchActive] = useState(false);
   const [splitRatio,     setSplitRatio]    = useState(1);
   const [mdPanelWidth,   setMdPanelWidth]  = useState(340); // resizable width of the Markdown/Actions left column
@@ -1057,7 +1338,6 @@ const PDFPage = forwardRef(({
   const toolbarRef                    = useRef(null);
   const toolButtonRefs                = useRef({}); // key -> tool strip button element, used to anchor .annot_tool_options at that button's own position instead of the toolbar's fixed corner
   const toolbarDragStateRef           = useRef(null); // { startX, startY, pointerId } while the drag handle is held
-  const toolbarTouchLabelTimerRef     = useRef(0);
   const fitScaleRef                 = useRef(1);
   const zoomRef                     = useRef(1);
   const extractModeRef              = useRef("ai");
@@ -1071,7 +1351,7 @@ const PDFPage = forwardRef(({
   // that flat dock, it never visually follows the cursor.
   const [toolbarDock, setToolbarDock] = useState({ edge: "top" });
   const [toolOptionsOffset, setToolOptionsOffset] = useState(0); // .annot_tool_options' own left (top/bottom dock) or top (left/right dock) offset, measured from the active tool's own button — see the effect near annotTool below
-  const [toolbarTouchLabel, setToolbarTouchLabel] = useState(null); // { key, label }
+  const effectiveToolbarEdge = toolbarHost ? "top" : toolbarDock.edge;
 
   // Single drag handle (replaces the old 4-button dock pad) — press and
   // drag in any direction; once the drag clears a small dead zone (so an
@@ -1121,7 +1401,7 @@ const PDFPage = forwardRef(({
   const [extracting, setExtracting]   = useState(false);
   const [extractError, setExtractError] = useState("");
   const { provider, setProvider }     = useAIProvider();
-  const [showSysModal, setShowSysModal] = useState(false);
+  const [pdfAssistantOpen, setPdfAssistantOpen] = useState(false);
 
   // Start with a real drawing tool selected so the toolbar is immediately
   // live when the PDF loads. Panning is still available through the
@@ -1258,56 +1538,6 @@ const PDFPage = forwardRef(({
     setPageNum(page);
   }, []);
 
-  const panFromMinimapPoint = useCallback((mini, clientX, clientY) => {
-    const previewEl = previewRef.current;
-    const pageEl = pageContainerRefs.current[mini.page - 1];
-    const dragState = minimapDragRef.current;
-    const rect = dragState.rect;
-    if (!previewEl || !pageEl || !rect || rect.width <= 0 || rect.height <= 0) return;
-
-    const relX = clamp((clientX - rect.left) / rect.width, 0, 1);
-    const relY = clamp((clientY - rect.top) / rect.height, 0, 1);
-    const pageX = relX * mini.pageWidth;
-    const pageY = relY * mini.pageHeight;
-    const targetLeft = pageEl.offsetLeft + pageX - mini.visibleWidth / 2;
-    const targetTop = pageEl.offsetTop + pageY - mini.visibleHeight / 2;
-    const maxLeft = Math.max(0, previewEl.scrollWidth - previewEl.clientWidth);
-    const maxTop = Math.max(0, previewEl.scrollHeight - previewEl.clientHeight);
-    previewEl.scrollLeft = clamp(targetLeft, 0, maxLeft);
-    previewEl.scrollTop = clamp(targetTop, 0, maxTop);
-  }, []);
-
-  const startMinimapDrag = useCallback((mini, event) => {
-    if (pinchActive) return; // a pinch is still in progress on the main view — don't also start navigating via the minimap
-    const sheet = event.currentTarget;
-    const pointerId = "pointerId" in event ? event.pointerId : null;
-    minimapDragRef.current = {
-      active: true,
-      pointerId,
-      page: mini.page,
-      rect: sheet.getBoundingClientRect(),
-    };
-    if (pointerId != null) sheet.setPointerCapture?.(pointerId);
-    event.preventDefault();
-    panFromMinimapPoint(mini, event.clientX, event.clientY);
-  }, [panFromMinimapPoint, pinchActive]);
-
-  const moveMinimapDrag = useCallback((mini, event) => {
-    const dragState = minimapDragRef.current;
-    if (!dragState.active || dragState.page !== mini.page) return;
-    if (dragState.pointerId != null && "pointerId" in event && dragState.pointerId !== event.pointerId) return;
-    event.preventDefault();
-    panFromMinimapPoint(mini, event.clientX, event.clientY);
-  }, [panFromMinimapPoint]);
-
-  const endMinimapDrag = useCallback((mini, event) => {
-    const dragState = minimapDragRef.current;
-    if (!dragState.active || dragState.page !== mini.page) return;
-    if (dragState.pointerId != null && "pointerId" in event && dragState.pointerId !== event.pointerId) return;
-    if ("pointerId" in event && event.pointerId != null) event.currentTarget.releasePointerCapture?.(event.pointerId);
-    minimapDragRef.current = { active: false, pointerId: null, page: null, rect: null };
-  }, []);
-
   const showMarkdownPageInPdf = useCallback((mode) => {
     const targetPage = mdCurrentPage.page;
     setPdfMdCountHighlight((prev) => {
@@ -1320,16 +1550,6 @@ const PDFPage = forwardRef(({
       return next;
     });
   }, [mdCurrentPage.page, scrollReaderToPage, splitRatio]);
-
-
-  const showToolbarTouchLabel = useCallback((key, label) => {
-    if (toolbarTouchLabelTimerRef.current) clearTimeout(toolbarTouchLabelTimerRef.current);
-    setToolbarTouchLabel({ key, label });
-    toolbarTouchLabelTimerRef.current = setTimeout(() => {
-      setToolbarTouchLabel((current) => (current?.key === key ? null : current));
-      toolbarTouchLabelTimerRef.current = 0;
-    }, 1000);
-  }, []);
 
   const toggleAnnotTool = useCallback((key) => {
     // Smart Video's aside is only ever closed by re-pressing this same
@@ -1346,7 +1566,7 @@ const PDFPage = forwardRef(({
   // and MODE_TOOL_ORDER (.annot_mode_strip) — every plain annotTool button
   // (everything except the "shapes" group-opener, which has its own
   // active-state logic across all four SHAPE_TOOL_KEYS) follows the exact
-  // same select/toggle/touch-label pattern regardless of which group it
+  // same select/toggle pattern regardless of which group it
   // renders in.
   const renderAnnotToolButton = (key) => {
     if (key === "shapes") {
@@ -1377,25 +1597,15 @@ const PDFPage = forwardRef(({
           ref={(el) => { toolButtonRefs.current[key] = el; }}
           type="button"
           className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}`}
-          onPointerDown={(event) => {
-            if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(key, tool.label);
-          }}
           onClick={() => toggleAnnotTool(key)}
           title={tool.label}
           aria-label={tool.label}
         >
-          {toolbarTouchLabel?.key === key && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
           {key === "pen" ? <PenToolIcon /> : tool.iconSvg || <i className={tool.icon} />}
         </button>
       </React.Fragment>
     );
   };
-
-  useEffect(() => (
-    () => {
-      if (toolbarTouchLabelTimerRef.current) clearTimeout(toolbarTouchLabelTimerRef.current);
-    }
-  ), []);
 
   // ── Annotation History (toolbar "History" button + left column) ────────────
   // A running, in-session log of every annotation step taken (add/undo/redo/
@@ -1403,11 +1613,29 @@ const PDFPage = forwardRef(({
   // you did and when, not just the current end result.
   const [annotHistory,     setAnnotHistory]     = useState([]);
   const [annotHistoryOpen, setAnnotHistoryOpen] = useState(false);
-  const [pageMinimap, setPageMinimap] = useState([]);
-  const minimapDragRef = useRef({ active: false, pointerId: null, page: null, rect: null });
+  const appendAnnotHistoryEntry = useCallback((history, entry) => (
+    [...history, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300)
+  ), []);
   const logAnnotHistory = useCallback((entry) => {
-    setAnnotHistory((prev) => [...prev, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300));
-  }, []);
+    setAnnotHistory((prev) => appendAnnotHistoryEntry(prev, entry));
+  }, [appendAnnotHistoryEntry]);
+  // Deleting a SINGLE annotation (text/highlight/bbox action-menu "Delete")
+  // used to always append a brand new "Deleted ..." row — leaving the
+  // original "Added ..." row for that same annotation sitting further up
+  // the log looking like it's still active. Marking that original row
+  // cleared in place is the more honest record: one row per annotation,
+  // its own current status, not two disconnected rows for the same thing.
+  // Only possible for annotations added after annotationId started being
+  // logged (see the "add" call sites) and whose row hasn't aged out of the
+  // 300-entry cap — falls back to the old standalone "delete" row otherwise.
+  const markAnnotationCleared = useCallback((annotationId, page, type) => {
+    const match = annotHistory.find((h) => h.action === "add" && h.annotationId === annotationId);
+    if (!match) {
+      logAnnotHistory({ action: "delete", type, page });
+      return;
+    }
+    setAnnotHistory((prev) => prev.map((h) => (h.id === match.id ? { ...h, clearedAt: new Date() } : h)));
+  }, [annotHistory, logAnnotHistory]);
 
   // ── Smart Video Search ("Extract Eidos and Find Videos") ────────────────────
   // A tool-strip tool (annotTool === "smartVideo", next to eraser). Selecting
@@ -1476,6 +1704,11 @@ const PDFPage = forwardRef(({
       .catch(() => {}); // footer just falls back to provider-only if this fails
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiProviderModels]);
+  useEffect(() => {
+    if (!pdfAssistantOpen) return;
+    fetchAiProviderModelsOnce();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfAssistantOpen]);
   // Mount the aside the moment the tool is picked; leaving the tool disarms
   // capture mode so switching away and back always requires an explicit
   // "Start selecting" press again, never a silently-still-armed drag.
@@ -1642,13 +1875,12 @@ const PDFPage = forwardRef(({
   // completely separate, purely client-side view, not to be confused.
   const [hyleLayerData, setHyleLayerData] = useState(null); // whatever pdfHyleStats.js returned for hyleMode, or null while loading/off
 
-  // "raw" is the resting/default state (draws nothing — see the drawing
-  // effect below), so toggling the active mode off lands back on "raw"
-  // rather than null; hyleMode is never null.
-  const selectHyleMode = useCallback((mode) => {
-    setHyleMode((prev) => (prev === mode ? "raw" : mode));
-    setHyleFabOpen(false);
-  }, []);
+  const createAnnotationLayer = useCallback((index, annotationsForLayer = {}) => ({
+    id: `annot-layer-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: `Layer ${index}`,
+    visible: true,
+    annotations: annotationsForLayer,
+  }), []);
 
   // ── Selection action (selectionOnly mode) ──────────────────────────────────
   const [selectionActionBusy,  setSelectionActionBusy]  = useState(false);
@@ -1657,9 +1889,9 @@ const PDFPage = forwardRef(({
   // ── Annotation state ──────────────────────────────────────────────────────
   const [savedToolbarSettings] = useState(loadPdfToolbarSettings);
   const [annotToolColors, setAnnotToolColors] = useState(savedToolbarSettings.annotToolColors);
+  const [annotToolColorPresets, setAnnotToolColorPresets] = useState(savedToolbarSettings.annotToolColorPresets);
   const [annotSize,      setAnnotSize]      = useState(savedToolbarSettings.annotSize);  // highlight lineWidth
   const [penSize,        setPenSize]        = useState(savedToolbarSettings.penSize);   // pen lineWidth
-  const [arrowSize,      setArrowSize]      = useState(savedToolbarSettings.arrowSize);   // arrow lineWidth
   const [penStabilization, setPenStabilization] = useState(savedToolbarSettings.penStabilization);
   const [penPressureAssist, setPenPressureAssist] = useState(savedToolbarSettings.penPressureAssist);
   const [penTaper, setPenTaper] = useState(savedToolbarSettings.penTaper);
@@ -1686,19 +1918,17 @@ const PDFPage = forwardRef(({
   // Shapes tools only (line/arrow/rect/circle) — border dash pattern and
   // (rect only) corner rounding. See annotationDraw.js's own "rect"/
   // shared-dash handling for how these render.
-  const [shapeBorderStyle, setShapeBorderStyle] = useState(savedToolbarSettings.shapeBorderStyle);
-  const [shapeBorderRadius, setShapeBorderRadius] = useState(savedToolbarSettings.shapeBorderRadius);
+  const [shapeToolSettings, setShapeToolSettings] = useState(savedToolbarSettings.shapeToolSettings);
   const [bboxBorderSize, setBBoxBorderSize] = useState(savedToolbarSettings.bboxBorderSize);
   // Fill for closed shapes only (rect/circle — line/arrow have no
   // interior to fill), same low-alpha wash convention as textBackground.
   // Always uses the shape's own border/ink color (annotationDraw.js) —
   // no independent fill color, so just an on/off toggle, not a swatch.
-  const [shapeBackground, setShapeBackground] = useState(savedToolbarSettings.shapeBackground);
   // Which color the shared floating dropdown (.annot_dd--colors) writes
-  // to when a swatch is clicked — "ink" (annotColor, every tool) or
-  // "background" (textBackgroundColor, Text tool's Background swatch).
-  // Not persisted — always resets to "ink" on reload.
-  const [colorMenuTarget, setColorMenuTarget] = useState("ink");
+  // to when a swatch is clicked — either the current tool ink, the Text
+  // tool's background swatch, or one of the per-tool saved preset slots.
+  // Not persisted — always resets to plain ink targeting on reload.
+  const [colorMenuTarget, setColorMenuTarget] = useState({ type: "ink", presetIndex: null });
   const [drawTextBusy, setDrawTextBusy] = useState(false);
   const [drawTextStatus, setDrawTextStatus] = useState("");
   const [drawTextProgress, setDrawTextProgress] = useState(0);
@@ -1720,8 +1950,247 @@ const PDFPage = forwardRef(({
   // shared dropdown — this ref covers ITS wrap for the outside-click
   // check below, same reason colorMenuRef does for the Ink trigger.
   const bgSwatchRef = useRef(null);
-  const [annotations, setAnnotations] = useState({});   // { [pageNum]: [...] }
+  const colorPresetPressRef = useRef({ index: null, timer: null, suppressClick: false, pointerId: null });
+  const [annotationLayers, setAnnotationLayers] = useState(() => [createAnnotationLayer(1, {})]);
+  const [activeAnnotationLayerId, setActiveAnnotationLayerId] = useState(null);
+  const [annotations, setAnnotations] = useState({});   // active layer only: { [pageNum]: [...] }
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
+  const activeAnnotationLayer = useMemo(
+    () => annotationLayers.find((layer) => layer.id === activeAnnotationLayerId) || annotationLayers[0] || null,
+    [annotationLayers, activeAnnotationLayerId],
+  );
+  useEffect(() => {
+    if (!annotationLayers.length) return;
+    if (!activeAnnotationLayerId || !annotationLayers.some((layer) => layer.id === activeAnnotationLayerId)) {
+      const firstLayer = annotationLayers[0];
+      setActiveAnnotationLayerId(firstLayer.id);
+      setAnnotations(firstLayer.annotations || {});
+      setRedoStacks({});
+    }
+  }, [annotationLayers, activeAnnotationLayerId]);
+  useEffect(() => {
+    // `annotations` is the editable working state for the active layer.
+    // Only copy it outward into that layer; copying layer state back here in
+    // a second effect created a two-way race that could restore stale data
+    // immediately after pointer-up and make a committed mark disappear.
+    if (!activeAnnotationLayerId || !activeAnnotationLayer) return;
+    if (activeAnnotationLayer.annotations === annotations) return;
+    setAnnotationLayers((prev) => prev.map((layer) => (
+      layer.id === activeAnnotationLayerId && layer.annotations !== annotations
+        ? { ...layer, annotations }
+        : layer
+    )));
+  }, [annotations, activeAnnotationLayer, activeAnnotationLayerId]);
+  const annotationLayersForView = useMemo(() => (
+    annotationLayers.map((layer) => (
+      layer.id === activeAnnotationLayer?.id ? { ...layer, annotations } : layer
+    ))
+  ), [annotationLayers, activeAnnotationLayer, annotations]);
+  const visibleAnnotations = useMemo(() => {
+    const merged = {};
+    for (const layer of annotationLayersForView) {
+      if (layer.visible === false) continue;
+      for (const [pageKey, pageAnnotations] of Object.entries(layer.annotations || {})) {
+        merged[pageKey] = [...(merged[pageKey] || []), ...pageAnnotations];
+      }
+    }
+    return merged;
+  }, [annotationLayersForView]);
+  const visiblePageAnnotations = visibleAnnotations[pageNum] || [];
+  const totalAnnotationCount = useMemo(
+    () => annotationLayersForView.reduce(
+      (sum, layer) => sum + Object.values(layer.annotations || {}).reduce((layerSum, list) => layerSum + list.length, 0),
+      0,
+    ),
+    [annotationLayersForView],
+  );
+  const buildReaderStatePayload = useCallback(() => {
+    const previewEl = previewRef.current;
+    const currentPageEl = pageContainerRefs.current[pageNum - 1] || null;
+    const pageWidth = Math.max(1, currentPageEl?.offsetWidth || 1);
+    const pageHeight = Math.max(1, currentPageEl?.offsetHeight || 1);
+    const pageLeft = currentPageEl?.offsetLeft || 0;
+    const pageTop = currentPageEl?.offsetTop || 0;
+    return {
+      pageNum,
+      zoom,
+      readingMode,
+      bookletRightPage: readingMode === "booklet" ? bookletRightPage : null,
+      searchOpen,
+      searchQuery,
+      pageRatioX: previewEl && currentPageEl
+        ? clamp(((previewEl.scrollLeft + (previewEl.clientWidth / 2)) - pageLeft) / pageWidth, 0, 1)
+        : null,
+      pageRatioY: previewEl && currentPageEl
+        ? clamp(((previewEl.scrollTop + (previewEl.clientHeight / 2)) - pageTop) / pageHeight, 0, 1)
+        : null,
+    };
+  }, [bookletRightPage, pageNum, readingMode, searchOpen, searchQuery, zoom]);
+  const buildAnnotationSavePayload = useCallback(({ activeAnnotations = annotations, history = annotHistory, layers = null } = {}) => {
+    const sourceLayers = layers || annotationLayersForView;
+    const targetLayerId = activeAnnotationLayer?.id
+      || activeAnnotationLayerId
+      || sourceLayers[0]?.id
+      || null;
+    const nextLayers = sourceLayers.map((layer) => (
+      layer.id === targetLayerId
+        ? { ...layer, annotations: activeAnnotations }
+        : layer
+    ));
+    return {
+      layers: nextLayers,
+      activeLayerId: targetLayerId || nextLayers[0]?.id || null,
+      history,
+      readerState: buildReaderStatePayload(),
+    };
+  }, [annotationLayersForView, activeAnnotationLayer, activeAnnotationLayerId, annotations, annotHistory, buildReaderStatePayload]);
+  const mapOcrPageToPdfSpace = useCallback(async (ocrPage, targetPage) => {
+    if (!ocrPage || !(ocrPage.width > 0) || !(ocrPage.height > 0) || !pdfDoc) return ocrPage;
+    const pdfPage = await pdfDoc.getPage(targetPage);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const scaleX = viewport.width / ocrPage.width;
+    const scaleY = viewport.height / ocrPage.height;
+    return {
+      ...ocrPage,
+      lines: (ocrPage.blocks || []).map((block) => {
+        const box = block.bbox || {};
+        const x = Number(box.x);
+        const y = Number(box.y);
+        const width = Number(box.width);
+        const height = Number(box.height);
+        const text = String(block.text || block.markdown || "").trim();
+        if (!text || ![x, y, width, height].every(Number.isFinite)) return null;
+        return {
+          text,
+          type: block.type || "unknown",
+          bbox: {
+            x: x * scaleX,
+            y: y * scaleY,
+            width: width * scaleX,
+            height: height * scaleY,
+          },
+        };
+      }).filter(Boolean),
+    };
+  }, [pdfDoc]);
+  const correctBBoxAnnotationFromOcr = useCallback(async ({ annotationId, targetPage, rawPdfText, bboxPdf, sourceId }) => {
+    if (!annotationId || !rawPdfText?.trim() || !sourceId) return;
+    try {
+      const response = await authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?page=${targetPage}`));
+      const data = await response.json();
+      const ocrPage = data.pages?.[0];
+      if (!response.ok || !ocrPage?.markdown?.trim()) return;
+      const alignedOcrPage = await mapOcrPageToPdfSpace(ocrPage, targetPage);
+      const correction = await correctBBoxText({
+        rawPdfText,
+        bboxPdf,
+        pageIndex: targetPage - 1,
+        ocrPage: alignedOcrPage,
+      });
+      const currentAnnotations = annotationsRef.current;
+      const currentAnnotation = (currentAnnotations[targetPage] || []).find((item) => item.id === annotationId);
+      if (!currentAnnotation || currentAnnotation.textCorrection?.source === "manual") return;
+      const nextAnnotations = {
+        ...currentAnnotations,
+        [targetPage]: (currentAnnotations[targetPage] || []).map((item) => (
+          item.id === annotationId
+            ? {
+                ...item,
+                text: correction.correctedText,
+                correctedText: correction.correctedText,
+                ocrCorrectedText: correction.correctionSource === "ocr_alignment"
+                  ? correction.correctedText
+                  : (correction.ocrCandidateText || correction.correctedText),
+                rawPdfText: correction.rawText,
+                textCorrection: {
+                  source: correction.correctionSource,
+                  confidence: correction.correctionConfidence,
+                  warnings: correction.correctionWarnings,
+                  audit: correction.correctionAudit,
+                  ocrVersion: data.job?.schemaVersion || null,
+                  ocrJobId: data.job?.id || null,
+                  applied: correction.correctionSource === "ocr_alignment",
+                  correctionVersion: BBOX_TEXT_CORRECTION_VERSION,
+                },
+              }
+            : item
+        )),
+      };
+      annotationsRef.current = nextAnnotations;
+      setAnnotations(nextAnnotations);
+      await authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
+      });
+    } catch (error) {
+      console.warn("[PDF] BBox OCR text correction skipped", error);
+    }
+  }, [buildAnnotationSavePayload, mapOcrPageToPdfSpace]);
+  const activateAnnotationLayer = useCallback((layerId) => {
+    const nextLayer = annotationLayers.find((layer) => layer.id === layerId);
+    if (!nextLayer || nextLayer.id === activeAnnotationLayerId) return;
+    setActiveAnnotationLayerId(nextLayer.id);
+    setAnnotations(nextLayer.annotations || {});
+    setRedoStacks({});
+  }, [annotationLayers, activeAnnotationLayerId]);
+  const addAnnotationLayer = useCallback(() => {
+    setAnnotationLayers((prev) => {
+      const nextLayer = createAnnotationLayer(prev.length + 1, {});
+      const next = [...prev, nextLayer];
+      setActiveAnnotationLayerId(nextLayer.id);
+      setAnnotations(nextLayer.annotations);
+      setRedoStacks({});
+      setHyleFabOpen(true);
+      return next;
+    });
+  }, [createAnnotationLayer]);
+  const toggleAnnotationLayerVisibility = useCallback((layerId) => {
+    setAnnotationLayers((prev) => {
+      const layer = prev.find((item) => item.id === layerId);
+      if (!layer) return prev;
+      const visibleCount = prev.filter((item) => item.visible !== false).length;
+      if (layer.visible !== false && visibleCount <= 1) return prev;
+      const next = prev.map((item) => (item.id === layerId ? { ...item, visible: item.visible === false } : item));
+      if (layer.id === activeAnnotationLayerId && layer.visible !== false) {
+        const nextVisibleLayer = next.find((item) => item.id !== layerId && item.visible !== false);
+        if (nextVisibleLayer) {
+          setActiveAnnotationLayerId(nextVisibleLayer.id);
+          setAnnotations(nextVisibleLayer.annotations || {});
+          setRedoStacks({});
+        }
+      }
+      return next;
+    });
+  }, [activeAnnotationLayerId]);
+  const deleteAnnotationLayer = useCallback((layerId) => {
+    if (annotationLayersForView.length <= 1) return;
+    const layer = annotationLayersForView.find((item) => item.id === layerId);
+    if (!layer) return;
+    const annotationCount = Object.values(layer.annotations || {})
+      .reduce((sum, list) => sum + list.length, 0);
+    if (
+      annotationCount > 0
+      && !window.confirm(
+        `Delete ${layer.name} and its ${annotationCount} annotation${annotationCount === 1 ? "" : "s"}? This cannot be undone.`,
+      )
+    ) return;
+
+    let nextLayers = annotationLayersForView.filter((item) => item.id !== layerId);
+    if (layerId === activeAnnotationLayerId) {
+      let replacement = nextLayers.find((item) => item.visible !== false) || nextLayers[0];
+      if (replacement.visible === false) {
+        replacement = { ...replacement, visible: true };
+        nextLayers = nextLayers.map((item) => (item.id === replacement.id ? replacement : item));
+      }
+      setActiveAnnotationLayerId(replacement.id);
+      setAnnotations(replacement.annotations || {});
+      setRedoStacks({});
+    }
+    setAnnotationLayers(nextLayers);
+  }, [activeAnnotationLayerId, annotationLayersForView]);
   const selectionBboxes = useMemo(
     () => (annotations[pageNum] || []).filter((ann) => isBBoxType(ann.type) && !bboxTypeHas(ann.type, "extractsTitle")),
     [annotations, pageNum],
@@ -1731,7 +2200,8 @@ const PDFPage = forwardRef(({
     [annotations, pageNum],
   );
   const drawAnnotationWithOwnerClip = useCallback((ctx, ann, scale, pageAnnotations = []) => {
-    drawAnnotation(ctx, ann, scale);
+    const basePageScale = Math.max(0.001, fitScaleRef.current || 1);
+    drawAnnotation(ctx, ann, scale, scale / basePageScale);
   }, []);
   const bboxTextMatchesSpan = useCallback((bbox, span) => bboxTextMatchesSpanUtil(bbox, span), []);
   const bboxCreationMatchesSpan = useCallback((selectionRect, span) => {
@@ -1820,27 +2290,133 @@ const PDFPage = forwardRef(({
   const regionForSpanIndex = useCallback((spanIdx) => {
     const span = spansRef.current[spanIdx];
     if (!span) return null;
-    for (let i = selectionBboxes.length - 1; i >= 0; i--) {
-      const bbox = selectionBboxes[i];
-      if (bboxMatchesSpan(bbox, span)) return bbox;
-    }
-    return null;
+    return selectionBboxes
+      .filter((bbox) => bboxMatchesSpan(bbox, span))
+      .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null;
   }, [bboxMatchesSpan, selectionBboxes]);
   const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
     ? (annotToolColors[annotTool] || DEFAULT_ANNOT_TOOL_COLORS[annotTool])
     : "#ffff00";
+  const activeToolColorPresets = annotTool && annotToolColorPresets[annotTool]
+    ? annotToolColorPresets[annotTool]
+    : [];
+  const activeToolColorPresetIndex = activeToolColorPresets.findIndex((color) => color === annotColor);
+  const activeShapeSettings = SHAPE_TOOL_KEYS.includes(annotTool)
+    ? (shapeToolSettings[annotTool] || DEFAULT_SHAPE_TOOL_SETTINGS[annotTool])
+    : null;
+  const shapeStrokeWidth = activeShapeSettings?.strokeWidth || 2;
+  const shapeBorderStyle = activeShapeSettings?.borderStyle || "solid";
+  const shapeBorderRadius = activeShapeSettings?.borderRadius || 0;
+  const shapeBackground = Boolean(activeShapeSettings?.background);
+  const updateActiveShapeSetting = useCallback((patch) => {
+    if (!SHAPE_TOOL_KEYS.includes(annotTool)) return;
+    setShapeToolSettings((previous) => ({
+      ...previous,
+      [annotTool]: {
+        ...(previous[annotTool] || DEFAULT_SHAPE_TOOL_SETTINGS[annotTool]),
+        ...patch,
+      },
+    }));
+  }, [annotTool]);
+  const setShapeBorderStyle = useCallback((borderStyle) => {
+    updateActiveShapeSetting({ borderStyle });
+  }, [updateActiveShapeSetting]);
+  const setShapeBorderRadius = useCallback((borderRadius) => {
+    updateActiveShapeSetting({ borderRadius });
+  }, [updateActiveShapeSetting]);
+  const setShapeBackground = useCallback((valueOrUpdater) => {
+    const nextValue = typeof valueOrUpdater === "function"
+      ? valueOrUpdater(Boolean(activeShapeSettings?.background))
+      : valueOrUpdater;
+    updateActiveShapeSetting({ background: Boolean(nextValue) });
+  }, [activeShapeSettings?.background, updateActiveShapeSetting]);
   const setAnnotColor = useCallback((nextColor) => {
     setAnnotToolColors((prev) => {
       if (!annotTool || !DEFAULT_ANNOT_TOOL_COLORS[annotTool]) return prev;
       return { ...prev, [annotTool]: nextColor };
     });
   }, [annotTool]);
+  const setAnnotToolColorPreset = useCallback((presetIndex, nextColor) => {
+    if (!annotTool || !DEFAULT_ANNOT_TOOL_COLORS[annotTool]) return;
+    setAnnotToolColorPresets((prev) => {
+      const current = Array.isArray(prev[annotTool]) ? prev[annotTool] : buildDefaultAnnotToolColorPresets()[annotTool];
+      const nextSlots = Array.from({ length: COLOR_PRESET_SLOT_COUNT }, (_, index) => current[index] ?? null);
+      nextSlots[presetIndex] = nextColor;
+      return { ...prev, [annotTool]: nextSlots };
+    });
+    if (nextColor) setAnnotColor(nextColor);
+  }, [annotTool, setAnnotColor]);
+  const openColorMenuFromRect = useCallback((rect, target) => {
+    setColorMenuTarget(target);
+    setColorMenuOpen((wasOpen) => {
+      if (
+        wasOpen
+        && colorMenuTarget.type === target.type
+        && colorMenuTarget.presetIndex === (target.presetIndex ?? null)
+      ) return false;
+      if (effectiveToolbarEdge === "bottom") {
+        setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
+      } else {
+        setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
+      }
+      return true;
+    });
+  }, [colorMenuTarget, effectiveToolbarEdge]);
+  const startColorPresetLongPress = useCallback((presetIndex, event) => {
+    const state = colorPresetPressRef.current;
+    if (state.timer) clearTimeout(state.timer);
+    state.index = presetIndex;
+    state.pointerId = event.pointerId;
+    state.suppressClick = false;
+    const rect = event.currentTarget.getBoundingClientRect();
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      state.suppressClick = true;
+      openColorMenuFromRect(rect, { type: "preset", presetIndex });
+    }, 450);
+  }, [openColorMenuFromRect]);
+  const clearColorPresetLongPress = useCallback((pointerId = null, options = {}) => {
+    const state = colorPresetPressRef.current;
+    if (pointerId !== null && state.pointerId !== null && state.pointerId !== pointerId) return false;
+    const suppressClick = state.suppressClick;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = null;
+    if (!options.keepSuppressClick) {
+      state.suppressClick = false;
+      state.index = null;
+      state.pointerId = null;
+    }
+    return suppressClick;
+  }, []);
+  useEffect(() => () => {
+    if (colorPresetPressRef.current.timer) clearTimeout(colorPresetPressRef.current.timer);
+  }, []);
+  // Starts true so the save effect's very first run — the initial mount,
+  // firing before the hydration GET below has had any chance to land —
+  // never PATCHes the server. Without this, a slow/racing hydration fetch
+  // could lose: mount fires the save effect with only the (possibly
+  // stale/default) localStorage values, arms its 700ms PATCH regardless,
+  // and if that fires before hydration's setters land, it overwrites
+  // whatever was genuinely saved server-side with those stale local ones —
+  // which is exactly "my settings vanished after a refresh": the account's
+  // real saved settings got clobbered by defaults on the very reload meant
+  // to restore them. Also re-set to true right before the hydration effect
+  // itself applies the account's settings, so THAT bulk 30-setter update
+  // doesn't immediately turn around and PATCH the exact same values
+  // straight back either — same skip-flag pattern skipNextAnnotationAutosaveRef
+  // already uses for the same reason.
+  const skipNextPdfToolbarServerSaveRef = useRef(true);
+  const pdfToolbarServerSaveTimerRef = useRef(null);
+  const pdfToolbarHydrationPendingRef = useRef(true);
+  const pdfToolbarChangedBeforeHydrationRef = useRef(false);
+  const pdfToolbarSaveEffectMountedRef = useRef(false);
+  const pdfToolbarSettingsRef = useRef(savedToolbarSettings);
   useEffect(() => {
-    savePdfToolbarSettings({
+    const settings = {
       annotToolColors,
+      annotToolColorPresets,
       annotSize,
       penSize,
-      arrowSize,
       penStabilization,
       penPressureAssist,
       penTaper,
@@ -1864,16 +2440,40 @@ const PDFPage = forwardRef(({
       textBackground,
       textBackgroundColor,
       textPadding,
-      shapeBorderStyle,
-      shapeBorderRadius,
       bboxBorderSize,
-      shapeBackground,
-    });
+      shapeToolSettings,
+    };
+    pdfToolbarSettingsRef.current = settings;
+    // Instant, synchronous, offline-safe — unaffected by the server debounce
+    // below, and still the first thing a fresh mount reads (loadPdfToolbarSettings).
+    savePdfToolbarSettings(settings);
+
+    if (pdfToolbarSaveEffectMountedRef.current && pdfToolbarHydrationPendingRef.current) {
+      pdfToolbarChangedBeforeHydrationRef.current = true;
+    }
+    pdfToolbarSaveEffectMountedRef.current = true;
+
+    if (skipNextPdfToolbarServerSaveRef.current) {
+      skipNextPdfToolbarServerSaveRef.current = false;
+      return;
+    }
+    // Debounced: several of these controls (the opacity/size/stabilization
+    // knobs especially) fire onChange continuously while being dragged —
+    // PATCHing the server on every tick of a drag would spam it for no
+    // benefit, since only the final value after release matters.
+    if (pdfToolbarServerSaveTimerRef.current) clearTimeout(pdfToolbarServerSaveTimerRef.current);
+    pdfToolbarServerSaveTimerRef.current = setTimeout(() => {
+      authFetch(apiUrl("/api/user/me/pdf-toolbar-settings"), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfToolbarSettings: settings }),
+      }).catch(() => {});
+    }, 700);
   }, [
     annotToolColors,
+    annotToolColorPresets,
     annotSize,
     penSize,
-    arrowSize,
     penStabilization,
     penPressureAssist,
     penTaper,
@@ -1897,11 +2497,84 @@ const PDFPage = forwardRef(({
     textBackground,
     textBackgroundColor,
     textPadding,
-    shapeBorderStyle,
-    shapeBorderRadius,
     bboxBorderSize,
-    shapeBackground,
+    shapeToolSettings,
   ]);
+  useEffect(() => {
+    const persistPdfToolbarSettingsNow = () => {
+      if (pdfToolbarHydrationPendingRef.current && !pdfToolbarChangedBeforeHydrationRef.current) return;
+      if (pdfToolbarServerSaveTimerRef.current) {
+        clearTimeout(pdfToolbarServerSaveTimerRef.current);
+        pdfToolbarServerSaveTimerRef.current = null;
+      }
+      authFetch(apiUrl("/api/user/me/pdf-toolbar-settings"), {
+        method: "PATCH",
+        keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfToolbarSettings: pdfToolbarSettingsRef.current }),
+      }).catch(() => {});
+    };
+    window.addEventListener("pagehide", persistPdfToolbarSettingsNow);
+    return () => {
+      window.removeEventListener("pagehide", persistPdfToolbarSettingsNow);
+      persistPdfToolbarSettingsNow();
+    };
+  }, []);
+  // One-time hydration from the account's server-saved settings (GET
+  // /api/user/me/pdf-toolbar-settings) — runs once on mount, right after
+  // the synchronous localStorage-based defaults above already gave every
+  // control an instant value. Overwrites them once the account's own copy
+  // comes back, so switching browsers/devices actually carries these
+  // settings over instead of silently resetting to DEFAULT_PDF_TOOLBAR_SETTINGS.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch(apiUrl("/api/user/me/pdf-toolbar-settings"));
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (!data.pdfToolbarSettings || !Object.keys(data.pdfToolbarSettings).length) return;
+        pdfToolbarHydrationPendingRef.current = false;
+        if (pdfToolbarChangedBeforeHydrationRef.current) return;
+        const s = normalizePdfToolbarSettings(data.pdfToolbarSettings);
+        skipNextPdfToolbarServerSaveRef.current = true;
+        setAnnotToolColors(s.annotToolColors);
+        setAnnotToolColorPresets(s.annotToolColorPresets);
+        setAnnotSize(s.annotSize);
+        setPenSize(s.penSize);
+        setPenStabilization(s.penStabilization);
+        setPenPressureAssist(s.penPressureAssist);
+        setPenTaper(s.penTaper);
+        setPenFlow(s.penFlow);
+        setPenNibAngle(s.penNibAngle);
+        setPenNibSpread(s.penNibSpread);
+        setPenType(s.penType);
+        setEraserSize(s.eraserSize);
+        setEraserMode(s.eraserMode);
+        setHighlightMode(s.highlightMode);
+        setHighlightAutoWidth(s.highlightAutoWidth);
+        setHighlightTaperEnds(s.highlightTaperEnds);
+        setHighlightAutoContrast(s.highlightAutoContrast);
+        setAnnotOpacity(s.annotOpacity);
+        setTextFontFamily(s.textFontFamily);
+        setTextFontSize(s.textFontSize);
+        setTextAlign(s.textAlign);
+        setTextBold(s.textBold);
+        setTextItalic(s.textItalic);
+        setTextUnderline(s.textUnderline);
+        setTextBackground(s.textBackground);
+        setTextBackgroundColor(s.textBackgroundColor);
+        setTextPadding(s.textPadding);
+        setBBoxBorderSize(s.bboxBorderSize);
+        setShapeToolSettings(s.shapeToolSettings);
+      } catch {
+        // Keep the localStorage-loaded defaults if the fetch fails.
+      } finally {
+        pdfToolbarHydrationPendingRef.current = false;
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const getOcrWorker = useCallback(async () => {
     if (ocrWorkerRef.current) return ocrWorkerRef.current;
     if (ocrWorkerPromiseRef.current) return ocrWorkerPromiseRef.current;
@@ -2026,11 +2699,11 @@ const PDFPage = forwardRef(({
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: annotations, history: annotHistory }),
+        body: JSON.stringify(buildAnnotationSavePayload()),
       }).catch(() => {}); // best-effort background autosave — a failed write shouldn't interrupt reading/annotating
     }, 1500);
     return () => clearTimeout(timer);
-  }, [annotations, annotHistory]);
+  }, [annotations, annotHistory, buildAnnotationSavePayload]);
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
   const [textActionMenu, setTextActionMenu] = useState(null); // { vx, vy, editingId }
   const [textStyleTargetId, setTextStyleTargetId] = useState(null); // id of an existing text annotation being style-edited
@@ -2038,17 +2711,232 @@ const PDFPage = forwardRef(({
   const [highlightActionMenu, setHighlightActionMenu] = useState(null); // { vx, vy, editingId }
   const [highlightStyleTargetId, setHighlightStyleTargetId] = useState(null); // id of an existing highlight being style-edited
   const [bboxActionMenu, setBBoxActionMenu] = useState(null); // { vx, vy, editingId }
+  const [bboxMinibarOpenId, setBBoxMinibarOpenId] = useState(null);
   const [bboxResizeTargetId, setBBoxResizeTargetId] = useState(null); // id of an existing bbox armed for resize
+  const [bboxOverlayTick, setBBoxOverlayTick] = useState(0);
+  const bboxLabelRefs = useRef({});
+  const [bboxLabelPositions, setBBoxLabelPositions] = useState({});
+  const bboxActionRefs = useRef({});
+  const [bboxActionPositions, setBBoxActionPositions] = useState({});
   const [activeBBoxCreationType, setActiveBBoxCreationType] = useState(null);
   const toggleBBoxCreationType = useCallback((type) => {
     setActiveBBoxCreationType((current) => (current === type ? null : type));
   }, []);
+  useLayoutEffect(() => {
+    if (!pageViewport || !managedBboxes.length) return;
+    const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
+    if (!canvasRect) return;
+    const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
+    const canvasScaleX = canvasRect.width && pageViewport.width ? canvasRect.width / pageViewport.width : 1;
+    const canvasScaleY = canvasRect.height && pageViewport.height ? canvasRect.height / pageViewport.height : canvasScaleX;
+    const priority = (label) => (
+      label.startsWith("Section") ? 0
+        : label.startsWith("Paragraph") ? 1
+          : label.startsWith("Bullet") ? 2
+            : label.startsWith("Image") ? 3 : 4
+    );
+    const overlaps = (a, b, gap = 2) => !(
+      a.right + gap <= b.left
+      || a.left >= b.right + gap
+      || a.bottom + gap <= b.top
+      || a.top >= b.bottom + gap
+    );
+    const ordered = managedBboxes
+      .map((bbox) => ({ bbox, label: getBBoxTypeDefinition(bbox.type)?.label || "" }))
+      .filter(({ bbox, label }) => label && bboxLabelRefs.current[bbox.id])
+      .sort((a, b) => (
+        priority(a.label) - priority(b.label)
+        || a.bbox.y - b.bbox.y
+        || a.bbox.x - b.bbox.x
+        || String(a.bbox.id).localeCompare(String(b.bbox.id))
+      ));
+    const placed = [];
+    const next = {};
+    for (const { bbox, label } of ordered) {
+      const element = bboxLabelRefs.current[bbox.id];
+      const measured = element.getBoundingClientRect();
+      const labelWidth = measured.width;
+      const labelHeight = measured.height;
+      const bboxLeft = bbox.x * scale * canvasScaleX;
+      const bboxTop = bbox.y * scale * canvasScaleY;
+      const bboxBottom = (bbox.y + bbox.h) * scale * canvasScaleY;
+      const left = bboxLeft - labelWidth;
+      const minY = bboxTop;
+      const maxY = Math.max(minY, bboxBottom - labelHeight);
+      let top = minY;
+      let blocked = false;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const candidate = { left, top, right: bboxLeft, bottom: top + labelHeight };
+        for (const previous of placed) {
+          if (!overlaps(candidate, previous)) continue;
+          const nextY = Math.min(previous.bottom + 2, maxY);
+          if (nextY <= top) {
+            blocked = true;
+            changed = false;
+            break;
+          }
+          top = nextY;
+          changed = true;
+          break;
+        }
+      }
+      const labelOffsetY = Math.max(0, Math.min(top - bboxTop, maxY - bboxTop));
+      const resolved = { labelOffsetY, blocked };
+      placed.push({ left, top: bboxTop + labelOffsetY, right: bboxLeft, bottom: bboxTop + labelOffsetY + labelHeight });
+      next[bbox.id] = resolved;
+    }
+    setBBoxLabelPositions((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+  }, [managedBboxes, pageViewport]);
+  useLayoutEffect(() => {
+    if (!pageViewport || !managedBboxes.length) return;
+    const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
+    if (!canvasRect) return;
+    const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
+    const canvasScaleX = canvasRect.width && pageViewport.width ? canvasRect.width / pageViewport.width : 1;
+    const canvasScaleY = canvasRect.height && pageViewport.height ? canvasRect.height / pageViewport.height : canvasScaleX;
+    const priority = (label) => (
+      label.startsWith("Section") ? 0
+        : label.startsWith("Paragraph") ? 1
+          : label.startsWith("Bullet") ? 2
+            : label.startsWith("Image") ? 3 : 4
+    );
+    const overlaps = (a, b, gap = 2) => !(
+      a.right + gap <= b.left
+      || a.left >= b.right + gap
+      || a.bottom + gap <= b.top
+      || a.top >= b.bottom + gap
+    );
+    const ordered = managedBboxes
+      .map((bbox) => ({ bbox, label: getBBoxTypeDefinition(bbox.type)?.label || "" }))
+      .filter(({ bbox }) => bboxActionRefs.current[bbox.id])
+      .sort((a, b) => (
+        priority(a.label) - priority(b.label)
+        || a.bbox.y - b.bbox.y
+        || a.bbox.x - b.bbox.x
+        || String(a.bbox.id).localeCompare(String(b.bbox.id))
+      ));
+    const placed = [];
+    const next = {};
+    for (const { bbox } of ordered) {
+      const element = bboxActionRefs.current[bbox.id];
+      const measured = element.getBoundingClientRect();
+      const width = measured.width;
+      const height = measured.height;
+      const bboxLeft = bbox.x * scale * canvasScaleX;
+      const bboxTop = bbox.y * scale * canvasScaleY;
+      const bboxBottom = (bbox.y + bbox.h) * scale * canvasScaleY;
+      const minY = bboxTop;
+      const maxY = Math.max(minY, bboxBottom - height);
+      const left = bboxLeft - width;
+      let top = minY;
+      let changed = true;
+      let blocked = false;
+      while (changed) {
+        changed = false;
+        const candidate = { left, top, right: bboxLeft, bottom: top + height };
+        for (const previous of placed) {
+          if (!overlaps(candidate, previous)) continue;
+          const nextY = Math.min(previous.bottom + 2, maxY);
+          if (nextY <= top) {
+            blocked = true;
+            changed = false;
+            break;
+          }
+          top = nextY;
+          changed = true;
+          break;
+        }
+      }
+      next[bbox.id] = {
+        offsetY: top - bboxTop,
+        blocked,
+      };
+      placed.push({ left, top, right: bboxLeft, bottom: top + height });
+    }
+    setBBoxActionPositions((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+  }, [managedBboxes, pageViewport, bboxMinibarOpenId]);
   const [bboxContainerBBoxTarget, setBBoxContainerBBoxTarget] = useState(null); // { pageNum, containerId } — next bbox should be placed inside this container
+  const [smartSegmentingBusy, setSmartSegmentingBusy] = useState(false);
+  const [smartSegmentingError, setSmartSegmentingError] = useState("");
+  const [semanticDetectionBusy, setSemanticDetectionBusy] = useState(false);
+  const [semanticDetectionError, setSemanticDetectionError] = useState("");
+  const [semanticDetectionPreview, setSemanticDetectionPreview] = useState(null);
+  const [semanticDetectionDialogOpen, setSemanticDetectionDialogOpen] = useState(false);
+  const [semanticDetectionScope, setSemanticDetectionScope] = useState(SEMANTIC_DETECTION_SCOPE.CURRENT_PAGE);
   const annotTextInputRef = useRef(null);
   const textActionMenuRef = useRef(null);
   const highlightActionMenuRef = useRef(null);
   const bboxActionMenuRef = useRef(null);
   const annotCanvasRef  = useRef(null);
+  const bboxOverlayRef = useRef(null);
+  const pdfBytesRef = useRef(null);
+  useEffect(() => {
+    if (!import.meta.env.DEV || !managedBboxes.length) return;
+    const overlay = bboxOverlayRef.current;
+    if (!overlay) return;
+    const targets = [
+      overlay,
+      ...overlay.querySelectorAll(".pdf_bbox_resize_handle"),
+      ...document.querySelectorAll(".pdf_bbox_type_label, .pdf_bbox_action_stack"),
+    ];
+    const audit = targets.map((element) => {
+      const ancestors = [];
+      let node = element.parentElement;
+      while (node) {
+        const style = getComputedStyle(node);
+        ancestors.push({
+          element: node.id || node.className || node.tagName,
+          transform: style.transform,
+          zoom: style.zoom,
+        });
+        node = node.parentElement;
+      }
+      const style = getComputedStyle(element);
+      return {
+        element: element.id || element.className || element.tagName,
+        transform: style.transform,
+        zoom: style.zoom,
+        ancestors,
+      };
+    });
+      console.debug("[PDF BBox overlay audit]", {
+        zoom,
+        overlayTransform: getComputedStyle(overlay).transform,
+        bboxAudit: audit,
+      });
+    const label = document.querySelector(".pdf_bbox_type_label");
+    if (label) {
+      const labelStyle = getComputedStyle(label);
+      const firstBBox = managedBboxes[0];
+      const bboxScale = pageViewport?.scale || (fitScaleRef.current * zoomRef.current);
+      console.table({
+        zoom,
+        bboxTop: firstBBox ? firstBBox.y * bboxScale : null,
+        bboxHeight: firstBBox ? firstBBox.h * bboxScale : null,
+        labelOffsetY: firstBBox ? (bboxLabelPositions[firstBBox.id]?.labelOffsetY || 0) : null,
+        renderedPageTop: firstBBox
+          ? firstBBox.y * bboxScale + (bboxLabelPositions[firstBBox.id]?.labelOffsetY || 0)
+          : null,
+        labelInlineTop: label.style.top,
+        labelFontSize: labelStyle.fontSize,
+        labelTransform: labelStyle.transform,
+        bboxBorderWidth: labelStyle.borderWidth,
+      });
+    }
+  }, [bboxOverlayTick, bboxLabelPositions, managedBboxes, pageViewport, zoom]);
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return undefined;
+    const refresh = () => setBBoxOverlayTick((tick) => tick + 1);
+    preview.addEventListener("scroll", refresh, { passive: true });
+    window.addEventListener("resize", refresh);
+    return () => {
+      preview.removeEventListener("scroll", refresh);
+      window.removeEventListener("resize", refresh);
+    };
+  }, [pageViewport]);
   // Separate, non-multiply-blended layer stacked above #pdf_annot_canvas —
   // see drawMaskedHighlightText's own comment in annotationDraw.js for why
   // masked/recolored highlight text can't just draw on the (CSS
@@ -2056,6 +2944,19 @@ const PDFPage = forwardRef(({
   // fully replace/hide what's underneath with a new opaque color.
   const maskCanvasRef = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
+  // What the LAST eraser gesture actually did to pageNum's array — before
+  // (the full pre-erase snapshot) and after (the exact resulting array
+  // reference). handleAnnotUndo's plain "pop the last item" logic assumes
+  // undo target is whatever's now last in the array, which is only true
+  // for a just-ADDED annotation; erasing REMOVES from arbitrary positions
+  // (and, in "precise" mode, can shrink a stroke's own points in place
+  // rather than removing it at all), so popping the new last item after an
+  // erase deleted a completely unrelated annotation instead of restoring
+  // what was erased. `after` lets undo confirm nothing has mutated the
+  // page since (reference equality against the live annotations[pageNum])
+  // before trusting this snapshot — any other edit naturally invalidates
+  // it without needing to be tracked separately.
+  const lastEraseRef = useRef(null);
   const eraserCursorRef = useRef(null);  // eraser-size preview circle, see the effect below
   const ocrWorkerRef = useRef(null);
   const ocrWorkerPromiseRef = useRef(null);
@@ -2091,6 +2992,19 @@ const PDFPage = forwardRef(({
   }, [colorMenuOpen, textActionMenu, highlightActionMenu, bboxActionMenu]);
 
   useEffect(() => {
+    if (!bboxMinibarOpenId) return undefined;
+    const onDocumentClick = (event) => {
+      if (
+        event.target.closest?.(".pdf_bbox_type_label")
+        || event.target.closest?.(".pdf_bbox_action_stack")
+      ) return;
+      setBBoxMinibarOpenId(null);
+    };
+    document.addEventListener("click", onDocumentClick);
+    return () => document.removeEventListener("click", onDocumentClick);
+  }, [bboxMinibarOpenId]);
+
+  useEffect(() => {
     if (annotTool !== "text") setTextActionMenu(null);
     if (annotTool !== "text") setTextStyleTargetId(null);
     if (annotTool !== "highlight") setHighlightActionMenu(null);
@@ -2099,6 +3013,7 @@ const PDFPage = forwardRef(({
       setActiveBBoxCreationType((current) => current || "bbox");
     } else {
       setBBoxActionMenu(null);
+      setBBoxMinibarOpenId(null);
       setBBoxResizeTargetId(null);
       setActiveBBoxCreationType(null);
       setBBoxContainerBBoxTarget(null);
@@ -2117,11 +3032,11 @@ const PDFPage = forwardRef(({
     if (!btn || !toolbarEl) { setToolOptionsOffset(0); return; }
     const btnRect = btn.getBoundingClientRect();
     const toolbarRect = toolbarEl.getBoundingClientRect();
-    const offset = (toolbarDock.edge === "left" || toolbarDock.edge === "right")
+    const offset = (effectiveToolbarEdge === "left" || effectiveToolbarEdge === "right")
       ? btnRect.top - toolbarRect.top
       : btnRect.left - toolbarRect.left;
     setToolOptionsOffset(offset);
-  }, [annotTool, toolbarDock.edge]);
+  }, [annotTool, effectiveToolbarEdge]);
 
   useEffect(() => {
     if (!annotTextInput) return;
@@ -2190,7 +3105,7 @@ const PDFPage = forwardRef(({
         [pageNum]: (prev[pageNum] || []).filter((ann) => ann.id !== hit.id),
       }));
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-      logAnnotHistory({ action: "delete", type: "text", page: pageNum });
+      markAnnotationCleared(hit.id, pageNum, "text");
       setAnnotTextInput(null);
       setAnnotTextVal("");
       setTextStyleTargetId(null);
@@ -2208,7 +3123,7 @@ const PDFPage = forwardRef(({
     }
 
     openTextEditorForHit(hit);
-  }, [textActionMenu, annotations, pageNum, logAnnotHistory, primeTextStyleFromAnnotation]);
+  }, [textActionMenu, annotations, pageNum, markAnnotationCleared, primeTextStyleFromAnnotation]);
 
   // Primes the shared highlight toolbar controls from an existing
   // annotation — annotColor is already namespaced per-tool (see its own
@@ -2262,7 +3177,7 @@ const PDFPage = forwardRef(({
         [pageNum]: (prev[pageNum] || []).filter((ann) => ann.id !== hit.id),
       }));
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-      logAnnotHistory({ action: "delete", type: "highlight", page: pageNum });
+      markAnnotationCleared(hit.id, pageNum, "highlight");
       setHighlightStyleTargetId(null);
       setHighlightActionMenu(null);
       return;
@@ -2271,7 +3186,7 @@ const PDFPage = forwardRef(({
     setHighlightStyleTargetId(hit.id);
     primeHighlightStyleFromAnnotation(hit);
     setHighlightActionMenu(null);
-  }, [highlightActionMenu, annotations, pageNum, logAnnotHistory, primeHighlightStyleFromAnnotation]);
+  }, [highlightActionMenu, annotations, pageNum, markAnnotationCleared, primeHighlightStyleFromAnnotation]);
 
   const handleBBoxAction = useCallback((action) => {
     if (!bboxActionMenu) return;
@@ -2288,7 +3203,7 @@ const PDFPage = forwardRef(({
         [pageNum]: (prev[pageNum] || []).filter((ann) => ann.id !== hit.id),
       }));
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-      logAnnotHistory({ action: "delete", type: hit.type, page: pageNum });
+      markAnnotationCleared(hit.id, pageNum, hit.type);
       setBBoxResizeTargetId(null);
       setBBoxActionMenu(null);
       return;
@@ -2296,7 +3211,7 @@ const PDFPage = forwardRef(({
 
     setBBoxResizeTargetId(hit.id);
     setBBoxActionMenu(null);
-  }, [bboxActionMenu, annotations, pageNum, logAnnotHistory]);
+  }, [bboxActionMenu, annotations, pageNum, markAnnotationCleared]);
 
   const beginBBoxResize = useCallback((bbox, handle, event) => {
     if (!bbox || !handle) return;
@@ -2373,7 +3288,7 @@ const PDFPage = forwardRef(({
         const ctx = annotCanvasRef.current?.getContext?.("2d");
         if (ctx && annotCanvasRef.current) {
           ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
-          const pageAnnotations = annotations[pageNum] || [];
+          const pageAnnotations = visiblePageAnnotations;
           for (const savedAnn of pageAnnotations) drawAnnotationWithOwnerClip(ctx, savedAnn, scale, pageAnnotations);
           drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
         }
@@ -2393,7 +3308,7 @@ const PDFPage = forwardRef(({
         const ctx = annotCanvasRef.current?.getContext?.("2d");
         if (ctx && annotCanvasRef.current) {
           ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
-          const pageAnnotations = annotations[pageNum] || [];
+          const pageAnnotations = visiblePageAnnotations;
           for (const savedAnn of pageAnnotations) drawAnnotationWithOwnerClip(ctx, savedAnn, scale, pageAnnotations);
         }
         return;
@@ -2421,14 +3336,43 @@ const PDFPage = forwardRef(({
                   ...(Array.isArray(ann.points) && ann.points.length >= 2 ? { points: ann.points.map((point) => ({ ...point })) } : {}),
                   ...(bboxTypeHas(item.type, "extractsText")
                     ? (() => {
+                        const resizedBox = { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
                         const extracted = extractBoundingBoxTextParts(
                           spansRef.current,
-                          { x: ann.x, y: ann.y, w: ann.w, h: ann.h },
+                          resizedBox,
                           bboxTextMatchesSpan,
+                          [],
+                          { preserveColumns: true, splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(item.type), detectTitle: item.smartSegmented },
                         );
+                        const partitionedText = item.type === "bbox"
+                          ? buildPartitionOrderedTextLines(
+                              spansRef.current,
+                              resizedBox,
+                              pageAnnotations.filter((candidate) => candidate?.type === "columnBBox"),
+                              bboxTextMatchesSpan,
+                            )
+                          : { lines: [], groups: [], partitionIds: [] };
+                        const partitionLines = partitionedText.lines.map((line) => line.text).filter(Boolean);
+                        const bodyLines = partitionLines.length
+                          ? removeParagraphTitleLine(partitionLines, item.title).bodyLines
+                          : [];
+                        const resizedText = bodyLines.length
+                          ? bodyLines.join("\n")
+                          : stripTitleFromBBoxTextValue(extracted.text, item.titleBBox?.text || extracted.title || item.title || "");
                         return {
-                          title: extracted.title || item.title || "",
-                          text: stripTitleFromBBoxTextValue(extracted.text, item.titleBBox?.text || extracted.title || item.title || ""),
+                          title: item.smartSegmented
+                            ? (extracted.title || item.title || "")
+                            : (item.title || ""),
+                          text: resizedText,
+                          rawPdfText: resizedText,
+                          ...(bodyLines.length ? { textLines: bodyLines } : {}),
+                          ...(partitionedText.partitionIds.length > 1 ? {
+                            partitionIds: partitionedText.partitionIds,
+                            partitionLineGroups: partitionedText.groups.map((group) => ({
+                              partitionId: group.partitionId,
+                              lines: group.lines.map((line) => line.text).filter(Boolean),
+                            })),
+                          } : { partitionIds: [], partitionLineGroups: [] }),
                         };
                       })()
                     : bboxTypeHas(item.type, "extractsContainerTitle")
@@ -2503,11 +3447,49 @@ const PDFPage = forwardRef(({
     if (!title) return;
     let nextAnnotations = null;
     setAnnotations((prev) => {
-      const nextPageAnnotations = (prev[targetPage] || []).map((ann) => (
-        ann.id === bboxId && EDITABLE_BBOX_TYPES.has(ann.type)
-          ? { ...ann, title }
-          : ann
-      ));
+      const nextPageAnnotations = (prev[targetPage] || []).map((ann) => {
+        if (ann.id !== bboxId || !EDITABLE_BBOX_TYPES.has(ann.type)) return ann;
+        if (ann.type !== "bbox") return { ...ann, title };
+        const liveSourceTextLines = targetPage === pageNum
+          ? buildTextLines(selectSpansForBoundingBox(
+              spansRef.current,
+              ann,
+              bboxTextMatchesSpanUtil,
+              [],
+              { preserveColumns: true, splitLines: true },
+            )).map((line) => line.text).filter(Boolean)
+          : [];
+        const sourceTextLines = Array.isArray(ann.sourceTextLines) && ann.sourceTextLines.length
+          ? ann.sourceTextLines
+          : (liveSourceTextLines.length
+            ? liveSourceTextLines
+            : (Array.isArray(ann.textLines) && ann.textLines.length
+            ? ann.textLines
+            : String(ann.sourceRawPdfText || ann.rawPdfText || ann.text || "").split(/\r?\n/).filter(Boolean)));
+        const { bodyLines, removedLine } = removeParagraphTitleLine(sourceTextLines, title);
+        const sourceRawPdfText = ann.sourceRawPdfText || ann.rawPdfText || ann.text || sourceTextLines.join("\n");
+        const bodyRawText = removedLine
+          ? bodyLines.join("\n")
+          : removeParagraphTitleFromText(sourceRawPdfText, title);
+        return {
+          ...ann,
+          title,
+          titleSourceLine: removedLine || ann.titleSourceLine || "",
+          sourceTextLines,
+          sourceRawPdfText,
+          textLines: bodyLines,
+          text: removedLine ? bodyRawText : (removeParagraphTitleFromText(ann.text || bodyRawText, title) || bodyRawText),
+          rawPdfText: bodyRawText,
+          correctedText: removeParagraphTitleFromText(ann.correctedText, title),
+          ocrCorrectedText: removeParagraphTitleFromText(ann.ocrCorrectedText, title),
+          textCorrection: {
+            ...(ann.textCorrection || {}),
+            audit: null,
+            applied: false,
+            correctionVersion: null,
+          },
+        };
+      });
       nextAnnotations = { ...prev, [targetPage]: nextPageAnnotations };
       return nextAnnotations;
     });
@@ -2518,10 +3500,114 @@ const PDFPage = forwardRef(({
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
       }).catch(() => {});
     }
   }, [annotHistory, pageNum, logAnnotHistory]);
+
+  const mergeParagraphBBoxes = useCallback((bboxIds, targetPage = pageNum) => {
+    const orderedIds = [...new Set(Array.isArray(bboxIds) ? bboxIds : [])];
+    if (orderedIds.length < 2) return;
+    const currentAnnotations = annotationsRef.current;
+    const pageAnnotations = currentAnnotations[targetPage] || [];
+    const byId = new Map(pageAnnotations.map((annotation) => [annotation.id, annotation]));
+    const selectedParagraphs = orderedIds.map((id) => byId.get(id)).filter((annotation) => annotation?.type === "bbox");
+    if (selectedParagraphs.length < 2) return;
+
+    const spanOrderByKey = new Map(spansRef.current.map((span, index) => [span.spanKey, index]));
+    const mergeRecords = selectedParagraphs.map((paragraph, inputOrder) => {
+      const selectedSpans = targetPage === pageNum
+        ? selectSpansForBoundingBox(
+            spansRef.current,
+            paragraph,
+            bboxTextMatchesSpanUtil,
+            [],
+            { preserveColumns: true, splitLines: true },
+          )
+        : [];
+      const readingOrder = selectedSpans.reduce((earliest, span) => (
+        Math.min(earliest, spanOrderByKey.get(span.spanKey) ?? Number.POSITIVE_INFINITY)
+      ), Number.POSITIVE_INFINITY);
+      const liveLines = buildTextLines(selectedSpans).map((line) => line.text).filter(Boolean);
+      const lines = liveLines.length
+        ? liveLines
+        : (Array.isArray(paragraph.textLines) && paragraph.textLines.length
+          ? paragraph.textLines
+          : String(paragraph.rawPdfText || paragraph.text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean));
+      return { paragraph, inputOrder, readingOrder, lines };
+    });
+    const { orderedRecords, survivor, mergedLines } = buildParagraphMergePlan(mergeRecords);
+    const paragraphs = orderedRecords.map((record) => record.paragraph);
+    if (!survivor) return;
+    const mergedIds = new Set(paragraphs.map((paragraph) => paragraph.id));
+    const removedIds = new Set(paragraphs.filter((paragraph) => paragraph.id !== survivor.id).map((paragraph) => paragraph.id));
+    const left = Math.min(...paragraphs.map((paragraph) => paragraph.x));
+    const top = Math.min(...paragraphs.map((paragraph) => paragraph.y));
+    const right = Math.max(...paragraphs.map((paragraph) => paragraph.x + paragraph.w));
+    const bottom = Math.max(...paragraphs.map((paragraph) => paragraph.y + paragraph.h));
+    const text = mergedLines.join("\n");
+    const parentIds = new Set(paragraphs.map((paragraph) => paragraph.parentId || null));
+    const sharedParentId = parentIds.size === 1 ? paragraphs[0].parentId : null;
+    let mergedParagraph = {
+      ...survivor,
+      x: left,
+      y: top,
+      w: right - left,
+      h: bottom - top,
+      points: [
+        { x: left, y: top },
+        { x: right, y: top },
+        { x: right, y: bottom },
+        { x: left, y: bottom },
+      ],
+      closed: true,
+      text,
+      rawPdfText: text,
+      textLines: mergedLines,
+      correctedText: "",
+      ocrCorrectedText: "",
+      textCorrection: {
+        source: "pdf_text_layer",
+        confidence: 1,
+        warnings: [],
+        correctionVersion: BBOX_TEXT_CORRECTION_VERSION,
+      },
+      textAutoFitted: false,
+      autoFitSourceGeometry: null,
+    };
+    if (sharedParentId) mergedParagraph.parentId = sharedParentId;
+    else {
+      const { parentId: _discardedParentId, ...withoutParent } = mergedParagraph;
+      mergedParagraph = withoutParent;
+    }
+
+    const nextPageAnnotations = pageAnnotations
+      .filter((annotation) => (
+        !removedIds.has(annotation.id)
+        && !(annotation.type === "bboxTitle" && removedIds.has(annotation.ownerId || annotation.containerId))
+      ))
+      .map((annotation) => {
+        if (annotation.id === survivor.id) return mergedParagraph;
+        if (annotation.parentId && mergedIds.has(annotation.parentId)) {
+          return { ...annotation, parentId: survivor.id };
+        }
+        return annotation;
+      });
+    const nextAnnotations = { ...currentAnnotations, [targetPage]: nextPageAnnotations };
+    annotationsRef.current = nextAnnotations;
+    setAnnotations(nextAnnotations);
+    setRedoStacks((prev) => (prev[targetPage]?.length ? { ...prev, [targetPage]: [] } : prev));
+    logAnnotHistory({ action: "merge", type: "bbox", page: targetPage });
+
+    const sourceId = currentSourceIdRef.current;
+    if (sourceId) {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
+      }).catch(() => {});
+    }
+  }, [logAnnotHistory, pageNum]);
 
   const autoFitBBoxToText = useCallback((bbox, targetPage = pageNum) => {
     if (!bbox || !bboxTypeHas(bbox.type, "autoFitsText")) return;
@@ -2540,13 +3626,15 @@ const PDFPage = forwardRef(({
             spansRef.current,
             { x: restored.x, y: restored.y, w: restored.w, h: restored.h },
             bboxTextMatchesSpan,
+            [],
+            { preserveColumns: true, splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(bbox.type), detectTitle: bbox.smartSegmented },
           );
           return {
             ...restored,
-            title: annotation.titleBBox?.text || annotation.title || extracted.title || "",
+            title: annotation.titleBBox?.text || annotation.title || "",
             text: stripTitleFromBBoxText(
               extracted.text || annotation.text || "",
-              annotation.titleBBox?.text || annotation.title || extracted.title || "",
+              annotation.titleBBox?.text || annotation.title || "",
             ),
           };
         }),
@@ -2555,7 +3643,13 @@ const PDFPage = forwardRef(({
       logAnnotHistory({ action: "edit", type: bbox.type, page: targetPage });
       return;
     }
-    const selectedSpans = selectSpansForBoundingBox(spansRef.current, bbox, bboxTextMatchesSpan);
+    const selectedSpans = selectSpansForBoundingBox(
+      spansRef.current,
+      bbox,
+      bboxTextMatchesSpan,
+      [],
+      { preserveColumns: true },
+    );
     let tightPoints = buildTightTextOutline(selectedSpans, 1);
     if (bbox.titleBBox) {
       // Title row + every body line, each contributing its own step to the
@@ -2612,6 +3706,11 @@ const PDFPage = forwardRef(({
   }, [bboxTextMatchesSpan, logAnnotHistory, pageNum]);
 
   const deleteBBox = useCallback((bboxId, targetPage = pageNum) => {
+    // Read from the closed-over annotations state directly, synchronously
+    // — NOT from inside the setAnnotations updater below, whose body isn't
+    // guaranteed to run before this function continues, which would make
+    // markAnnotationCleared's type argument unreliable.
+    const targetType = (annotations[targetPage] || []).find((ann) => ann.id === bboxId)?.type || "bbox";
     let nextAnnotations = null;
     setAnnotations((prev) => {
       const pageAnnotations = prev[targetPage] || [];
@@ -2622,25 +3721,27 @@ const PDFPage = forwardRef(({
       ));
       nextAnnotations = {
         ...prev,
-        [targetPage]: nextPageAnnotations.map((ann) => (
-          target?.type === "bboxTitle" && ann.id === target.ownerId
-            ? { ...ann, titleBBox: null }
-            : ann
-        )),
+        [targetPage]: nextPageAnnotations.map((ann) => {
+          if (target?.type === "bboxTitle" && ann.id === target.ownerId) return { ...ann, titleBBox: null };
+          if (ann.parentId !== target?.id) return ann;
+          if (target?.type === "columnBBox" && target.parentId) return { ...ann, parentId: target.parentId };
+          const { parentId: _removedParentId, ...withoutParent } = ann;
+          return withoutParent;
+        }),
       };
       return nextAnnotations;
     });
     setRedoStacks((prev) => (prev[targetPage]?.length ? { ...prev, [targetPage]: [] } : prev));
-    logAnnotHistory({ action: "delete", type: "bbox", page: targetPage });
+    markAnnotationCleared(bboxId, targetPage, targetType);
     const sourceId = currentSourceIdRef.current;
     if (sourceId && nextAnnotations) {
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
       }).catch(() => {});
     }
-  }, [annotHistory, pageNum, logAnnotHistory]);
+  }, [annotations, annotHistory, pageNum, markAnnotationCleared]);
 
   const moveBBoxInGroup = useCallback((bboxId, direction, targetPage = pageNum) => {
     if (!direction || !bboxId) return;
@@ -2690,7 +3791,7 @@ const PDFPage = forwardRef(({
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
       }).catch(() => {});
     }
   }, [annotHistory, pageNum, logAnnotHistory]);
@@ -2850,18 +3951,72 @@ const PDFPage = forwardRef(({
   }, []);
 
   const rehydrateBBoxTitleLayers = useCallback((layers) => {
+    const removedBBoxTypes = new Set(["bboxContainer", "chapterBBox", "bulletBBox"]);
     const nextLayers = {};
     for (const [pageKey, pageAnnotations] of Object.entries(layers || {})) {
-      nextLayers[pageKey] = (pageAnnotations || [])
-        .filter((ann) => ann?.type !== "bboxTitle")
-        .map((ann) => (
-          ann?.titleBBox
-            ? { ...ann, titleBBox: null }
-            : ann
-        ));
+      // Title BBoxes are real persisted page annotations. Removing them here
+      // made their border disappear on every reload and also discarded the
+      // owner's geometry link.
+      const restored = (pageAnnotations || []).filter((ann) => !removedBBoxTypes.has(ann?.type)).map((ann) => {
+        const migrated = { ...ann };
+        if (bboxTypeHas(migrated.type, "extractsText")) {
+          migrated.rawPdfText = migrated.rawPdfText ?? migrated.text ?? "";
+          migrated.text = migrated.text ?? migrated.rawPdfText;
+          migrated.textCorrection = migrated.textCorrection || {
+            source: migrated.smartSegmented ? "ocr_alignment" : "pdf_text_layer",
+            confidence: 1,
+            warnings: [],
+            correctionVersion: BBOX_TEXT_CORRECTION_VERSION,
+          };
+        }
+        return migrated;
+      });
+      const restoredIds = new Set(restored.map((ann) => ann?.id));
+      restored.forEach((ann) => {
+        if (ann.parentId && !restoredIds.has(ann.parentId)) delete ann.parentId;
+      });
+      const titleOwnerIds = new Set(
+        restored.filter((ann) => ann?.type === "bboxTitle").map((ann) => ann.ownerId).filter(Boolean),
+      );
+      for (const owner of restored) {
+        const legacyTitle = owner?.titleBBox;
+        if (!legacyTitle || titleOwnerIds.has(owner.id) || !(legacyTitle.w > 0) || !(legacyTitle.h > 0)) continue;
+        restored.push({
+          ...legacyTitle,
+          id: legacyTitle.id || `${owner.id}-title`,
+          type: "bboxTitle",
+          ownerId: owner.id,
+          color: legacyTitle.color || owner.color,
+          lineWidth: legacyTitle.lineWidth ?? owner.lineWidth,
+          closed: legacyTitle.closed !== false,
+          geometry: legacyTitle.geometry || "rectangle",
+          text: legacyTitle.text || owner.title || "",
+        });
+        titleOwnerIds.add(owner.id);
+      }
+      nextLayers[pageKey] = normalizePagePartitionHierarchy(restored);
     }
     return nextLayers;
   }, []);
+
+  const normalizeStoredAnnotationLayers = useCallback((storedLayers, storedActiveLayerId = null) => {
+    if (Array.isArray(storedLayers) && storedLayers.length) {
+      const normalized = storedLayers.map((layer, index) => ({
+        id: layer?.id || `annot-layer-${index + 1}`,
+        name: String(layer?.name || `Layer ${index + 1}`),
+        visible: layer?.visible !== false,
+        annotations: rehydrateBBoxTitleLayers(layer?.annotations || {}),
+      }));
+      const activeId = normalized.some((layer) => layer.id === storedActiveLayerId)
+        ? storedActiveLayerId
+        : normalized[0].id;
+      return { layers: normalized, activeId };
+    }
+    return {
+      layers: [createAnnotationLayer(1, rehydrateBBoxTitleLayers(storedLayers || {}))],
+      activeId: null,
+    };
+  }, [createAnnotationLayer, rehydrateBBoxTitleLayers]);
 
   const stripTitleFromBBoxText = useCallback((text, title) => stripTitleFromBBoxTextValue(text, title), []);
 
@@ -3020,7 +4175,6 @@ const PDFPage = forwardRef(({
   // exists to avoid). Written to directly during the gesture instead, same
   // as canvasWrapRef's own transform, so the number still tracks live
   // without paying for a React re-render on every tick.
-  const zoomLabelRef = useRef(null);
   const momentumFrameRef = useRef(0); // shared by touch-pan and mouse-drag-pan momentum coasting
   const livePanRef = useRef({
     frame: 0,
@@ -3036,24 +4190,175 @@ const PDFPage = forwardRef(({
   const zoomHoldIntervalRef = useRef(null);
   const selBarRef          = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
+  const pageImageRectsRef  = useRef([]);
+  const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
+  const [hyleSources, setHyleSources] = useState([]);
+  const [hyleSourcesLoading, setHyleSourcesLoading] = useState(false);
   const bboxCardsForBuilder = useMemo(() => {
     const entityBuilderPageAnnotations = annotations[pageNum] || [];
     if (!entityBuilderPageAnnotations.length) return [];
+    const sourceOrder = hyleSources.findIndex((source) => source._id === currentSourceIdRef.current) + 1;
+    const hyleIds = buildHyleBBoxIdMap(entityBuilderPageAnnotations, sourceOrder, pageNum);
+    const typeOrdinals = {};
     return entityBuilderPageAnnotations
-      .filter((bbox) => BBOX_CARD_TYPES.has(bbox.type) || bboxTypeHas(bbox.type, "containsChildren"))
-      .map((bbox, index) => ({
-        ...bbox,
-        _index: index + 1,
-        _displayTitle: bbox.title?.trim() || (bboxTypeHas(bbox.type, "capturesImage") ? `Image BBox ${index + 1}` : `BBox ${index + 1}`),
-        text: bbox.text || "",
-      }));
-  }, [annotations, pageNum]);
+      .filter((bbox) => BBOX_CARD_TYPES.has(bbox.type) || bboxTypeHas(bbox.type, "containsChildren") || ["columnBBox", "subLineBBox"].includes(bbox.type))
+      .map((bbox, index) => {
+        typeOrdinals[bbox.type] = (typeOrdinals[bbox.type] || 0) + 1;
+        const partitionedText = bbox.type === "bbox"
+          ? buildPartitionOrderedTextLines(
+              spansRef.current,
+              bbox,
+              entityBuilderPageAnnotations.filter((item) => item?.type === "columnBBox"),
+              bboxTextMatchesSpanUtil,
+            )
+          : { lines: [], groups: [], partitionIds: [] };
+        const derivedTextLines = bboxTypeHas(bbox.type, "extractsText")
+          ? (partitionedText.lines.length
+              ? partitionedText.lines
+              : buildTextLines(
+                  selectSpansForBoundingBox(
+                    spansRef.current,
+                    bbox,
+                    bboxTextMatchesSpanUtil,
+                    [],
+                    { preserveColumns: true, splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(bbox.type) },
+                  ),
+                )).map((line) => line.text).filter(Boolean)
+          : null;
+        const bodyTextLines = bbox.type === "bbox" && derivedTextLines?.length
+          ? removeParagraphTitleLine(derivedTextLines, bbox.title).bodyLines
+          : derivedTextLines;
+        return {
+          ...bbox,
+          ...(bodyTextLines?.length || derivedTextLines?.length ? { textLines: bodyTextLines || [] } : {}),
+          ...(partitionedText.partitionIds.length > 1 ? {
+            partitionIds: partitionedText.partitionIds,
+            partitionLineGroups: partitionedText.groups.map((group) => ({
+              partitionId: group.partitionId,
+              lines: group.lines.map((line) => line.text).filter(Boolean),
+            })),
+          } : {}),
+          hyleId: hyleIds[bbox.id] || getSemanticHyleBBoxId(currentSourceIdRef.current, pageNum, bbox.type, typeOrdinals[bbox.type]),
+          _index: index + 1,
+          _displayTitle: bbox.title?.trim()
+            || (bboxTypeHas(bbox.type, "containsChildren")
+              ? `${getBBoxTypeAbbreviation(bbox.type)} ${index + 1}`
+              : `${getBBoxTypeAbbreviation(bbox.type)} ${index + 1}`),
+          text: bbox.text || "",
+        };
+      });
+  }, [annotations, hyleSources, pageNum, textLayerRenderTick]);
+  useEffect(() => {
+    const sourceId = currentSourceIdRef.current;
+    if (!entityBuilderOpen || !sourceId) return undefined;
+    let cancelled = false;
+    let retryTimer = 0;
+    const targetPage = pageNum;
+
+    const refreshCorrections = async () => {
+      try {
+        const response = await authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?page=${targetPage}`));
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (response.status === 202 && ["queued", "uploading", "processing"].includes(data.status)) {
+          retryTimer = window.setTimeout(refreshCorrections, 4000);
+          return;
+        }
+        const ocrPage = data.pages?.[0];
+        if (!response.ok || !ocrPage?.markdown?.trim()) return;
+        const alignedOcrPage = await mapOcrPageToPdfSpace(ocrPage, targetPage);
+
+        const currentAnnotations = annotationsRef.current;
+        const currentPageAnnotations = currentAnnotations[targetPage] || [];
+        const targets = currentPageAnnotations.filter((item) => (
+          bboxTypeHas(item.type, "extractsText")
+          && String(item.rawPdfText || item.text || "").trim()
+          && item.textCorrection?.source !== "manual"
+          && !(
+            item.textCorrection?.ocrJobId === data.job?.id
+            && item.textCorrection?.correctionVersion === BBOX_TEXT_CORRECTION_VERSION
+          )
+        ));
+        if (!targets.length) return;
+
+        const corrections = await Promise.all(targets.map(async (item) => ({
+          id: item.id,
+          result: await correctBBoxText({
+            rawPdfText: item.rawPdfText || item.text || "",
+            bboxPdf: { x: item.x, y: item.y, width: item.w, height: item.h },
+            pageIndex: targetPage - 1,
+            ocrPage: alignedOcrPage,
+          }),
+        })));
+        if (cancelled || currentSourceIdRef.current !== sourceId) return;
+        const correctionById = new Map(corrections.map((entry) => [entry.id, entry.result]));
+        const nextAnnotations = {
+          ...annotationsRef.current,
+          [targetPage]: (annotationsRef.current[targetPage] || []).map((item) => {
+            const correction = correctionById.get(item.id);
+            if (!correction) return item;
+            return {
+              ...item,
+              text: correction.correctedText,
+              correctedText: correction.correctedText,
+              ocrCorrectedText: correction.correctionSource === "ocr_alignment"
+                ? correction.correctedText
+                : (correction.ocrCandidateText || correction.correctedText),
+              rawPdfText: correction.rawText,
+              textCorrection: {
+                source: correction.correctionSource,
+                confidence: correction.correctionConfidence,
+                warnings: correction.correctionWarnings,
+                audit: correction.correctionAudit,
+                ocrVersion: data.job?.schemaVersion || null,
+                ocrJobId: data.job?.id || null,
+                applied: correction.correctionSource === "ocr_alignment",
+                correctionVersion: BBOX_TEXT_CORRECTION_VERSION,
+              },
+            };
+          }),
+        };
+        annotationsRef.current = nextAnnotations;
+        setAnnotations(nextAnnotations);
+        await authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
+        });
+      } catch (error) {
+        if (!cancelled) console.warn("[PDF] Could not refresh stored OCR corrections", error);
+      }
+    };
+
+    void refreshCorrections();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  // Re-run only when the visible Builder page/source changes. Annotation
+  // mutations are handled from annotationsRef to avoid correction loops.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entityBuilderOpen, pageNum, hasSourceId]);
+  useEffect(() => {
+    let cancelled = false;
+    pageImageRectsRef.current = [];
+    if (!pdfDoc || !pageViewport) return undefined;
+    pdfDoc.getPage(pageNum)
+      .then((page) => page.getOperatorList())
+      .then((operatorList) => {
+        if (cancelled) return;
+        pageImageRectsRef.current = extractPlacedImageRects(operatorList, pageViewport, pdfjsLib.OPS);
+      })
+      .catch(() => {
+        if (!cancelled) pageImageRectsRef.current = [];
+      });
+    return () => { cancelled = true; };
+  }, [pdfDoc, pageNum, pageViewport]);
   const selectionDraggingEdgeRef = useRef(null); // "start" | "end" | null — which manual-selection handle (if any) is actively being dragged, see the manualSelection highlight effect below
   const selectionHandleDragRef = useRef(null); // { edge, startX, startY, active } — taps on handles must not alter selection, only real drags
   const selectionHandleLivePosRef = useRef(null); // { edge, x, y } live visual handle position while dragging
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
   const lastLoadedSourceKeyRef = useRef("");
-  const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
   const insertBlankPageRef = useRef(null); // latest insertBlankPageAfterCurrent closure — see its own effect further down for why this indirection is needed
   const lastLoadedFileRef = useRef(null);
   const skipNextAnnotationAutosaveRef = useRef(false); // set right before restoring a saved session, so that restore doesn't immediately re-trigger the autosave effect below
@@ -3102,11 +4407,7 @@ const PDFPage = forwardRef(({
   const canExtract = Boolean(pdfDoc) && pdfType !== "scanned";
 
   // ── Sources list (for /hyles drop-zone replacement) ─────────────────────
-  const [hyleSources,        setHyleSources]        = useState([]);
-  const [hyleSourcesLoading, setHyleSourcesLoading] = useState(false);
-
   useEffect(() => {
-    if (!isNounsPage) return;
     setHyleSourcesLoading(true);
     authFetch(apiUrl("/api/sources/"))
       .then((r) => r.json())
@@ -3215,9 +4516,14 @@ const PDFPage = forwardRef(({
         fitScaleRef.current = 1;
       } else {
         const previewWidth = previewRef.current?.clientWidth || 480;
+        const previewHeight = previewRef.current?.clientHeight || 720;
+        const baseViewport = page1.getViewport({ scale: 1 });
+        const horizontalFit = (previewWidth - 24) / baseViewport.width;
+        const verticalFit = (previewHeight - 24) / baseViewport.height;
         fitScaleRef.current = Math.min(
           1,
-          (previewWidth - 24) / page1.getViewport({ scale: 1 }).width,
+          horizontalFit,
+          verticalFit,
         );
       }
       if (cancelled) return;
@@ -3335,6 +4641,7 @@ const PDFPage = forwardRef(({
         wrap.style.transform       = "";
         wrap.style.transformOrigin = "";
         wrap.style.willChange      = "";
+        wrap.style.removeProperty("--pdf-live-zoom-inverse");
       }
       if (pending.kind === "page-anchor") {
         const pageEl = pageContainerRefs.current[pending.page - 1];
@@ -3353,60 +4660,23 @@ const PDFPage = forwardRef(({
     });
   }, [zoom, pageViewport]);
 
+  // A zoom gesture uses a temporary wrapper transform until the committed
+  // PDF raster reaches the new scale. The anchor effect above clears it when
+  // an anchor exists, but some zoom paths intentionally have no anchor. Once
+  // the rendered scale matches the committed zoom, no transform is allowed
+  // to remain because it would resize the BBox DOM chrome as well.
   useEffect(() => {
-    if (!pdfDoc || !previewRef.current) {
-      setPageMinimap([]);
-      return;
-    }
-
-    const previewEl = previewRef.current;
-    let frame = 0;
-
-    const updateMinimap = () => {
-      frame = 0;
-      const previewRect = previewEl.getBoundingClientRect();
-      const visiblePages = pageContainerRefs.current
-        .map((pageEl, index) => {
-          if (!pageEl) return null;
-          const pageRect = pageEl.getBoundingClientRect();
-          if (pageRect.width <= 0 || pageRect.height <= 0) return null;
-          const visibleLeft = clamp(previewRect.left - pageRect.left, 0, pageRect.width);
-          const visibleTop = clamp(previewRect.top - pageRect.top, 0, pageRect.height);
-          const visibleRight = clamp(previewRect.right - pageRect.left, 0, pageRect.width);
-          const visibleBottom = clamp(previewRect.bottom - pageRect.top, 0, pageRect.height);
-          const visibleWidth = Math.max(0, visibleRight - visibleLeft);
-          const visibleHeight = Math.max(0, visibleBottom - visibleTop);
-          if (visibleWidth <= 0 || visibleHeight <= 0) return null;
-          return {
-            page: index + 1,
-            pageWidth: pageRect.width,
-            pageHeight: pageRect.height,
-            visibleLeft,
-            visibleTop,
-            visibleWidth,
-            visibleHeight,
-            previewSrc: pageCanvasRefs.current[index]?.toDataURL?.("image/jpeg", 0.72) || "",
-          };
-        })
-        .filter(Boolean);
-
-      setPageMinimap(visiblePages);
-    };
-
-    const requestMinimapUpdate = () => {
-      if (!frame) frame = requestAnimationFrame(updateMinimap);
-    };
-
-    requestMinimapUpdate();
-    previewEl.addEventListener("scroll", requestMinimapUpdate, { passive: true });
-    window.addEventListener("resize", requestMinimapUpdate);
-
-    return () => {
-      previewEl.removeEventListener("scroll", requestMinimapUpdate);
-      window.removeEventListener("resize", requestMinimapUpdate);
-      if (frame) cancelAnimationFrame(frame);
-    };
-  }, [pdfDoc, pageNum, pageViewport, zoom, splitRatio]);
+    const wrap = canvasWrapRef.current;
+    if (!wrap || renderedScaleRef.current[pageNumRef.current - 1] !== fitScaleRef.current * zoom) return undefined;
+    const frame = requestAnimationFrame(() => {
+      if (!wrap.style.transform) return;
+      wrap.style.transform = "";
+      wrap.style.transformOrigin = "";
+      wrap.style.willChange = "";
+      wrap.style.removeProperty("--pdf-live-zoom-inverse");
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [pageViewport, zoom]);
 
   // Single-page view: only pageNum is ever mounted, so (re)render it
   // directly on every page switch instead of watching scroll position.
@@ -3452,6 +4722,92 @@ const PDFPage = forwardRef(({
     if (el) { el.scrollLeft = 0; el.scrollTop = 0; }
   }, [pageNum]);
 
+  useEffect(() => {
+    const pending = pendingReaderRestoreRef.current;
+    const previewEl = previewRef.current;
+    const pageEl = pageContainerRefs.current[pageNum - 1];
+    if (!pending || pending.pageNum !== pageNum || !previewEl || !pageEl || !pageViewport) return;
+    requestAnimationFrame(() => {
+      const nextPending = pendingReaderRestoreRef.current;
+      const nextPreviewEl = previewRef.current;
+      const nextPageEl = pageContainerRefs.current[pageNum - 1];
+      if (!nextPending || nextPending.pageNum !== pageNum || !nextPreviewEl || !nextPageEl) return;
+      const ratioX = typeof nextPending.pageRatioX === "number" ? nextPending.pageRatioX : null;
+      const ratioY = typeof nextPending.pageRatioY === "number" ? nextPending.pageRatioY : null;
+      if (ratioX == null || ratioY == null) {
+        pendingReaderRestoreRef.current = null;
+        return;
+      }
+      const pageWidth = Math.max(1, nextPageEl.offsetWidth || 1);
+      const pageHeight = Math.max(1, nextPageEl.offsetHeight || 1);
+      const targetCenterX = nextPageEl.offsetLeft + (pageWidth * ratioX);
+      const targetCenterY = nextPageEl.offsetTop + (pageHeight * ratioY);
+      const maxLeft = Math.max(0, nextPreviewEl.scrollWidth - nextPreviewEl.clientWidth);
+      const maxTop = Math.max(0, nextPreviewEl.scrollHeight - nextPreviewEl.clientHeight);
+      nextPreviewEl.scrollLeft = clamp(targetCenterX - (nextPreviewEl.clientWidth / 2), 0, maxLeft);
+      nextPreviewEl.scrollTop = clamp(targetCenterY - (nextPreviewEl.clientHeight / 2), 0, maxTop);
+      pendingReaderRestoreRef.current = null;
+    });
+  }, [pageNum, pageViewport, zoom]);
+
+  const [readerStateSaveTick, setReaderStateSaveTick] = useState(0);
+  useEffect(() => {
+    const el = previewRef.current;
+    if (!el) return undefined;
+    let timer = 0;
+    const onScroll = () => {
+      if (timer) clearTimeout(timer);
+      timer = window.setTimeout(() => setReaderStateSaveTick((n) => n + 1), 220);
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      if (timer) clearTimeout(timer);
+      el.removeEventListener("scroll", onScroll);
+    };
+  }, [pageViewport, pageNum, readingMode]);
+
+  useEffect(() => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId) return undefined;
+    const timer = setTimeout(() => {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload()),
+      }).catch(() => {});
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, readerStateSaveTick, buildAnnotationSavePayload]);
+
+  // buildAnnotationSavePayload is read through a ref, and this effect's own
+  // deps are deliberately [] (mount/unmount only) — NOT [buildAnnotationSavePayload].
+  // React runs a useEffect's cleanup on every re-run whose deps changed, not
+  // only on true unmount; buildAnnotationSavePayload gets a new identity on
+  // almost every annotation edit (it depends on annotationLayersForView,
+  // which is rebuilt any time annotations/annotationLayers change), so
+  // depending on it directly here fired this "only on tab-close" real,
+  // non-debounced PUT on nearly every stroke — the runaway repeated PUT
+  // calls seen in the server log while just drawing normally.
+  const buildAnnotationSavePayloadRef = useRef(buildAnnotationSavePayload);
+  buildAnnotationSavePayloadRef.current = buildAnnotationSavePayload;
+  useEffect(() => {
+    const persistReaderStateNow = () => {
+      const sourceId = currentSourceIdRef.current;
+      if (!sourceId) return;
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayloadRef.current()),
+      }).catch(() => {});
+    };
+    window.addEventListener("pagehide", persistReaderStateNow);
+    return () => {
+      window.removeEventListener("pagehide", persistReaderStateNow);
+      persistReaderStateNow();
+    };
+  }, []);
+
   useEffect(() => { extractModeRef.current = extractMode; }, [extractMode]);
   useEffect(() => { if (!textSelectable) { setManualPopup(null); setManualSelection(null); } }, [textSelectable]);
 
@@ -3469,7 +4825,20 @@ const PDFPage = forwardRef(({
   // scale — mismatched forever, since nothing re-ran this effect afterward.
   // pageViewport is set by renderPage() at the exact moment it resizes the
   // current page's canvas, so waiting for it keeps the two canvases in sync.
-  useEffect(() => {
+  const paintCurrentAnnotationLayers = useCallback(() => {
+    // While a stroke/shape is actively being dragged, the pointer-handling
+    // effect's own redraw(ann) is already keeping the canvas correctly
+    // updated every move tick, drawing the in-progress annotation straight
+    // from activeAnnotRef (nothing committed to `annotations` yet). If this
+    // authoritative repaint — which only knows about committed state, not
+    // the in-progress one — runs mid-gesture for any unrelated reason (a
+    // re-render triggered elsewhere in the tree), it clears the canvas and
+    // redraws WITHOUT the live stroke, which reappears on the next move
+    // tick — a rapid blink for as long as the drag lasts. Bailing out here
+    // while a gesture is in progress leaves redraw() as the sole source of
+    // truth until pointer-up, when the commit's own state change naturally
+    // triggers a fresh (now-inclusive) authoritative repaint anyway.
+    if (activeAnnotRef.current) return;
     const ac = annotCanvasRef.current;
     if (!ac || !pageViewport) return;
     // Backing buffer at the SAME device-pixel density (and safety cap) as
@@ -3483,7 +4852,10 @@ const PDFPage = forwardRef(({
     ac.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
     ac.style.width = `${pageViewport.width}px`;
     ac.style.height = `${pageViewport.height}px`;
-    const scale = fitScaleRef.current * zoom;
+    // Use the exact viewport that sized the PDF and overlay canvases. Re-
+    // deriving this from fitScale/zoom can differ by a fractional amount;
+    // that turns into a visible vertical drift farther down the page.
+    const scale = pageViewport.scale || (fitScaleRef.current * zoom);
     const ctx = ac.getContext("2d");
     // Setting width/height above reset the transform to identity — redraw()
     // (in the pointer-handling effect below) relies on this same transform
@@ -3491,8 +4863,21 @@ const PDFPage = forwardRef(({
     // the canvas itself.
     ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
     ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-    const pageAnnotations = annotations[pageNum] || [];
-    for (const ann of pageAnnotations) drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
+    const pageAnnotations = visiblePageAnnotations;
+    // One malformed annotation throwing here used to abort this whole loop
+    // silently (a canvas 2D context call throwing mid-draw doesn't leave
+    // any trace outside the console) — every annotation on the page went
+    // invisible, including perfectly valid ones already drawn before it or
+    // still queued after it, since ctx.clearRect above had already wiped
+    // the canvas for this repaint. Isolating each draw call means one bad
+    // annotation only drops itself, not the whole page's worth.
+    for (const ann of pageAnnotations) {
+      try {
+        drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
+      } catch (err) {
+        console.error("Failed to draw annotation", ann, err);
+      }
+    }
 
     const mc = maskCanvasRef.current;
     if (mc) {
@@ -3503,11 +4888,56 @@ const PDFPage = forwardRef(({
       const maskCtx = mc.getContext("2d");
       maskCtx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
       maskCtx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-      for (const ann of (annotations[pageNum] || [])) {
-        if (ann.type === "highlight") drawMaskedHighlightText(maskCtx, ann, scale);
+      for (const ann of visiblePageAnnotations) {
+        if (ann.type !== "highlight") continue;
+        try {
+          drawMaskedHighlightText(maskCtx, ann, scale);
+        } catch (err) {
+          console.error("Failed to draw masked highlight text", ann, err);
+        }
       }
     }
-  }, [annotations, pageNum, pageViewport]);
+  }, [drawAnnotationWithOwnerClip, pageViewport, visiblePageAnnotations, zoom]);
+
+  useEffect(() => {
+    paintCurrentAnnotationLayers();
+  }, [paintCurrentAnnotationLayers]);
+
+  // Single-page mode keys each page's container on its own page number (see
+  // the .map(n => ...) render below), so navigating away and back mounts a
+  // BRAND NEW <canvas> — freshly zero-sized, nothing drawn to it yet. The
+  // effect above only repaints when annotations/pageNum/pageViewport
+  // actually CHANGE; a page you're revisiting can come back with the exact
+  // same pageViewport reference already cached (e.g. two pages sharing
+  // identical dimensions), so that effect's deps never fire and the fresh
+  // canvas stays blank. These ref callbacks paint unconditionally the
+  // instant a canvas node actually mounts, independent of those deps.
+  //
+  // paintCurrentAnnotationLayersRef (rather than closing over
+  // paintCurrentAnnotationLayers directly) is what keeps setAnnotCanvasNode/
+  // setMaskCanvasNode themselves stable ([] deps) across renders. If they
+  // depended on paintCurrentAnnotationLayers directly, their own identity
+  // would change on every annotation added/erased (it's in that callback's
+  // deps) — and since a *changed* ref-callback identity makes React detach
+  // the old one and reattach the new one even though the underlying DOM
+  // node never moved, drawing a single stroke would spuriously fire this
+  // mount path on every commit. Reading through a ref sidesteps that: the
+  // callback identity never changes, so React only ever calls it on a real
+  // mount/unmount, and it still always runs the latest paint logic.
+  const paintCurrentAnnotationLayersRef = useRef(paintCurrentAnnotationLayers);
+  paintCurrentAnnotationLayersRef.current = paintCurrentAnnotationLayers;
+
+  const setAnnotCanvasNode = useCallback((node) => {
+    annotCanvasRef.current = node;
+    if (!node) return;
+    requestAnimationFrame(() => { paintCurrentAnnotationLayersRef.current(); });
+  }, []);
+
+  const setMaskCanvasNode = useCallback((node) => {
+    maskCanvasRef.current = node;
+    if (!node) return;
+    requestAnimationFrame(() => { paintCurrentAnnotationLayersRef.current(); });
+  }, []);
 
   // Fetches (and caches) a page's raw pdf.js text-content items — the same
   // data the "Manual mode" text-layer effect above turns into DOM word-
@@ -3519,8 +4949,44 @@ const PDFPage = forwardRef(({
     if (pageTextItemsCacheRef.current[n]) return pageTextItemsCacheRef.current[n];
     const page = await pdfDoc.getPage(n);
     const content = await page.getTextContent();
-    pageTextItemsCacheRef.current[n] = content.items;
-    return content.items;
+    let items = content.items;
+    // Scanned pages can have no native PDF.js text layer. In that case,
+    // search the persisted OCR blocks and map their OCR-page rectangles into
+    // PDF.js item geometry, so search still works without invoking OCR here.
+    if (!items.some((item) => String(item.str || "").trim()) && currentSourceIdRef.current) {
+      try {
+        const response = await authFetch(apiUrl(`/api/sources/${currentSourceIdRef.current}/ocr/pages?page=${n}`));
+        const data = await response.json();
+        const ocrPage = data.pages?.[0];
+        if (response.ok && ocrPage?.width > 0 && ocrPage?.height > 0) {
+          const viewport = page.getViewport({ scale: 1 });
+          const scaleX = viewport.width / ocrPage.width;
+          const scaleY = viewport.height / ocrPage.height;
+          items = (ocrPage.blocks || []).map((block) => {
+            const box = block.bbox || {};
+            const x = Number(box.x);
+            const y = Number(box.y);
+            const width = Number(box.width);
+            const height = Number(box.height);
+            const text = String(block.text || block.markdown || "").trim();
+            if (!text || ![x, y, width, height].every(Number.isFinite)) return null;
+            const renderedHeight = Math.max(1, height * scaleY);
+            return {
+              str: text,
+              width: Math.max(1, width * scaleX),
+              height: renderedHeight,
+              transform: [renderedHeight, 0, 0, renderedHeight, x * scaleX, viewport.height - ((y + height) * scaleY)],
+              hasEOL: true,
+              fontName: "ocr-cache",
+            };
+          }).filter(Boolean);
+        }
+      } catch {
+        // Keep the empty native item list while OCR is unavailable/pending.
+      }
+    }
+    pageTextItemsCacheRef.current[n] = items;
+    return items;
   }, [pdfDoc]);
 
   // Scans every page's text for the query, debounced so fast typing doesn't
@@ -4048,7 +5514,7 @@ const PDFPage = forwardRef(({
       };
     };
 
-    // Image BBox gestures use page-relative ratios instead of the reader's
+    // Figure BBox gestures use page-relative ratios instead of the reader's
     // zoom value. This keeps pointer mapping valid while a zoom render is in
     // flight and at fractional/odd zoom percentages where CSS pixel sizes
     // are not exact multiples of PDF points.
@@ -4263,7 +5729,7 @@ const PDFPage = forwardRef(({
       // here needs to stay in the same post-transform CSS-pixel space
       // everything else in this function draws in.
       ctx.clearRect(0, 0, ac.clientWidth, ac.clientHeight);
-      const pageAnnotations = annotations[pageNum] || [];
+      const pageAnnotations = visiblePageAnnotations;
       for (const ann of pageAnnotations) drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
       if (extra) drawAnnotationWithOwnerClip(ctx, extra, scale, pageAnnotations);
       syncLiveBBoxPreview(extra);
@@ -4383,9 +5849,7 @@ const PDFPage = forwardRef(({
         // the exact click point here. Row-band, not word-bbox — the whole
         // line counts as text from page-left to page-right, so starting
         // right at a word's leading edge (its first letter) never misses.
-        const hlClientY = e.touches ? e.touches[0].clientY : e.clientY;
-        const hasTextHere = highlightMode === "line" ? Boolean(firstPoint.textAligned) : Boolean(findTextRowAt(hlClientY));
-        activeAnnotRef.current = !hasTextHere ? null : {
+        activeAnnotRef.current = {
           type: "highlight",
           color: strokeColor,
           lineWidth: (firstPoint.lineWidth || annotSize),
@@ -4437,7 +5901,8 @@ const PDFPage = forwardRef(({
       } else if (["rect","circle"].includes(annotTool)) {
           const bboxType = annotTool;
           activeAnnotRef.current = {
-            type: bboxType, color: bboxType === "bbox" || bboxType === "bboxContainer" ? bboxColor : strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
+            type: bboxType, color: bboxType === "bbox" ? bboxColor : strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y,
+            lineWidth: shapeStrokeWidth / getScale(),
             borderStyle: shapeBorderStyle,
             shapeBackground,
             ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
@@ -4449,8 +5914,8 @@ const PDFPage = forwardRef(({
       } else if (["line","arrow"].includes(annotTool)) {
         activeAnnotRef.current = {
           type: annotTool, color: strokeColor, x1: p.x, y1: p.y, x2: p.x, y2: p.y,
+          lineWidth: shapeStrokeWidth / getScale(),
           borderStyle: shapeBorderStyle,
-          ...(annotTool === "arrow" ? { lineWidth: arrowSize / getScale() } : {}),
         };
       } else if (annotTool === "freeshape") {
         // Captured the same way as a pen stroke (points pushed + smoothed
@@ -4461,6 +5926,7 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = {
           type: "freeshape",
           color: strokeColor,
+          lineWidth: shapeStrokeWidth / getScale(),
           borderStyle: shapeBorderStyle,
           shapeBackground,
           points: [{ x: p.x, y: p.y }],
@@ -4484,12 +5950,16 @@ const PDFPage = forwardRef(({
           points: [{ x: p.x, y: p.y, t: p.t, pressure: p.pressure }],
         };
       } else if (annotTool === "eraser") {
-        activeAnnotRef.current = { type: "eraser", erasedCount: 0 };
+        // Snapshot BEFORE this gesture touches anything — the one true
+        // "undo target" for the whole drag, however many separate erase
+        // hits it ends up covering. See lastEraseRef's own comment.
+        activeAnnotRef.current = { type: "eraser", erasedCount: 0, eraseSnapshot: annotations[pageNum] || [] };
         const er = eraserSize / getScale();
         setAnnotations((prev) => {
           const pts = [...(prev[pageNum] || [])];
           const { kept, erasedCount } = eraseAnnotationsAtPoint(pts, p.x, p.y, er, eraserMode);
           activeAnnotRef.current.erasedCount += erasedCount;
+          activeAnnotRef.current.lastKept = kept;
           return { ...prev, [pageNum]: kept };
         });
         setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
@@ -4578,21 +6048,7 @@ const PDFPage = forwardRef(({
         };
         const lastPoint = ann.points[ann.points.length - 1];
         if (lastPoint && Math.hypot((nextPoint.x ?? 0) - (lastPoint.x ?? 0), (nextPoint.y ?? 0) - (lastPoint.y ?? 0)) < 0.6) return;
-        const obstacleGap = BBOX_MIN_GAP;
-        const obstacles = (annotations[pageNum] || []).filter((item) => (
-          item
-          && item.id !== ann.id
-          && bboxTypeHas(item.type, "preventsContact")
-        )).map((item) => ({
-          x: item.x ?? 0,
-          y: item.y ?? 0,
-          w: item.w ?? 0,
-          h: item.h ?? 0,
-        }));
-        const acceptedPoint = bboxTypeHas(ann.type, "bendsAroundObstacles")
-          ? bendPointAwayFromObstacles(nextPoint, obstacles, obstacleGap)
-          : nextPoint;
-        ann.points.push(acceptedPoint);
+        ann.points.push(nextPoint);
         const attracted = attractBBoxLoopPoint(ann.points, getScale());
         ann.points = attracted.points;
         ann.closed = attracted.closed;
@@ -4633,6 +6089,7 @@ const PDFPage = forwardRef(({
           const pts = [...(prev[pageNum] || [])];
           const { kept, erasedCount } = eraseAnnotationsAtPoint(pts, p.x, p.y, er, eraserMode);
           ann.erasedCount = (ann.erasedCount || 0) + erasedCount;
+          ann.lastKept = kept;
           return { ...prev, [pageNum]: kept };
         });
         setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
@@ -4645,7 +6102,10 @@ const PDFPage = forwardRef(({
       activeAnnotRef.current = null;
       if (!ann) return;
       if (ann.type === "eraser") {
-        if (ann.erasedCount > 0) logAnnotHistory({ action: "erase", page: pageNum, count: ann.erasedCount });
+        if (ann.erasedCount > 0) {
+          lastEraseRef.current = { pageNum, before: ann.eraseSnapshot, after: ann.lastKept };
+          logAnnotHistory({ action: "erase", page: pageNum, count: ann.erasedCount });
+        }
         clearLiveBBoxPreview();
         return;
       }
@@ -4667,9 +6127,10 @@ const PDFPage = forwardRef(({
       }
       if (isBBoxType(ann.type) && !bboxTypeHas(ann.type, "extractsTitle")) {
         if (Array.isArray(ann.points) && !ann._editingId) {
-          const finalized = finalizeBBoxFreeformPoints(ann.points, fitScaleRef.current * zoomRef.current);
+          const finalized = finalizeBBoxAsRectangle(ann.points, ann.type, spansRef.current);
           ann.points = finalized.points;
           ann.closed = finalized.closed;
+          ann.geometry = finalized.geometry;
         }
         const freeformBounds = Array.isArray(ann.points) && !ann._editingId ? pointsToBounds(ann.points) : null;
         if (freeformBounds) {
@@ -4678,7 +6139,55 @@ const PDFPage = forwardRef(({
           ann.w = freeformBounds.w;
           ann.h = freeformBounds.h;
         }
-        if (ann.w < 8 || ann.h < 8) return;
+        if (ann.type === "columnBBox") {
+          const parentTolerance = 2;
+          const containingParent = (annotationsRef.current[pageNum] || [])
+            .filter((item) => (
+              item.id !== ann._editingId
+              && canBBoxContain(item.type, "columnBBox")
+              && ann.x >= item.x - parentTolerance
+              && ann.y >= item.y - parentTolerance
+              && ann.x + ann.w <= item.x + item.w + parentTolerance
+              && ann.y + ann.h <= item.y + item.h + parentTolerance
+            ))
+            .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null;
+          if (!containingParent) {
+            return;
+          }
+          ann.parentId = containingParent.id;
+        }
+        if (ann.type === "subLineBBox") {
+          // Text-line metrics can protrude slightly past a paragraph's
+          // tightly fitted border (font ascent and border rounding are the
+          // usual causes). Treat that small difference as the same owner,
+          // then clamp the visible child rectangle back inside it.
+          const parentTolerance = 4;
+          const containingParagraph = (annotations[pageNum] || [])
+            .filter((item) => (
+              item.id !== ann._editingId
+              && item.type === "bbox"
+              && canBBoxContain(item.type, "subLineBBox")
+              && ann.x >= item.x - parentTolerance
+              && ann.y >= item.y - parentTolerance
+              && ann.x + ann.w <= item.x + item.w + parentTolerance
+              && ann.y + ann.h <= item.y + item.h + parentTolerance
+            ))
+            .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null;
+          if (!containingParagraph) return;
+          const clampedLeft = Math.max(ann.x, containingParagraph.x);
+          const clampedTop = Math.max(ann.y, containingParagraph.y);
+          const clampedRight = Math.min(ann.x + ann.w, containingParagraph.x + containingParagraph.w);
+          const clampedBottom = Math.min(ann.y + ann.h, containingParagraph.y + containingParagraph.h);
+          if (clampedRight <= clampedLeft || clampedBottom <= clampedTop) return;
+          ann.x = clampedLeft;
+          ann.y = clampedTop;
+          ann.w = clampedRight - clampedLeft;
+          ann.h = clampedBottom - clampedTop;
+          ann.points = rectanglePointsFromBounds(ann);
+          ann.parentId = containingParagraph.id;
+        }
+        const minimumBBoxExtent = ann.type === "subLineBBox" ? 2 : 8;
+        if (ann.w < minimumBBoxExtent || ann.h < minimumBBoxExtent) return;
         if (ann._editingId) {
           setAnnotations((prev) => {
             const pageAnnotations = prev[pageNum] || [];
@@ -4706,14 +6215,43 @@ const PDFPage = forwardRef(({
                       ...(Array.isArray(ann.points) && ann.points.length >= 2 ? { points: ann.points.map((point) => ({ ...point })) } : {}),
                       ...(bboxTypeHas(item.type, "extractsText")
                         ? (() => {
+                            const resizedBox = { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
                             const extracted = extractBoundingBoxTextParts(
                               spansRef.current,
-                              { x: ann.x, y: ann.y, w: ann.w, h: ann.h },
+                              resizedBox,
                               bboxTextMatchesSpan,
+                              [],
+                              { splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(item.type), detectTitle: item.smartSegmented },
                             );
+                            const partitionedText = item.type === "bbox"
+                              ? buildPartitionOrderedTextLines(
+                                  spansRef.current,
+                                  resizedBox,
+                                  pageAnnotations.filter((candidate) => candidate?.type === "columnBBox"),
+                                  bboxTextMatchesSpan,
+                                )
+                              : { lines: [], groups: [], partitionIds: [] };
+                            const partitionLines = partitionedText.lines.map((line) => line.text).filter(Boolean);
+                            const bodyLines = partitionLines.length
+                              ? removeParagraphTitleLine(partitionLines, item.title).bodyLines
+                              : [];
+                            const resizedText = bodyLines.length
+                              ? bodyLines.join("\n")
+                              : stripTitleFromBBoxText(extracted.text, item.titleBBox?.text || extracted.title || item.title || "");
                             return {
-                              title: extracted.title || item.title || "",
-                              text: stripTitleFromBBoxText(extracted.text, item.titleBBox?.text || extracted.title || item.title || ""),
+                              title: item.smartSegmented
+                                ? (extracted.title || item.title || "")
+                                : (item.title || ""),
+                              text: resizedText,
+                              rawPdfText: resizedText,
+                              ...(bodyLines.length ? { textLines: bodyLines } : {}),
+                              ...(partitionedText.partitionIds.length > 1 ? {
+                                partitionIds: partitionedText.partitionIds,
+                                partitionLineGroups: partitionedText.groups.map((group) => ({
+                                  partitionId: group.partitionId,
+                                  lines: group.lines.map((line) => line.text).filter(Boolean),
+                                })),
+                              } : { partitionIds: [], partitionLineGroups: [] }),
                             };
                           })()
                         : bboxTypeHas(item.type, "extractsContainerTitle")
@@ -4725,7 +6263,7 @@ const PDFPage = forwardRef(({
                                 childBboxes,
                               );
                               return {
-                                title: extracted.title || item.title || "",
+                                title: item.smartSegmented ? (extracted.title || item.title || "") : (item.title || ""),
                               };
                             })()
                         : {}),
@@ -4743,12 +6281,13 @@ const PDFPage = forwardRef(({
         }
       }
       if (bboxTypeHas(ann.type, "extractsTitle")) {
-        const finalized = finalizeBBoxFreeformPoints(ann.points, fitScaleRef.current * zoomRef.current);
+        const finalized = finalizeBBoxAsRectangle(ann.points, ann.type, spansRef.current);
         ann.points = finalized.points;
         ann.closed = finalized.closed;
+        ann.geometry = finalized.geometry;
         const box = pointsToBounds(ann.points);
         if (!box || box.w < 8 || box.h < 8) return;
-        const pageAnnotations = annotations[pageNum] || [];
+        const pageAnnotations = visiblePageAnnotations;
         const anchorPoint = Array.isArray(ann.points) && ann.points.length ? { x: ann.points[0].x, y: ann.points[0].y } : null;
         const selectionPad = Math.max(0.5, (ann.lineWidth ?? 0) / 2) + 0.5;
         const visibleTitleBox = {
@@ -4761,29 +6300,80 @@ const PDFPage = forwardRef(({
           clearLiveBBoxPreview();
           return;
         }
-        const extracted = extractBoundingBoxTextParts(spansRef.current, box, bboxTextMatchesSpan);
+        const extracted = extractBoundingBoxTextParts(
+          spansRef.current,
+          box,
+          bboxTextMatchesSpan,
+          [],
+          { preserveColumns: true },
+        );
         const nextTitle = (extracted.title || extracted.text || "").trim();
+        const titleId = Date.now();
+        const titleGeometry = {
+          id: titleId,
+          type: "bboxTitle",
+          ownerId: targetOwner.id,
+          x: box.x,
+          y: box.y,
+          w: box.w,
+          h: box.h,
+          points: ann.points.map((point) => ({ x: point.x, y: point.y })),
+          closed: true,
+          geometry: "rectangle",
+          color: targetOwner.color || ann.color,
+          lineWidth: ann.lineWidth,
+          borderStyle: ann.borderStyle,
+          shapeBackground: false,
+          text: nextTitle,
+          hyleId: getSemanticHyleBBoxId(currentSourceIdRef.current, pageNum, "bboxTitle", 1),
+        };
         let nextAnnotations = null;
         setAnnotations((prev) => {
-          const nextPageAnnotations = (prev[pageNum] || []).map((item) => (
+          const withoutPreviousTitle = (prev[pageNum] || []).filter((item) => !(
+            item.type === "bboxTitle" && (item.ownerId === targetOwner.id || item.containerId === targetOwner.id)
+          ));
+          const nextPageAnnotations = withoutPreviousTitle.map((item) => (
             item.id === targetOwner.id && item.type === targetOwner.type
               ? {
                   ...item,
                   title: nextTitle || item.title || "",
-                  text: bboxTypeHas(item.type, "extractsText")
+                  ...(bboxTypeHas(item.type, "extractsText")
                     ? (() => {
-                        const extracted = extractBoundingBoxTextParts(
+                        const sourceTextLines = buildTextLines(selectSpansForBoundingBox(
                           spansRef.current,
-                          { x: item.x, y: item.y, w: item.w, h: item.h },
-                          bboxTextMatchesSpan,
-                        );
-                        return stripTitleFromBBoxText(extracted.text || item.text || "", nextTitle || "");
+                          item,
+                          bboxTextMatchesSpanUtil,
+                          [],
+                          { preserveColumns: true, splitLines: item.type === "bbox" },
+                        )).map((line) => line.text).filter(Boolean);
+                        const { bodyLines, removedLine } = removeParagraphTitleLine(sourceTextLines, nextTitle);
+                        const sourceRawPdfText = item.sourceRawPdfText || item.rawPdfText || item.text || sourceTextLines.join("\n");
+                        const bodyRawText = removedLine
+                          ? bodyLines.join("\n")
+                          : removeParagraphTitleFromText(sourceRawPdfText, nextTitle);
+                        return {
+                          titleSourceLine: removedLine || item.titleSourceLine || "",
+                          sourceTextLines,
+                          sourceRawPdfText,
+                          textLines: bodyLines,
+                          text: bodyRawText,
+                          rawPdfText: bodyRawText,
+                          correctedText: removeParagraphTitleFromText(item.correctedText, nextTitle),
+                          ocrCorrectedText: removeParagraphTitleFromText(item.ocrCorrectedText, nextTitle),
+                          textCorrection: {
+                            ...(item.textCorrection || {}),
+                            audit: null,
+                            applied: false,
+                            correctionVersion: null,
+                          },
+                        };
                       })()
-                    : item.text,
-                  titleBBox: null,
+                    : { text: item.text }),
+                  titleBBox: { ...titleGeometry },
                 }
               : item
           ));
+          nextPageAnnotations.push(titleGeometry);
           nextAnnotations = {
             ...prev,
             [pageNum]: nextPageAnnotations,
@@ -4791,16 +6381,15 @@ const PDFPage = forwardRef(({
           return nextAnnotations;
         });
         setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-        const sourceId = currentSourceIdRef.current;
+        const sourceId = currentSourceIdRef.current || embeddedSourceId || null;
         if (sourceId && nextAnnotations) {
           authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
+            body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
           }).catch(() => {});
         }
         logAnnotHistory({ action: "edit", type: targetOwner.type, page: pageNum });
-        setActiveBBoxCreationType(null);
         redraw();
         clearLiveBBoxPreview();
         return;
@@ -4814,9 +6403,10 @@ const PDFPage = forwardRef(({
         return;
       }
       const tinyDocThreshold = 3 / Math.max(1, fitScaleRef.current * zoomRef.current);
+      const strokeLength = (ann.type === "pen" || ann.type === "freeshape") ? polylineLength(ann.points) : 0;
       // ignore accidental tiny marks
       const tiny = (ann.type === "pen" || ann.type === "freeshape")
-        ? ann.points.length < 3
+        ? (ann.points.length < 2 || strokeLength < tinyDocThreshold)
         : ["line","arrow"].includes(ann.type)
           ? Math.hypot(ann.x2 - ann.x1, ann.y2 - ann.y1) < tinyDocThreshold
           : ann.w < tinyDocThreshold && ann.h < tinyDocThreshold;
@@ -4825,27 +6415,24 @@ const PDFPage = forwardRef(({
         return;
       }
       const { _sx, _sy, _startLeft, textAligned, _editingId, points, ...clean } = ann;
+      // points is pulled out above (alongside the truly transient drag-only
+      // fields) so the BBox branch below can normalize/obstacle-adjust it
+      // before reattaching — but every non-BBox points-based type (pen,
+      // highlight, freeshape) never goes through that branch, so without
+      // this fallback the committed annotation lost its points entirely:
+      // drawAnnotation's own `!ann.points` guard then silently skipped it,
+      // which is why a stroke stayed visible while dragging (the live
+      // preview draws straight from the in-progress object) and vanished
+      // the instant the pointer lifted (the committed one had no points).
+      if (Array.isArray(points)) clean.points = points;
       if (isBBoxType(ann.type) && !bboxTypeHas(ann.type, "extractsTitle") && Array.isArray(points) && points.length >= 2 && !_editingId) {
-        const obstacleGap = Math.max(BBOX_MIN_GAP, 1 / Math.max(1, fitScaleRef.current * zoomRef.current));
-        const obstacles = (annotations[pageNum] || []).filter((item) => (
-          item
-          && item.id !== ann.id
-          && bboxTypeHas(item.type, "preventsContact")
-        )).map((item) => ({
-          x: item.x ?? 0,
-          y: item.y ?? 0,
-          w: item.w ?? 0,
-          h: item.h ?? 0,
-        }));
         const normalizedPoints = points.map((point) => ({
           x: point.x,
           y: point.y,
           ...(point.t != null ? { t: point.t } : {}),
           ...(point.pressure != null ? { pressure: point.pressure } : {}),
         }));
-        clean.points = bboxTypeHas(ann.type, "bendsAroundObstacles")
-          ? normalizedPoints.map((point) => bendPointAwayFromObstacles(point, obstacles, obstacleGap))
-          : normalizedPoints;
+        clean.points = normalizedPoints;
         clean.closed = ann.closed !== false;
       }
       if (clean.type === "highlight" && highlightAutoContrast) {
@@ -4855,7 +6442,11 @@ const PDFPage = forwardRef(({
       const insideContainerTarget = bboxContainerBBoxTarget && bboxContainerBBoxTarget.pageNum === pageNum
         ? bboxContainerBBoxTarget
         : null;
-      setAnnotations((prev) => {
+      // Build the complete next state synchronously before handing it to
+      // React. The database write below must not depend on a variable being
+      // assigned inside a deferred setState updater.
+      const nextId = Date.now();
+      const buildNextAnnotations = (prev) => {
         const pageAnnotations = prev[pageNum] || [];
         const initialBox = isBBoxType(clean.type) && Array.isArray(clean.points) && clean.points.length >= 2
           ? {
@@ -4867,49 +6458,171 @@ const PDFPage = forwardRef(({
             }
           : clean;
         const box = initialBox;
+        const typeOrdinal = pageAnnotations.filter((item) => item?.type === clean.type).length + 1;
+        const containingSubLineParagraph = clean.type === "subLineBBox"
+          ? pageAnnotations
+            .filter((item) => (
+              item?.type === "bbox"
+              && box.x >= item.x
+              && box.y >= item.y
+              && box.x + box.w <= item.x + item.w
+              && box.y + box.h <= item.y + item.h
+            ))
+            .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null
+          : null;
+        const containingColumn = ["bbox", "imageBBox"].includes(clean.type)
+          ? pageAnnotations
+            .filter((item) => (
+              item?.type === "columnBBox"
+              && canBBoxContain(item.type, clean.type)
+              && box.x >= item.x
+              && box.y >= item.y
+              && box.x + box.w <= item.x + item.w
+              && box.y + box.h <= item.y + item.h
+            ))
+            .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null
+          : null;
+        const containingPage = clean.type !== "pageBBox"
+          ? pageAnnotations
+            .filter((item) => (
+              item?.type === "pageBBox"
+              && canBBoxContain(item.type, clean.type)
+              && box.x >= item.x - 2
+              && box.y >= item.y - 2
+              && box.x + box.w <= item.x + item.w + 2
+              && box.y + box.h <= item.y + item.h + 2
+            ))
+            .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null
+          : null;
         const imageSnippet = bboxTypeHas(clean.type, "capturesImage")
           ? captureImageBBoxSnippet(box)
           : null;
-        const nextId = Date.now();
+        if (clean.type === "columnBBox" && !containingPage) {
+          return { ...prev, [pageNum]: pageAnnotations };
+        }
+        const structuralParent = clean.type === "columnBBox"
+          ? containingPage
+          : (["bbox", "imageBBox"].includes(clean.type)
+            ? (containingColumn || containingPage)
+            : (containingSubLineParagraph || containingPage));
         const newAnnotation = {
           ...box,
           ...(imageSnippet ? { imageDataUrl: imageSnippet.dataUrl, imageWidth: imageSnippet.width, imageHeight: imageSnippet.height } : {}),
           ...(bboxTypeHas(clean.type, "extractsText")
             ? (() => {
-                const extracted = extractBoundingBoxTextParts(spansRef.current, box, bboxTextMatchesSpan);
+                const textMatcher = clean.type === "imageBBox"
+                  ? (candidate, span) => {
+                      if (!bboxTextMatchesSpan(candidate, span)) return false;
+                      const spanLeft = span.pageLeft ?? span.geoLeft ?? 0;
+                      const spanTop = span.pageTop ?? span.geoTop ?? 0;
+                      const spanRight = span.pageRight ?? span.geoRight ?? spanLeft;
+                      const spanBottom = span.pageBottom ?? (spanTop + (span.pageHeight ?? span.geoHeight ?? 0));
+                      const spanArea = Math.max(1, (spanRight - spanLeft) * (spanBottom - spanTop));
+                      return !pageImageRectsRef.current.some((imageRect) => {
+                        const overlapX = Math.max(0, Math.min(spanRight, imageRect.x + imageRect.w) - Math.max(spanLeft, imageRect.x));
+                        const overlapY = Math.max(0, Math.min(spanBottom, imageRect.y + imageRect.h) - Math.max(spanTop, imageRect.y));
+                        return (overlapX * overlapY) / spanArea >= 0.5;
+                      });
+                    }
+                  : bboxTextMatchesSpan;
+                const extracted = extractBoundingBoxTextParts(
+                  spansRef.current,
+                  box,
+                  textMatcher,
+                  [],
+                  { preserveColumns: true, splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(clean.type), detectTitle: clean.smartSegmented },
+                );
+                const partitionedText = clean.type === "bbox"
+                  ? buildPartitionOrderedTextLines(
+                      spansRef.current,
+                      box,
+                      pageAnnotations.filter((item) => item?.type === "columnBBox"),
+                      textMatcher,
+                    )
+                  : { lines: [], groups: [], partitionIds: [] };
+                const selectedTextLines = (partitionedText.lines.length
+                  ? partitionedText.lines
+                  : buildTextLines(
+                      selectSpansForBoundingBox(
+                        spansRef.current,
+                        box,
+                        textMatcher,
+                        [],
+                        { preserveColumns: true, splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(clean.type) },
+                      ),
+                    )).map((line) => line.text).filter(Boolean);
+                if (extracted.title && selectedTextLines.length) {
+                  const normalizeLine = (value) => String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+                  if (normalizeLine(selectedTextLines[0]) === normalizeLine(extracted.title)) {
+                    selectedTextLines.shift();
+                  }
+                }
+                const rawPdfText = clean.type === "subLineBBox"
+                  ? [extracted.title, extracted.text].filter(Boolean).join(" ").trim()
+                  : clean.type === "bbox" && !clean.smartSegmented && selectedTextLines.length
+                    ? selectedTextLines.join("\n")
+                  : stripTitleFromBBoxText(extracted.text, extracted.title || clean.title || "");
                 return {
-                  title: extracted.title,
-                  text: stripTitleFromBBoxText(extracted.text, extracted.title || clean.title || ""),
+                  title: clean.smartSegmented
+                    ? (clean.type === "subLineBBox" ? "" : extracted.title)
+                    : (clean.title || ""),
+                  text: rawPdfText,
+                  rawPdfText,
+                  ...(selectedTextLines.length ? { textLines: selectedTextLines } : {}),
+                  ...(partitionedText.partitionIds.length > 1 ? {
+                    partitionIds: partitionedText.partitionIds,
+                    partitionLineGroups: partitionedText.groups.map((group) => ({
+                      partitionId: group.partitionId,
+                      lines: group.lines.map((line) => line.text).filter(Boolean),
+                    })),
+                  } : {}),
+                  textCorrection: {
+                    source: "pdf_text_layer",
+                    confidence: 1,
+                    warnings: ["No reliable OCR alignment was found"],
+                    correctionVersion: BBOX_TEXT_CORRECTION_VERSION,
+                  },
                 };
               })()
-            : bboxTypeHas(clean.type, "extractsContainerTitle")
-              ? (() => {
-                  const childBboxes = pageAnnotations.filter((item) => (
-                    BBOX_CARD_TYPES.has(item.type)
-                    && item.x >= box.x
-                    && item.y >= box.y
-                    && item.x + item.w <= box.x + box.w
-                    && item.y + item.h <= box.y + box.h
-                  ));
-                  const extracted = extractBoundingBoxTextParts(
-                    spansRef.current,
-                    box,
-                    bboxTextMatchesSpan,
-                    childBboxes,
-                  );
-                  return {
-                    title: extracted.title,
-                  };
-                })()
             : {}),
           id: nextId,
+          hyleId: getSemanticHyleBBoxId(currentSourceIdRef.current, pageNum, clean.type, typeOrdinal),
+          ...(
+            structuralParent
+              ? { parentId: structuralParent.id }
+              : {}
+          ),
         };
+        let nextPageAnnotations = [...pageAnnotations, newAnnotation];
+        const isContainedBy = (child, parent) => (
+          child.x >= parent.x
+          && child.y >= parent.y
+          && child.x + child.w <= parent.x + parent.w
+          && child.y + child.h <= parent.y + parent.h
+        );
+        if (clean.type === "pageBBox") {
+          const pagePartitions = nextPageAnnotations
+            .filter((item) => item.type === "columnBBox" && isContainedBy(item, newAnnotation))
+            .sort((a, b) => (a.w * a.h) - (b.w * b.h));
+          nextPageAnnotations = nextPageAnnotations.map((item) => {
+            if (item.id === newAnnotation.id) return item;
+            if (item.type === "columnBBox" && isContainedBy(item, newAnnotation)) {
+              return { ...item, parentId: newAnnotation.id };
+            }
+            if (!["bbox", "imageBBox"].includes(item.type) || !isContainedBy(item, newAnnotation)) return item;
+            const partition = pagePartitions.find((candidate) => isContainedBy(item, candidate));
+            return { ...item, parentId: partition?.id || newAnnotation.id };
+          });
+        } else if (clean.type === "columnBBox") {
+          nextPageAnnotations = nextPageAnnotations.map((item) => (
+            ["bbox", "imageBBox"].includes(item.type) && isContainedBy(item, newAnnotation)
+              ? { ...item, parentId: newAnnotation.id }
+              : item
+          ));
+        }
         const nextAnnotations = {
           ...prev,
-          [pageNum]: [
-            ...pageAnnotations,
-            newAnnotation,
-          ],
+          [pageNum]: nextPageAnnotations,
         };
         if (bboxTypeHas(clean.type, "canBeNested") && insideContainerTarget?.containerId) {
           nextAnnotations[pageNum] = expandContainerToIncludeBBox(
@@ -4919,11 +6632,16 @@ const PDFPage = forwardRef(({
           );
         }
         return nextAnnotations;
-      });
+      };
+      // Pointer-up can arrive before React has rebound this effect after the
+      // previous partition. Always build from the ref-backed current state so
+      // adding Partition 2 cannot replace Partition 1 with a stale snapshot.
+      const nextAnnotations = buildNextAnnotations(annotationsRef.current);
+      annotationsRef.current = nextAnnotations;
+      setAnnotations(nextAnnotations);
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-      if (isBBoxType(clean.type)) setActiveBBoxCreationType(null);
       if (bboxTypeHas(clean.type, "canBeNested") && insideContainerTarget) setBBoxContainerBBoxTarget(null);
-      logAnnotHistory({
+      const historyEntry = {
         action: "add",
         type: clean.type,
         page: pageNum,
@@ -4931,7 +6649,39 @@ const PDFPage = forwardRef(({
         size: clean.lineWidth
           ? Math.round(clean.type === "pen" ? clean.lineWidth : clean.lineWidth * (fitScaleRef.current * zoomRef.current))
           : null,
-      });
+        // Links this row to the actual annotation it created — see
+        // markAnnotationCleared, which uses it to mark THIS row cleared
+        // in place instead of appending a whole separate "deleted" row
+        // when that specific annotation is later removed.
+        annotationId: nextId,
+      };
+      const nextHistory = appendAnnotHistoryEntry(annotHistory, historyEntry);
+      setAnnotHistory(nextHistory);
+      const sourceId = currentSourceIdRef.current || embeddedSourceId || null;
+      if (sourceId && nextAnnotations) {
+        authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildAnnotationSavePayload({
+            activeAnnotations: nextAnnotations,
+            history: nextHistory,
+          })),
+        }).then((response) => {
+          if (!response.ok) throw new Error(`Annotation save failed (${response.status})`);
+        }).catch((error) => {
+          console.error("[PDF] Failed to persist BBox annotation", error);
+        });
+      }
+      const createdAnnotation = (nextAnnotations[pageNum] || []).find((item) => item.id === nextId);
+      if (sourceId && createdAnnotation?.rawPdfText) {
+        void correctBBoxAnnotationFromOcr({
+          annotationId: nextId,
+          targetPage: pageNum,
+          rawPdfText: createdAnnotation.rawPdfText,
+          bboxPdf: { x: createdAnnotation.x, y: createdAnnotation.y, width: createdAnnotation.w, height: createdAnnotation.h },
+          sourceId,
+        });
+      }
       clearLiveBBoxPreview();
     };
 
@@ -4970,7 +6720,7 @@ const PDFPage = forwardRef(({
       clearLiveBBoxPreview();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, arrowSize, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, captureImageBBoxSnippet, shapeBorderStyle, shapeBorderRadius, shapeBackground, activeBBoxCreationType, bboxContainerBBoxTarget, expandContainerToIncludeBBox, findContainingBBoxContainer, updateBBoxName]);
+  }, [annotTool, annotColor, annotSize, penSize, shapeStrokeWidth, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, captureImageBBoxSnippet, shapeBorderStyle, shapeBorderRadius, shapeBackground, activeBBoxCreationType, bboxContainerBBoxTarget, correctBBoxAnnotationFromOcr, expandContainerToIncludeBBox, findContainingBBoxContainer, updateBBoxName]);
 
   // Eraser-size cursor circle — a real hit-test-radius preview, not just a
   // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
@@ -5028,19 +6778,48 @@ const PDFPage = forwardRef(({
       textBaseline: "top",
       padding: textPadding,
     };
-    setAnnotations((prev) => ({
-      ...prev,
-      [pageNum]: annotTextInput.editingId
-        ? (prev[pageNum] || []).map((ann) => (ann.id === annotTextInput.editingId ? { ...ann, ...nextText } : ann))
-        : [...(prev[pageNum] || []), { id: Date.now(), ...nextText }],
-    }));
+    const newTextId = Date.now();
+    const isEditing = Boolean(annotTextInput.editingId);
+    let nextAnnotations = null;
+    setAnnotations((prev) => {
+      nextAnnotations = {
+        ...prev,
+        [pageNum]: isEditing
+          ? (prev[pageNum] || []).map((ann) => (ann.id === annotTextInput.editingId ? { ...ann, ...nextText } : ann))
+          : [...(prev[pageNum] || []), { id: newTextId, ...nextText }],
+      };
+      return nextAnnotations;
+    });
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-    logAnnotHistory({ action: annotTextInput.editingId ? "edit" : "add", type: "text", page: pageNum, color: annotColor });
+    const historyEntry = {
+      action: isEditing ? "edit" : "add",
+      type: "text",
+      page: pageNum,
+      color: annotColor,
+      ...(isEditing ? {} : { annotationId: newTextId }),
+    };
+    if (isEditing) {
+      logAnnotHistory(historyEntry);
+    } else {
+      const nextHistory = appendAnnotHistoryEntry(annotHistory, historyEntry);
+      setAnnotHistory(nextHistory);
+      const sourceId = currentSourceIdRef.current;
+      if (sourceId && nextAnnotations) {
+        authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations, history: nextHistory })),
+        }).catch(() => {});
+      }
+    }
     setAnnotTextInput(null);
     setTextActionMenu(null);
     setTextStyleTargetId(null);
     setAnnotTextVal("");
-  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBackground, textBackgroundColor, textPadding]);
+    // Same safety-net repaint as the generic pointer-commit path above —
+    // see paintCurrentAnnotationLayersRef's own comment.
+    requestAnimationFrame(() => { paintCurrentAnnotationLayersRef.current(); });
+  }, [annotTextInput, annotTextVal, annotColor, pageNum, logAnnotHistory, textFontSize, textFontFamily, textAlign, textBold, textItalic, textUnderline, textBackground, textBackgroundColor, textPadding, appendAnnotHistoryEntry, annotHistory]);
 
   // Full 8-point resize (corners + edges) on the text-annotation editor
   // box, matching the standard text-box handle set of PowerPoint/Figma/
@@ -5106,6 +6885,22 @@ const PDFPage = forwardRef(({
   ];
 
   const handleAnnotUndo = useCallback(() => {
+    // The eraser removes from wherever it hits (or, in "precise" mode,
+    // shrinks a stroke's own points in place) — not from the end of the
+    // array — so "pop whatever's now last" below is the wrong undo for it:
+    // it would delete a completely unrelated annotation instead of
+    // restoring what was actually erased. If the last thing that happened
+    // to this page was an erase gesture, and nothing has touched the page
+    // since (the reference-equality check), restore its pre-erase snapshot
+    // wholesale instead.
+    const le = lastEraseRef.current;
+    if (le && le.pageNum === pageNum && le.before && annotations[pageNum] === le.after) {
+      setAnnotations((prev) => ({ ...prev, [pageNum]: le.before }));
+      setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+      lastEraseRef.current = null;
+      logAnnotHistory({ action: "undo", type: "eraser", page: pageNum });
+      return;
+    }
     const arr = annotations[pageNum] || [];
     if (arr.length === 0) return;
     const popped = arr[arr.length - 1];
@@ -5123,26 +6918,165 @@ const PDFPage = forwardRef(({
     logAnnotHistory({ action: "redo", type: restored.type, page: pageNum });
   }, [pageNum, redoStacks, logAnnotHistory]);
 
-  const handleAnnotClear = useCallback(() => {
-    const count = (annotations[pageNum] || []).length;
-    if (count === 0) return;
-    const nextAnnotations = { ...annotations, [pageNum]: [] };
-    setAnnotations(nextAnnotations);
-    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-    logAnnotHistory({ action: "clear", page: pageNum, count });
-    // Clearing is destructive — persist immediately instead of waiting on
-    // the debounced autosave effect (below), so a page cleared right
-    // before closing the tab/navigating away doesn't silently survive in
-    // the db because the debounce never got a chance to fire.
+  // Whole-document wipe — every page's annotations AND the entire history
+  // log, gone with nothing left to retrieve. Deliberately not routed
+  // through logAnnotHistory (which would immediately re-populate the log
+  // it just blanked) and deliberately not attaching restorableAnnotations
+  // the way handleDeleteHistoryDay's per-day delete does — "no retrieving,
+  // blank history" was the explicit point of this one, unlike that one.
+  const handleClearAllAnnotations = useCallback(() => {
+    const totalCount = totalAnnotationCount;
+    if (totalCount === 0) return;
+    if (!window.confirm(`Permanently delete all ${totalCount} annotation${totalCount === 1 ? "" : "s"} on every page and blank the entire Annotation History? This cannot be undone — nothing will be left to retrieve.`)) return;
+
+    const clearedLayers = annotationLayersForView.map((layer) => ({ ...layer, annotations: {} }));
+    setAnnotationLayers(clearedLayers);
+    setAnnotations({});
+    setRedoStacks({});
+    setAnnotHistory([]);
+    // Same reasoning as the other destructive handlers above — persist
+    // immediately instead of waiting on the debounced autosave effect.
     const sourceId = currentSourceIdRef.current;
     if (sourceId) {
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: nextAnnotations, history: annotHistory }),
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: {}, history: [], layers: clearedLayers })),
       }).catch(() => {});
     }
-  }, [pageNum, annotations, annotHistory, logAnnotHistory]);
+  }, [annotationLayersForView, buildAnnotationSavePayload, totalAnnotationCount]);
+
+  // Deletes every annotation actually created on a given calendar day —
+  // not just that day's rows in the history LOG. The log is only a record
+  // of actions taken; annotation objects don't carry their own timestamp
+  // field, but every one is created with `id: Date.now()` (see the "add"
+  // path in the pointer-up handler and commitAnnotText below), so that id
+  // doubles as its creation time. Spans every page, not just the current
+  // one — a day's drawing session is rarely confined to a single page, and
+  // "delete this day" from the history panel means the whole session.
+  const handleDeleteHistoryDay = useCallback((day) => {
+    const isSameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    const dayHistory = annotHistory.filter((h) => isSameDay(h.time, day));
+    if (!dayHistory.length) return;
+    const nextLayers = [];
+    // Kept alongside the "Cleared" log entry itself (restorableAnnotations
+    // below) so the panel can offer a real retrieve/undo for THIS specific
+    // delete — not a generic undo stack entry, since undoStacks are
+    // per-page and this spans the whole document.
+    const removedByLayer = {};
+    let removedCount = 0;
+    for (const layer of annotationLayersForView) {
+      const nextLayerAnnotations = {};
+      const removedByPage = {};
+      for (const [page, list] of Object.entries(layer.annotations || {})) {
+        const kept = [];
+        const removed = [];
+        for (const ann of list) {
+          (isSameDay(new Date(ann.id), day) ? removed : kept).push(ann);
+        }
+        removedCount += removed.length;
+        if (removed.length) removedByPage[page] = removed;
+        nextLayerAnnotations[page] = kept;
+      }
+      if (Object.keys(removedByPage).length) removedByLayer[layer.id] = removedByPage;
+      nextLayers.push({ ...layer, annotations: nextLayerAnnotations });
+    }
+    const dayLabel = day.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+    if (
+      !window.confirm(
+        removedCount > 0
+          ? `Permanently delete ${removedCount} annotation${removedCount === 1 ? "" : "s"} from ${dayLabel}? This cannot be undone.`
+          : `Remove the history entries for ${dayLabel}? The annotations from that day were already erased.`
+      )
+    ) return;
+
+    if (removedCount > 0) {
+      setAnnotationLayers(nextLayers);
+      setAnnotations(nextLayers.find((layer) => layer.id === activeAnnotationLayer?.id)?.annotations || {});
+      setRedoStacks((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const layer of nextLayers) {
+          for (const page of Object.keys(layer.annotations || {})) {
+            if (next[page]?.length) { next[page] = []; changed = true; }
+          }
+        }
+        return changed ? next : prev;
+      });
+    }
+    // Drop that day's own log rows (the thing the user is deleting from
+    // the panel), then log this deletion itself as a fresh "clear" entry —
+    // same rendering the "Clear page" button's entries already use, just
+    // not tied to a single page, so today's group still shows what happened.
+    // restorableAnnotations rides along on THIS entry (not a separate undo
+    // stack) so the "retrieve" button next to it — and only it, not every
+    // "Cleared" row — knows exactly what to bring back and from where.
+    const nextHistory = [
+      ...annotHistory.filter((h) => !isSameDay(h.time, day)),
+      ...(removedCount > 0
+        ? [{ id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), action: "clear", page: pageNum, count: removedCount, restorableAnnotations: removedByLayer }]
+        : []),
+    ].slice(-300);
+    setAnnotHistory(nextHistory);
+
+    // Same reasoning as handleAnnotClear above — persist immediately rather
+    // than waiting on the debounced autosave, since this is destructive
+    // and irreversible.
+    const sourceId = currentSourceIdRef.current;
+    if (sourceId) {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload({
+          activeAnnotations: nextLayers.find((layer) => layer.id === activeAnnotationLayer?.id)?.annotations || annotations,
+          history: nextHistory,
+          layers: nextLayers,
+        })),
+      }).catch(() => {});
+    }
+  }, [annotationLayersForView, activeAnnotationLayer, annotations, annotHistory, buildAnnotationSavePayload, pageNum]);
+
+  // Brings back exactly what a specific "Cleared" entry removed (see
+  // restorableAnnotations above) — re-inserted onto the same pages they
+  // came from, with their original ids intact. Once restored, that entry's
+  // own restorableAnnotations is cleared so the retrieve button can't be
+  // pressed twice (which would duplicate the restored annotations).
+  const handleRestoreHistoryDay = useCallback((entry) => {
+    const removedByLayer = entry.restorableAnnotations;
+    if (!removedByLayer || !Object.keys(removedByLayer).length) return;
+
+    const nextLayers = annotationLayersForView.map((layer) => ({ ...layer, annotations: { ...(layer.annotations || {}) } }));
+    let restoredCount = 0;
+    for (const layer of nextLayers) {
+      const layerRemoved = removedByLayer[layer.id];
+      if (!layerRemoved) continue;
+      for (const [page, list] of Object.entries(layerRemoved)) {
+        layer.annotations[page] = [...(layer.annotations[page] || []), ...list];
+        restoredCount += list.length;
+      }
+    }
+    setAnnotationLayers(nextLayers);
+    setAnnotations(nextLayers.find((layer) => layer.id === activeAnnotationLayer?.id)?.annotations || {});
+
+    const nextHistory = [
+      ...annotHistory.map((h) => (h.id === entry.id ? { ...h, restorableAnnotations: null } : h)),
+      { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), action: "restore", page: pageNum, count: restoredCount },
+    ].slice(-300);
+    setAnnotHistory(nextHistory);
+
+    const sourceId = currentSourceIdRef.current;
+    if (sourceId) {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload({
+          activeAnnotations: nextLayers.find((layer) => layer.id === activeAnnotationLayer?.id)?.annotations || annotations,
+          history: nextHistory,
+          layers: nextLayers,
+        })),
+      }).catch(() => {});
+    }
+  }, [annotationLayersForView, activeAnnotationLayer, annotations, annotHistory, buildAnnotationSavePayload, pageNum]);
 
   // Lets an embedding parent drive undo/history/redo externally when
   // hideUndoRedo hides this instance's own copy of that row (see
@@ -5211,12 +7145,9 @@ const PDFPage = forwardRef(({
     ...pageNavState,
   }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch]);
 
-  // Debounced commit shared by ctrl+scroll zoom (below) and the +/- zoom
-  // buttons (see zoomFromCenter, further down): both only push a cheap CSS
-  // transform on canvasWrap while the gesture is in progress, and call the
-  // real, expensive setZoom + re-render just once here, after ticks stop
-  // for a beat — re-rasterizing the canvas on every single tick (what the
-  // +/- buttons used to do directly) is what caused the visible flicker.
+  // Commits zoom through the PDF.js viewport. The page wrapper is never
+  // visually transformed; the overlay and canvas are rerendered from the
+  // same committed viewport.
   const commitLiveZoom = useCallback(() => {
     if (zoomingDisabled) return;
     const state = wheelZoomStateRef.current;
@@ -5240,6 +7171,7 @@ const PDFPage = forwardRef(({
       wrap.style.transform       = "";
       wrap.style.transformOrigin = "";
       wrap.style.willChange      = "";
+      wrap.style.removeProperty("--pdf-live-zoom-inverse");
       return;
     }
     scrollAfterZoomRef.current = captureZoomAnchor(
@@ -5306,12 +7238,7 @@ const PDFPage = forwardRef(({
       // the viewer), so that offset must be subtracted out here or the live
       // preview zooms around a point down-and-right of the real cursor —
       // which visibly drifts the shown page up-and-left as the scale grows.
-      wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
-      wrap.style.transform = `scale(${state.pendingZoom / state.baseZoom})`;
-      if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(state.pendingZoom * 100)}%`;
-
-      if (state.timer) clearTimeout(state.timer);
-      state.timer = setTimeout(commitLiveZoom, 70);
+      commitLiveZoom();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -5373,17 +7300,11 @@ const PDFPage = forwardRef(({
     state.originX = originX;
     state.originY = originY;
 
-    wrap.style.willChange      = "transform";
     // Same wrap-vs-el frame mismatch as the ctrl+scroll handler above:
     // transform-origin is relative to wrap's own border box, so wrap's own
     // offset within el (padding + auto-centering margin) must be subtracted
     // from the el-frame origin computed above.
-    wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
-    wrap.style.transform       = `scale(${state.pendingZoom / state.baseZoom})`;
-    if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(state.pendingZoom * 100)}%`;
-
-    if (state.timer) clearTimeout(state.timer);
-    state.timer = setTimeout(commitLiveZoom, 90);
+    commitLiveZoom();
   }, [commitLiveZoom, zoomingDisabled]);
 
   const stopZoomHold = useCallback(() => {
@@ -5456,6 +7377,44 @@ const PDFPage = forwardRef(({
     let lastPinchZoom = 1;
     let pinchCooldownUntil = 0;
     let pinchTransformApplied = false;
+    let pinchRaf = 0;
+    let gestureActive = false;
+    let targetScale = 1;
+    let displayedScale = 1;
+    let targetX = 0;
+    let targetY = 0;
+    let displayedX = 0;
+    let displayedY = 0;
+    const PINCH_SMOOTHING = 0.22;
+    const RELEASE_SMOOTHING = 0.18;
+    const SNAP_EPSILON = 0.001;
+
+    const animatePinch = () => {
+      const wrap = canvasWrapRef.current;
+      if (!wrap) return;
+      const smoothing = gestureActive ? PINCH_SMOOTHING : RELEASE_SMOOTHING;
+      displayedScale += (targetScale - displayedScale) * smoothing;
+      displayedX += (targetX - displayedX) * smoothing;
+      displayedY += (targetY - displayedY) * smoothing;
+      wrap.style.transformOrigin = "0 0";
+      wrap.style.transform = `translate3d(${displayedX}px, ${displayedY}px, 0) scale(${displayedScale})`;
+      wrap.style.willChange = "transform";
+      pinchTransformApplied = true;
+      if (
+        gestureActive
+        || Math.abs(targetScale - displayedScale) > SNAP_EPSILON
+        || Math.abs(targetX - displayedX) > SNAP_EPSILON
+        || Math.abs(targetY - displayedY) > SNAP_EPSILON
+      ) {
+        pinchRaf = requestAnimationFrame(animatePinch);
+      } else {
+        pinchRaf = 0;
+      }
+    };
+
+    const startPinchAnimation = () => {
+      if (!pinchRaf) pinchRaf = requestAnimationFrame(animatePinch);
+    };
 
     const fireTwoFingerUndo = () => {
       if (twoFingerUndoCandidate?.timer) clearTimeout(twoFingerUndoCandidate.timer);
@@ -5508,20 +7467,21 @@ const PDFPage = forwardRef(({
       return { x: x / t.length, y: y / t.length };
     };
 
-    // Mirrors the ctrl+scroll zoom path: during the gesture we only push a
-    // cheap CSS transform on the canvas wrapper (no React re-render, no PDF.js
-    // re-rasterization) so the live pinch tracks the fingers at 60fps instead
-    // of jittering on every touchmove; the real (expensive) setZoom + redraw
-    // happens once, when the fingers lift.
+    // Keep the gesture preview local and smooth. PDF.js rerenders only when
+    // the gesture commits, while the shared canvas/page/annotation wrapper
+    // follows the fingers at animation-frame cadence.
     const commitPinchZoom = () => {
       if (!pinchPrimed || lastPinchZoom === startZoom) {
-        // Nothing actually changed — no re-render is coming to strip the
-        // preview transform, so clean it up here instead.
+        gestureActive = false;
+        targetScale = 1;
+        targetX = 0;
+        targetY = 0;
+        startPinchAnimation();
         const wrap = canvasWrapRef.current;
         if (wrap) {
-          wrap.style.transform       = "";
+          wrap.style.transform = "";
           wrap.style.transformOrigin = "";
-          wrap.style.willChange      = "";
+          wrap.style.willChange = "";
         }
         pinchTransformApplied = false;
         return;
@@ -5543,11 +7503,10 @@ const PDFPage = forwardRef(({
         left: (startSL + lastMidX) * (lastPinchZoom / startZoom) - lastMidX,
         top: (startST + lastMidY) * (lastPinchZoom / startZoom) - lastMidY,
       };
+      gestureActive = false;
+      targetScale = lastPinchZoom / startZoom;
+      startPinchAnimation();
       setZoom(lastPinchZoom);
-      // The preview transform stays in place until the [zoom] effect swaps it
-      // for the real scroll position in the same frame the new raster paints
-      // — clearing it here would flash back to the pre-zoom size first.
-      pinchTransformApplied = false;
     };
 
     // Drops an in-progress pinch entirely — no setZoom, unlike
@@ -5561,6 +7520,7 @@ const PDFPage = forwardRef(({
         wrap.style.transform       = "";
         wrap.style.transformOrigin = "";
         wrap.style.willChange      = "";
+        wrap.style.removeProperty("--pdf-live-zoom-inverse");
       }
       pinchTransformApplied = false;
     };
@@ -5653,11 +7613,9 @@ const PDFPage = forwardRef(({
     const regionForSpanIndex = (spanIdx) => {
       const span = spansRef.current[spanIdx];
       if (!span) return null;
-      for (let i = selectionBboxes.length - 1; i >= 0; i--) {
-        const bbox = selectionBboxes[i];
-        if (bboxMatchesSpan(bbox, span)) return bbox;
-      }
-      return null;
+      return selectionBboxes
+        .filter((bbox) => bboxMatchesSpan(bbox, span))
+        .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null;
     };
 
     const selectWordAt = (cx, cy) => {
@@ -5980,29 +7938,17 @@ const PDFPage = forwardRef(({
         }
         const wrap = canvasWrapRef.current;
         if (wrap) {
-          // Anchor the live preview to the content point that started under
-          // the pinch midpoint, then translate by the midpoint's drift. The
-          // older version moved the transform origin itself with lastMidX/Y;
-          // that made a two-finger pinch-pan feel inverted because the page
-          // "chased" the hands by re-scaling around a new origin instead of
-          // actually moving with them.
-          const originX = startSL + startMidX;
-          const originY = startST + startMidY;
-          // originX/Y are in el's (previewEl's) content-space frame; the
-          // transform is applied to wrap, whose own box sits offset from
-          // el's padding edge by wrap.offsetLeft/Top (el's padding, plus
-          // wrap's margin:auto centering when the page is narrower than the
-          // viewer). Without subtracting that out, the live pinch preview
-          // scales around a point down-and-right of the real fingers. The
-          // live preview intentionally stays anchored in place now instead of
-          // following the fingers with an extra translate, so pinch zoom feels
-          // like pure zoom rather than zoom-plus-pan.
-          wrap.style.willChange      = "transform";
-          wrap.style.transformOrigin = `${originX - wrap.offsetLeft}px ${originY - wrap.offsetTop}px`;
-          wrap.style.transform       = `scale(${newZoom / startZoom})`;
-          pinchTransformApplied = true;
+          const ratio = newZoom / startZoom;
+          const anchorX = startSL + startMidX - wrap.offsetLeft;
+          const anchorY = startST + startMidY - wrap.offsetTop;
+          const currentX = startSL + lastMidX - wrap.offsetLeft;
+          const currentY = startST + lastMidY - wrap.offsetTop;
+          targetScale = ratio;
+          targetX = currentX - anchorX * ratio;
+          targetY = currentY - anchorY * ratio;
+          gestureActive = true;
+          startPinchAnimation();
         }
-        if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(newZoom * 100)}%`;
         return;
       }
       if (e.touches.length === 3) {
@@ -6152,6 +8098,7 @@ const PDFPage = forwardRef(({
 
     return () => {
       if (twoFingerUndoCandidate?.timer) clearTimeout(twoFingerUndoCandidate.timer);
+      if (pinchRaf) cancelAnimationFrame(pinchRaf);
       livePanRef.current.active = false;
       stopLivePan(livePanRef);
       stopMomentumScroll(momentumFrameRef);
@@ -6161,6 +8108,7 @@ const PDFPage = forwardRef(({
           wrap.style.transform       = "";
           wrap.style.transformOrigin = "";
           wrap.style.willChange      = "";
+          wrap.style.removeProperty("--pdf-live-zoom-inverse");
         }
       }
       el.removeEventListener("touchstart",  onTouchStart);
@@ -6301,8 +8249,12 @@ const PDFPage = forwardRef(({
           const item = content.items[pdfItemIndex];
           if (!item.str) continue;
           const tx       = mul(item.transform);
-          const fontSize = Math.hypot(tx[0], tx[1]);
+          // PDF.js defines text height on the transform's vertical axis.
+          // The horizontal axis may include glyph stretching/condensing and
+          // must not be reused as height or boxes drift vertically.
+          const fontSize = Math.hypot(tx[2], tx[3]);
           if (fontSize < 1) continue;
+          const ascentRatio = getPdfTextAscentRatio(content.styles?.[item.fontName]);
 
           const angle      = Math.atan2(tx[1], tx[0]);
           const itemWidth  = item.width * scale; // PDF advance width → canvas pixels
@@ -6377,11 +8329,11 @@ const PDFPage = forwardRef(({
             spansRef.current.push({
               text: token, el: span, fontFamily: itemFontFamily, fontWeight: itemFontWeight, fontStyle: itemFontStyle,
               geoLeft: originX, geoRight: originX + tokenWidth,
-              geoTop: originY - fontSize * 0.8, geoHeight: fontSize,
+              geoTop: originY - fontSize * ascentRatio, geoHeight: fontSize,
               pageLeft: originX / scale,
               pageRight: (originX + tokenWidth) / scale,
-              pageTop: (originY - fontSize * 0.8) / scale,
-              pageBottom: (originY - fontSize * 0.8 + fontSize) / scale,
+              pageTop: (originY - fontSize * ascentRatio) / scale,
+              pageBottom: (originY - fontSize * ascentRatio + fontSize) / scale,
               pageHeight: fontSize / scale,
               pdfItemIndex, // which raw content.items entry this token came from
               tokenIndex,   // stable within the page: item index + token order
@@ -6390,7 +8342,7 @@ const PDFPage = forwardRef(({
             span.textContent        = token;
             span.style.position     = "absolute";
             span.style.left         = `${originX}px`;
-            span.style.top          = `${originY - fontSize * 0.8}px`;
+            span.style.top          = `${originY - fontSize * ascentRatio}px`;
             span.style.height       = `${fontSize}px`;
             span.style.fontSize     = `${fontSize}px`;
             span.style.whiteSpace   = "pre";
@@ -7067,6 +9019,9 @@ const PDFPage = forwardRef(({
 
   // ── Load PDF ───────────────────────────────────────────────────────────────
   const loadPdfBytes = useCallback(async (arrayBuffer, name) => {
+    // PDF.js may transfer/detach the ArrayBuffer passed to getDocument().
+    // Keep an independent copy for the backend semantic-analysis upload.
+    pdfBytesRef.current = arrayBuffer instanceof ArrayBuffer ? arrayBuffer.slice(0) : arrayBuffer;
     currentSourceIdRef.current = ""; // caller (loadFromSource) sets this back if applicable
     setHasSourceId(false); // mirrors currentSourceIdRef.current as real state — a plain ref mutation alone doesn't trigger the re-render canInsertBlankPage/pageNavState need to pick up the change
     setLoading(true);
@@ -7075,12 +9030,17 @@ const PDFPage = forwardRef(({
     setPdfDoc(null); setPdfType(null);
     setHyleData(null); setHylePage(null);
     setExtractError(""); setSavedId(null); setActiveHistoryId(null);
+    pendingReaderRestoreRef.current = null;
+    setReadingMode("single");
+    setBookletRightPage(null);
     setPageNum(1); setPageViewport(null); setZoom(1);
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
     pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
     pageTextItemsCacheRef.current = {};
+    pdfAssistantPagesCacheRef.current = { document: null, promise: null, pages: null };
     pageIndexCacheRef.current.clear();
+    setPdfAssistantOpen(false);
     setSearchQuery(""); setSearchMatches([]); setSearchActiveIndex(-1); setSearchOpen(false);
     try {
       const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
@@ -7172,7 +9132,39 @@ const PDFPage = forwardRef(({
         if (annRes.ok) {
           const annData = await annRes.json();
           skipNextAnnotationAutosaveRef.current = true; // suppress the autosave effect for this restore
-          setAnnotations(rehydrateBBoxTitleLayers(annData.layers || {}));
+          const normalizedAnnotationState = normalizeStoredAnnotationLayers(annData.layers || {}, annData.activeLayerId || null);
+          const restoredActiveLayerId = normalizedAnnotationState.activeId || normalizedAnnotationState.layers[0]?.id || null;
+          const persistedReaderState = annData.readerState || null;
+          const persistedPageNum = Math.min(
+            Math.max(1, parseInt(persistedReaderState?.pageNum, 10) || 1),
+            numPages || Math.max(1, parseInt(persistedReaderState?.pageNum, 10) || 1),
+          );
+          setAnnotationLayers(normalizedAnnotationState.layers);
+          setActiveAnnotationLayerId(restoredActiveLayerId);
+          setAnnotations(
+            normalizedAnnotationState.layers.find((layer) => layer.id === restoredActiveLayerId)?.annotations
+            || normalizedAnnotationState.layers[0]?.annotations
+            || {}
+          );
+          setReadingMode(persistedReaderState?.readingMode === "booklet" ? "booklet" : "single");
+          setBookletRightPage(
+            persistedReaderState?.readingMode === "booklet" && persistedReaderState?.bookletRightPage
+              ? Math.min(Math.max(1, parseInt(persistedReaderState.bookletRightPage, 10) || 1), numPages || 1)
+              : null
+          );
+          setZoom(Number.isFinite(persistedReaderState?.zoom) ? normalizeZoom(persistedReaderState.zoom) : 1);
+          setSearchOpen(Boolean(persistedReaderState?.searchOpen));
+          setSearchQuery(typeof persistedReaderState?.searchQuery === "string" ? persistedReaderState.searchQuery : "");
+          pendingReaderRestoreRef.current = persistedReaderState
+            ? {
+                pageNum: jumpToPage ? (Math.min(Math.max(1, parseInt(jumpToPage, 10) || 1), numPages || 1)) : persistedPageNum,
+                pageRatioX: jumpToPage ? null : (typeof persistedReaderState.pageRatioX === "number" ? persistedReaderState.pageRatioX : null),
+                pageRatioY: jumpToPage ? null : (typeof persistedReaderState.pageRatioY === "number" ? persistedReaderState.pageRatioY : null),
+              }
+            : null;
+          if (!jumpToPage && persistedReaderState?.pageNum) {
+            setPageNum(persistedPageNum);
+          }
           // `time` round-trips through JSON as an ISO string — logAnnotHistory
           // and the history panel's own rendering (.toLocaleTimeString(),
           // day-bucketing) both expect a real Date instance.
@@ -7218,14 +9210,19 @@ const PDFPage = forwardRef(({
         }
         return shifted;
       };
-      const shiftedLayers = shiftPagesUp(annotations);
+      const shiftedLayersState = annotationLayersForView.map((layer) => ({
+        ...layer,
+        annotations: shiftPagesUp(layer.id === activeAnnotationLayer?.id ? annotations : layer.annotations),
+      }));
+      const shiftedLayers = shiftedLayersState.find((layer) => layer.id === activeAnnotationLayer?.id)?.annotations || {};
       skipNextAnnotationAutosaveRef.current = true; // writing it directly below — the debounced autosave effect shouldn't also fire against the pre-shift state
+      setAnnotationLayers(shiftedLayersState);
       setAnnotations(shiftedLayers);
       setRedoStacks({});
       await authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: shiftedLayers, history: annotHistory }),
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: shiftedLayers, layers: shiftedLayersState })),
       }).catch(() => {});
 
       setBlankInsertedPages((prev) => {
@@ -7281,14 +9278,19 @@ const PDFPage = forwardRef(({
         }
         return shifted;
       };
-      const shiftedLayers = shiftPagesDown(annotations);
+      const shiftedLayersState = annotationLayersForView.map((layer) => ({
+        ...layer,
+        annotations: shiftPagesDown(layer.id === activeAnnotationLayer?.id ? annotations : layer.annotations),
+      }));
+      const shiftedLayers = shiftedLayersState.find((layer) => layer.id === activeAnnotationLayer?.id)?.annotations || {};
       skipNextAnnotationAutosaveRef.current = true;
+      setAnnotationLayers(shiftedLayersState);
       setAnnotations(shiftedLayers);
       setRedoStacks({});
       await authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ layers: shiftedLayers, history: annotHistory }),
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: shiftedLayers, layers: shiftedLayersState })),
       }).catch(() => {});
 
       setBlankInsertedPages((prev) => {
@@ -7385,17 +9387,16 @@ const PDFPage = forwardRef(({
     finally { setSaving(false); }
   }, [hyleData, saving, filename, pageCount, pdfType, hylePage, pageNum, provider, extractMode]);
 
-  // Prefers the server-side Mistral OCR Markdown for this page (better structure —
-  // real headings/lists/tables) when the doc came from a saved Source; falls back
-  // to raw client-side pdf.js text (local uploads, or if the markdown service is
-  // unavailable/unconfigured/out of quota) so extraction never breaks.
+  // Reads persisted OCR only. A missing or still-processing cache falls back to
+  // local pdf.js extraction and never starts a provider request from the reader.
   const getPageText = useCallback(async (n) => {
     const sourceId = currentSourceIdRef.current;
     if (sourceId) {
       try {
-        const res  = await authFetch(apiUrl(`/api/sources/${sourceId}/markdown?page=${n}`));
+        const res  = await authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?page=${n}`));
         const data = await res.json();
-        if (res.ok && data.markdown?.trim()) return data.markdown;
+        const ocrPage = data.pages?.[0];
+        if (res.ok && ocrPage?.markdown?.trim()) return ocrPage.markdown;
       } catch {}
     }
     const page    = await pdfDoc.getPage(n);
@@ -7403,13 +9404,399 @@ const PDFPage = forwardRef(({
     return content.items.map((item) => item.str + (item.hasEOL ? "\n" : " ")).join("").trim();
   }, [pdfDoc]);
 
+  const loadPdfAssistantPages = useCallback(async () => {
+    const cached = pdfAssistantPagesCacheRef.current;
+    if (cached.document === pdfDoc && cached.pages) return cached;
+    if (cached.document === pdfDoc && cached.promise) return cached.promise;
+
+    const promise = (async () => {
+      const assistantPageCount = Math.min(pageCount, 1500);
+      const perPageCharacterLimit = Math.max(
+        700,
+        Math.min(12000, Math.floor(1500000 / Math.max(1, assistantPageCount))),
+      );
+      const sourceId = currentSourceIdRef.current;
+      let pages = null;
+      let stored = false;
+      let generated = false;
+
+      // Saved documents use one read-only bulk request to the persisted OCR
+      // cache. Opening the assistant can never initiate document processing.
+      if (sourceId) {
+        try {
+          const res = await authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?from=1&to=${assistantPageCount}`));
+          const data = await res.json();
+          if (res.ok && Array.isArray(data.pages) && data.pages.some((p) => String(p.markdown || "").trim())) {
+            pages = data.pages.map((p) => ({ pageNumber: Number(p.pageIndex) + 1, text: String(p.markdown || "").slice(0, perPageCharacterLimit) }));
+            stored = true;
+            generated = false;
+          }
+        } catch {
+          // falls through to the per-page native-extraction loop below
+        }
+      }
+
+      // Local/unsaved files (no sourceId), or the bulk fetch above failed/
+      // came back empty — per-page pdf.js extraction, nothing saved anywhere.
+      if (!pages) {
+        pages = [];
+        for (let start = 1; start <= assistantPageCount; start += 4) {
+          const pageNumbers = Array.from(
+            { length: Math.min(4, assistantPageCount - start + 1) },
+            (_, index) => start + index,
+          );
+          const batch = await Promise.all(pageNumbers.map(async (pageNumber) => {
+            try {
+              const text = await getPageText(pageNumber);
+              return { pageNumber, text: String(text || "").slice(0, perPageCharacterLimit) };
+            } catch {
+              return { pageNumber, text: "" };
+            }
+          }));
+          pages.push(...batch);
+        }
+      }
+
+      const result = { pages, stored, generated };
+      pdfAssistantPagesCacheRef.current = { document: pdfDoc, promise: null, pages: result };
+      return result;
+    })();
+    pdfAssistantPagesCacheRef.current = { document: pdfDoc, promise, pages: null };
+    return promise;
+  }, [getPageText, pageCount, pdfDoc]);
+
+  // Page-space (PDF-point — same convention as ann.x/y/w/h) text spans built
+  // straight from pdf.js's raw text items for the CURRENT page, independent
+  // of whether the Manual-mode DOM text layer (spansRef) happens to be
+  // mounted right now — Smart Segmenting needs to work regardless of
+  // extract mode, and spansRef is left stale (not cleared) whenever
+  // textSelectable is false, so it can't be trusted here. Item-level (not
+  // word-level) granularity is enough: buildTextLines/groupSpansIntoLines
+  // only need line-grouping geometry, not per-word boundaries. Same
+  // viewport-transform math as the Manual-mode text-layer effect above
+  // (pageViewport.transform × item.transform via pdf.js's own Util.transform),
+  // just without that effect's word-splitting/font-metrics work, which
+  // Smart Segmenting doesn't need.
+  const buildPageSpansForSmartSegmenting = useCallback(async () => {
+    if (!pageViewport) return [];
+    const page = await pdfDoc.getPage(pageNum);
+    const content = await page.getTextContent();
+    const items = content.items;
+    const scale = Math.hypot(pageViewport.transform[0], pageViewport.transform[1]);
+    const spans = [];
+    for (const item of items) {
+      if (!item.str || !item.str.trim()) continue;
+      const tx = pdfjsLib.Util.transform(pageViewport.transform, item.transform);
+      const fontSize = Math.hypot(tx[2], tx[3]);
+      if (fontSize < 1) continue;
+      const itemWidth = item.width * scale;
+      const originX = tx[4];
+      const originY = tx[5];
+      const ascentRatio = getPdfTextAscentRatio(content.styles?.[item.fontName]);
+      spans.push({
+        text: item.str,
+        pageLeft: originX / scale,
+        pageRight: (originX + itemWidth) / scale,
+        pageTop: (originY - fontSize * ascentRatio) / scale,
+        pageBottom: (originY - fontSize * ascentRatio + fontSize) / scale,
+        pageHeight: fontSize / scale,
+      });
+    }
+    return spans;
+  }, [pageNum, pageViewport, pdfDoc]);
+
+  const buildPageImageRectsForSmartSegmenting = useCallback(async () => {
+    if (!pageViewport || !pdfDoc) return [];
+    const page = await pdfDoc.getPage(pageNum);
+    const operatorList = await page.getOperatorList();
+    return extractPlacedImageRects(operatorList, pageViewport, pdfjsLib.OPS);
+  }, [pageNum, pageViewport, pdfDoc]);
+
+  const runSemanticDetection = useCallback(async () => {
+    if (!pdfDoc || !pageViewport || semanticDetectionBusy) return;
+    setSemanticDetectionBusy(true);
+    setSemanticDetectionDialogOpen(false);
+    setSemanticDetectionError("");
+    setSemanticDetectionPreview(null);
+    try {
+      const [spans, imageRects, persistedOcrText] = await Promise.all([
+        buildPageSpansForSmartSegmenting(),
+        buildPageImageRectsForSmartSegmenting(),
+        getPageText(pageNum),
+      ]);
+      const candidates = buildSemanticCandidates(spans, pageNum - 1, imageRects);
+      if (!candidates.length) throw new Error("No candidate regions were found on this page.");
+      const form = new FormData();
+      form.append("candidates", JSON.stringify(candidates));
+      form.append("reasoningEffort", "medium");
+      form.append("scope", semanticDetectionScope);
+      if (persistedOcrText) form.append("ocrPage", persistedOcrText);
+      if (pdfBytesRef.current?.byteLength > 0) form.append("pdf", new Blob([pdfBytesRef.current], { type: "application/pdf" }), filename || "document.pdf");
+      const pageCanvas = pageCanvasRefs.current[pageNum - 1];
+      if (pageCanvas?.toDataURL) {
+        const imageBlob = await new Promise((resolve) => pageCanvas.toBlob(resolve, "image/png"));
+        if (imageBlob) form.append("pageImage", imageBlob, `page-${pageNum}.png`);
+      }
+      const response = await authFetch(apiUrl("/api/ai/semantic-document-detection"), { method: "POST", body: form });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error?.message || data.error || "Semantic detection failed.");
+      const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+      const contentsEvidence = candidates.some((candidate) => (
+        /\btable\s+of\s+contents\b|\bcontents\b/i.test(candidate.text || "")
+        || /\.{2,}\s*\d{1,3}\s*$/.test(candidate.text || "")
+      ));
+      const normalizedRegions = (data.result?.regions || []).map((region) => {
+        const regionText = region.candidateIds.map((id) => candidateById.get(id)?.text || "").join(" ");
+        const rowLooksLikeContents = /\.{2,}\s*\d{1,3}\s*$/.test(regionText)
+          || (/\bcontents\b/i.test(regionText) && ["body_paragraph", "list", "unknown"].includes(region.type));
+        return contentsEvidence && rowLooksLikeContents
+          ? { ...region, type: "table_of_contents", reasonCodes: [...(region.reasonCodes || []), "contents-page-pattern"] }
+          : region;
+      });
+      setSemanticDetectionPreview({
+        ...data.result,
+        regions: normalizedRegions,
+        candidates,
+        candidateById,
+        provider: data.provider,
+        model: data.model,
+      });
+    } catch (error) {
+      setSemanticDetectionError(error.message || "Semantic detection failed.");
+    } finally {
+      setSemanticDetectionBusy(false);
+    }
+  }, [pdfDoc, pageViewport, semanticDetectionBusy, buildPageSpansForSmartSegmenting, buildPageImageRectsForSmartSegmenting, getPageText, pageNum, semanticDetectionScope, filename]);
+
+  const applySemanticDetection = useCallback((regionsOverride = null) => {
+    if (!semanticDetectionPreview) return;
+    const candidateById = semanticDetectionPreview.candidateById;
+    const regions = regionsOverride || semanticDetectionPreview.regions;
+    const nextIdStart = Date.now();
+    const additions = regions
+      .filter((region) => Number(region.confidence) >= 0.85)
+      .map((region, index) => {
+        const type = semanticTypeToBBoxType(region.type);
+        if (!type) return null;
+        let box;
+        try { box = unionCandidateBoxes(region.candidateIds, candidateById); } catch { return null; }
+        return {
+          ...box,
+          id: nextIdStart + index,
+          type,
+          color: nextDistinctBBoxColor(visiblePageAnnotations),
+          closed: true,
+          geometry: "rectangle",
+          semanticDetected: true,
+          semanticRole: region.type,
+          semanticConfidence: region.confidence,
+          semanticCandidateIds: region.candidateIds,
+          text: region.candidateIds.map((id) => candidateById.get(id)?.text || "").filter(Boolean).join(" "),
+          lineWidth: bboxBorderSize,
+          borderStyle: shapeBorderStyle,
+        };
+      })
+      .filter(Boolean);
+    if (!additions.length) {
+      setSemanticDetectionError("No confident semantic regions could be applied.");
+      return;
+    }
+    const nextAnnotations = {
+      ...annotations,
+      [pageNum]: [...(annotations[pageNum] || []), ...additions],
+    };
+    setAnnotations(nextAnnotations);
+    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+    logAnnotHistory({ action: "semantic-detection", page: pageNum, count: additions.length });
+    const sourceId = currentSourceIdRef.current;
+    if (sourceId) {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
+      }).catch(() => {});
+    }
+    if (regionsOverride) {
+      const applied = new Set(regionsOverride);
+      setSemanticDetectionPreview((current) => {
+        if (!current) return null;
+        const remaining = current.regions.filter((region) => !applied.has(region));
+        return remaining.length ? { ...current, regions: remaining } : null;
+      });
+    } else {
+      setSemanticDetectionPreview(null);
+    }
+  }, [semanticDetectionPreview, visiblePageAnnotations, nextDistinctBBoxColor, annotations, pageNum, bboxBorderSize, shapeBorderStyle, logAnnotHistory, buildAnnotationSavePayload]);
+
+  // BBox tool's "Smart Segmenting" action — one bbox per paragraph on the
+  // current page, matched from the page's own (cached, Mistral-OCR-derived)
+  // Markdown against the PDF's real text geometry. Deliberately no AI/LLM
+  // call: paragraph boundaries already exist in the Markdown, geometry
+  // already exists in the PDF's text layer, and matching one against the
+  // other is a deterministic text-comparison problem (pdfSmartSegment.js,
+  // built on the same normalization/fuzzy-matching tools the search bar
+  // uses) — not something that benefits from a model call.
+  const runSmartSegmenting = useCallback(async () => {
+    if (!pdfDoc || !pageViewport || smartSegmentingBusy) return;
+    const targetSourceId = currentSourceIdRef.current
+      || embeddedSourceId
+      || location.state?.sourceId
+      || "";
+    if (!targetSourceId) {
+      setSmartSegmentingError("Save this PDF to Sources before creating database-backed segments.");
+      return;
+    }
+    // Pinned to whichever page was current WHEN THE BUTTON WAS CLICKED —
+    // this is async (two awaited requests), and without this, navigating to
+    // a different page before it resolves would still silently apply the
+    // (stale-page's) results via the closure's own `pageNum`/`pageViewport`
+    // — reported as "I'm on page 3 but got page 2's text," which is exactly
+    // that: the operation actually ran against whatever page was current
+    // when it STARTED, not whatever's current when it FINISHES. The
+    // pageNumRef check below aborts instead of silently mutating a page
+    // you've since navigated away from.
+    const targetPageNum = pageNum;
+    setSmartSegmentingBusy(true);
+    setSmartSegmentingError("");
+    try {
+      const [markdown, spans, imageRects] = await Promise.all([
+        getPageText(targetPageNum),
+        buildPageSpansForSmartSegmenting(),
+        buildPageImageRectsForSmartSegmenting(),
+      ]);
+
+      if (pageNumRef.current !== targetPageNum) {
+        setSmartSegmentingError(`Switched away from page ${targetPageNum} before Smart Segmenting finished — try again on the page you want.`);
+        return;
+      }
+
+      // debug isn't used for anything functional — it just lets a failed
+      // run (0 matches) be diagnosed from the console instead of being a
+      // single opaque error message. See segmentPageIntoParagraphBBoxes'
+      // own comment for the shape.
+      const debug = {};
+      const matches = segmentPageIntoParagraphBBoxes(markdown, spans, debug, imageRects);
+      console.log("[Smart Segmenting]", {
+        page: targetPageNum,
+        markdownLength: markdown?.length || 0,
+        markdownPreview: String(markdown || "").slice(0, 200),
+        spanCount: spans.length,
+        imageCount: imageRects.length,
+        paragraphCount: debug.paragraphCount,
+        lineCount: debug.lineCount,
+        matchedCount: matches.length,
+        attempts: debug.attempts,
+      });
+      if (!matches.length) {
+        setSmartSegmentingError("Couldn't confidently match any paragraphs on this page.");
+        return;
+      }
+
+      const normalizeSegmentText = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+      const matchedTexts = new Set(matches.map((match) => normalizeSegmentText(match.text)).filter(Boolean));
+      // Replace a previous Smart Segmenting result for the same paragraph.
+      // Otherwise its persisted old rectangle remains directly underneath the
+      // corrected one and makes a rerun look as though nothing changed.
+      const existingPageAnnotations = (annotations[targetPageNum] || []).filter((annotation) => {
+        if (annotation.smartSegmented === true) return false;
+        return !(isBBoxType(annotation.type) && matchedTexts.has(normalizeSegmentText(annotation.text)));
+      });
+      // nextDistinctBBoxColor only ever looks at the array it's handed, so
+      // each call needs to see the colors already claimed by THIS batch too
+      // — not just what was on the page before it started — or every new
+      // box would pick the same "first unused" color.
+      const colorPool = [...existingPageAnnotations];
+      let nextSmartBBoxId = Date.now();
+      const smartTypeOrdinals = {};
+      const createSmartBBox = (match, type, padding = 3, bottomPadding = padding, horizontalPadding = padding) => {
+        const color = nextDistinctBBoxColor(colorPool);
+        colorPool.push({ type, color });
+        const annotation = {
+          id: nextSmartBBoxId++,
+          hyleId: getSemanticHyleBBoxId(
+            targetSourceId,
+            targetPageNum,
+            type,
+            (smartTypeOrdinals[type] = (smartTypeOrdinals[type] || 0) + 1),
+          ),
+          type,
+          color,
+          x: match.rect.x - horizontalPadding,
+          y: match.rect.y - padding,
+          w: match.rect.w + horizontalPadding * 2,
+          h: match.rect.h + padding + bottomPadding,
+          closed: true,
+          borderStyle: shapeBorderStyle,
+          lineWidth: bboxBorderSize,
+          shapeBackground: false,
+          smartSegmented: true,
+          smartSegmentRole: type === "imageBBox" ? "figure" : "paragraph",
+          text: match.text,
+          title: match.title || "",
+        };
+        const imageSnippet = type === "imageBBox" ? captureImageBBoxSnippet(annotation) : null;
+        return imageSnippet
+          ? { ...annotation, imageDataUrl: imageSnippet.dataUrl, imageWidth: imageSnippet.width, imageHeight: imageSnippet.height }
+          : annotation;
+      };
+      const smartBBoxGroups = matches.map((match) => {
+        if (match.kind !== "section" || !match.childSegments?.length) {
+          return [createSmartBBox(match, match.imageSegment ? "imageBBox" : "bbox")];
+        }
+        // Semantic headings remain useful metadata, but smart segmentation now
+        // emits only content BBoxes rather than structural section/chapter boxes.
+        const imageChild = match.imageSegment
+          ? [createSmartBBox(match.imageSegment, "imageBBox", 1)]
+          : [];
+        const paragraphs = match.childSegments.map((child) => createSmartBBox(child, "bbox", 1));
+        return [...imageChild, ...paragraphs];
+      });
+      // Preserve the exact candidate geometry. BBoxes are allowed to overlap;
+      // no obstacle/shield promotion is applied to manual or smart results.
+      const newBBoxes = smartBBoxGroups.flat();
+
+      const nextAnnotations = { ...annotations, [targetPageNum]: [...existingPageAnnotations, ...newBBoxes] };
+      const nextHistory = appendAnnotHistoryEntry(annotHistory, {
+        action: "add",
+        type: "bbox",
+        page: targetPageNum,
+        count: newBBoxes.length,
+      });
+      const saveResponse = await authFetch(apiUrl(`/api/source-annotations/${targetSourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations, history: nextHistory })),
+      });
+      if (!saveResponse.ok) {
+        const saveError = await saveResponse.json().catch(() => ({}));
+        const saveMessage = typeof saveError.error === "string"
+          ? saveError.error
+          : saveError.error?.message;
+        throw new Error(saveMessage || `Could not save segments (${saveResponse.status}).`);
+      }
+
+      // The database is authoritative: publish the generated segmentation
+      // locally only after its persisted layer payload is confirmed.
+      setAnnotations(nextAnnotations);
+      setRedoStacks((prev) => (prev[targetPageNum]?.length ? { ...prev, [targetPageNum]: [] } : prev));
+      setAnnotHistory(nextHistory);
+    } catch (error) {
+      setSmartSegmentingError(error?.message || "Smart Segmenting failed for this page.");
+    } finally {
+      setSmartSegmentingBusy(false);
+    }
+  }, [
+    pdfDoc, pageViewport, smartSegmentingBusy, getPageText, pageNum, buildPageSpansForSmartSegmenting,
+    buildPageImageRectsForSmartSegmenting,
+    annotations, nextDistinctBBoxColor, shapeBorderStyle, bboxBorderSize, appendAnnotHistoryEntry,
+    annotHistory, buildAnnotationSavePayload, captureImageBBoxSnippet, embeddedSourceId, location.state,
+  ]);
+
   // Shows a page range's (or the whole document's) Markdown in the left-side
   // column (the "All Pages"/pager/delete tools, not the Actions -> Text
   // Extraction flow below, which has its own dedicated fetch). The backend's
-  // GET /api/sources/:id/markdown lazily converts on first read via
-  // ensureSourceMarkdown, so this can be called on an unconverted source too.
-  // Extended with ?from=&to= for ranges alongside the existing ?page= and
-  // no-param forms.
+  // GET /api/sources/:id/markdown is a compatibility view over persisted OCR.
+  // It never launches OCR; pending documents return a non-blocking 202.
   const fetchMarkdownRange = useCallback(async (from, to, isAll) => {
     const sourceId = currentSourceIdRef.current;
     if (!sourceId) return;
@@ -8220,27 +10607,33 @@ const PDFPage = forwardRef(({
   // inside either group so the two can live in separate containers.
   const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
   const shapeToolbarOpen = annotTool === "shapes";
-  const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser" || annotTool === "arrow";
+  const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser" || SHAPE_TOOL_KEYS.includes(annotTool);
   const sizeProps =
     annotTool === "pen"     ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
     annotTool === "eraser"  ? { min: 6, max: 72, step: 2,   value: eraserSize, onChange: setEraserSize } :
     annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
-    annotTool === "arrow"   ? { min: 1, max: 20, step: 0.5, value: arrowSize,  onChange: setArrowSize } :
+    SHAPE_TOOL_KEYS.includes(annotTool) ? {
+      min: 1,
+      max: 20,
+      step: 0.5,
+      value: shapeStrokeWidth,
+      onChange: (strokeWidth) => updateActiveShapeSetting({ strokeWidth }),
+    } :
     null;
   // Per-tool title labels for the shared controls below (Ink/color trigger,
   // the generic hasSize knob) — same "every control gets a title above it"
   // organization the Pen panel already uses (LabeledPercentKnob), applied
   // to the controls Pen itself doesn't own.
   const inkColorLabel =
-    annotTool === "text"     ? "Font color" :
+    annotTool === "text"     ? "Text color" :
     annotTool === "highlight" ? "Highlight color" :
-    SHAPE_TOOL_KEYS.includes(annotTool) ? "Border color" :
+    SHAPE_TOOL_KEYS.includes(annotTool) ? "Stroke color" :
     `${activeToolMeta?.label || "Tool"} color`;
   const sizeKnobLabel =
     annotTool === "pen"      ? "Stroke width" :
     annotTool === "eraser"   ? "Eraser size" :
     annotTool === "highlight" ? "Highlighter size" :
-    annotTool === "arrow"    ? "Line width" :
+    SHAPE_TOOL_KEYS.includes(annotTool) ? "Stroke width" :
     "Size";
   return (
     <div
@@ -8248,17 +10641,16 @@ const PDFPage = forwardRef(({
       className={[
         embedded ? "pdf_page--embedded" : "",
         showFooterSelection ? "pdf_page--footer-open" : "",
-        toolbarDock.edge === "left" || toolbarDock.edge === "right" ? "pdf_page--toolbar-side" : "",
+        effectiveToolbarEdge === "left" || effectiveToolbarEdge === "right" ? "pdf_page--toolbar-side" : "",
       ].filter(Boolean).join(" ") || undefined}
     >
-      {showSysModal && <SystemMessageModal onClose={() => setShowSysModal(false)} />}
-
-      {/* Toolbar */}
-      <div
-        id="pdf_toolbar"
-        ref={toolbarRef}
-        className={`pdf_toolbar--${toolbarDock.edge}`}
-      >
+      {(() => {
+        const toolbarNode = (
+          <div
+            id="pdf_toolbar"
+            ref={toolbarRef}
+            className={`pdf_toolbar--${effectiveToolbarEdge}${toolbarHost ? " pdf_toolbar--hoisted" : ""}`}
+          >
         {/* Wraps the toolbar's own content (page-nav/search/undo-redo row +
             tool-icons row) — a flex sibling of the dock-direction pad below,
             not a parent of it, so the pad always stays a fixed-size item
@@ -8266,132 +10658,6 @@ const PDFPage = forwardRef(({
             horizontal top/bottom dock, bottom for a vertical left/right
             one) regardless of how much the content side scrolls/wraps. */}
         <div className="pdf_toolbar_scroll">
-        <div id="pdf_toolbar_topbar">
-          {pdfDoc && !selectionOnly && (
-            <div id="pdf_toolbar_topbar_controls">
-              {/* Hidden when an embedding parent drives it externally instead
-                  (see hideUndoRedo prop + the useImperativeHandle above) —
-                  e.g. PDFReaderWorkspace hoists this into its own tab bar,
-                  to the left of undo/redo, same as the reading-mode toggle. */}
-              {!hideUndoRedo && (
-                <div id="pdf_search_group">
-                  <button
-                    type="button"
-                    id="pdf_search_toggle_btn"
-                    className={searchOpen ? "pdf_search_toggle_btn--active" : undefined}
-                    onClick={() => setSearchOpen((v) => !v)}
-                    title="Search text"
-                  >
-                    <i className="bx bx-search" />
-                  </button>
-                  {searchOpen && (
-                    <div id="pdf_search_bar">
-                      <div id="pdf_search_bar_row">
-                        <input
-                          type="text"
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") { e.preventDefault(); goToSearchMatch(e.shiftKey ? -1 : 1); }
-                            else if (e.key === "Escape") { setSearchOpen(false); }
-                          }}
-                          placeholder="Search in document…"
-                          autoFocus
-                        />
-                        <span id="pdf_search_count">
-                          {searchScanning
-                            ? "…"
-                            : searchMatches.length
-                              ? `${searchActiveIndex + 1} / ${searchMatches.length}`
-                              : searchQuery.trim()
-                                ? "0 / 0"
-                                : ""}
-                        </span>
-                        <button type="button" onClick={() => goToSearchMatch(-1)} disabled={!searchMatches.length} title="Previous match"><i className="bx bx-chevron-up" /></button>
-                        <button type="button" onClick={() => goToSearchMatch(1)} disabled={!searchMatches.length} title="Next match"><i className="bx bx-chevron-down" /></button>
-                        <button type="button" onClick={() => { setSearchOpen(false); setSearchQuery(""); }} title="Close search"><i className="bx bx-x" /></button>
-                      </div>
-                      {/* Only shown for a non-exact (tolerant/fuzzy) match — an exact hit
-                          needs no explanation, per spec section 54. */}
-                      {searchActiveMatch && searchActiveMatch.matchType !== "exact" && (
-                        <div id="pdf_search_confidence">
-                          <i className="bx bx-info-circle" /> Likely match: "{searchActiveMatch.originalMatchedText}"
-                          <span id="pdf_search_confidence_pct">{Math.round(searchActiveMatch.confidence * 100)}%</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-              {/* Hidden when an embedding parent drives page navigation
-                  externally instead (see hidePageNav prop + the
-                  useImperativeHandle above) — same reasoning as
-                  hideUndoRedo just below. */}
-              {!hidePageNav && (
-                <div id="pdf_page_nav_row">
-                  {/* Always the LEFT/original/primary page (pageNum) — never
-                      swaps to reflect the booklet companion, in single mode
-                      or booklet mode alike. */}
-                  <div id="pdf_page_nav">
-                    <button onClick={() => setPageNum((n) => Math.max(1, n - 1))} disabled={pageNum <= 1 || pinchActive} title="Previous page">‹</button>
-                    <span id="pdf_page_nav_label">{pageNum} / {pageCount}</span>
-                    <button onClick={() => setPageNum((n) => Math.min(pageCount, n + 1))} disabled={pageNum >= pageCount || pinchActive} title="Next page">›</button>
-                  </div>
-                  {readingMode === "single" && (
-                    <button
-                      type="button"
-                      id="pdf_insert_blank_page_btn"
-                      onClick={insertBlankPageAfterCurrent}
-                      disabled={insertingBlankPage || !hasSourceId}
-                      title="Insert a blank page after this one"
-                    >
-                      {insertingBlankPage ? <i className="bx bx-loader-alt bx-spin" /> : <InsertPageIcon />}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    id="pdf_reading_mode_toggle"
-                    className={readingMode === "booklet" ? "pdf_reading_mode_toggle--active" : undefined}
-                    onClick={() => setReadingMode((m) => (m === "booklet" ? "single" : "booklet"))}
-                    disabled={pageCount < 2}
-                    title={readingMode === "booklet" ? "Switch to page-by-page" : "Switch to booklet (two pages side by side)"}
-                  >
-                    <i className="bx bx-book-open" />
-                  </button>
-                  {readingMode === "booklet" && (
-                    <div id="pdf_page_nav_right">
-                      <button onClick={() => setBookletRightPage((n) => Math.max(1, (n || 1) - 1))} disabled={(bookletRightPage || 1) <= 1 || pinchActive} title="Previous page">‹</button>
-                      <span id="pdf_page_nav_right_label">{bookletRightPage || 1} / {pageCount}</span>
-                      <button onClick={() => setBookletRightPage((n) => Math.min(pageCount, (n || 1) + 1))} disabled={(bookletRightPage || 1) >= pageCount || pinchActive} title="Next page">›</button>
-                    </div>
-                  )}
-                </div>
-              )}
-              {/* Hidden when an embedding parent drives undo/history/redo
-                  externally instead (see hideUndoRedo prop + the
-                  useImperativeHandle above) — e.g. PDFReaderWorkspace hoists
-                  this row into its own tab bar so it isn't duplicated once
-                  per open tab/pane. */}
-              {!hideUndoRedo && (
-                <div id="pdf_annot_right_group">
-                  <div id="pdf_annot_actions">
-                    <button className="annot_action_btn" onClick={handleAnnotUndo} title="Undo last" disabled={!(annotations[pageNum]?.length > 0)}><i className="bx bx-undo" /></button>
-                    {annotHistory.length > 0 && (
-                      <button
-                        className={`annot_action_btn${annotHistoryOpen ? " annot_action_btn--active" : ""}`}
-                        onClick={() => setAnnotHistoryOpen((v) => !v)}
-                        title="Annotation History"
-                      >
-                        <i className="bx bx-history" />
-                      </button>
-                    )}
-                    <button className="annot_action_btn" onClick={handleAnnotRedo} title="Redo" disabled={!(redoStacks[pageNum]?.length > 0)}><i className="bx bx-redo" /></button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
         <div id="pdf_toolbar_mainbar">
         <div id="pdf_toolbar_left">
           {pdfDoc && !selectionOnly && (
@@ -8409,8 +10675,6 @@ const PDFPage = forwardRef(({
               {DRAWING_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
             </div>
 
-            <span className="annot_tool_separator" aria-hidden="true" />
-
             {/* Non-drawing "mode" tools — Smart Video is a real annotTool
                 (selected/drawn the same way as the drawing tools above,
                 see MODE_TOOL_ORDER) but isn't itself a drawing tool;
@@ -8421,6 +10685,56 @@ const PDFPage = forwardRef(({
                 toolbar reads as two areas: draw-on-the-page tools on the
                 left, open-a-panel tools on the right. */}
             <div className="annot_mode_strip" aria-label="Panel tools">
+              <div id="pdf_search_group">
+                <button
+                  type="button"
+                  id="pdf_search_toggle_btn"
+                  className={searchOpen ? "pdf_search_toggle_btn--active" : undefined}
+                  onClick={() => setSearchOpen((v) => !v)}
+                  title="Search text"
+                >
+                  <i className="bx bx-search" />
+                </button>
+                {searchOpen && (
+                  <div id="pdf_search_bar">
+                    <div id="pdf_search_bar_row">
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            goToSearchMatch(e.shiftKey ? -1 : 1);
+                          } else if (e.key === "Escape") {
+                            setSearchOpen(false);
+                          }
+                        }}
+                        placeholder="Search in document..."
+                        autoFocus
+                      />
+                      <span id="pdf_search_count">
+                        {searchScanning
+                          ? "..."
+                          : searchMatches.length
+                            ? `${searchActiveIndex + 1} / ${searchMatches.length}`
+                            : searchQuery.trim()
+                              ? "0 / 0"
+                              : ""}
+                      </span>
+                      <button type="button" onClick={() => goToSearchMatch(-1)} disabled={!searchMatches.length} title="Previous match"><i className="bx bx-chevron-up" /></button>
+                      <button type="button" onClick={() => goToSearchMatch(1)} disabled={!searchMatches.length} title="Next match"><i className="bx bx-chevron-down" /></button>
+                      <button type="button" onClick={() => { setSearchOpen(false); setSearchQuery(""); }} title="Close search"><i className="bx bx-x" /></button>
+                    </div>
+                    {searchActiveMatch?.matchType && searchActiveMatch.matchType !== "exact" && (
+                      <div id="pdf_search_confidence">
+                        <i className="bx bx-info-circle" /> Likely match: "{searchActiveMatch.originalMatchedText}"
+                        <span id="pdf_search_confidence_pct">{Math.round((searchActiveMatch.confidence || 0) * 100)}%</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               {MODE_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
               {/* AMCTOSHS Clinical Vignette Generator — same convention as
                   the (now removed) Segments Builder trigger used to be;
@@ -8452,62 +10766,111 @@ const PDFPage = forwardRef(({
             <div
               className="annot_tool_options"
               style={
-                (toolbarDock.edge === "left" || toolbarDock.edge === "right")
+                (effectiveToolbarEdge === "left" || effectiveToolbarEdge === "right")
                   ? { top: toolOptionsOffset }
                   : { left: toolOptionsOffset }
               }
             >
               {annotTool === "bbox" && (
-                <div className="annot_bbox_creation_block">
-                  <button
-                    type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bbox" ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => toggleBBoxCreationType("bbox")}
-                    title={activeBBoxCreationType === "bbox" ? "BBox creation armed" : "Arm new bbox creation"}
-                    aria-label="New bbox"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M7 3h2v2h6v2H9v10H7V7H5V5h2zm10 4h2v14H7v-2h10z" />
-                    </svg>
-                    <span>New BBox</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bboxContainer" ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => toggleBBoxCreationType("bboxContainer")}
-                    title={activeBBoxCreationType === "bboxContainer" ? "BBox container creation armed" : "Arm new bbox container creation"}
-                    aria-label="New bbox container"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M3 6c0-1.1.9-2 2-2h5l2 2h9c.55 0 1 .45 1 1v11c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2zm2 1v11h14V9H11.2L9.2 7z" />
-                    </svg>
-                    <span>Container BBox</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bboxTitle" ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => toggleBBoxCreationType("bboxTitle")}
-                    title={activeBBoxCreationType === "bboxTitle" ? "Title selection armed" : "Arm title selection"}
-                    aria-label="Title BBox"
-                  >
-                    <svg className="annot_mode_btn_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M4 5h16v2h-7v12h-2V7H4z" />
-                    </svg>
-                    <span>Title BBox</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "imageBBox" ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => toggleBBoxCreationType("imageBBox")}
-                    title={activeBBoxCreationType === "imageBBox" ? "Image BBox armed" : "Arm image bbox selection"}
-                    aria-label="Image BBox"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M4 5h16v14H4zm2 2v10h12V7z" />
-                      <path d="M7 15l3-4 2 2 3-4 2 6z" />
-                    </svg>
-                    <span>Image BBox</span>
-                  </button>
+                <div className="annot_bbox_creation_block annot_control">
+                  <AnnotControlHeaderInfo title="Create" />
+                  <div className="annot_bbox_creation_row">
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "pageBBox" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => toggleBBoxCreationType("pageBBox")}
+                      title={activeBBoxCreationType === "pageBBox" ? "Page BBox creation armed" : "Create a Page BBox containing this page's lines"}
+                      aria-label="New page bbox"
+                    >
+                      <i className="bx bx-file" aria-hidden="true" />
+                      <span>Page BBox</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bbox" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => toggleBBoxCreationType("bbox")}
+                      title={activeBBoxCreationType === "bbox" ? "Paragraph BBox creation armed" : "Create a Paragraph BBox"}
+                      aria-label="New bbox"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M7 3h2v2h6v2H9v10H7V7H5V5h2zm10 4h2v14H7v-2h10z" />
+                      </svg>
+                      <span>Paragraph BBox</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "subLineBBox" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => toggleBBoxCreationType("subLineBBox")}
+                      title={activeBBoxCreationType === "subLineBBox" ? "SubLine BBox creation armed" : "Nest selected lines under their preceding paragraph line"}
+                      aria-label="New SubLine BBox"
+                    >
+                      <i className="bx bx-subdirectory-right" aria-hidden="true" />
+                      <span>SubLine BBox</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bboxTitle" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => toggleBBoxCreationType("bboxTitle")}
+                      title={activeBBoxCreationType === "bboxTitle" ? "Title selection armed" : "Arm title selection"}
+                      aria-label="Title BBox"
+                    >
+                      <svg className="annot_mode_btn_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 5h16v2h-7v12h-2V7H4z" />
+                      </svg>
+                      <span>Title BBox</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "imageBBox" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => toggleBBoxCreationType("imageBBox")}
+                      title={activeBBoxCreationType === "imageBBox" ? "Figure BBox armed" : "Arm figure bbox selection"}
+                      aria-label="Figure BBox"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 5h16v14H4zm2 2v10h12V7z" />
+                        <path d="M7 15l3-4 2 2 3-4 2 6z" />
+                      </svg>
+                      <span>Figure BBox</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "columnBBox" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => toggleBBoxCreationType("columnBBox")}
+                      title={activeBBoxCreationType === "columnBBox" ? "Partition BBox creation armed" : "Create a Partition BBox inside another BBox"}
+                      aria-label="Create Partition BBox"
+                    >
+                      <i className="bx bx-columns" aria-hidden="true" />
+                      <span>Partition BBox</span>
+                    </button>
+                    {/* One-shot bulk action, not an armed mode — no
+                        --toggle/--active, unlike the five buttons above.
+                        Auto-creates one bbox per paragraph on the current
+                        page, matching this page's own cached Markdown
+                        against the PDF's real text geometry (no AI call —
+                        see runSmartSegmenting/pdfSmartSegment.js). */}
+                    <button
+                      type="button"
+                      className="annot_mode_btn"
+                      onClick={runSmartSegmenting}
+                      disabled={smartSegmentingBusy || !pdfDoc}
+                      title="Auto-create one bbox per paragraph on this page, using the page's saved text"
+                      aria-label="Smart Segmenting"
+                    >
+                      {smartSegmentingBusy ? (
+                        <i className="bx bx-loader-alt bx-spin" />
+                      ) : (
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M7.5 5.6 5 7l1.4-2.5L5 2l2.5 1.4L10 2 8.6 4.5 10 7z" />
+                          <path d="M22 2l-1.4 2.5L22 7l-2.5-1.4L17 7l1.4-2.5L17 2l2.5 1.4z" />
+                          <path d="m3.7 20.3 15-15 1.4 1.4-15 15z" />
+                        </svg>
+                      )}
+                      <span>Smart Segmenting</span>
+                    </button>
+                  </div>
+                  {smartSegmentingError && (
+                    <p className="annot_bbox_creation_error">{smartSegmentingError}</p>
+                  )}
                 </div>
               )}
             {shapeToolbarOpen && (
@@ -8519,9 +10882,6 @@ const PDFPage = forwardRef(({
                       key={shapeKey}
                       type="button"
                       className={`annot_trigger annot_tool_btn${annotTool === shapeKey ? " annot_trigger--active" : ""}`}
-                      onPointerDown={(event) => {
-                        if (event.pointerType === "touch" || event.pointerType === "pen") showToolbarTouchLabel(shapeKey, shapeTool.label);
-                      }}
                       onClick={() => {
                         setAnnotTool(shapeKey);
                         setColorMenuOpen(false);
@@ -8529,7 +10889,6 @@ const PDFPage = forwardRef(({
                       title={shapeTool.label}
                       aria-label={shapeTool.label}
                     >
-                      {toolbarTouchLabel?.key === shapeKey && <span className="annot_touch_tooltip">{toolbarTouchLabel.label}</span>}
                       {shapeKey === "arrow" ? <ArrowToolIcon /> : shapeKey === "freeshape" ? <FreeshapeToolIcon /> : <i className={shapeTool.icon} />}
                     </button>
                   );
@@ -8539,50 +10898,75 @@ const PDFPage = forwardRef(({
 
             {toolActive && annotTool !== "eraser" && annotTool !== "smartVideo" && annotTool !== "bbox" && (
               <div className="annot_control">
+                <AnnotControlHeaderInfo title={inkColorLabel} />
                 <div className="annot_dd_wrap" ref={colorMenuRef}>
-                <button
-                  type="button"
-                  className="annot_trigger annot_trigger--color"
-                  onClick={(e) => {
-                    // Capture the rect synchronously, before it goes into
-                    // the setColorMenuOpen updater below — e.currentTarget
-                    // is only valid for the duration of this handler; by
-                    // the time a functional setState updater actually
-                    // runs, React has already nulled it out.
-                    const rect = e.currentTarget.getBoundingClientRect();
-                    setColorMenuTarget("ink");
-                    setColorMenuOpen((wasOpen) => {
-                      if (wasOpen && colorMenuTarget === "ink") return false;
-                      if (toolbarDock.edge === "bottom") {
-                        setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
-                      } else {
-                        setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
-                      }
-                      return true;
-                    });
-                  }}
-                  title={inkColorLabel}
-                >
-                  <span className="annot_swatch annot_swatch--trigger" style={{ background: annotColor }} />
-                  <i className="bx bx-chevron-down annot_trigger_chevron" />
-                </button>
+                  <div className="annot_color_preset_row" role="group" aria-label={inkColorLabel}>
+                    {Array.from({ length: COLOR_PRESET_SLOT_COUNT }, (_, presetIndex) => {
+                      const presetColor = activeToolColorPresets[presetIndex] || null;
+                      const presetActive = presetColor && presetIndex === activeToolColorPresetIndex;
+                      return (
+                        <button
+                          key={presetIndex}
+                          type="button"
+                          className={`annot_color_preset_btn${presetActive ? " annot_color_preset_btn--active" : ""}${presetColor ? "" : " annot_color_preset_btn--empty"}`}
+                          onPointerDown={(event) => startColorPresetLongPress(presetIndex, event)}
+                          onPointerUp={(event) => { clearColorPresetLongPress(event.pointerId, { keepSuppressClick: true }); }}
+                          onPointerCancel={(event) => { clearColorPresetLongPress(event.pointerId); }}
+                          onPointerLeave={(event) => { clearColorPresetLongPress(event.pointerId); }}
+                          onClick={(event) => {
+                            if (clearColorPresetLongPress(null)) return;
+                            const rect = event.currentTarget.getBoundingClientRect();
+                            if (!presetColor) {
+                              openColorMenuFromRect(rect, { type: "preset", presetIndex });
+                              return;
+                            }
+                            setAnnotColor(presetColor);
+                          }}
+                          title={presetColor ? `Preset ${presetIndex + 1}: ${presetColor}` : `Set preset ${presetIndex + 1}`}
+                          aria-label={presetColor ? `Color preset ${presetIndex + 1}` : `Empty color preset ${presetIndex + 1}`}
+                        >
+                          <span
+                            className="annot_color_preset_dot"
+                            style={presetColor ? { background: presetColor } : undefined}
+                          />
+                        </button>
+                      );
+                    })}
+                  </div>
                 {colorMenuOpen && colorMenuPos && createPortal(
                   <div ref={colorMenuPopoverRef} className="annot_dd annot_dd--colors" style={colorMenuPos}>
                     <div className="annot_color_preview">
                       <div
                         className="annot_color_preview_chip"
-                        style={{ background: colorMenuTarget === "background" ? textBackgroundColor : annotColor }}
+                        style={{
+                          background:
+                            colorMenuTarget.type === "background"
+                              ? textBackgroundColor
+                              : colorMenuTarget.type === "preset"
+                                ? (activeToolColorPresets[colorMenuTarget.presetIndex] || annotColor)
+                                : annotColor,
+                        }}
                       />
                       <div className="annot_color_preview_text">
                         <span className="annot_color_preview_label">
-                          {colorMenuTarget === "background" ? "Current background" : "Current ink"}
+                          {colorMenuTarget.type === "background"
+                            ? "Current background"
+                            : colorMenuTarget.type === "preset"
+                              ? `Preset ${Number(colorMenuTarget.presetIndex) + 1}`
+                              : "Current ink"}
                         </span>
                         <span className="annot_color_preview_hex">
-                          {(colorMenuTarget === "background" ? textBackgroundColor : annotColor).toUpperCase()}
+                          {(
+                            colorMenuTarget.type === "background"
+                              ? textBackgroundColor
+                              : colorMenuTarget.type === "preset"
+                                ? (activeToolColorPresets[colorMenuTarget.presetIndex] || annotColor)
+                                : annotColor
+                          ).toUpperCase()}
                         </span>
                       </div>
                     </div>
-                    {colorMenuTarget === "background" && (
+                    {colorMenuTarget.type === "background" && (
                       <button
                         type="button"
                         className="annot_dd_none_btn"
@@ -8601,7 +10985,13 @@ const PDFPage = forwardRef(({
                         <div className="annot_color_group_label">{label}</div>
                         <div className="annot_color_group_grid">
                           {colors.map((c) => {
-                            const active = (colorMenuTarget === "background" ? textBackgroundColor : annotColor) === c;
+                            const active = (
+                              colorMenuTarget.type === "background"
+                                ? textBackgroundColor
+                                : colorMenuTarget.type === "preset"
+                                  ? (activeToolColorPresets[colorMenuTarget.presetIndex] || annotColor)
+                                  : annotColor
+                            ) === c;
                             return (
                               <button
                                 key={c}
@@ -8610,10 +11000,12 @@ const PDFPage = forwardRef(({
                                 style={{ background: c }}
                                 title={c}
                                 onClick={() => {
-                                  if (colorMenuTarget === "background") {
+                                  if (colorMenuTarget.type === "background") {
                                     setTextBackgroundColor(c);
                                     setTextBackground(true);
                                     updateStyledTextTarget({ textBackgroundColor: c, textBackground: true });
+                                  } else if (colorMenuTarget.type === "preset") {
+                                    setAnnotToolColorPreset(colorMenuTarget.presetIndex, c);
                                   } else {
                                     setAnnotColor(c);
                                   }
@@ -8657,7 +11049,7 @@ const PDFPage = forwardRef(({
 
             {SHAPE_TOOL_KEYS.includes(annotTool) && (
               <div className="annot_control">
-                <AnnotControlHeaderInfo title="Border style" />
+                <AnnotControlHeaderInfo title="Stroke style" />
                 <div className="annot_mode_toggle" aria-label="Border style">
                   {SHAPE_BORDER_STYLES.map(({ key, label }) => (
                     <button
@@ -8677,7 +11069,7 @@ const PDFPage = forwardRef(({
 
             {annotTool === "rect" && (
               <div className="annot_control">
-                <AnnotControlHeaderInfo title="Corner radius" />
+                <AnnotControlHeaderInfo title="Corners" />
                 <SizeKnob
                   min={0} max={60} step={1}
                   value={shapeBorderRadius}
@@ -8690,7 +11082,7 @@ const PDFPage = forwardRef(({
 
             {["rect", "circle", "freeshape"].includes(annotTool) && (
               <div className="annot_control">
-                <AnnotControlHeaderInfo title="Fill" />
+                <AnnotControlHeaderInfo title="Interior" />
                 <div className="annot_mode_toggle">
                   <button
                     type="button"
@@ -8707,7 +11099,7 @@ const PDFPage = forwardRef(({
 
             {annotTool === "eraser" && (
               <div className="annot_control">
-                <AnnotControlHeaderInfo title="Erase mode" />
+                <AnnotControlHeaderInfo title="Mode" />
                 <div className="annot_mode_toggle annot_mode_toggle--pen" aria-label="Eraser mode">
                 {ERASER_MODES.map(({ key, label }) => (
                   <button
@@ -8826,19 +11218,8 @@ const PDFPage = forwardRef(({
                       type="button"
                       className={`annot_mode_btn${textBackground ? " annot_mode_btn--active" : ""}`}
                       onClick={(e) => {
-                        // Same capture-before-updater reasoning as the Ink
-                        // trigger above.
                         const rect = e.currentTarget.getBoundingClientRect();
-                        setColorMenuTarget("background");
-                        setColorMenuOpen((wasOpen) => {
-                          if (wasOpen && colorMenuTarget === "background") return false;
-                          if (toolbarDock.edge === "bottom") {
-                            setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
-                          } else {
-                            setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
-                          }
-                          return true;
-                        });
+                        openColorMenuFromRect(rect, { type: "background", presetIndex: null });
                       }}
                       title="Background color"
                       aria-label="Text background color"
@@ -8853,7 +11234,7 @@ const PDFPage = forwardRef(({
                 </div>
 
                 <div className="annot_control">
-                <AnnotControlHeaderInfo title="Font family" />
+                <AnnotControlHeaderInfo title="Typeface" />
                 <div className="annot_text_font_row">
                   <label className="annot_text_font_label" htmlFor="pdf_text_font_family">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" className="pdf_toolbar_svg_icon">
@@ -8880,7 +11261,7 @@ const PDFPage = forwardRef(({
 
 
                 <div className="annot_control">
-                <AnnotControlHeaderInfo title="Font size" />
+                <AnnotControlHeaderInfo title="Type size" />
                 <SizeKnob
                   min={10}
                   max={48}
@@ -8897,7 +11278,7 @@ const PDFPage = forwardRef(({
 
 
                 <LabeledPercentKnob
-                  title="Padding Size"
+                  title="Text padding"
                   subtitle="Space around text in the background/border box"
                   value={textPadding}
                   onChange={(next) => {
@@ -9007,7 +11388,7 @@ const PDFPage = forwardRef(({
             )}
             {annotTool === "highlight" && highlightMode === "line" && (
               <div className="annot_control">
-                <AnnotControlHeaderInfo title="Line options" />
+                <AnnotControlHeaderInfo title="Straight line" />
                 <div className="annot_mode_toggle annot_mode_toggle--pen">
                 <button
                   type="button"
@@ -9051,7 +11432,6 @@ const PDFPage = forwardRef(({
                     {saving ? "Saving…" : savedId ? "Saved" : "Save"}
                   </button>
                 )}
-                <button id="pdf_sys_btn" onClick={() => setShowSysModal(true)}>System</button>
                 {extractMode === "ai" && (
                   <button id="pdf_extract_btn" onClick={handleExtract} disabled={!canExtract || extracting} title={!canExtract ? "Open a text-based PDF first" : ""}>
                     {extracting ? "Extracting…" : pdfDoc ? `Extract Page ${pageNum}` : "Extract"}
@@ -9061,22 +11441,13 @@ const PDFPage = forwardRef(({
             )}
           </>}
         </div>
-
-        <div id="pdf_toolbar_center">
-          {/* In hideHyleControls contexts (e.g. PDFReaderWorkspace) the
-              embedding parent shows this as an icon next to the tab's name
-              instead — see onPdfTypeChange — so it isn't duplicated here. */}
-          {pdfType && !hideHyleControls && (
-            <span className={`pdf_type_badge pdf_type_badge--${pdfType}`}>
-                <i className={PDF_TYPE_ICON[pdfType]} />
-              {PDF_TYPE_LABEL[pdfType]}
-            </span>
-          )}
-        </div>
         </div>
         </div>
 
-      </div>
+          </div>
+        );
+        return toolbarHost ? createPortal(toolbarNode, toolbarHost) : toolbarNode;
+      })()}
 
       {/* Thin selection bar — appears under the toolbar for a double-clicked
           word in reading mode (hideHyleControls). The onSelectionAction
@@ -9283,11 +11654,12 @@ const PDFPage = forwardRef(({
               <span>Annotation History</span>
               <button
                 id="pdf_annot_history_clear"
-                onClick={handleAnnotClear}
-                title="Clear all annotations on this page"
-                disabled={!(annotations[pageNum]?.length > 0)}
+                onClick={handleClearAllAnnotations}
+                title="Clear All Annotations — permanently delete every annotation on every page and blank the entire history. Cannot be undone."
+                aria-label="Clear All Annotations"
+                disabled={totalAnnotationCount === 0}
               >
-                <i className="bx bx-trash" /> Clear page
+                <i className="bxf bx-trash-alt" />
               </button>
               <button id="pdf_annot_history_close" onClick={() => setAnnotHistoryOpen(false)} title="Close">✕</button>
             </div>
@@ -9308,19 +11680,56 @@ const PDFPage = forwardRef(({
                   if (isSameDay(d, yesterday)) return "Yesterday";
                   return d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
                 };
+                // Deleting a day should stay available even if every
+                // annotation created that day has already been erased from
+                // the live document — the user may still want to clear the
+                // day's history group itself. Count unique "add" rows by
+                // annotationId so the button/tooltip reflect creations for
+                // that day rather than only currently-surviving marks.
+                const countCreatedOn = (day) => new Set(
+                  annotHistory
+                    .filter((h) => h.action === "add" && h.annotationId && isSameDay(h.time, day))
+                    .map((h) => h.annotationId)
+                ).size;
                 const rows = [];
                 let lastDay = null;
                 for (const h of [...annotHistory].reverse()) {
                   if (!lastDay || !isSameDay(lastDay, h.time)) {
+                    const dayForDelete = h.time;
+                    const deletableCount = countCreatedOn(dayForDelete);
                     rows.push(
-                      <div key={`day-${h.id}`} className="anh_day_header">{dayLabel(h.time)}</div>
+                      <div key={`day-${h.id}`} className="anh_day_header">
+                        <span>{dayLabel(h.time)}</span>
+                        <button
+                          type="button"
+                          className="anh_day_delete"
+                          onClick={() => handleDeleteHistoryDay(dayForDelete)}
+                          title={
+                            deletableCount === 0
+                              ? `Remove the history entries for ${dayLabel(h.time)} — the annotations from that day were already erased`
+                              : `Delete ${deletableCount} annotation${deletableCount === 1 ? "" : "s"} created on ${dayLabel(h.time)}`
+                          }
+                        >
+                          <i className="bx bx-trash" />
+                        </button>
+                      </div>
                     );
                     lastDay = h.time;
                   }
+                  // A cleared "add" row (see markAnnotationCleared) keeps its
+                  // own original icon/verb/color — it's still the record of
+                  // that annotation being added, just tagged with what later
+                  // happened to it — rather than borrowing "delete"'s meta.
                   const meta = ANNOT_HISTORY_META[h.action] || ANNOT_HISTORY_META.add;
                   const toolLabel = ANNOT_TOOLS.find((t) => t.key === h.type)?.label || (h.type === "text" ? "Text" : h.type);
+                  // Only the "Cleared" row a day-delete itself produced
+                  // carries restorableAnnotations (see handleDeleteHistoryDay)
+                  // — a plain "Clear All Annotations" wipe deliberately never
+                  // sets it, so no retrieve button appears there.
+                  const canRetrieve = h.action === "clear" && h.restorableAnnotations && Object.keys(h.restorableAnnotations).length > 0;
+                  const isCleared = h.action === "add" && Boolean(h.clearedAt);
                   rows.push(
-                    <div key={h.id} className="anh_row">
+                    <div key={h.id} className={`anh_row${isCleared ? " anh_row--cleared" : ""}`}>
                       <i className={`${meta.icon} anh_icon`} />
                       <div className="anh_main">
                         <span className="anh_label">
@@ -9331,6 +11740,17 @@ const PDFPage = forwardRef(({
                         </span>
                       </div>
                       {h.color && <span className="anh_swatch" style={{ background: h.color }} />}
+                      {isCleared && <span className="anh_cleared_tag">Cleared</span>}
+                      {canRetrieve && (
+                        <button
+                          type="button"
+                          className="anh_retrieve_btn"
+                          onClick={() => handleRestoreHistoryDay(h)}
+                          title={`Retrieve the ${h.count} annotation${h.count === 1 ? "" : "s"} deleted here`}
+                        >
+                          <i className="bx bx-history" />
+                        </button>
+                      )}
                     </div>
                   );
                 }
@@ -9397,6 +11817,7 @@ const PDFPage = forwardRef(({
             onDeleteBBox={deleteBBox}
             onMoveBBoxUp={(bboxId) => moveBBoxInGroup(bboxId, -1, pageNum)}
             onMoveBBoxDown={(bboxId) => moveBBoxInGroup(bboxId, 1, pageNum)}
+            onMergeParagraphs={mergeParagraphBBoxes}
             onArmBBoxInsideContainer={armBBoxInsideContainer}
             armedBBoxInsideContainer={bboxContainerBBoxTarget}
           />
@@ -9472,10 +11893,10 @@ const PDFPage = forwardRef(({
                       <>
                       <canvas
                         id="pdf_annot_canvas"
-                        ref={annotCanvasRef}
+                        ref={setAnnotCanvasNode}
                         style={{ pointerEvents: toolActive ? "auto" : "none", cursor: annotTool === "eraser" ? "none" : toolActive ? "crosshair" : "default" }}
                       />
-                      <canvas id="pdf_mask_canvas" ref={maskCanvasRef} />
+                      <canvas id="pdf_mask_canvas" ref={setMaskCanvasNode} />
                       <canvas id="pdf_search_canvas" ref={searchCanvasRef} />
                       <canvas id="pdf_hyle_canvas" ref={hyleCanvasRef} />
                       {hyleMode === "segmented" && hyleLayerData?.mode === "segmented" && hyleLayerData.pageNum === pageNum && pageViewport && (
@@ -9531,69 +11952,146 @@ const PDFPage = forwardRef(({
                           })()}
                         </div>
                       )}
-                      {pageViewport && managedBboxes.length > 0 && (
+                      {pageViewport && managedBboxes.length > 0 && pageContainerRefs.current[pageNum - 1] && createPortal(
                         <div
                           className="pdf_bbox_delete_layer"
-                          style={{ width: pageViewport.width, height: pageViewport.height }}
-                          aria-hidden="true"
+                          ref={bboxOverlayRef}
+                          style={{
+                            position: "absolute",
+                            left: 0,
+                            top: 0,
+                            width: annotCanvasRef.current?.getBoundingClientRect?.().width || pageViewport.width,
+                            height: annotCanvasRef.current?.getBoundingClientRect?.().height || pageViewport.height,
+                            transform: "none",
+                            zIndex: 1000,
+                          }}
+                          data-overlay-tick={bboxOverlayTick}
                         >
                           {(() => {
                             return managedBboxes.map((bbox) => {
                               const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
-                              const left = Math.min(
-                                Math.max(0, (bbox.x + bbox.w) * scale - 10),
-                                Math.max(0, pageViewport.width - 22),
-                              );
-                              const top = Math.min(
-                                Math.max(0, bbox.y * scale - 12),
-                                Math.max(0, pageViewport.height - 22),
-                              );
-                              const boxLeft = bbox.x * scale;
-                              const boxTop = bbox.y * scale;
-                              const boxWidth = bbox.w * scale;
-                              const boxHeight = bbox.h * scale;
+                              const bboxTypeLabel = BBOX_TYPE_ABBREVIATIONS[bbox.type]
+                                || getBBoxTypeDefinition(bbox.type)?.label?.replace(/\s+BBox$/i, "");
+                              const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
+                              const canvasScaleX = canvasRect?.width && pageViewport.width
+                                ? canvasRect.width / pageViewport.width
+                                : 1;
+                              const canvasScaleY = canvasRect?.height && pageViewport.height
+                                ? canvasRect.height / pageViewport.height
+                                : canvasScaleX;
+                              const pageLeft = canvasRect?.left || 0;
+                              const pageTop = canvasRect?.top || 0;
+                              const boxLeft = pageLeft + bbox.x * scale * canvasScaleX;
+                              const boxTop = pageTop + bbox.y * scale * canvasScaleY;
+                              const overlayScale = scale * canvasScaleX;
+                              const basePageScale = Math.max(0.001, fitScaleRef.current || 1);
+                              const uiScale = scale / basePageScale;
+                              const actionGap = 0;
+                              const actionChrome = 2 * uiScale;
+                              const actionSize = 8 * uiScale;
+                              const actionHeight = actionSize + actionChrome;
+                              const resolvedAction = bboxActionPositions[bbox.id];
+                              const bboxLocalLeft = boxLeft - pageLeft;
+                              const bboxLocalTop = boxTop - pageTop;
+                              const bboxLocalWidth = bbox.w * overlayScale;
+                              const localActionTop = resolvedAction?.offsetY ?? 0;
                               const isEditing = bboxResizeTargetId === bbox.id;
-                              const generatedHandles = isEditing ? sampleClosedOutlineHandles(bbox, scale) : [];
+                              const isMinibarOpen = bboxMinibarOpenId === bbox.id;
+                              const generatedHandles = isEditing ? sampleClosedOutlineHandles(bbox, overlayScale) : [];
                               const manualHandles = isEditing
                                 ? buildEditableBBoxOutline(bbox)
                                   .map((point, pointIndex) => ({ ...point, pointIndex }))
                                   .filter((point) => point.manualControl)
                                 : [];
                               const borderHandles = [...generatedHandles, ...manualHandles];
-                              const handleSize = Math.max(6, Math.min(12, 12 * scale));
+                              // Handles are rendered inside the page layer,
+                              // which is temporarily scaled during preview.
+                              // Keep their settled size fixed and compensate
+                              // only for that transient wrapper transform.
+                              const handleSize = 8 * uiScale;
                               return (
                                 <React.Fragment key={bbox.id}>
-                                  <div className="pdf_bbox_action_stack" style={{ left, top }}>
-                                    {bboxTypeHas(bbox.type, "autoFitsText") && (
-                                      <button
-                                        type="button"
-                                        className={`pdf_bbox_action_btn${bbox.textAutoFitted ? " pdf_bbox_action_btn--active" : ""}`}
-                                        title={bbox.textAutoFitted ? "Restore original border shape" : "Fit border to selected text"}
-                                        aria-label={bbox.textAutoFitted ? "Restore original border shape" : "Fit border to selected text"}
-                                        onMouseDown={(event) => {
-                                          event.preventDefault();
-                                          event.stopPropagation();
-                                        }}
-                                        onTouchStart={(event) => {
-                                          event.preventDefault();
-                                          event.stopPropagation();
-                                        }}
-                                        onClick={(event) => {
-                                          event.preventDefault();
-                                          event.stopPropagation();
-                                          autoFitBBoxToText(bbox);
-                                        }}
+                                  {bboxTypeLabel && (
+                                    <span
+                                      className="pdf_bbox_type_label"
+                                      ref={(element) => {
+                                        if (element) bboxLabelRefs.current[bbox.id] = element;
+                                        else delete bboxLabelRefs.current[bbox.id];
+                                      }}
+                                      style={{
+                                        left: bboxLocalLeft,
+                                        top: bboxLocalTop,
+                                        width: "max-content",
+                                        minWidth: 0,
+                                        height: "max-content",
+                                        minHeight: 0,
+                                        padding: `0 ${0.5 * uiScale}px`,
+                                        fontSize: `${4 * uiScale}px`,
+                                        lineHeight: 1,
+                                        transform: "translateY(-100%)",
+                                        writingMode: "horizontal-tb",
+                                        textOrientation: "mixed",
+                                        whiteSpace: "nowrap",
+                                        color: bbox.color || "#334155",
+                                        borderColor: bbox.color || "#334155",
+                                        pointerEvents: "auto",
+                                        cursor: "pointer",
+                                      }}
+                                      role="button"
+                                      tabIndex={0}
+                                      title={getBBoxTypeDefinition(bbox.type)?.label || bbox.type}
+                                      aria-expanded={isMinibarOpen}
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        setBBoxMinibarOpenId((current) => current === bbox.id ? null : bbox.id);
+                                      }}
+                                      onKeyDown={(event) => {
+                                        if (event.key !== "Enter" && event.key !== " ") return;
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        setBBoxMinibarOpenId((current) => current === bbox.id ? null : bbox.id);
+                                      }}
+                                    >
+                                      {bboxTypeLabel}
+                                    </span>
+                                  )}
+                                  {isMinibarOpen && (
+                                    <div
+                                      className="pdf_bbox"
+                                      style={{
+                                        left: bboxLocalLeft,
+                                        top: bboxLocalTop,
+                                        width: bboxLocalWidth,
+                                        height: bbox.h * overlayScale,
+                                      }}
+                                    >
+                                      <div
+                                        className="pdf_bbox_minibar_anchor"
+                                        style={{ left: bboxLocalWidth, top: localActionTop }}
                                       >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24" aria-hidden="true">
-                                          <path d="M3 8V3h5M21 8V3h-5M3 16v5h5M21 16v5h-5M8 8l-5-5M16 8l5-5M8 16l-5 5M16 16l5 5" />
-                                        </svg>
-                                      </button>
-                                    )}
+                                        <div
+                                          className="pdf_bbox_action_stack"
+                                          ref={(element) => {
+                                            if (element) bboxActionRefs.current[bbox.id] = element;
+                                            else delete bboxActionRefs.current[bbox.id];
+                                          }}
+                                          style={{
+                                            right: 0,
+                                            top: 0,
+                                            height: `${actionHeight}px`,
+                                            minHeight: `${actionHeight}px`,
+                                            padding: 0,
+                                            gap: `${actionGap}px`,
+                                            transform: "none",
+                                          }}
+                                        >
                                     <button
                                       type="button"
                                       className={`pdf_bbox_action_btn${isEditing ? " pdf_bbox_action_btn--active" : ""}`}
-                                      title={bbox.title?.trim() || "BBox"}
-                                      aria-label={bbox.title?.trim() || "BBox"}
+                                      style={{ width: `${actionSize}px`, height: `${actionSize}px`, minWidth: `${actionSize}px`, minHeight: `${actionSize}px`, fontSize: `${6 * uiScale}px`, transform: "none" }}
+                                      title="Manual resize"
+                                      aria-label="Manual resize"
                                       onMouseDown={(e) => {
                                         e.preventDefault();
                                         e.stopPropagation();
@@ -9614,6 +12112,7 @@ const PDFPage = forwardRef(({
                                     <button
                                       type="button"
                                       className="pdf_bbox_delete_btn"
+                                      style={{ width: `${actionSize}px`, height: `${actionSize}px`, minWidth: `${actionSize}px`, minHeight: `${actionSize}px`, fontSize: `${6 * uiScale}px`, transform: "none" }}
                                       title={`Delete ${bbox.title?.trim() || "BBox"}`}
                                       aria-label={`Delete ${bbox.title?.trim() || "BBox"}`}
                                       onMouseDown={(e) => {
@@ -9632,17 +12131,19 @@ const PDFPage = forwardRef(({
                                     >
                                       <i className="bx bx-trash" aria-hidden="true" />
                                     </button>
-                                  </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
                                   {isEditing && (
                                     <svg
                                       className="pdf_bbox_edit_hit_layer"
-                                      width={pageViewport.width}
-                                      height={pageViewport.height}
-                                      viewBox={`0 0 ${pageViewport.width} ${pageViewport.height}`}
-                                      aria-hidden="true"
-                                    >
+                                      width={canvasRect?.width || pageViewport.width}
+                                      height={canvasRect?.height || pageViewport.height}
+                                      viewBox={`0 0 ${pageViewport.width * canvasScaleX} ${pageViewport.height * canvasScaleY}`}
+                        >
                                       <path
-                                        d={buildBBoxOutlinePath(bbox, scale)}
+                                        d={buildBBoxOutlinePath(bbox, overlayScale)}
                                         className="pdf_bbox_edit_hit_path"
                                         onMouseDown={(event) => addBBoxResizePoint(bbox, event)}
                                         onTouchStart={(event) => addBBoxResizePoint(bbox, event)}
@@ -9655,8 +12156,8 @@ const PDFPage = forwardRef(({
                                       type="button"
                                       className="pdf_bbox_resize_handle"
                                       style={{
-                                        left: handle.x * scale,
-                                        top: handle.y * scale,
+                                        left: handle.x * overlayScale,
+                                        top: handle.y * overlayScale,
                                         width: handleSize,
                                         height: handleSize,
                                         marginLeft: -(handleSize / 2),
@@ -9674,6 +12175,46 @@ const PDFPage = forwardRef(({
                             });
                           })()}
                         </div>
+                        , pageContainerRefs.current[pageNum - 1], "pdf-bbox-overlay"
+                      )}
+                      {semanticDetectionPreview?.regions?.length > 0 && pageViewport && pageContainerRefs.current[pageNum - 1] && createPortal(
+                        <div
+                          className="pdf_semantic_preview_layer"
+                          style={{ width: annotCanvasRef.current?.getBoundingClientRect?.().width || pageViewport.width, height: annotCanvasRef.current?.getBoundingClientRect?.().height || pageViewport.height }}
+                        >
+                          {semanticDetectionPreview.regions.map((region, index) => {
+                            let box;
+                            try { box = unionCandidateBoxes(region.candidateIds, semanticDetectionPreview.candidateById); } catch { return null; }
+                            const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
+                            const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
+                            const canvasScaleX = canvasRect?.width && pageViewport.width ? canvasRect.width / pageViewport.width : 1;
+                            const canvasScaleY = canvasRect?.height && pageViewport.height ? canvasRect.height / pageViewport.height : canvasScaleX;
+                            const left = box.x * scale * canvasScaleX;
+                            const top = box.y * scale * canvasScaleY;
+                            const width = box.w * scale * canvasScaleX;
+                            const height = box.h * scale * canvasScaleY;
+                            const label = SEMANTIC_TYPE_ABBREVIATIONS[region.type] || String(region.type || "unknown").replaceAll("_", " ");
+                            return (
+                              <div
+                                className="pdf_semantic_preview_bbox"
+                                key={region.id || index}
+                                style={{ left, top, width, height }}
+                              >
+                                <span className="pdf_semantic_preview_label" title={String(region.type || "unknown").replaceAll("_", " ")}>{label}</span>
+                                <div className="pdf_semantic_preview_minibar" aria-label={`${label} proposal actions`}>
+                                  <button type="button" title="Accept proposed region" aria-label="Accept proposed region" onClick={(event) => { event.stopPropagation(); applySemanticDetection([region]); }}>
+                                    <i className="bx bx-check" aria-hidden="true" />
+                                  </button>
+                                  <button type="button" title="Reject proposed region" aria-label="Reject proposed region" onClick={(event) => { event.stopPropagation(); setSemanticDetectionPreview((current) => { if (!current) return null; const remaining = current.regions.filter((_, itemIndex) => itemIndex !== index); return remaining.length ? { ...current, regions: remaining } : null; }); }}>
+                                    <i className="bx bx-x" aria-hidden="true" />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>,
+                        pageContainerRefs.current[pageNum - 1],
+                        "pdf-semantic-preview-overlay",
                       )}
                       {createPortal(
                         <div ref={eraserCursorRef} className="eraser_cursor_circle" />,
@@ -9921,6 +12462,30 @@ const PDFPage = forwardRef(({
           )}
           <input ref={fileInputRef} type="file" accept="application/pdf" style={{ display: "none" }} onChange={handleInputChange} />
           </div>
+          {pdfDoc && !selectionOnly && pdfAssistantOpen && (
+            <PDFTextAssistant
+              filename={filename}
+              currentPage={pageNum}
+              loadDocumentPages={loadPdfAssistantPages}
+              provider={provider}
+              model={aiProviderModels[provider === "manual" ? "groq" : provider] || ""}
+              onClose={() => setPdfAssistantOpen(false)}
+              sourceId={hasSourceId ? currentSourceIdRef.current : null}
+            />
+          )}
+          {pdfDoc && !selectionOnly && (
+            <button
+              type="button"
+              id="pdf_ai_assistant_fab"
+              className={pdfAssistantOpen ? "pdf_ai_assistant_fab--active" : undefined}
+              onClick={() => setPdfAssistantOpen((open) => !open)}
+              title={pdfAssistantOpen ? "Close PDF Study Avatar" : "Open PDF Study Avatar"}
+              aria-label={pdfAssistantOpen ? "Close PDF Study Avatar" : "Open PDF Study Avatar"}
+              aria-expanded={pdfAssistantOpen}
+            >
+              <i className={`bx ${pdfAssistantOpen ? "bx-x" : "bx-robot"}`} aria-hidden="true" />
+            </button>
+          )}
           {manualSelection && !manualPopup && (
             <div
               id="pdf_selected_text_preview"
@@ -9936,135 +12501,92 @@ const PDFPage = forwardRef(({
           {pdfDoc && (
             <div id="pdf_hyle_fab_wrap" ref={hyleFabRef}>
               {hyleFabOpen && (
-                <div id="pdf_hyle_menu" role="menu" aria-label="AMCTOSHS Hyle layers">
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={hyleMode === "raw"}
-                    className={hyleMode === "raw" ? "pdf_hyle_menu_item pdf_hyle_menu_item--active" : "pdf_hyle_menu_item"}
-                    onClick={() => selectHyleMode("raw")}
-                  >
-                    <i className="bx bx-shape-square" />
-                    <span>Raw Hyle mode</span>
-                    {hyleMode === "raw" && <i className="bx bx-check pdf_hyle_menu_check" />}
-                  </button>
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={hyleMode === "segmented"}
-                    className={hyleMode === "segmented" ? "pdf_hyle_menu_item pdf_hyle_menu_item--active" : "pdf_hyle_menu_item"}
-                    onClick={() => selectHyleMode("segmented")}
-                  >
-                    <i className="bx bx-layer" />
-                    <span>Segmented Hyle mode</span>
-                    {hyleMode === "segmented" && <i className="bx bx-check pdf_hyle_menu_check" />}
-                  </button>
+                <div id="pdf_hyle_menu" role="menu" aria-label="Annotation layers">
+                  <div className="pdf_hyle_menu_header">
+                    <span>Annotation layers</span>
+                    <button
+                      type="button"
+                      className="pdf_hyle_menu_add"
+                      onClick={addAnnotationLayer}
+                      title="Create a new empty annotation layer"
+                    >
+                      <i className="bx bx-plus" />
+                    </button>
+                  </div>
+                  <div className="pdf_hyle_menu_layers">
+                    {annotationLayersForView.map((layer) => (
+                      <div
+                        key={layer.id}
+                        role="menuitemradio"
+                        tabIndex={0}
+                        aria-checked={activeAnnotationLayer?.id === layer.id}
+                        className={activeAnnotationLayer?.id === layer.id ? "pdf_hyle_menu_item pdf_hyle_menu_item--active" : "pdf_hyle_menu_item"}
+                        onClick={() => activateAnnotationLayer(layer.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            activateAnnotationLayer(layer.id);
+                          }
+                        }}
+                        title={`Draw on ${layer.name}`}
+                      >
+                        <span className="pdf_hyle_menu_item_main">
+                          <span className="pdf_hyle_menu_item_name">{layer.name}</span>
+                          <span className="pdf_hyle_menu_item_meta">
+                            {Object.values(layer.annotations || {}).reduce((sum, list) => sum + list.length, 0)} annotations
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          className={`pdf_hyle_menu_eye${layer.visible === false ? " pdf_hyle_menu_eye--off" : ""}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleAnnotationLayerVisibility(layer.id);
+                          }}
+                          title={layer.visible === false ? "Show layer" : "Hide layer"}
+                          aria-label={layer.visible === false ? `Show ${layer.name}` : `Hide ${layer.name}`}
+                        >
+                          {layer.visible === false ? (
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.3A10.8 10.8 0 0 1 12 4c5.5 0 9 5.2 9 5.2a13.5 13.5 0 0 1-2.3 2.8M6.2 6.2C4.2 7.5 3 9.2 3 9.2s3.5 5.2 9 5.2c1.2 0 2.3-.2 3.3-.7" />
+                            </svg>
+                          ) : (
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M3 12s3.5-5.2 9-5.2 9 5.2 9 5.2-3.5 5.2-9 5.2S3 12 3 12Z" />
+                              <circle cx="12" cy="12" r="2.5" />
+                            </svg>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          className="pdf_hyle_menu_delete"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteAnnotationLayer(layer.id);
+                          }}
+                          disabled={annotationLayersForView.length <= 1}
+                          title={annotationLayersForView.length <= 1 ? "At least one layer is required" : `Delete ${layer.name}`}
+                          aria-label={`Delete ${layer.name}`}
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5" />
+                          </svg>
+                        </button>
+                        {activeAnnotationLayer?.id === layer.id && <i className="bx bx-check pdf_hyle_menu_check" />}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               <button
                 type="button"
                 id="pdf_hyle_fab_btn"
-                className={hyleMode === "segmented" ? "pdf_hyle_fab_btn--active" : undefined}
+                className={hyleFabOpen ? "pdf_hyle_fab_btn--active" : undefined}
                 onClick={() => setHyleFabOpen((v) => !v)}
-                title="AMCTOSHS Hyle layers"
+                title="Annotation layers"
               >
-                <i className="bx bx-shapes" />
+                <i className="bx bx-layers" />
               </button>
-            </div>
-          )}
-          {pdfDoc && pageMinimap.length > 0 && (
-            <div id="pdf_page_minimap" aria-label="Page navigator">
-              {pageMinimap.map((mini) => {
-                const maxWidth = 92;
-                const maxHeight = 124;
-                const scale = Math.min(maxWidth / mini.pageWidth, maxHeight / mini.pageHeight);
-                const miniWidth = Math.max(36, mini.pageWidth * scale);
-                const miniHeight = Math.max(48, mini.pageHeight * scale);
-                return (
-                  <div key={mini.page} className="pdf_page_minimap_card">
-                    <div
-                      className="pdf_page_minimap_sheet"
-                      style={{ width: miniWidth, height: miniHeight }}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={`Pan document using page ${mini.page} preview`}
-                      onPointerDown={(e) => startMinimapDrag(mini, e)}
-                      onPointerMove={(e) => moveMinimapDrag(mini, e)}
-                      onPointerUp={(e) => endMinimapDrag(mini, e)}
-                      onPointerCancel={(e) => endMinimapDrag(mini, e)}
-                      onKeyDown={(e) => {
-                        if (e.key !== "Enter" && e.key !== " ") return;
-                        startMinimapDrag(mini, {
-                          ...e,
-                          currentTarget: e.currentTarget,
-                          clientX: e.currentTarget.getBoundingClientRect().left + (miniWidth / 2),
-                          clientY: e.currentTarget.getBoundingClientRect().top + (miniHeight / 2),
-                          preventDefault: () => e.preventDefault(),
-                        });
-                        endMinimapDrag(mini, {
-                          ...e,
-                          currentTarget: e.currentTarget,
-                          pointerId: null,
-                        });
-                      }}
-                    >
-                      {mini.previewSrc && (
-                        <img
-                          className="pdf_page_minimap_image"
-                          src={mini.previewSrc}
-                          alt=""
-                          draggable="false"
-                        />
-                      )}
-                      <div
-                        className="pdf_page_minimap_viewport"
-                        style={{
-                          left: mini.visibleLeft * scale,
-                          top: mini.visibleTop * scale,
-                          width: Math.max(10, mini.visibleWidth * scale),
-                          height: Math.max(10, mini.visibleHeight * scale),
-                        }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-              {!zoomingDisabled && (
-                <div id="pdf_zoom_controls">
-                  <button
-                    onClick={() => zoomFromCenter((z) => z - 0.01)}
-                    onMouseDown={() => startZoomHold(-0.01)}
-                    onMouseUp={stopZoomHold}
-                    onMouseLeave={stopZoomHold}
-                    onTouchStart={(e) => { e.preventDefault(); startZoomHold(-0.01); }}
-                    onTouchEnd={stopZoomHold}
-                    onTouchCancel={stopZoomHold}
-                    title="Zoom out 1%"
-                  >
-                    −
-                  </button>
-                  <button
-                    id="pdf_zoom_label"
-                    ref={zoomLabelRef}
-                    onClick={() => zoomFromCenter(1)}
-                    title="Reset zoom to original size"
-                  >
-                    {Math.round(zoom * 100)}%
-                  </button>
-                  <button
-                    onClick={() => zoomFromCenter((z) => z + 0.01)}
-                    onMouseDown={() => startZoomHold(0.01)}
-                    onMouseUp={stopZoomHold}
-                    onMouseLeave={stopZoomHold}
-                    onTouchStart={(e) => { e.preventDefault(); startZoomHold(0.01); }}
-                    onTouchEnd={stopZoomHold}
-                    onTouchCancel={stopZoomHold}
-                    title="Zoom in 1%"
-                  >
-                    +
-                  </button>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -10231,6 +12753,69 @@ const PDFPage = forwardRef(({
                 <button id="manual_add_btn" onClick={() => { setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>Done</button>
               )}
               <button id="manual_cancel_btn" onClick={() => { setManualPopup(null); setManualSelection(null); window.getSelection()?.removeAllRanges(); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {semanticDetectionDialogOpen && (
+        <div className="pdf_semantic_detection_modal" role="dialog" aria-modal="true" aria-labelledby="pdf_semantic_detection_title">
+          <div className="pdf_semantic_detection_card">
+            <div className="pdf_semantic_detection_header">
+              <div>
+                <strong id="pdf_semantic_detection_title">Semantic Document Detection</strong>
+                <span>Classify this document using candidate geometry and OpenAI.</span>
+              </div>
+              <button type="button" onClick={() => setSemanticDetectionDialogOpen(false)} aria-label="Close">×</button>
+            </div>
+            <label className="pdf_semantic_detection_scope">
+              <span>Scope</span>
+              <select value={semanticDetectionScope} onChange={(event) => setSemanticDetectionScope(event.target.value)}>
+                <option value={SEMANTIC_DETECTION_SCOPE.CURRENT_PAGE}>Current page</option>
+                <option value={SEMANTIC_DETECTION_SCOPE.VISIBLE_PAGES} disabled>Visible pages (coming next)</option>
+                <option value={SEMANTIC_DETECTION_SCOPE.PAGE_RANGE} disabled>Page range (coming next)</option>
+                <option value={SEMANTIC_DETECTION_SCOPE.ENTIRE_DOCUMENT} disabled>Entire document (coming next)</option>
+              </select>
+            </label>
+            <div className="pdf_semantic_detection_actions">
+              <button type="button" onClick={() => setSemanticDetectionDialogOpen(false)}>Cancel</button>
+              <button type="button" className="pdf_semantic_detection_primary" onClick={runSemanticDetection}>Analyze</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {semanticDetectionPreview && (
+        <div className="pdf_semantic_detection_modal" role="dialog" aria-modal="true" aria-labelledby="pdf_semantic_review_title">
+          <div className="pdf_semantic_detection_card pdf_semantic_detection_card--review">
+            <div className="pdf_semantic_detection_header">
+              <div>
+                <strong id="pdf_semantic_review_title">Semantic detection complete</strong>
+                <span>{semanticDetectionPreview.regions.length} proposed regions · {semanticDetectionPreview.model}</span>
+              </div>
+              <button type="button" onClick={() => setSemanticDetectionPreview(null)} aria-label="Discard">×</button>
+            </div>
+            <div className="pdf_semantic_detection_results">
+              {semanticDetectionPreview.regions.map((region, index) => (
+                <div className="pdf_semantic_detection_result" key={region.id || index}>
+                  <select
+                    value={region.type}
+                    onChange={(event) => setSemanticDetectionPreview((current) => ({
+                      ...current,
+                      regions: current.regions.map((item, itemIndex) => itemIndex === index ? { ...item, type: event.target.value } : item),
+                    }))}
+                  >
+                    {[
+                      "chapter_title", "section_title", "subsection_title", "paragraph_title", "body_paragraph",
+                      "figure", "figure_caption", "table", "table_caption", "table_of_contents", "list", "equation", "header", "footer", "page_number", "unknown",
+                    ].map((type) => <option key={type} value={type}>{type.replaceAll("_", " ")}</option>)}
+                  </select>
+                  <span>{Math.round(Number(region.confidence || 0) * 100)}%</span>
+                  <button type="button" onClick={() => setSemanticDetectionPreview((current) => ({ ...current, regions: current.regions.filter((_, itemIndex) => itemIndex !== index) }))}>Reject</button>
+                </div>
+              ))}
+            </div>
+            <div className="pdf_semantic_detection_actions">
+              <button type="button" onClick={() => setSemanticDetectionPreview(null)}>Discard</button>
+              <button type="button" className="pdf_semantic_detection_primary" onClick={applySemanticDetection}>Apply</button>
             </div>
           </div>
         </div>

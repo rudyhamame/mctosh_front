@@ -19,6 +19,10 @@ const AvatarContainer = forwardRef(({ allowViewportControls = true, onSpeechCapt
   useImperativeHandle(ref, () => ({
     isLive: () => innerRef.current?.isLive?.() ?? false,
     streamChunk: (text) => innerRef.current?.streamChunk?.(text),
+    streamSpeechChunk: (text) => {
+      if (innerRef.current?.streamSpeechChunk) return innerRef.current.streamSpeechChunk(text);
+      return innerRef.current?.streamChunk?.(text);
+    },
     endMessage: () => innerRef.current?.endMessage?.(),
     initialize: () => innerRef.current?.initialize?.(),
     pause: () => innerRef.current?.pause?.(),

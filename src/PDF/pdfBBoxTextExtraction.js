@@ -28,6 +28,48 @@ const spanPageRight = (span) => span.pageRight ?? span.geoRight ?? 0;
 const spanPageTop = (span) => span.pageTop ?? span.geoTop ?? 0;
 const spanPageHeight = (span) => span.pageHeight ?? span.geoHeight ?? 0;
 
+const spanText = (span) => String(span?.text ?? span?.el?.textContent ?? "");
+
+// PDF.js can expose an entire visual line as one span. A partition may cut
+// through that span, so selecting the span as a whole leaks text from the
+// neighboring column. Clip the text to the partition's x-range and keep
+// complete words at both cut edges.
+export const clipSpanToHorizontalBBox = (span, bbox) => {
+  const text = spanText(span);
+  const left = spanPageLeft(span);
+  const right = spanPageRight(span);
+  const top = spanPageTop(span);
+  const height = spanPageHeight(span);
+  if (!text || right <= left || !bbox) return null;
+  const bboxLeft = bbox.x ?? 0;
+  const bboxRight = bboxLeft + (bbox.w ?? 0);
+  const bboxTop = bbox.y ?? 0;
+  const bboxBottom = bboxTop + (bbox.h ?? 0);
+  if (right <= bboxLeft || left >= bboxRight || top + height <= bboxTop || top >= bboxBottom) return null;
+  if (left >= bboxLeft && right <= bboxRight) return span;
+
+  const length = text.length;
+  const charWidth = (right - left) / Math.max(1, length);
+  let start = Math.max(0, Math.floor((bboxLeft - left) / charWidth));
+  let end = Math.min(length, Math.ceil((bboxRight - left) / charWidth));
+  // If a boundary cuts through a word, retain that complete word rather than
+  // returning a misleading partial token.
+  while (start > 0 && !/\s/u.test(text[start - 1])) start -= 1;
+  while (end < length && !/\s/u.test(text[end])) end += 1;
+  const clippedText = text.slice(start, end).trim();
+  if (!clippedText) return null;
+  const leadingWhitespace = text.slice(start, end).search(/\S/u);
+  const first = start + Math.max(0, leadingWhitespace);
+  const trailing = text.slice(first, end).search(/\s+$/u);
+  const last = trailing >= 0 ? first + trailing : end;
+  return {
+    ...span,
+    text: text.slice(first, last),
+    pageLeft: left + first * charWidth,
+    pageRight: left + last * charWidth,
+  };
+};
+
 const isLowercaseContinuation = (text) => {
   const first = String(text || "").trimStart().match(/^\p{Ll}/u)?.[0] || "";
   return !!first;
@@ -168,6 +210,60 @@ export const buildTextLineRects = (spans, padding = 0) => {
     .map((rect) => expandRect(rect, padding));
 };
 
+// One entry per visual line — text AND rect together (buildTextLineRects
+// above only keeps the rect). Used by Smart Segmenting (pdfSmartSegment.js)
+// to match a page's own text lines, in reading order, against a Markdown
+// paragraph's text before it has any bbox to test overlap against yet —
+// everything else in this file assumes a bbox already exists to select
+// spans against, which is exactly backwards for that use case.
+export const buildTextLines = (spans) => {
+  const lines = groupSpansIntoLines(spans || []);
+  return lines
+    .map((line) => ({ text: getLineText(line.spans || []), rect: lineBounds(line) }))
+    .filter((line) => line.rect);
+};
+
+const intersectRects = (left, right) => {
+  if (!left || !right) return null;
+  const x = Math.max(left.x ?? 0, right.x ?? 0);
+  const y = Math.max(left.y ?? 0, right.y ?? 0);
+  const rightEdge = Math.min((left.x ?? 0) + (left.w ?? 0), (right.x ?? 0) + (right.w ?? 0));
+  const bottomEdge = Math.min((left.y ?? 0) + (left.h ?? 0), (right.y ?? 0) + (right.h ?? 0));
+  return rightEdge > x && bottomEdge > y
+    ? { type: "bbox", x, y, w: rightEdge - x, h: bottomEdge - y }
+    : null;
+};
+
+// A paragraph can intentionally cross multiple Page partitions. Extract each
+// fenced region independently so equal-Y lines from neighboring columns never
+// merge, then concatenate the groups in stable partition order.
+export const buildPartitionOrderedTextLines = (
+  spans,
+  bbox,
+  partitions = [],
+  matchSpan = bboxTextMatchesSpan,
+) => {
+  const groups = [];
+  for (const partition of partitions || []) {
+    const region = intersectRects(bbox, partition);
+    if (!region) continue;
+    const lines = buildTextLines(selectSpansForBoundingBox(
+      spans,
+      region,
+      matchSpan,
+      [],
+      { preserveColumns: true, splitLines: true },
+    ));
+    if (!lines.length) continue;
+    groups.push({ partitionId: partition.id, lines });
+  }
+  return {
+    groups,
+    lines: groups.flatMap((group) => group.lines),
+    partitionIds: groups.map((group) => group.partitionId),
+  };
+};
+
 const lineMostlyInsideBBox = (line, bbox, minCoverage = 0.9) => {
   const bounds = lineBounds(line);
   if (!bounds || !bbox) return false;
@@ -214,13 +310,36 @@ export const extractTextFromOrderedSpans = (spans) => {
   return joinLineTexts(lines.map((line) => getLineText(line.spans || [])));
 };
 
-export const selectSpansForBoundingBox = (spans, bbox, matchSpan = bboxTextMatchesSpan, excludedBboxes = []) => {
+export const selectSpansForBoundingBox = (
+  spans,
+  bbox,
+  matchSpan = bboxTextMatchesSpan,
+  excludedBboxes = [],
+  { preserveColumns = false, splitLines = false, spanKeys = null } = {},
+) => {
   if (!bbox || !Array.isArray(spans) || !spans.length) return [];
-  const selected = spans.filter((span) => (
-    matchSpan(bbox, span)
-    && !excludedBboxes.some((excludedBBox) => matchSpan(excludedBBox, span))
-  ));
+  const shouldSplitLines = splitLines || ["bbox", "columnBBox"].includes(bbox.type);
+  const selected = shouldSplitLines
+    ? spans
+      .filter((span) => (
+        !excludedBboxes.some((excludedBBox) => matchSpan(excludedBBox, span))
+      ))
+      .map((span) => clipSpanToHorizontalBBox(span, bbox))
+      .filter(Boolean)
+    : spans.filter((span) => (
+      matchSpan(bbox, span)
+      && !excludedBboxes.some((excludedBBox) => matchSpan(excludedBBox, span))
+    ));
   if (!selected.length) return [];
+  // Smart/container boxes can be broad enough to cross a column gutter, so
+  // retain their historical dominant-column filtering. Manual boxes are
+  // already derived from the exact selected spans and must keep all of them
+  // (notably a TOC label such as "Arrhythmias" plus its page number).
+  if (Array.isArray(spanKeys)) {
+    const selectedKeySet = new Set(spanKeys);
+    return selected.filter((span) => selectedKeySet.has(span.spanKey));
+  }
+  if (preserveColumns) return selected;
   const columnVotes = new Map();
   for (const span of selected) {
     if (span.columnIndex == null) continue;
@@ -274,8 +393,15 @@ export const buildTightTextOutline = (spans, padding = 1) => (
   buildTightOutlineFromLineRects(buildTextLineRects(spans, padding))
 );
 
-export const extractBoundingBoxTextParts = (spans, bbox, matchSpan = bboxTextMatchesSpan, excludedBboxes = []) => {
-  const narrowed = selectSpansForBoundingBox(spans, bbox, matchSpan, excludedBboxes);
+export const extractBoundingBoxTextParts = (
+  spans,
+  bbox,
+  matchSpan = bboxTextMatchesSpan,
+  excludedBboxes = [],
+  options = {},
+) => {
+  const { detectTitle = true, ...selectionOptions } = options || {};
+  const narrowed = selectSpansForBoundingBox(spans, bbox, matchSpan, excludedBboxes, selectionOptions);
   if (!narrowed.length) return { title: "", text: "" };
   const lines = groupSpansIntoLines(narrowed);
   if (!lines.length) return { title: "", text: "" };
@@ -289,7 +415,9 @@ export const extractBoundingBoxTextParts = (spans, bbox, matchSpan = bboxTextMat
     )
     && lineMostlyInsideBBox(lines[0], bbox)
   );
-  const titleLine = (looksLikeTitleLine(lines[0], lines.slice(1)) && lineMostlyInsideBBox(lines[0], bbox)) || loneLineLooksLikeTitle ? lines[0] : null;
+  const titleLine = detectTitle && ((looksLikeTitleLine(lines[0], lines.slice(1)) && lineMostlyInsideBBox(lines[0], bbox)) || loneLineLooksLikeTitle)
+    ? lines[0]
+    : null;
   const title = titleLine ? getLineText(titleLine.spans) : "";
   const bodyLines = titleLine ? lines.slice(1) : lines;
   const text = bodyLines.length
@@ -298,6 +426,6 @@ export const extractBoundingBoxTextParts = (spans, bbox, matchSpan = bboxTextMat
   return { title, text };
 };
 
-export const extractTextForBoundingBox = (spans, bbox, matchSpan = bboxTextMatchesSpan, excludedBboxes = []) => {
-  return extractBoundingBoxTextParts(spans, bbox, matchSpan, excludedBboxes).text;
+export const extractTextForBoundingBox = (spans, bbox, matchSpan = bboxTextMatchesSpan, excludedBboxes = [], options = {}) => {
+  return extractBoundingBoxTextParts(spans, bbox, matchSpan, excludedBboxes, options).text;
 };

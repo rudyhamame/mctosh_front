@@ -77,7 +77,7 @@ const relativeLuminance = ({ r, g, b }) => {
 };
 const contrastInkFor = (hex) => (relativeLuminance(highlightSafeColorRgb(hex)) > 0.42 ? "#000000" : "#ffffff");
 
-export const drawAnnotation = (ctx, ann, scale = 1) => {
+export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
   const s  = scale;
   const p  = (v) => v * s;
   const pt = ({ x, y }) => [x * s, y * s];
@@ -361,6 +361,15 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       if (points.length === 2) {
         const [lx, ly] = pt(points[1]);
         ctx.lineTo(lx, ly);
+      } else if (ann.geometry === "rectangle") {
+        // Committed manual BBoxes are true geometric rectangles. Use straight
+        // segments so the minimum-area orientation is preserved; the live
+        // draft remains freeform until pointer-up.
+        for (let i = 1; i < points.length; i += 1) {
+          const [x, y] = pt(points[i]);
+          ctx.lineTo(x, y);
+        }
+        if (closed) ctx.closePath();
       } else {
         for (let i = 1; i < points.length - 1; i++) {
           const [x, y] = pt(points[i]);
@@ -372,9 +381,13 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
         if (closed) ctx.closePath();
       }
       ctx.save();
-      const borderSize = Math.max(1, ann.lineWidth ?? 2) * s;
-      ctx.setLineDash([8 * s, 6 * s]);
-      ctx.lineWidth = Math.max(0.75, borderSize);
+      // Smart boxes are guides over the document; keep their outline light
+      // enough that the PDF content remains primary.
+      // BBox geometry follows `s`; visual chrome follows the same page-relative
+      // scale as the rendered PDF.
+      const borderSize = Math.min(1, Math.max(0.5, ann.smartSegmented ? 1 : (ann.lineWidth ?? 1))) * appearanceScale;
+      ctx.setLineDash([8, 6].map((value) => value * appearanceScale));
+      ctx.lineWidth = Math.max(0.5, borderSize);
       if (closed) {
         ctx.globalAlpha = 0.12;
         ctx.fillStyle = ann.color;
@@ -386,9 +399,11 @@ export const drawAnnotation = (ctx, ann, scale = 1) => {
       ctx.restore();
     } else {
       ctx.save();
-      const borderSize = Math.max(1, ann.lineWidth ?? 2) * s;
-      ctx.setLineDash([8 * s, 6 * s]);
-      ctx.lineWidth = Math.max(0.75, borderSize);
+      // Keep persisted smart-segmentation guides visually lightweight even
+      // when the general bbox tool uses a thicker user-selected stroke.
+      const borderSize = Math.min(1, Math.max(0.5, ann.smartSegmented ? 1 : (ann.lineWidth ?? 1))) * appearanceScale;
+      ctx.setLineDash([8, 6].map((value) => value * appearanceScale));
+      ctx.lineWidth = Math.max(0.5, borderSize);
       ctx.globalAlpha = 0.95;
       ctx.strokeRect(p(ann.x), p(ann.y), p(ann.w), p(ann.h));
       ctx.setLineDash([]);

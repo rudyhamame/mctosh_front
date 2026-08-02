@@ -437,6 +437,37 @@
   max-width: 260px;
 }
 
+.sources_ocr_status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+  width: fit-content;
+  color: #667085;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
+.sources_ocr_status--completed { color: #16806a; }
+.sources_ocr_status--failed { color: #b42318; }
+.sources_ocr_status--queued,
+.sources_ocr_status--uploading,
+.sources_ocr_status--processing { color: #176b87; }
+
+.sources_ocr_retry_btn {
+  border: 1px solid #b9d9df;
+  border-radius: 0.45rem;
+  background: #f4fbfc;
+  color: #176b87;
+  padding: 0.28rem 0.48rem;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
 .sources_rename_group {
   display: flex;
   align-items: center;

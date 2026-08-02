@@ -21,6 +21,7 @@ const AnamAvatarView = forwardRef(({ onSpeechCaptionChange = null }, ref) => {
   useImperativeHandle(ref, () => ({
     isLive: () => innerRef.current?.isLive?.() ?? false,
     streamChunk: (text) => innerRef.current?.streamChunk?.(text),
+    streamSpeechChunk: (text) => innerRef.current?.streamChunk?.(text),
     endMessage: () => innerRef.current?.endMessage?.(),
     initialize: async () => {
       // AnamAvatar connects on its own mount effect — nothing to trigger here.

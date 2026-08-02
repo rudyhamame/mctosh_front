@@ -90,6 +90,25 @@ describe("pdfPageLayout — two columns", () => {
     expect(pageNumBlock.columnIndex).not.toBe(null);
     expect(pageNumBlock.columnIndex).toBe(rightColBlock.columnIndex - 1);
   });
+
+  it("does not invent a narrow third column inside a variable-width sidebar", () => {
+    const leftWidths = [36, 132, 123, 60, 130, 142, 143, 33];
+    const items = [];
+    leftWidths.forEach((width, row) => {
+      const y = row * 12;
+      items.push(item(`Left line ${row}`, 32, y, width, 10));
+      items.push(item(`Right line ${row}`, 201, y, 300, 10));
+    });
+
+    const layout = analyzePageLayout(items);
+    expect(layout.columnCount).toBe(2);
+    expect(layout.gutters).toHaveLength(1);
+    expect(layout.gutters[0]).toBeGreaterThan(170);
+
+    const leftBlocks = layout.blocks.filter((block) => block.items.some((entry) => entry.x1 === 32));
+    expect(leftBlocks).toHaveLength(leftWidths.length);
+    expect(leftBlocks.every((block) => block.columnIndex === 0 && !block.isFullWidth)).toBe(true);
+  });
 });
 
 describe("pdfPageLayout — full-width elements", () => {

@@ -189,6 +189,7 @@ export const DEFAULT_ANNOT_TOOL_COLORS = {
   rect: "#20c997",
   bbox: "#339af0",
   circle: "#fd7e14",
+  freeshape: "#7950f2",
   text: "#212529",
   drawText: "#212529",
 };
@@ -292,10 +293,20 @@ export const TEXT_FONT_FAMILIES = [
 export const ANNOT_HISTORY_META = {
   add: { icon: "bx bx-plus", verb: "Added" },
   edit: { icon: "bx bx-edit", verb: "Edited" },
+  merge: { icon: "bx bx-merge", verb: "Merged" },
   undo: { icon: "bx bx-undo", verb: "Undid" },
   redo: { icon: "bx bx-redo", verb: "Redid" },
   erase: { icon: "bx bx-eraser", verb: "Erased" },
   clear: { icon: "bx bx-trash", verb: "Cleared" },
+  restore: { icon: "bx bx-history", verb: "Retrieved" },
+  // Fallback only — a single-annotation delete normally marks its own
+  // original "Added" row cleared in place (see markAnnotationCleared in
+  // PDFPage.jsx) rather than logging a standalone row with this action.
+  // This still fires for annotations whose "add" row aged out of the
+  // 300-entry cap, so it needs its own real icon/verb rather than silently
+  // falling through to ANNOT_HISTORY_META.add and misreporting a delete as
+  // an add.
+  delete: { icon: "bx bx-trash", verb: "Deleted" },
 };
 
 export const PenToolIcon = () => (

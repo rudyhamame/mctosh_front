@@ -4,12 +4,10 @@ import {
   Navigate,
   Route,
   Routes,
-  useLocation,
   useParams,
 } from "react-router-dom";
-import { SplitViewProvider, SplitViewFrame, SplitViewButton } from "./App/SplitView";
+import { SplitViewProvider, SplitViewFrame } from "./App/SplitView";
 import { AvatarProviderContextProvider } from "./Avatar/AvatarProviderContext";
-import AppFooter from "./App/AppFooter";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 import { clearStoredPatientSession, readStoredPatientSession } from "./utils/patientSessionCleanup";
 import { applyStoredTheme } from "./utils/theme";
@@ -17,7 +15,6 @@ import { applyStoredTheme } from "./utils/theme";
 const App = lazy(() => import("./App/App"));
 const Login = lazy(() => import("./Login/Login"));
 const AIChat = lazy(() => import("./AI/AIChat"));
-const HomeChat = lazy(() => import("./App/HomeChat"));
 const PredictionOverlay = lazy(() => import("./Prediction/PredictionOverlay"));
 const DraftPage = lazy(() => import("./Draft/DraftPage"));
 const DraftListPage = lazy(() => import("./Draft/DraftListPage"));
@@ -69,18 +66,6 @@ const PodcastRedirect = () => {
   const sourceId = location.state?.sourceId;
   if (!sourceId) return <Navigate to="/sources" replace />;
   return <Navigate to={`/podcast/${sourceId}`} replace state={location.state} />;
-};
-
-// Home renders its own Dev AI trigger docked inside the 3D canvas (see
-// App.js) instead of the app-wide footer strip — a bottom toolbar has
-// nowhere to sit over a full-bleed scroll stage. Every other authenticated
-// page keeps the footer (Dev AI + split view) exactly as before; this only
-// suppresses it on that one route. Needs useLocation, which only works
-// inside the <Router> below, so it can't live directly in AppRouter itself.
-const FooterGate = ({ children }) => {
-  const location = useLocation();
-  if (location.pathname === "/home") return null;
-  return children;
 };
 
 const AppRouter = () => {
@@ -229,14 +214,6 @@ const AppRouter = () => {
       </Routes>
       </SplitViewFrame>
 
-      {canAccessAuthenticatedRoutes && (
-        <FooterGate>
-          <AppFooter>
-            {withSuspense(<HomeChat />)}
-            <SplitViewButton />
-          </AppFooter>
-        </FooterGate>
-      )}
       {canAccessAuthenticatedRoutes && withSuspense(<PredictionOverlay />)}
       </SplitViewProvider>
       </AvatarProviderContextProvider>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
-import { BBOX_CARD_TYPES, bboxTypeHas } from "../PDF/pdfBBoxTypes";
+import { BBOX_CARD_TYPES, bboxTypeHas, buildHyleBBoxIdMap } from "../PDF/pdfBBoxTypes";
 
 // useAllSegments — the reservoir fetch + flatten logic originally inline
 // in SegmentationsPage.jsx, extracted so AMCTOSHS Morphe's own segment
@@ -19,6 +19,23 @@ const isDocumentSource = (s) => (
 );
 
 export const segmentKeyFor = (sourceId, pageNum, bboxId) => `${sourceId}::${pageNum}::${bboxId}`;
+
+// SourceAnnotation.layers used to be the flat { [page]: annotations[] }
+// object. The PDF reader now persists an array of named annotation layers,
+// each with its own annotations object. Segmentation is a reservoir of saved
+// content, so merge every persisted layer by page regardless of eye-toggle
+// visibility; hidden is not deleted.
+export const flattenPersistedAnnotationLayers = (storedLayers) => {
+  if (!Array.isArray(storedLayers)) return storedLayers && typeof storedLayers === "object" ? storedLayers : {};
+  const pages = {};
+  for (const layer of storedLayers) {
+    for (const [pageKey, annotations] of Object.entries(layer?.annotations || {})) {
+      if (!Array.isArray(annotations)) continue;
+      pages[pageKey] = [...(pages[pageKey] || []), ...annotations];
+    }
+  }
+  return pages;
+};
 
 // Same geometric containment check (2px tolerance) EntityBuilderPanel.jsx's
 // groupedBboxes uses to decide which segments sit inside a Segment
@@ -83,11 +100,11 @@ export const useAllSegments = () => {
   }, []);
 
   // One group per source, each holding every one of its content segments
-  // (BBOX_CARD_TYPES — bbox, imageBBox) across all of that source's pages,
+  // (page roots plus paragraph and figure BBoxes) across all source pages,
   // sorted page-then-appearance order.
   const sourceGroups = useMemo(() => (
-    sources.map((source) => {
-      const layers = layersBySource[source._id] || {};
+    sources.map((source, sourceIndex) => {
+      const layers = flattenPersistedAnnotationLayers(layersBySource[source._id]);
       const pageNums = Object.keys(layers)
         .map((n) => Number(n))
         .filter((n) => Number.isFinite(n))
@@ -95,28 +112,38 @@ export const useAllSegments = () => {
 
       const segments = [];
       for (const pageNum of pageNums) {
-        const pageAnnotations = layers[pageNum] || [];
+        const pageAnnotations = (layers[pageNum] || []).filter((bbox) => bbox && (
+          BBOX_CARD_TYPES.has(bbox.type) || bbox.type === "pageBBox"
+        ));
         const pageContainers = pageAnnotations
-          .filter((a) => a && bboxTypeHas(a.type, "containsChildren"))
+          .filter((bbox) => bbox.type === "pageBBox")
           .map((container, index) => ({
             ...container,
-            _displayName: container.title?.trim() || `Segment Container ${index + 1}`,
+            _displayName: container.title?.trim() || `Page ${pageNum}`,
           }));
+        const hyleIds = buildHyleBBoxIdMap(pageAnnotations, sourceIndex + 1, pageNum);
 
         pageAnnotations
-          .filter((bbox) => bbox && BBOX_CARD_TYPES.has(bbox.type))
           .forEach((bbox, index) => {
-            const containingContainer = pageContainers.find((container) => isBBoxWithinContainer(bbox, container));
+            const containingContainer = pageContainers.find((container) => (
+              bbox.parentId === container.id || isBBoxWithinContainer(bbox, container)
+            ));
+            const hyleId = hyleIds[bbox.id];
+            if (!hyleId) return;
+            const isPage = bbox.type === "pageBBox";
+            const isFigure = bboxTypeHas(bbox.type, "capturesImage");
+            const typeLabel = isPage ? "Page Segment" : isFigure ? "Figure Segment" : "Segment";
             segments.push({
-              key: segmentKeyFor(source._id, pageNum, bbox.id),
+              key: hyleId,
               sourceId: source._id,
               sourceName: source.name,
               pageNum,
-              bbox,
+              hyleId,
+              bbox: { ...bbox, hyleId },
               isImage: bboxTypeHas(bbox.type, "capturesImage"),
-              typeLabel: bboxTypeHas(bbox.type, "capturesImage") ? "Image Segment" : "Segment",
+              typeLabel,
               displayTitle: bbox.title?.trim()
-                || `${bboxTypeHas(bbox.type, "capturesImage") ? "Image Segment" : "Segment"} ${index + 1}`,
+                || `${typeLabel} ${index + 1}`,
               container_name: containingContainer ? containingContainer._displayName : null,
             });
           });

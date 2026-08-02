@@ -106,7 +106,6 @@ export default function SegmentationsPage() {
   const [selectedSegmentKey, setSelectedSegmentKey] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
-  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [extraction, setExtraction] = useState(null);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState("");
@@ -161,20 +160,17 @@ export default function SegmentationsPage() {
   ), [allSegmentsByKey, selectedSegmentKey]);
 
   const selectSegment = (key) => {
+    if (key !== selectedSegmentKey) {
+      setExtraction(null);
+      setExtractError("");
+      setPredicateExtraction(null);
+      setPredicateExtractError("");
+      setPredicateAnalysis(null);
+      setAnalyzeError("");
+    }
     setSelectedSegmentKey(key);
     setDrawerOpen(false);
   };
-
-  const toggleSegmentSelected = (key, ev) => {
-    ev?.stopPropagation();
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
-  };
-
-  const clearSelection = () => setSelectedKeys(new Set());
 
   // Traces a segment back to its own source document, open to the exact
   // page it was drawn on — PDFReaderWorkspace/PDFPage both read
@@ -186,14 +182,15 @@ export default function SegmentationsPage() {
   };
 
   const extractRelations = async () => {
-    const segments = [...selectedKeys]
-      .map((key) => allSegmentsByKey.get(key))
-      .filter((seg) => seg && !seg.isImage)
-      .map((seg) => ({
-        sourceId: seg.sourceId, pageNum: seg.pageNum, segmentBboxId: seg.bbox.id,
-        segmentText: seg.bbox.text || "", containerName: seg.container_name || null,
-      }));
-    if (!segments.length) return;
+    if (!selectedSegment || selectedSegment.isImage) return;
+    const segments = [{
+      sourceId: selectedSegment.sourceId,
+      pageNum: selectedSegment.pageNum,
+      segmentBboxId: selectedSegment.bbox.id,
+      segmentHyleId: selectedSegment.hyleId,
+      segmentText: selectedSegment.bbox.text || "",
+      containerName: selectedSegment.container_name || null,
+    }];
 
     setExtracting(true);
     setExtractError("");
@@ -235,14 +232,14 @@ export default function SegmentationsPage() {
   };
 
   const extractPredicates = async () => {
-    const segments = [...selectedKeys]
-      .map((key) => allSegmentsByKey.get(key))
-      .filter((seg) => seg && !seg.isImage)
-      .map((seg) => ({
-        sourceId: seg.sourceId, pageNum: seg.pageNum, segmentBboxId: seg.bbox.id,
-        segmentText: seg.bbox.text || "", containerName: seg.container_name || null,
-      }));
-    if (!segments.length) return;
+    if (!selectedSegment || selectedSegment.isImage) return;
+    const segments = [{
+      sourceId: selectedSegment.sourceId,
+      pageNum: selectedSegment.pageNum,
+      segmentBboxId: selectedSegment.bbox.id,
+      segmentText: selectedSegment.bbox.text || "",
+      containerName: selectedSegment.container_name || null,
+    }];
 
     setPredicateExtracting(true);
     setPredicateExtractError("");
@@ -361,16 +358,6 @@ export default function SegmentationsPage() {
                   className={`segp_segment_row${selectedSegmentKey === seg.key ? " segp_segment_row--active" : ""}`}
                   onClick={() => selectSegment(seg.key)}
                 >
-                  {!seg.isImage && (
-                    <input
-                      type="checkbox"
-                      className="segp_segment_checkbox"
-                      checked={selectedKeys.has(seg.key)}
-                      onClick={(ev) => ev.stopPropagation()}
-                      onChange={(ev) => toggleSegmentSelected(seg.key, ev)}
-                      title="Select for AMCTOSHS Relations extraction"
-                    />
-                  )}
                   <i className={seg.isImage ? "fi fi-rr-picture" : "fi fi-rr-text"} />
                   <span className="segp_segment_row_text">
                     <span className="segp_segment_row_title">{seg.displayTitle}</span>
@@ -409,23 +396,6 @@ export default function SegmentationsPage() {
         </div>
       </div>
 
-      {selectedKeys.size > 0 && (
-        <div id="segp_selection_bar">
-          <span className="segp_selection_count">{selectedKeys.size} segment{selectedKeys.size !== 1 ? "s" : ""} selected</span>
-          <button type="button" id="segp_selection_clear_btn" onClick={clearSelection} disabled={extracting}>
-            Clear
-          </button>
-          <button type="button" id="segp_extract_btn" onClick={extractRelations} disabled={extracting}>
-            <i className={extracting ? "bx bx-loader-circle segp_icon_spin" : "fi fi-rr-sparkles"} />
-            {extracting ? "Extracting…" : "Extract AMCTOSHS Relations"}
-          </button>
-          <button type="button" id="segp_extract_predicates_btn" onClick={extractPredicates} disabled={predicateExtracting}>
-            <i className={predicateExtracting ? "bx bx-loader-circle segp_icon_spin" : "fi fi-rr-diagram-project"} />
-            {predicateExtracting ? "Extracting…" : "Extract Predicates"}
-          </button>
-        </div>
-      )}
-
       {(sourcesError || annotationsError) && (
         <div id="segp_row_error">
           <i className="bx bx-error" /> {sourcesError || annotationsError}
@@ -446,7 +416,7 @@ export default function SegmentationsPage() {
           {!selectedSegment && !extraction ? (
             <div id="segp_no_selection">
               <i className="fi fi-rr-arrow-small-left" />
-              <p>Select a segment from the list to view it, or check segments and click "Extract AMCTOSHS Relations"</p>
+              <p>Open a segment from the list to view it and run extraction actions here.</p>
             </div>
           ) : (
             <div id="segp_seg_body">
@@ -465,6 +435,9 @@ export default function SegmentationsPage() {
                         </span>
                       )}
                       <span className="segp_dim_badge segp_dim_badge--type">{selectedSegment.typeLabel}</span>
+                      <span className="segp_dim_badge segp_dim_badge--id" title="Global AMCTOSHS Hyle BBox ID">
+                        ID {selectedSegment.hyleId}
+                      </span>
                     </div>
                     <button
                       type="button"
@@ -475,6 +448,19 @@ export default function SegmentationsPage() {
                       <i className="fi fi-rr-arrow-up-right-from-square" /> Open in PDF Reader
                     </button>
                   </div>
+
+                  {!selectedSegment.isImage && (
+                    <div id="segp_seg_actions">
+                      <button type="button" id="segp_extract_btn" onClick={extractRelations} disabled={extracting}>
+                        <i className={extracting ? "bx bx-loader-circle segp_icon_spin" : "fi fi-rr-sparkles"} />
+                        {extracting ? "Extracting…" : "Extract AMCTOSHS Relations"}
+                      </button>
+                      <button type="button" id="segp_extract_predicates_btn" onClick={extractPredicates} disabled={predicateExtracting}>
+                        <i className={predicateExtracting ? "bx bx-loader-circle segp_icon_spin" : "fi fi-rr-diagram-project"} />
+                        {predicateExtracting ? "Extracting…" : "Extract Predicates"}
+                      </button>
+                    </div>
+                  )}
 
                   <div id="segp_seg_content">
                     {selectedSegment.isImage ? (

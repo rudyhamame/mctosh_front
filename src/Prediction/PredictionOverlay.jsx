@@ -38,12 +38,29 @@ const PredictionOverlay = () => {
   const prefixRef = useRef("");
   const debounceRef = useRef(null);
   const requestIdRef = useRef(0);
+  const positionFrameRef = useRef(0);
 
   const dismiss = useCallback(() => {
+    requestIdRef.current += 1;
     setSuggestions([]);
     setBox(null);
     prefixRef.current = "";
   }, []);
+
+  const reposition = useCallback(() => {
+    const el = targetRef.current;
+    if (!el || !el.isConnected || suggestions.length === 0) return;
+    cancelAnimationFrame(positionFrameRef.current);
+    positionFrameRef.current = requestAnimationFrame(() => {
+      const caret = el.selectionStart ?? el.value.length;
+      const coords = getCaretCoordinates(el, caret);
+      const rect = el.getBoundingClientRect();
+      setBox({
+        top: rect.top - el.scrollTop + coords.top + coords.height + 4,
+        left: rect.left - el.scrollLeft + coords.left,
+      });
+    });
+  }, [suggestions.length]);
 
   const runSuggest = useCallback((el) => {
     const caret = el.selectionStart ?? el.value.length;
@@ -58,14 +75,20 @@ const PredictionOverlay = () => {
       const results = await suggestPredictions(prefix);
       if (myRequestId !== requestIdRef.current || targetRef.current !== el) return;
       if (!results.length) { dismiss(); return; }
-      const coords = getCaretCoordinates(el, caret);
-      const rect = el.getBoundingClientRect();
-      setBox({
-        top: rect.top - el.scrollTop + coords.top + coords.height + 4,
-        left: rect.left - el.scrollLeft + coords.left,
-      });
       setSuggestions(results);
       setActiveIndex(0);
+      // Position after suggestions are mounted so an input's own horizontal
+      // scroll does not make the list disappear or leave it behind.
+      requestAnimationFrame(() => {
+        if (targetRef.current !== el) return;
+        const nextCaret = el.selectionStart ?? caret;
+        const coords = getCaretCoordinates(el, nextCaret);
+        const rect = el.getBoundingClientRect();
+        setBox({
+          top: rect.top - el.scrollTop + coords.top + coords.height + 4,
+          left: rect.left - el.scrollLeft + coords.left,
+        });
+      });
     }, 150);
   }, [dismiss]);
 
@@ -112,7 +135,9 @@ const PredictionOverlay = () => {
         dismiss();
       }
     };
-    const onScrollOrResize = () => dismiss();
+    const onScrollOrResize = () => {
+      if (targetRef.current && suggestions.length > 0) reposition();
+    };
 
     document.addEventListener("focusin", onFocusIn);
     document.addEventListener("focusout", onFocusOut);
@@ -128,8 +153,9 @@ const PredictionOverlay = () => {
       window.removeEventListener("scroll", onScrollOrResize, true);
       window.removeEventListener("resize", onScrollOrResize);
       clearTimeout(debounceRef.current);
+      cancelAnimationFrame(positionFrameRef.current);
     };
-  }, [runSuggest, acceptSuggestion, dismiss, suggestions, activeIndex]);
+  }, [runSuggest, acceptSuggestion, dismiss, reposition, suggestions, activeIndex]);
 
   if (!box || suggestions.length === 0) return null;
 

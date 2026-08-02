@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BBOX_CARD_TYPES,
   BBOX_TYPES,
+  canBBoxContain,
   clientPointToBBoxPagePoint,
   createBBoxDraft,
   getViewportDocumentSize,
@@ -9,7 +10,7 @@ import {
 
 describe("BBox type model", () => {
   it("registers every current bbox subtype", () => {
-    expect([...BBOX_TYPES]).toEqual(["bbox", "bboxContainer", "bboxTitle", "imageBBox"]);
+    expect([...BBOX_TYPES]).toEqual(["bbox", "subLineBBox", "columnBBox", "pageBBox", "bboxTitle", "imageBBox"]);
     expect([...BBOX_CARD_TYPES]).toEqual(["bbox", "imageBBox"]);
   });
 
@@ -22,6 +23,19 @@ describe("BBox type model", () => {
       });
       expect(draft).toMatchObject({ type, x: 12, y: 34, points: [{ x: 12, y: 34 }] });
     }
+  });
+
+  it("enforces page, optional partition, and content nesting", () => {
+    expect(canBBoxContain("pageBBox", "columnBBox")).toBe(true);
+    expect(canBBoxContain("pageBBox", "bboxContainer")).toBe(false);
+    expect(canBBoxContain("pageBBox", "imageBBox")).toBe(true);
+    expect(canBBoxContain("columnBBox", "bbox")).toBe(true);
+    expect(canBBoxContain("columnBBox", "imageBBox")).toBe(true);
+    expect(canBBoxContain("columnBBox", "bulletBBox")).toBe(false);
+    expect(canBBoxContain("bbox", "columnBBox")).toBe(false);
+    expect(canBBoxContain("bbox", "subLineBBox")).toBe(true);
+    expect(canBBoxContain("columnBBox", "subLineBBox")).toBe(false);
+    expect(canBBoxContain("columnBBox", "columnBBox")).toBe(false);
   });
 });
 
