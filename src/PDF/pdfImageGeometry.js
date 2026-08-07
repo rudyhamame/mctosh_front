@@ -18,7 +18,13 @@ export const extractPlacedImageRects = (operatorList, viewport, ops) => {
   const imageOps = new Set([
     ops.paintImageXObject,
     ops.paintInlineImageXObject,
+    ops.paintInlineImageXObjectGroup,
     ops.paintJpegXObject,
+    ops.paintImageXObjectRepeat,
+    ops.paintImageMaskXObject,
+    ops.paintImageMaskXObjectGroup,
+    ops.paintImageMaskXObjectRepeat,
+    ops.paintSolidColorImageMask,
   ].filter(Number.isFinite));
   const stack = [];
   const rects = [];
@@ -31,11 +37,11 @@ export const extractPlacedImageRects = (operatorList, viewport, ops) => {
       stack.push([...current]);
     } else if (fn === ops.restore) {
       current = stack.pop() || current;
-    } else if (fn === ops.transform && Array.isArray(args) && args.length >= 6) {
+    } else if (fn === ops.transform && args && args.length >= 6) {
       current = multiplyMatrices(current, args);
     } else if (fn === ops.paintFormXObjectBegin) {
       stack.push([...current]);
-      if (Array.isArray(args?.[0]) && args[0].length >= 6) current = multiplyMatrices(current, args[0]);
+      if (args?.[0] && args[0].length >= 6) current = multiplyMatrices(current, args[0]);
     } else if (fn === ops.paintFormXObjectEnd) {
       current = stack.pop() || current;
     } else if (imageOps.has(fn)) {

@@ -32,6 +32,32 @@ export const listMorphe = async () => {
   return parseJsonResponse(res);
 };
 
+/** Lightweight Schema-name hydrate used by the PDF reader's word markers. */
+export const listMorpheSchemaNames = async () => {
+  const res = await fetch(apiUrl("/api/amctoshs-morphe/schema-names"), { headers: authHeaders() });
+  return parseJsonResponse(res);
+};
+
+/** Create a one-word or multi-word Schema from a Smart Pen stroke, or return its existing match. */
+export const upsertSmartPenSchema = async ({ name, sourceId, page }) => {
+  const res = await fetch(apiUrl("/api/amctoshs-morphe/schemas/smart-pen"), {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ name, sourceId, page }),
+  });
+  return parseJsonResponse(res);
+};
+
+/** Save a directional Smart Pen far-end word as a Trace Schema for a Schema word. */
+export const upsertSmartPenTrace = async ({ name, sourceSchemaId, sourceSchemaName, sourceId, page, traceDimension = "3D" }) => {
+  const res = await fetch(apiUrl("/api/amctoshs-morphe/trace-schemas/smart-pen"), {
+    method: "POST",
+    headers: jsonHeaders(),
+    body: JSON.stringify({ name, sourceSchemaId, sourceSchemaName, sourceId, page, traceDimension }),
+  });
+  return parseJsonResponse(res);
+};
+
 const typedCrud = (resource) => ({
   get: async (id) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}/${id}`), { headers: authHeaders() })),
   update: async (id, patch) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}/${id}`), {

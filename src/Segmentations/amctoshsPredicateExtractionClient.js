@@ -21,7 +21,8 @@ const parseJsonResponse = async (res) => {
   const data = await res.json().catch(() => ({}));
   if (data.error) {
     const message = data.error.message || data.error || `Request failed (${res.status}).`;
-    throw Object.assign(new Error(message), data);
+    const details = Array.isArray(data.error.details) ? data.error.details.filter(Boolean).join(" ") : data.error.details;
+    throw Object.assign(new Error(details ? `${message} ${details}` : message), data);
   }
   if (!res.ok) throw new Error(`Request failed (${res.status}).`);
   return data;
@@ -46,6 +47,14 @@ export const listPredicateExtractions = async () => {
 
 export const getPredicateExtraction = async (id) => {
   const res = await fetch(apiUrl(`/api/amctoshs-predicates/extractions/${id}`), { headers: authHeaders() });
+  return parseJsonResponse(res);
+};
+
+export const deletePredicateExtraction = async (id) => {
+  const res = await fetch(apiUrl(`/api/amctoshs-predicates/extractions/${id}`), {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
   return parseJsonResponse(res);
 };
 

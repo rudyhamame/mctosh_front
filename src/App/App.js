@@ -40,7 +40,7 @@ const LEVELS = [
         path: "/segmentations",
         icon: "fi-rr-shapes",
         label: "AMCTOSHS Segmentation",
-        description: "Browse the segments (BBoxes) extracted from a PDF source and extract AMCTOSHS Medical Statements from each one",
+        description: "Browse the Line Blocks (BBoxes) extracted from a PDF source and extract AMCTOSHS Medical Statements from each one",
         color: "#4fc3f7",
       },
     ],

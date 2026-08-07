@@ -25,6 +25,14 @@ export const DEFAULT_PAGE_NAV_STATE = {
   searchActiveMatchedText: null,
 };
 
+export const DEFAULT_ZOOM_STATE = {
+  zoom: 1,
+  percent: 100,
+  canZoomOut: true,
+  canZoomIn: true,
+  disabled: false,
+};
+
 const safeSessionStorage = () => {
   if (typeof window === "undefined" || !window.sessionStorage) return null;
   return window.sessionStorage;

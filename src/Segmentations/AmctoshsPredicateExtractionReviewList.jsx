@@ -8,6 +8,13 @@ const latestEditedFields = (reviewedItem) => (
   reviewedItem.edits?.length ? reviewedItem.edits[reviewedItem.edits.length - 1].fields : null
 );
 
+const SUBJECT_ROLES = new Set(["subject", "expletive"]);
+const OBJECT_ROLES = new Set(["direct_object", "indirect_object", "prepositional_object", "object_complement"]);
+
+const argumentText = (argumentsList, roles) => (
+  (argumentsList || []).filter((arg) => roles.has(arg.grammatical_role)).map((arg) => arg.mention).filter(Boolean).join("; ") || "—"
+);
+
 // Frontend mirror of back/validation/amctoshsPredicateSchemas.js's
 // grammatical enums — display/edit only, the backend's own Zod schema
 // (.strict(), no ontology fields at all) is the real enforcement.
@@ -63,8 +70,13 @@ const ExtractionRow = ({ reviewedItem, assertion, busy, onDecide, index }) => {
               {merged.predicate.surface} ({merged.predicate.lemma}) · arity {merged.arity} · {merged.voice} · {merged.tense}/{merged.aspect} · {merged.polarity} · {merged.modality}
               {merged.confidence != null && ` · confidence ${merged.confidence.toFixed(2)}`}
             </span>
-            <span className="pev_arguments">
-              {merged.arguments.map((arg) => (
+            <span className="pev_arguments pev_arguments--explicit">
+              <span className="pev_argument_field"><strong>Subject</strong><span>{argumentText(merged.arguments, SUBJECT_ROLES)}</span></span>
+              <span className="pev_argument_field"><strong>Predicate</strong><span>{merged.predicate.surface || "—"}</span></span>
+              <span className="pev_argument_field"><strong>Object</strong><span>{argumentText(merged.arguments, OBJECT_ROLES)}</span></span>
+            </span>
+            <span className="pev_arguments pev_arguments--additional">
+              {(merged.arguments || []).filter((arg) => !SUBJECT_ROLES.has(arg.grammatical_role) && !OBJECT_ROLES.has(arg.grammatical_role)).map((arg) => (
                 <span key={arg.argument_id} className="pev_argument_chip">
                   <strong>{arg.grammatical_role}</strong>: {arg.mention}
                 </span>

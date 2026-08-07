@@ -1,5 +1,5 @@
 /* AMCTOSHS Reasoning reuses ClinicalSchemata/clinicalSchemata.css's
-   #cs_* shell classes and morphePanels.css's .mrp_*/.mrv_* panel classes
+   #cs_* shell classes and morphePanels.css's mrp and mrv panel classes
    (imported alongside this file in ReasoningPage.jsx) — both are fully
    generic layout/component styles, not Morphe-specific. This file only
    holds the few things unique to this page: the Trace/Schema input

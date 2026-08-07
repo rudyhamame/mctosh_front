@@ -28,6 +28,8 @@ const parseJsonResponse = async (res) => {
   return data;
 };
 
+const isObjectId = (value) => /^[a-f\d]{24}$/i.test(String(value || "").trim());
+
 /**
  * Get-or-create a stable documentId for (user, filename) — no AI/extraction,
  * safe to call once per loaded PDF. `sourceId`, when the PDF is backed by
@@ -52,6 +54,16 @@ export const resolveDocumentId = async ({ filename, pageCount, type, sourceId })
 /** Read-only — loads existing draft/saved structure (+ each slot's own schemaVersion/legacy flag). NEVER triggers extraction/AI. Safe to call on page navigation / Narrative Mode open. */
 export const getPageStructure = async (documentId, pageNumber) => {
   const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}`), { headers: authHeaders() });
+  return parseJsonResponse(res);
+};
+
+/** Read-only extraction evidence for one page: native geometry + Docling layout, with no draft/save side effects. */
+export const getPageExtractionEvidence = async (documentId, pageNumber, { nativeOnly = false } = {}) => {
+  if (!isObjectId(documentId)) {
+    throw new Error("PDF extraction is unavailable until the document identity is resolved.");
+  }
+  const query = nativeOnly ? "?nativeOnly=1" : "";
+  const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/extraction${query}`), { headers: authHeaders() });
   return parseJsonResponse(res);
 };
 

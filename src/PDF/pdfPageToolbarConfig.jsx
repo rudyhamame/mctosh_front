@@ -85,6 +85,7 @@ export const ANNOT_TOOLS = [
   },
   { key: "strikethrough", icon: "bx bx-strikethrough", label: "Strikethrough", hasSize: false },
   { key: "pen", icon: "bx bx-pencil", label: "Pen", hasSize: true },
+  { key: "smartPen", icon: "bx bx-pencil", label: "Smart Pen", hasSize: true },
   { key: "line", icon: "bx bx-minus", label: "Line", hasSize: false },
   { key: "arrow", icon: "bx bx-right-arrow-alt", label: "Arrow", hasSize: true },
   { key: "rect", icon: "bx bx-rectangle", label: "Rectangle", hasSize: false },
@@ -111,7 +112,6 @@ export const ANNOT_TOOLS = [
     label: "Text",
     hasSize: false,
   },
-  { key: "drawText", icon: "bx bx-magic-wand", label: "Draw to Text", hasSize: false },
   { key: "eraser", icon: "bx bx-eraser", label: "Eraser", hasSize: true },
   {
     key: "smartVideo",
@@ -129,12 +129,12 @@ export const ANNOT_TOOLS = [
 export const SHAPE_TOOL_KEYS = ["line", "arrow", "rect", "circle", "freeshape"];
 export const DRAWING_TOOL_ORDER = [
   "pen",
+  "smartPen",
   "highlight",
   "underline",
   "strikethrough",
   "shapes",
   "text",
-  "drawText",
   "bbox",
   "eraser",
 ];
@@ -182,6 +182,7 @@ export const BBOX_DISTINCT_COLORS = [
 export const DEFAULT_ANNOT_TOOL_COLORS = {
   highlight: "#ffe066",
   pen: "#212529",
+  smartPen: "#212529",
   underline: "#fa5252",
   strikethrough: "#e03131",
   line: "#4c6ef5",
@@ -191,7 +192,6 @@ export const DEFAULT_ANNOT_TOOL_COLORS = {
   circle: "#fd7e14",
   freeshape: "#7950f2",
   text: "#212529",
-  drawText: "#212529",
 };
 
 export const BBOX_MIN_GAP = 1;
@@ -346,8 +346,8 @@ const KNOB_PAD_PX = 12;
 const KNOB_TRACK_W = 64;
 const KNOB_LABEL_W = 44;
 const KNOB_TOTAL_W = KNOB_TRACK_W + KNOB_LABEL_W;
-const OPACITY_MIN_PCT = 10;
-const OPACITY_MAX_PCT = 90;
+export const OPACITY_MIN_PCT = 10;
+export const OPACITY_MAX_PCT = 90;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
 export const SizeKnob = ({ min, max, step, value, onChange, color, dashed, variant = "dot" }) => {

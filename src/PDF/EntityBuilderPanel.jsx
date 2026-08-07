@@ -1,9 +1,27 @@
 import React, { useEffect, useMemo, useState } from "react";
 import "./entityBuilderPanel.css";
 import { BBOX_CARD_TYPES, bboxTypeHas, canBBoxContain, getBBoxTypeAbbreviation } from "./pdfBBoxTypes.js";
-import { applyOcrTokenCasing } from "./bboxTextCorrection.js";
+import {
+  listMorpheSchemaNames,
+  morpheSchemas as morpheSchemasApi,
+  morpheTraceSchemas as morpheTraceSchemasApi,
+} from "../ClinicalSchemata/amctoshsMorpheClient.js";
+import MorpheInfoTab from "../ClinicalSchemata/MorpheInfoTab.jsx";
 
 const DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE = 12;
+
+const SegmentsBuilderIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8"></path>
+    <path d="M12 4c-7.67 0-9.94 7.65-9.96 7.73-.05.18-.05.37 0 .55.02.08 2.3 7.73 9.96 7.73s9.94-7.65 9.96-7.73c.05-.18.05-.37 0-.55C21.94 11.65 19.66 4 12 4m0 14c-5.47 0-7.51-4.77-7.95-6 .44-1.23 2.48-6 7.95-6s7.51 4.78 7.95 6c-.44 1.23-2.48 6-7.95 6"></path>
+  </svg>
+);
+
+const IlluminationIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="m21.95 12.32-1.9-.64C19.98 11.9 18.16 17 12 17s-7.98-5.1-8.05-5.32l-1.9.63s.28.8.93 1.81L.7 15.85l1.21 1.6 2.3-1.74c.58.62 1.29 1.24 2.16 1.77l-1.51 2.48L6.57 21l1.62-2.65c.83.3 1.78.5 2.82.59v3.05h2v-3.05c1.05-.08 1.99-.29 2.82-.59L17.45 21l1.71-1.04-1.51-2.48c.87-.53 1.58-1.15 2.16-1.77l2.3 1.74 1.21-1.6-2.28-1.73c.65-1.01.92-1.79.93-1.81Z"></path>
+  </svg>
+);
 
 const normalizeBuilderText = (value) => String(value || "")
   .replace(/^\s*(?:[\u2022\u25E6\-*]|\d+[.)])\s*/, "")
@@ -11,7 +29,7 @@ const normalizeBuilderText = (value) => String(value || "")
   .trim()
   .toLowerCase();
 
-const paragraphTextWithSubLines = (paragraph, subLines = [], textFor = (item) => item.text || "") => {
+const paragraphTextWithSubLines = (paragraph, subLines = [], textFor = (item) => item.text || "", onSetLineTitle = null) => {
   const originalText = String(textFor(paragraph) || "").trim();
   const lines = originalText.split(/\r?\n/).filter((line) => line.trim());
   if (!lines.length) return originalText;
@@ -35,30 +53,67 @@ const paragraphTextWithSubLines = (paragraph, subLines = [], textFor = (item) =>
     }
   });
   let paragraphLineNumber = 0;
-  return lines.map((line, index) => {
+  const lineRecords = lines.map((line, index) => {
     const isSubLine = subLineIndexes.has(index);
     const lineNumber = isSubLine ? null : ++paragraphLineNumber;
-    const className = [
-      "entity_builder_bbox_text_line",
-      isSubLine ? "entity_builder_bbox_text_line--subline" : "",
-    ].filter(Boolean).join(" ");
+    return { line, index, isSubLine, lineNumber };
+  });
+  const renderLine = ({ line, index, isSubLine, lineNumber }) => {
+    const className = ["entity_builder_bbox_text_line", isSubLine ? "entity_builder_bbox_text_line--subline" : ""].filter(Boolean).join(" ");
     return (
       <span key={`${paragraph.id}-line-${index}`} className={className}>
         {lineNumber != null && <span className="entity_builder_bbox_line_index" aria-hidden="true">L{lineNumber}</span>}
         {isSubLine && <span className="entity_builder_bbox_subline_index" aria-hidden="true">SL</span>}
         <span className="entity_builder_bbox_line_content">{line.trim()}</span>
+        {onSetLineTitle && (
+          <button
+            type="button"
+            className="entity_builder_bbox_line_title_btn"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onSetLineTitle(paragraph.id, line.trim());
+            }}
+            aria-label={`Set line as title for ${paragraph._displayTitle || "parent BBox"}`}
+            title="Set this line as the parent BBox title"
+          >
+            <i className="bx bx-heading" aria-hidden="true" />
+          </button>
+        )}
       </span>
     );
-  });
+  };
+  const rendered = [];
+  for (let index = 0; index < lineRecords.length; index += 1) {
+    const record = lineRecords[index];
+    if (!record.isSubLine) {
+      rendered.push(renderLine(record));
+      continue;
+    }
+    if (lineRecords[index - 1]?.isSubLine) continue;
+    const group = [];
+    while (lineRecords[index]?.isSubLine) group.push(lineRecords[index++]);
+    rendered.push(
+      <span key={`${paragraph.id}-subline-group-${group[0].index}`} className="entity_builder_bbox_subline_group">
+        {group.map(renderLine)}
+      </span>,
+    );
+    index -= 1;
+  }
+  return rendered;
 };
 
 const EntityBuilderPanel = ({
+  embedded = false,
   width = null,
   onResizeStart = null,
   onClose,
   bboxCards = [],
+  bboxResizePreview = null,
   pageNum = null,
+  isPageFullySegmented = false,
   onUpdateBBoxName = null,
+  onSetBBoxTitle = null,
   onDeleteBBox = null,
   onMoveBBoxUp = null,
   onMoveBBoxDown = null,
@@ -69,9 +124,15 @@ const EntityBuilderPanel = ({
   const [editingNameId, setEditingNameId] = useState(null);
   const [editingNameValue, setEditingNameValue] = useState("");
   const [openMinibarId, setOpenMinibarId] = useState(null);
-  const [textView, setTextView] = useState("corrected");
   const [paragraphMergeMode, setParagraphMergeMode] = useState(false);
   const [selectedParagraphIds, setSelectedParagraphIds] = useState(() => new Set());
+  const [morpheSchemas, setMorpheSchemas] = useState([]);
+  const [morpheTraceSchemas, setMorpheTraceSchemas] = useState([]);
+  const [morpheLoading, setMorpheLoading] = useState(!embedded);
+  const [morpheError, setMorpheError] = useState("");
+  const [deletingMorpheIds, setDeletingMorpheIds] = useState(() => new Set());
+  const [activeMorpheView, setActiveMorpheView] = useState("entities");
+  const [morpheSaveStatus, setMorpheSaveStatus] = useState(null);
   const isImageBBox = (bbox) => bboxTypeHas(bbox?.type, "capturesImage");
   const normalizedBboxes = useMemo(() => (
     (Array.isArray(bboxCards) ? bboxCards : [])
@@ -165,62 +226,94 @@ const EntityBuilderPanel = ({
     return { groups, standalone, subLineChildren, columnChildren, columnContentChildren };
   }, [bboxContainers, layoutColumns, normalizedBboxes]);
 
-  const correctedTextFor = (bbox) => {
-    const sourceText = String(bbox.text || bbox.rawPdfText || "");
-    const candidateText = String(
-      bbox.textCorrection?.applied ? (bbox.correctedText || sourceText) : (bbox.ocrCorrectedText || bbox.correctedText || sourceText),
-    );
-    const wordCount = (value) => (value.match(/[\p{L}\p{N}]+/gu) || []).length;
-    // OCR suggestions can be incomplete when the first line is visually
-    // distinct. Never let a shorter suggestion hide text already extracted
-    // from the BBox.
-    return wordCount(candidateText) >= wordCount(sourceText)
-      && candidateText.replace(/\s+/g, " ").length >= sourceText.replace(/\s+/g, " ").length * 0.85
-      ? candidateText
-      : sourceText;
-  };
-  const textForView = (bbox, view) => view === "raw"
-    ? String(bbox.rawPdfText || bbox.text || "")
-    : correctedTextFor(bbox);
-  const textFor = (bbox) => textForView(bbox, textView);
-  const textLinesForView = (bbox) => {
-    if (!Array.isArray(bbox?.textLines) || !bbox.textLines.length) return textFor(bbox);
-    const lines = bbox.textLines.join("\n");
-    return textView === "corrected"
-      ? applyOcrTokenCasing(lines, correctedTextFor(bbox))
-      : lines;
-  };
-  const correctionSummary = useMemo(() => {
-    const textBboxes = normalizedBboxes.filter((bbox) => bboxTypeHas(bbox.type, "extractsText"));
-    return textBboxes.reduce((summary, bbox) => {
-      const auditSummary = bbox.textCorrection?.audit?.summary;
-      if (auditSummary) summary.audited += 1;
-      else summary.unaudited += 1;
-      summary.unresolved += auditSummary?.unresolvedCount || 0;
-      summary.auditWarnings += auditSummary?.warningCount || 0;
-      summary.silentOmissions += auditSummary?.silentOmissionCount || 0;
-      if (bbox.textCorrection?.applied) summary.applied += 1;
-      else if (bbox.ocrCorrectedText) summary.suggested += 1;
-      else if (!bbox.textCorrection?.ocrJobId) summary.pending += 1;
-      else summary.checked += 1;
-      return summary;
-    }, {
-      applied: 0,
-      suggested: 0,
-      pending: 0,
-      checked: 0,
-      audited: 0,
-      unaudited: 0,
-      unresolved: 0,
-      auditWarnings: 0,
-      silentOmissions: 0,
-    });
-  }, [normalizedBboxes]);
+  // Illumination intentionally shows only the text extracted from the PDF
+  // bbox. Corrections and OCR belong to their separate reader workflows.
+  const textFor = (bbox) => String(bbox?.rawPdfText || bbox?.text || "");
+  const textLinesForView = (bbox) => (
+    Array.isArray(bbox?.textLines) && bbox.textLines.length
+      ? bbox.textLines.join("\n")
+      : textFor(bbox)
+  );
 
   useEffect(() => {
     setParagraphMergeMode(false);
     setSelectedParagraphIds(new Set());
   }, [pageNum]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadMorpheSchemas = async () => {
+      setMorpheLoading(true);
+      setMorpheError("");
+      try {
+        const data = await listMorpheSchemaNames();
+        if (!cancelled) {
+          setMorpheSchemas(Array.isArray(data.schemas) ? data.schemas : []);
+          setMorpheTraceSchemas(Array.isArray(data.traceSchemas) ? data.traceSchemas : []);
+        }
+      } catch (error) {
+        if (!cancelled) setMorpheError(error.message || "Failed to load AMCTOSHS Morphe.");
+      } finally {
+        if (!cancelled) setMorpheLoading(false);
+      }
+    };
+    const refresh = (event) => {
+      const detail = event?.detail;
+      if (detail?.phase) {
+        setMorpheSaveStatus(detail);
+        if (detail.phase !== "saving") {
+          window.setTimeout(() => setMorpheSaveStatus((current) => current === detail ? null : current), 2600);
+        }
+      }
+      void loadMorpheSchemas();
+    };
+    void loadMorpheSchemas();
+    window.addEventListener("amctoshs:morphe-updated", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("amctoshs:morphe-updated", refresh);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  const deleteMorpheSchema = async (schema) => {
+    if (!schema?._id || deletingMorpheIds.has(schema._id)) return;
+    setDeletingMorpheIds((current) => new Set(current).add(schema._id));
+    setMorpheError("");
+    try {
+      await morpheSchemasApi.remove(schema._id);
+      setMorpheSchemas((current) => current.filter((item) => item._id !== schema._id));
+      window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated"));
+    } catch (error) {
+      setMorpheError(error.message || `Failed to delete ${schema.name || "Schema"}.`);
+    } finally {
+      setDeletingMorpheIds((current) => {
+        const next = new Set(current);
+        next.delete(schema._id);
+        return next;
+      });
+    }
+  };
+
+  const deleteMorpheTrace = async (trace) => {
+    if (!trace?._id || deletingMorpheIds.has(trace._id)) return;
+    setDeletingMorpheIds((current) => new Set(current).add(trace._id));
+    setMorpheError("");
+    try {
+      await morpheTraceSchemasApi.remove(trace._id);
+      setMorpheTraceSchemas((current) => current.filter((item) => item._id !== trace._id));
+      window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated"));
+    } catch (error) {
+      setMorpheError(error.message || `Failed to delete Trace ${trace.name || ""}.`);
+    } finally {
+      setDeletingMorpheIds((current) => {
+        const next = new Set(current);
+        next.delete(trace._id);
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     const availableIds = new Set(normalizedBboxes.filter((bbox) => bbox.type === "bbox").map((bbox) => bbox.id));
@@ -255,12 +348,12 @@ const EntityBuilderPanel = ({
 
   const renderParagraphMergeCheckbox = (bbox) => (
     paragraphMergeMode && bbox?.type === "bbox" ? (
-      <label className="entity_builder_merge_checkbox" title="Include paragraph in merge">
+      <label className="entity_builder_merge_checkbox" title="Include block in merge">
         <input
           type="checkbox"
           checked={selectedParagraphIds.has(bbox.id)}
           onChange={() => toggleParagraphMergeCandidate(bbox.id)}
-          aria-label={`Select ${bbox._displayTitle || "paragraph"} for merging`}
+          aria-label={`Select ${bbox._displayTitle || "block"} for merging`}
         />
         <span aria-hidden="true" />
       </label>
@@ -455,12 +548,7 @@ const EntityBuilderPanel = ({
                 ...(column.unbulletedText ? [{ kind: "text", text: column.unbulletedText }] : []),
                 ...(column.bulletedText ? [{ kind: "bullet", text: column.bulletedText }] : []),
               ];
-          const parts = textView === "corrected"
-            ? rawParts.map((part) => ({
-                ...part,
-                text: applyOcrTokenCasing(part.text, correctedTextFor(parent)),
-              }))
-            : rawParts;
+          const parts = rawParts;
           return (
             <article key={column.id} className="entity_builder_bbox_nested_item entity_builder_bbox_column_card entity_builder_bbox_tree_node entity_builder_bbox_tree_node--partition" data-bbox-type={column.type}>
               <div className="entity_builder_bbox_nested_item_head">
@@ -528,6 +616,7 @@ const EntityBuilderPanel = ({
     paragraph,
     groupedBboxes.subLineChildren.get(paragraph.id) || [],
     (item) => textLinesForView(item),
+    onSetBBoxTitle,
   );
   const renderSegments = () => (
     <>
@@ -676,6 +765,144 @@ const EntityBuilderPanel = ({
       )}
     </>
   );
+  const builderBody = (
+    <div id="entity_builder_body">
+      <div className="entity_builder_global_text_view">
+        <div>
+          <span className="entity_builder_global_text_label">BBox text</span>
+          <span className="entity_builder_global_text_summary">Original PDF text</span>
+        </div>
+        <div className="entity_builder_global_text_controls">
+          <div className="entity_builder_merge_tool">
+            {paragraphMergeMode && (
+              <span className="entity_builder_merge_count" aria-label={`${selectedParagraphIds.size} blocks selected`}>
+                {selectedParagraphIds.size}
+              </span>
+            )}
+            <button
+              type="button"
+              className={`entity_builder_merge_icon${paragraphMergeMode ? " entity_builder_merge_icon--active" : ""}`}
+              onClick={paragraphMergeMode ? mergeSelectedParagraphs : () => setParagraphMergeMode(true)}
+              disabled={paragraphMergeMode
+                ? selectedParagraphIds.size < 2
+                : (!onMergeParagraphs || normalizedBboxes.filter((bbox) => bbox.type === "bbox").length < 2)}
+              aria-label={paragraphMergeMode ? "Merge selected blocks" : "Select blocks to merge"}
+              title={paragraphMergeMode ? "Merge selected blocks" : "Merge blocks"}
+            >
+              <i className="bx bx-merge" aria-hidden="true" />
+            </button>
+            {paragraphMergeMode && (
+              <button
+                type="button"
+                className="entity_builder_merge_icon entity_builder_merge_cancel_icon"
+                onClick={cancelParagraphMerge}
+                aria-label="Cancel block merge"
+                title="Cancel merge"
+              >
+                <i className="bx bx-x" aria-hidden="true" />
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+      {renderSegments()}
+    </div>
+  );
+  const morpheBody = (
+    <div id="entity_builder_body" className="entity_builder_morphe_body">
+      <div className="entity_builder_morphe_summary">
+        <span className="entity_builder_morphe_title">
+          AMCTOSHS Morphe
+          <button
+            type="button"
+            className={`entity_builder_morphe_info_button${activeMorpheView === "information" ? " entity_builder_morphe_info_button--active" : ""}`}
+            onClick={() => setActiveMorpheView((view) => (view === "information" ? "entities" : "information"))}
+            aria-label="Open AMCTOSHS Morphe information"
+            aria-expanded={activeMorpheView === "information"}
+            aria-controls="mrp_information"
+            title="About AMCTOSHS Morphe Entities"
+          >
+            <i className="bx bx-info-circle" aria-hidden="true" />
+          </button>
+        </span>
+        <strong>{morpheSchemas.length} Schemata</strong>
+      </div>
+      {morpheSaveStatus && (
+        <div className={`entity_builder_morphe_save_status entity_builder_morphe_save_status--${morpheSaveStatus.phase}`} role="status" aria-live="polite">
+          <i className={morpheSaveStatus.phase === "saving" ? "bx bx-loader-alt bx-spin" : morpheSaveStatus.phase === "saved" ? "bx bx-check-circle" : "bx bx-error-circle"} aria-hidden="true" />
+          {morpheSaveStatus.phase === "saving" ? `Saving ${morpheSaveStatus.kind === "trace" ? "Trace" : "Schema"} ${morpheSaveStatus.name || ""}…` : morpheSaveStatus.phase === "saved" ? `${morpheSaveStatus.kind === "trace" ? "Trace" : "Schema"} ${morpheSaveStatus.name || ""} saved` : `Could not save ${morpheSaveStatus.kind === "trace" ? "Trace" : "Schema"} ${morpheSaveStatus.name || ""}`}
+        </div>
+      )}
+      {activeMorpheView === "information" ? (
+        <MorpheInfoTab onBackToEntities={() => setActiveMorpheView("entities")} />
+      ) : (
+        <>
+          {morpheError && (
+            <div className="entity_builder_status entity_builder_status--error">{morpheError}</div>
+          )}
+          {morpheLoading ? (
+            <div className="entity_builder_status">Loading Schemata...</div>
+          ) : morpheSchemas.length ? (
+            <div className="entity_builder_morphe_list">
+          {morpheSchemas.map((schema, index) => (
+            <article key={schema._id || `${schema.name}-${index}`} className="entity_builder_morphe_schema">
+              <span className="entity_builder_morphe_unit">Schema</span>
+              <strong className="entity_builder_morphe_name">{schema.name}</strong>
+              <button
+                type="button"
+                className="entity_builder_morphe_delete"
+                onClick={() => { void deleteMorpheSchema(schema); }}
+                disabled={deletingMorpheIds.has(schema._id)}
+                aria-label={`Delete Morphe Schema ${schema.name}`}
+                title="Delete Morphe"
+              >
+                <i className={deletingMorpheIds.has(schema._id) ? "bx bx-loader-alt bx-spin" : "bx bx-trash"} aria-hidden="true" />
+              </button>
+              <div className="entity_builder_morphe_meta">
+                {schema.entityClass && <span>{schema.entityClass}</span>}
+                {schema.domain && <span>{schema.domain.replaceAll("_", " ")}</span>}
+                {schema.extractionBasis && <span>{schema.extractionBasis.replaceAll("_", " ")}</span>}
+              </div>
+              {Array.isArray(schema.evidenceText) && schema.evidenceText.length > 0 && (
+                <span className="entity_builder_morphe_evidence">{schema.evidenceText[0]}</span>
+              )}
+              {morpheTraceSchemas
+                .filter((trace) => String(trace.sourceSchemaId) === String(schema._id))
+                .map((trace, traceIndex) => (
+                  <div key={trace._id || `${schema._id}-trace-${traceIndex}`} className="entity_builder_morphe_trace">
+                    <span><i className="bx bx-right-arrow-alt" aria-hidden="true" /> Trace: {trace.name} <small>({trace.traceDimension || "3D"})</small></span>
+                    <button
+                      type="button"
+                      className="entity_builder_morphe_trace_delete"
+                      onClick={() => { void deleteMorpheTrace(trace); }}
+                      disabled={deletingMorpheIds.has(trace._id)}
+                      aria-label={`Delete Trace ${trace.name}`}
+                      title="Delete Trace"
+                    >
+                      <i className={deletingMorpheIds.has(trace._id) ? "bx bx-loader-alt bx-spin" : "bx bx-trash"} aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+            </article>
+          ))}
+            </div>
+          ) : !morpheError ? (
+            <p className="entity_builder_helper">No Schemata yet. Cover a complete word with the Smart Pen to create the first one.</p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+  if (embedded) {
+    return (
+      <div
+        className="entity_builder_panel--embedded"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        {builderBody}
+      </div>
+    );
+  }
   return (
     <div
       id="entity_builder_panel"
@@ -689,77 +916,12 @@ const EntityBuilderPanel = ({
       />
       <div id="entity_builder_header">
         <span id="entity_builder_header_title">
-          <i className="bx bx-network-chart" /> AMCTOSHS Segments Builder
+          {isPageFullySegmented ? <IlluminationIcon /> : <SegmentsBuilderIcon />}
+          AMCTOSHS Illumination
         </span>
         <button type="button" id="entity_builder_close" onClick={onClose} title="Close">✕</button>
       </div>
-
-      <div id="entity_builder_body">
-        <div className="entity_builder_global_text_view">
-          <div>
-            <span className="entity_builder_global_text_label">BBox text</span>
-            <span className="entity_builder_global_text_summary">
-              {correctionSummary.applied} corrected
-              {correctionSummary.suggested ? ` · ${correctionSummary.suggested} suggested` : ""}
-              {correctionSummary.pending ? ` · ${correctionSummary.pending} pending` : ""}
-              {correctionSummary.unresolved || correctionSummary.auditWarnings || correctionSummary.unaudited
-                ? ` · ${correctionSummary.unresolved + correctionSummary.auditWarnings + correctionSummary.unaudited} review`
-                : ""}
-              {` · audit ${correctionSummary.audited}/${correctionSummary.audited + correctionSummary.unaudited}`}
-              {` · ${correctionSummary.silentOmissions} omitted`}
-            </span>
-          </div>
-          <div className="entity_builder_global_text_controls">
-            <div className="entity_builder_text_tabs" role="tablist" aria-label="Text view for every BBox">
-              <button
-                type="button"
-                role="tab"
-                aria-selected={textView === "corrected"}
-                className={textView === "corrected" ? "entity_builder_text_tab--active" : ""}
-                onClick={() => setTextView("corrected")}
-              >Corrected</button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={textView === "raw"}
-                className={textView === "raw" ? "entity_builder_text_tab--active" : ""}
-                onClick={() => setTextView("raw")}
-              >Raw</button>
-            </div>
-            <div className="entity_builder_merge_tool">
-              {paragraphMergeMode && (
-                <span className="entity_builder_merge_count" aria-label={`${selectedParagraphIds.size} paragraphs selected`}>
-                  {selectedParagraphIds.size}
-                </span>
-              )}
-              <button
-                type="button"
-                className={`entity_builder_merge_icon${paragraphMergeMode ? " entity_builder_merge_icon--active" : ""}`}
-                onClick={paragraphMergeMode ? mergeSelectedParagraphs : () => setParagraphMergeMode(true)}
-                disabled={paragraphMergeMode
-                  ? selectedParagraphIds.size < 2
-                  : (!onMergeParagraphs || normalizedBboxes.filter((bbox) => bbox.type === "bbox").length < 2)}
-                aria-label={paragraphMergeMode ? "Merge selected paragraphs" : "Select paragraphs to merge"}
-                title={paragraphMergeMode ? "Merge selected paragraphs" : "Merge paragraphs"}
-              >
-                <i className="bx bx-merge" aria-hidden="true" />
-              </button>
-              {paragraphMergeMode && (
-                <button
-                  type="button"
-                  className="entity_builder_merge_icon entity_builder_merge_cancel_icon"
-                  onClick={cancelParagraphMerge}
-                  aria-label="Cancel paragraph merge"
-                  title="Cancel merge"
-                >
-                  <i className="bx bx-x" aria-hidden="true" />
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-        {renderSegments()}
-      </div>
+      {morpheBody}
     </div>
   );
 };

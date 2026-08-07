@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { apiUrl } from "../config/api";
 
-export const useAI = ({ model = "mistral" } = {}) => {
+export const useAI = ({ model = "llama3.2:3b" } = {}) => {
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);

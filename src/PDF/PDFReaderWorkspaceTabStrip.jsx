@@ -84,42 +84,78 @@ const useSourcePicker = () => {
   };
 };
 
-const ReaderTabs = ({ tabs, activeId, splitModeOn, checkedIds, tabTypes, setActiveId, onToggleCheck, onCloseTab }) => (
-  <div className="pdfw_tabstrip">
-    {tabs.map((tab) => (
-      <button
-        key={tab.id}
-        className={`pdfw_tab${tab.id === activeId ? " pdfw_tab--active" : ""}`}
-        onClick={() => setActiveId(tab.id)}
-        title={tab.name}
-      >
-        {splitModeOn && (
-          <span
-            className="pdfw_tab_check"
-            onClick={(event) => {
-              event.stopPropagation();
-              onToggleCheck(tab.id);
-            }}
+const ReaderTabs = ({ tabs, activeId, splitModeOn, checkedIds, tabTypes, annotationSaveStatus, setActiveId, onToggleCheck, onCloseTab }) => {
+  const [showSaveStatus, setShowSaveStatus] = useState(false);
+
+  useEffect(() => {
+    if (!annotationSaveStatus || annotationSaveStatus === "idle") {
+      setShowSaveStatus(false);
+      return undefined;
+    }
+    setShowSaveStatus(true);
+    if (!["saved", "error"].includes(annotationSaveStatus)) return undefined;
+    const timer = setTimeout(() => setShowSaveStatus(false), 1400);
+    return () => clearTimeout(timer);
+  }, [annotationSaveStatus]);
+
+  return (
+    <div className="pdfw_tabstrip">
+      {tabs.map((tab) => {
+        const showingStatus = tab.id === activeId && showSaveStatus;
+        return (
+          <button
+            key={tab.id}
+            className={`pdfw_tab${tab.id === activeId ? " pdfw_tab--active" : ""}`}
+            onClick={() => setActiveId(tab.id)}
+            title={tab.name}
           >
-            <i className={checkedIds.includes(tab.id) ? "bxf bx-checkbox-checked" : "bx bx-checkbox"} />
-          </span>
-        )}
-        <span className="pdfw_tab_label">{tab.name}</span>
-        {tabTypes?.[tab.id] && (
-          <i
-            className={`${PDF_TYPE_ICON[tabTypes[tab.id]]} pdfw_tab_type`}
-            title={tabTypes[tab.id]}
-          />
-        )}
-        <span className="pdfw_tab_close" onClick={(event) => onCloseTab(event, tab.id)}>
-          <i className="bx bx-x" />
-        </span>
-      </button>
-    ))}
-  </div>
-);
+            {splitModeOn && (
+              <span
+                className="pdfw_tab_check"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleCheck(tab.id);
+                }}
+              >
+                <i className={checkedIds.includes(tab.id) ? "bxf bx-checkbox-checked" : "bx bx-checkbox"} />
+              </span>
+            )}
+            <span className={`pdfw_tab_label${showingStatus ? " pdfw_tab_label--save-status" : ""}`}>
+              {showingStatus && annotationSaveStatus === "saving"
+                ? "Saving…"
+                : showingStatus && annotationSaveStatus === "saved"
+                  ? "Saved"
+                  : showingStatus && annotationSaveStatus === "error"
+                    ? "Save failed"
+                    : tab.name}
+            </span>
+            {tabTypes?.[tab.id] && (
+              <i
+                className={`${PDF_TYPE_ICON[tabTypes[tab.id]]} pdfw_tab_type`}
+                title={tabTypes[tab.id]}
+              />
+            )}
+            <span className="pdfw_tab_close" onClick={(event) => onCloseTab(event, tab.id)}>
+              <i className="bx bx-x" />
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+};
 
 const ReaderPageNavigation = ({ pageNav }) => {
+  const [readingModeMenuOpen, setReadingModeMenuOpen] = useState(false);
+  const readingModeMenuRef = useRef(null);
+  useEffect(() => {
+    if (!readingModeMenuOpen) return undefined;
+    const close = (event) => {
+      if (!readingModeMenuRef.current?.contains(event.target)) setReadingModeMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close, true);
+    return () => document.removeEventListener("pointerdown", close, true);
+  }, [readingModeMenuOpen]);
   if (!pageNav || pageNav.pageCount <= 0) return null;
   return (
     <div id="pdf_page_nav_row" className="pdfw_page_nav_group">
@@ -129,15 +165,47 @@ const ReaderPageNavigation = ({ pageNav }) => {
         <button onClick={pageNav.goToNextPage} disabled={pageNav.pageNum >= pageNav.pageCount || pageNav.disabled} title="Next page">›</button>
       </div>
       {pageNav.pageCount > 1 && (
-        <button
-          type="button"
-          id="pdf_reading_mode_toggle"
-          className={pageNav.readingMode === "booklet" ? "pdf_reading_mode_toggle--active" : undefined}
-          onClick={() => pageNav.setReadingMode(pageNav.readingMode === "booklet" ? "single" : "booklet")}
-          title={pageNav.readingMode === "booklet" ? "Switch to page-by-page" : "Switch to booklet (two pages side by side)"}
-        >
-          <i className="bx bx-book-open" />
-        </button>
+        <>
+          <div ref={readingModeMenuRef} className={`pdf_reading_mode_menu_wrap${readingModeMenuOpen ? " pdf_reading_mode_menu_wrap--open" : ""}`}>
+            <button
+              type="button"
+              id="pdf_reading_mode_toggle"
+              className={!pageNav.markdownOpen ? "pdf_reading_mode_toggle--active" : undefined}
+              onClick={() => {
+                if (pageNav.markdownOpen) pageNav.setReadingMode("single");
+                setReadingModeMenuOpen((open) => !open);
+              }}
+              title="Reading mode"
+            >
+              PDF
+            </button>
+            {readingModeMenuOpen && (
+              <div className="pdf_reading_mode_menu" role="menu" aria-label="Reading mode">
+                <button type="button" className={pageNav.readingMode === "single" ? "pdf_reading_mode_menu_item--active" : undefined} onClick={() => { pageNav.setReadingMode("single"); setReadingModeMenuOpen(false); }}>
+                  <i className="bx bx-file" />
+                  <span>One-page PDF</span>
+                </button>
+                <button type="button" className={pageNav.readingMode === "booklet" ? "pdf_reading_mode_menu_item--active" : undefined} onClick={() => { pageNav.setReadingMode("booklet"); setReadingModeMenuOpen(false); }}>
+                  <i className="bx bx-book-open" />
+                  <span>Two-pages PDF</span>
+                </button>
+              </div>
+            )}
+          </div>
+          <button
+            type="button"
+            id="pdf_ocr_companion_toggle"
+            className={[
+              pageNav.markdownOpen ? "pdf_ocr_companion_toggle--active" : "",
+              pageNav.markdownMenuOpen ? "pdf_ocr_companion_toggle--menu-open" : "",
+            ].filter(Boolean).join(" ") || undefined}
+            onClick={pageNav.toggleMarkdownAside}
+            title={pageNav.markdownOpen ? "Markdown options" : "Choose Markdown mode"}
+            disabled={pageNav.disabled}
+          >
+            MD
+          </button>
+        </>
       )}
       {pageNav.readingMode === "booklet" && (
         <div id="pdf_page_nav_right">
@@ -184,6 +252,109 @@ const ReaderAnnotationActions = ({ undoRedo, pageNav }) => {
   );
 };
 
+const ReaderZoomControls = ({ zoomControls }) => {
+  const holdRef = useRef({ timer: null, interval: null, suppressClick: false });
+
+  const stopZoomHold = useCallback(() => {
+    const state = holdRef.current;
+    if (state.timer) window.clearTimeout(state.timer);
+    if (state.interval) window.clearInterval(state.interval);
+    state.timer = null;
+    state.interval = null;
+  }, []);
+
+  useEffect(() => () => stopZoomHold(), [stopZoomHold]);
+
+  const startZoomHold = useCallback((direction) => {
+    if (zoomControls.disabled) return;
+    const canZoom = direction < 0 ? zoomControls.canZoomOut : zoomControls.canZoomIn;
+    if (!canZoom) return;
+    stopZoomHold();
+    const state = holdRef.current;
+    state.suppressClick = false;
+    const zoomStep = direction < 0 ? zoomControls.zoomOut : zoomControls.zoomIn;
+    zoomStep();
+    state.timer = window.setTimeout(() => {
+      state.timer = null;
+      state.suppressClick = true;
+      const holdStart = performance.now();
+      state.interval = window.setInterval(() => {
+        const currentCanZoom = direction < 0 ? zoomControls.canZoomOut : zoomControls.canZoomIn;
+        if (!currentCanZoom) {
+          stopZoomHold();
+          return;
+        }
+        const elapsed = performance.now() - holdStart;
+        const progress = Math.min(1, elapsed / 1800);
+        const multiplier = 1 + 7 * progress * progress;
+        for (let step = 0; step < multiplier; step += 1) zoomStep();
+      }, 48);
+    }, 220);
+  }, [stopZoomHold, zoomControls]);
+
+  const finishZoomPress = useCallback((event) => {
+    const suppressClick = holdRef.current.suppressClick;
+    stopZoomHold();
+    if (suppressClick && event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    // Keep the flag through pointerup so the synthetic click is consumed by
+    // handleZoomClick; cancellation/leave has no following click to consume.
+    if (!suppressClick || event?.type !== "pointerup") holdRef.current.suppressClick = false;
+  }, [stopZoomHold]);
+
+  const handleZoomClick = useCallback((action) => (event) => {
+    if (holdRef.current.suppressClick) {
+      event.preventDefault();
+      holdRef.current.suppressClick = false;
+      return;
+    }
+    action();
+  }, []);
+
+  if (!zoomControls) return null;
+  return (
+    <div className="pdfw_zoom_group" aria-label="Zoom controls">
+      <button
+        type="button"
+        className="pdfw_zoom_btn"
+        onPointerDown={() => startZoomHold(-1)}
+        onPointerUp={finishZoomPress}
+        onPointerCancel={finishZoomPress}
+        onPointerLeave={finishZoomPress}
+        onClick={handleZoomClick(zoomControls.zoomOut)}
+        disabled={zoomControls.disabled || !zoomControls.canZoomOut}
+        title="Zoom out"
+      >
+        <i className="bx bx-minus" />
+      </button>
+      <button
+        type="button"
+        className="pdfw_zoom_label"
+        onClick={zoomControls.resetZoom}
+        disabled={zoomControls.disabled}
+        title="Reset zoom"
+      >
+        {zoomControls.percent || 100}%
+      </button>
+      <button
+        type="button"
+        className="pdfw_zoom_btn"
+        onPointerDown={() => startZoomHold(1)}
+        onPointerUp={finishZoomPress}
+        onPointerCancel={finishZoomPress}
+        onPointerLeave={finishZoomPress}
+        onClick={handleZoomClick(zoomControls.zoomIn)}
+        disabled={zoomControls.disabled || !zoomControls.canZoomIn}
+        title="Zoom in"
+      >
+        <i className="bx bx-plus" />
+      </button>
+    </div>
+  );
+};
+
 const PDFReaderWorkspaceTabStrip = ({
   tabs,
   setTabs,
@@ -195,6 +366,9 @@ const PDFReaderWorkspaceTabStrip = ({
   onToggleCheck,
   undoRedo,
   pageNav,
+  zoomControls,
+  annotationSaveStatus,
+  onAnnotationSaveStateChange,
   onBack,
 }) => {
   const {
@@ -235,6 +409,7 @@ const PDFReaderWorkspaceTabStrip = ({
           splitModeOn={splitModeOn}
           checkedIds={checkedIds}
           tabTypes={tabTypes}
+          annotationSaveStatus={annotationSaveStatus}
           setActiveId={setActiveId}
           onToggleCheck={onToggleCheck}
           onCloseTab={closeTab}
@@ -273,6 +448,7 @@ const PDFReaderWorkspaceTabStrip = ({
       </div>
 
       <div className="pdfw_tabbar_right">
+        <ReaderZoomControls zoomControls={zoomControls} />
         <ReaderAnnotationActions undoRedo={undoRedo} pageNav={pageNav} />
       </div>
     </div>

@@ -3,17 +3,11 @@ const DEV_API_BASE_URL = (() => {
     return "https://localhost:4000";
   }
 
-  if (window.location.protocol === "https:") {
-    return window.location.origin;
-  }
-
-  const currentHostname = String(window.location.hostname || "").trim();
-
-  if (["localhost", "127.0.0.1"].includes(currentHostname)) {
-    return "https://localhost:4000";
-  }
-
-  return `https://${currentHostname}:4000`;
+  // In development, route API calls through the Vite origin. This is
+  // important when the Reader is opened on another device: that device's
+  // localhost is not the laptop running the backend. Vite's /api proxy then
+  // sends both devices to the same backend instance.
+  return window.location.origin;
 })();
 
 const DEFAULT_API_BASE_URL = import.meta.env.DEV
@@ -23,20 +17,9 @@ const DEFAULT_API_BASE_URL = import.meta.env.DEV
 const PROD_ENV_API_BASE_URL = String(
   import.meta.env.VITE_API_BASE_URL || "",
 ).trim();
-const DEV_ENV_API_BASE_URL = String(
-  import.meta.env.VITE_API_BASE_URL_DEV || "",
-).trim();
-
-const isSecureDevContext =
-  import.meta.env.DEV &&
-  typeof window !== "undefined" &&
-  window.location.protocol === "https:";
-
 export const API_BASE_URL = (
   import.meta.env.DEV
-    ? isSecureDevContext
-      ? DEFAULT_API_BASE_URL
-      : DEV_ENV_API_BASE_URL || DEFAULT_API_BASE_URL
+    ? DEV_API_BASE_URL
     : PROD_ENV_API_BASE_URL || DEFAULT_API_BASE_URL
 ).replace(/\/+$/, "");
 

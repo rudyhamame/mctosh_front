@@ -439,6 +439,7 @@
 
 .sources_ocr_status {
   display: inline-flex;
+  flex-direction: column;
   align-items: center;
   gap: 0.3rem;
   margin-top: 0.3rem;
@@ -448,6 +449,48 @@
   font-weight: 700;
   letter-spacing: 0.035em;
   text-transform: uppercase;
+}
+
+.sources_ocr_status_label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.sources_ocr_progress {
+  position: relative;
+  display: block;
+  width: 8rem;
+  height: 0.35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+.sources_ocr_progress_fill {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width 0.25s ease;
+}
+
+.sources_ocr_progress_fill--indeterminate {
+  width: 42% !important;
+  animation: sources_ocr_progress_indeterminate 1.15s ease-in-out infinite;
+}
+
+.sources_ocr_progress_value {
+  font-size: 0.6rem;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+@keyframes sources_ocr_progress_indeterminate {
+  0% { transform: translateX(-130%); }
+  100% { transform: translateX(290%); }
 }
 
 .sources_ocr_status--completed { color: #16806a; }
@@ -466,6 +509,22 @@
   font-size: 0.7rem;
   font-weight: 750;
   cursor: pointer;
+}
+
+.sources_ocr_delete_btn {
+  border: 1px solid #e4b7b7;
+  border-radius: 0.45rem;
+  background: #fff7f7;
+  color: #b42318;
+  padding: 0.28rem 0.48rem;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.sources_ocr_delete_btn:hover {
+  background: #ffe9e9;
 }
 
 .sources_rename_group {

@@ -30,7 +30,10 @@
   left: 0;
   z-index: 61;
   width: max-content;
-  max-width: 9rem;
+  max-width: min(18rem, calc(100vw - 1rem));
+  max-height: calc(100vh - 1rem);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   padding: 0.4rem 0.55rem;
   border-radius: 8px;
   background: var(--color-surface);

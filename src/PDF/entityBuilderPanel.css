@@ -11,6 +11,243 @@
   overscroll-behavior: contain;
 }
 
+.pdf_markdown_aside_tree_view {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+.entity_builder_panel--embedded {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+
+.entity_builder_panel--embedded #entity_builder_body {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+}
+
+.entity_builder_morphe_body {
+  gap: 0.6rem;
+}
+
+.entity_builder_morphe_summary {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.15rem 0.45rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+.entity_builder_morphe_save_status {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0.4rem 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+.entity_builder_morphe_save_status--saving { color: #b7791f; background: rgba(245, 158, 11, 0.1); }
+.entity_builder_morphe_save_status--saved { color: #15803d; background: rgba(34, 197, 94, 0.1); }
+.entity_builder_morphe_save_status--failed { color: #b91c1c; background: rgba(239, 68, 68, 0.1); }
+
+.entity_builder_morphe_summary strong {
+  color: #2563eb;
+  font-size: 0.64rem;
+}
+
+.entity_builder_morphe_title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+}
+
+.entity_builder_morphe_info_button {
+  width: 1.3rem;
+  height: 1.3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.entity_builder_morphe_info_button:hover,
+.entity_builder_morphe_info_button:focus-visible,
+.entity_builder_morphe_info_button--active {
+  border-color: color-mix(in srgb, #26c6da 55%, var(--color-border));
+  background: color-mix(in srgb, #26c6da 13%, transparent);
+  color: #26c6da;
+  outline: none;
+}
+
+#entity_builder_body > #mrp_information {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.entity_builder_morphe_list {
+  display: grid;
+  gap: 0.42rem;
+}
+
+.entity_builder_morphe_schema {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.28rem 0.48rem;
+  padding: 0.52rem 0.58rem;
+  border: 1px solid color-mix(in srgb, #2563eb 26%, var(--color-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, #2563eb 5%, var(--color-surface));
+}
+
+.entity_builder_morphe_unit {
+  padding: 0.14rem 0.32rem;
+  border-radius: 999px;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+}
+
+.entity_builder_morphe_name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entity_builder_morphe_delete {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, #e5484d 24%, var(--color-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, #e5484d 5%, var(--color-surface));
+  color: color-mix(in srgb, #e5484d 82%, var(--color-text));
+  cursor: pointer;
+}
+
+.entity_builder_morphe_delete:hover:not(:disabled) {
+  border-color: #e5484d;
+  background: color-mix(in srgb, #e5484d 13%, var(--color-surface));
+  color: #e5484d;
+}
+
+.entity_builder_morphe_delete:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.entity_builder_morphe_meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.22rem;
+}
+
+.entity_builder_morphe_meta span,
+.entity_builder_morphe_evidence {
+  padding: 0.12rem 0.3rem;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--color-bg) 80%, transparent);
+  color: var(--color-text-muted);
+  font-size: 0.59rem;
+  line-height: 1.25;
+}
+
+.entity_builder_morphe_evidence {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.entity_builder_morphe_trace {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.16rem;
+  padding: 0.15rem 0.32rem;
+  border-left: 2px solid #eab308;
+  background: color-mix(in srgb, #facc15 13%, var(--color-surface));
+  color: #854d0e;
+  font-size: 0.61rem;
+  line-height: 1.25;
+}
+
+.entity_builder_morphe_trace > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.entity_builder_morphe_trace > span small {
+  color: #a16207;
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.entity_builder_morphe_trace_delete {
+  flex: 0 0 auto;
+  width: 1.35rem;
+  height: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, #eab308 42%, var(--color-border));
+  border-radius: 5px;
+  background: color-mix(in srgb, #facc15 10%, var(--color-surface));
+  color: #854d0e;
+  cursor: pointer;
+}
+
+.entity_builder_morphe_trace_delete:hover:not(:disabled) {
+  background: #facc15;
+  color: #713f12;
+}
+
+.entity_builder_morphe_trace_delete:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 #entity_builder_header {
   display: flex;
   align-items: center;
@@ -578,7 +815,8 @@
   top: -0.65rem;
   z-index: 5;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   justify-content: space-between;
   gap: 0.65rem;
   min-width: 0;
@@ -603,46 +841,21 @@
 }
 
 .entity_builder_global_text_summary {
-  overflow: hidden;
   color: var(--color-text-muted);
   font-size: 0.56rem;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.entity_builder_text_tabs {
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  background: var(--color-bg);
-}
-
-.entity_builder_text_tabs button {
-  min-height: 20px;
-  padding: 0.1rem 0.38rem;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--color-text-muted);
-  font: inherit;
-  font-size: 0.62rem;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.entity_builder_text_tabs button.entity_builder_text_tab--active {
-  background: color-mix(in srgb, #187f78 14%, var(--color-surface));
-  color: #126c66;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .entity_builder_global_text_controls {
   display: flex;
   min-width: 0;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 0.28rem;
+  margin-left: auto;
 }
 
 .entity_builder_merge_tool {
@@ -869,6 +1082,19 @@
   margin-left: 0.45rem;
   padding: 0.1rem 0 0.1rem 0.8rem;
   border-left: 1px solid color-mix(in srgb, var(--color-highlight) 38%, var(--color-border));
+}
+
+/* The Page node is already the parent of this body. Its first child (the
+   partition rail, when present) supplies the only needed nested connector. */
+.entity_builder_bbox_tree_node--root > .entity_builder_bbox_container_body {
+  border-left: 0;
+}
+
+/* The Page label is the tree root, so its first child does not need a
+   horizontal branch from the page node. Keep connectors for later siblings
+   and all nested descendants. */
+.entity_builder_bbox_tree_node--root > .entity_builder_bbox_container_body > :first-child::before {
+  content: none;
 }
 
 .entity_builder_bbox_container_body > .entity_builder_bbox_card,
@@ -1162,14 +1388,45 @@
 }
 
 .entity_builder_bbox_tree_node--paragraph > .entity_builder_bbox_text::after {
-  content: none;
+  content: "";
+  display: none;
+}
+
+/* Consecutive sublines are grouped immediately after their parent line, so
+   the rail starts at that line's bottom rather than at a fixed paragraph
+   offset. */
+.entity_builder_bbox_subline_group {
+  position: relative;
+  display: block;
+  min-width: 0;
+  margin-top: -0.18rem;
+  padding-top: 0.18rem;
+  padding-bottom: 0.18rem;
+}
+
+.entity_builder_bbox_subline_group::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: calc(0.82rem - 1px);
+  border-left: 1px solid var(--entity-tree-line);
+  pointer-events: none;
 }
 
 .entity_builder_bbox_text_line {
   position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
   min-width: 0;
   min-height: 1.28em;
+  box-sizing: border-box;
+  margin: 0.18rem 0;
+  padding: 0.22rem 0.34rem 0.22rem calc(var(--entity-line-branch) + 0.34rem);
+  border: 1px solid color-mix(in srgb, var(--entity-tree-line) 78%, var(--color-border));
+  border-radius: 0.2rem;
+  background: color-mix(in srgb, var(--color-surface) 94%, #187f78);
 }
 
 .entity_builder_bbox_line_index,
@@ -1225,14 +1482,45 @@
 }
 
 .entity_builder_bbox_text_line--subline {
-  margin-left: 0.82rem;
-  padding-left: var(--entity-line-branch);
+  margin-left: calc(0.82rem + var(--entity-line-branch));
+  padding-left: 0.34rem;
   border-left: 1px solid var(--entity-tree-line);
   color: color-mix(in srgb, var(--color-text) 88%, #187f78);
 }
 
+.entity_builder_bbox_text_line--subline::before {
+  left: calc(var(--entity-line-branch-negative) + var(--entity-line-box-half));
+  width: calc(var(--entity-line-branch) - var(--entity-line-box-half));
+}
+
+.entity_builder_bbox_text_line--subline .entity_builder_bbox_subline_index {
+  left: calc(var(--entity-line-branch-negative) - var(--entity-line-box-half));
+}
+
 .entity_builder_bbox_line_content {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: pre-wrap;
+}
+
+.entity_builder_bbox_line_title_btn {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-left: auto;
+  padding: 0.08rem 0.16rem;
+  border: 1px solid color-mix(in srgb, var(--entity-tree-line) 75%, var(--color-border));
+  border-radius: 2px;
+  background: var(--color-surface);
+  color: color-mix(in srgb, #187f78 78%, var(--color-text-muted));
+  font: inherit;
+  font-size: 0.56rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.entity_builder_bbox_line_title_btn:hover {
+  background: color-mix(in srgb, #187f78 12%, var(--color-surface));
+  color: #126c66;
 }
 
 /* Every BBox action menu floats; opening it must never reflow the tree. */

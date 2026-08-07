@@ -4,6 +4,7 @@ import PDFPage from "./PDFPage";
 import PDFReaderWorkspaceTabStrip from "./PDFReaderWorkspaceTabStrip";
 import {
   DEFAULT_PAGE_NAV_STATE,
+  DEFAULT_ZOOM_STATE,
   DEFAULT_UNDO_REDO_STATE,
   storeReaderTab,
   usePdfReaderWorkspaceState,
@@ -20,8 +21,21 @@ import "./pdfReaderWorkspace.css";
 // bar can only ever drive one tab's state at a time; split view showing
 // several *other* tabs alongside the active one keeps each of those with
 // their own in-toolbar controls.
-const PaneBody = ({ tab, onTabTypeChange, isActive, pdfPageRef, onUndoRedoStateChange, onPageNavStateChange, toolbarHost }) => (
-  <div className="pdfw_pane_body">
+const PaneBody = ({
+  tab,
+  onTabTypeChange,
+  isActive,
+  pdfPageRef,
+  onUndoRedoStateChange,
+  onPageNavStateChange,
+  onZoomStateChange,
+  onAnnotationSaveStateChange,
+  toolbarHost,
+  entityBuilderHost,
+  markdownHost,
+  markdownHostRef,
+}) => (
+  <div className={`pdfw_pane_body${isActive && markdownHost ? " pdfw_pane_body--md" : ""}`}>
     {tab ? (
       <PDFPage
         key={tab.id}
@@ -36,7 +50,11 @@ const PaneBody = ({ tab, onTabTypeChange, isActive, pdfPageRef, onUndoRedoStateC
         onUndoRedoStateChange={isActive ? onUndoRedoStateChange : undefined}
         hidePageNav={isActive}
         onPageNavStateChange={isActive ? onPageNavStateChange : undefined}
+        onZoomStateChange={isActive ? onZoomStateChange : undefined}
+        onAnnotationSaveStateChange={isActive ? onAnnotationSaveStateChange : undefined}
         toolbarHost={isActive ? toolbarHost : null}
+        entityBuilderHost={isActive ? entityBuilderHost : null}
+        markdownHost={isActive ? markdownHost : null}
         initialPage={tab.page}
         onPdfTypeChange={(type) => onTabTypeChange(tab.id, type)}
       />
@@ -46,6 +64,7 @@ const PaneBody = ({ tab, onTabTypeChange, isActive, pdfPageRef, onUndoRedoStateC
         <p>No document open — click + to open one</p>
       </div>
     )}
+    {isActive && <div id="pdfw_markdown_host" ref={markdownHostRef} />}
   </div>
 );
 
@@ -66,6 +85,8 @@ const PDFReaderWorkspace = () => {
     locationState: location.state,
   });
   const [toolbarHostEl, setToolbarHostEl] = useState(null);
+  const [entityBuilderHostEl, setEntityBuilderHostEl] = useState(null);
+  const [markdownHostEl, setMarkdownHostEl] = useState(null);
 
   // pdf-type (text-based/mixed/scanned) per tab, reported by each PDFPage
   // instance via onPdfTypeChange — shown as an icon after the tab's name.
@@ -97,6 +118,10 @@ const PDFReaderWorkspace = () => {
   // Same pattern as undoRedo above, for the prev/page-number/next row.
   const [pageNavState, setPageNavState] = useState(DEFAULT_PAGE_NAV_STATE);
   useEffect(() => { setPageNavState(DEFAULT_PAGE_NAV_STATE); }, [activeId]);
+  const [zoomState, setZoomState] = useState(DEFAULT_ZOOM_STATE);
+  useEffect(() => { setZoomState(DEFAULT_ZOOM_STATE); }, [activeId]);
+  const [annotationSaveStatus, setAnnotationSaveStatus] = useState("idle");
+  useEffect(() => { setAnnotationSaveStatus("idle"); }, [activeId]);
 
   const pageNav = activeId ? {
     ...pageNavState,
@@ -104,7 +129,15 @@ const PDFReaderWorkspace = () => {
     goToNextPage: () => activePageRef.current?.goToNextPage(),
     setReadingMode: (v) => activePageRef.current?.setReadingMode(v),
     setBookletRightPage: (v) => activePageRef.current?.setBookletRightPage(v),
+    toggleOcrBlankPage: () => activePageRef.current?.toggleOcrBlankPage(),
+    toggleMarkdownAside: () => activePageRef.current?.toggleMarkdownAside(),
     insertBlankPageAfterCurrent: () => activePageRef.current?.insertBlankPageAfterCurrent(),
+  } : null;
+  const zoomControls = activeId ? {
+    ...zoomState,
+    zoomOut: () => activePageRef.current?.zoomOut?.(),
+    zoomIn: () => activePageRef.current?.zoomIn?.(),
+    resetZoom: () => activePageRef.current?.resetZoom?.(),
   } : null;
 
   useEffect(() => {
@@ -122,50 +155,61 @@ const PDFReaderWorkspace = () => {
 
   return (
     <div id="pdfw_root">
-      <div id="pdfw_header">
-        <div id="pdfw_header_main">
-          <PDFReaderWorkspaceTabStrip
-            tabs={tabs}
-            setTabs={setTabs}
-            activeId={activeId}
-            setActiveId={setActiveId}
-            tabTypes={tabTypes}
-            splitModeOn={splitModeOn}
-            checkedIds={checkedIds}
-            onToggleCheck={onToggleCheck}
-            undoRedo={undoRedo}
-            pageNav={pageNav}
-            onBack={() => navigate("/home")}
-          />
-          <div id="pdfw_toolbar_host" ref={setToolbarHostEl} />
-        </div>
-        {tabs.length > 1 && (
-          <button
-            id="pdfw_split_toggle"
-            className={splitModeOn ? "pdfw_split_toggle--active" : ""}
-            onClick={toggleSplitMode}
-            title={splitModeOn ? "Stop selecting tabs to split" : "Check two or more tabs to view their pages side by side"}
-          >
-            <i className={splitModeOn ? "bx bx-checkbox" : "bx bx-columns"} />
-            {splitModeOn ? "Done" : "Split view"}
-          </button>
-        )}
-      </div>
-
-      <div id="pdfw_panes" className={panesToShow.length > 1 ? "pdfw_panes--split" : ""}>
-        {panesToShow.map((tab, i) => (
-          <div className="pdfw_pane" key={tab?.id ?? `empty_${i}`}>
-            <PaneBody
-              tab={tab}
-              onTabTypeChange={onTabTypeChange}
-              isActive={Boolean(tab) && tab.id === activeId}
-              pdfPageRef={activePageRef}
-              onUndoRedoStateChange={setUndoRedoState}
-              onPageNavStateChange={setPageNavState}
-              toolbarHost={toolbarHostEl}
+      <div id="pdfw_entity_builder_host" ref={setEntityBuilderHostEl} />
+      <div id="pdfw_main">
+        <div id="pdfw_header">
+          <div id="pdfw_header_main">
+            <PDFReaderWorkspaceTabStrip
+              tabs={tabs}
+              setTabs={setTabs}
+              activeId={activeId}
+              setActiveId={setActiveId}
+              tabTypes={tabTypes}
+              splitModeOn={splitModeOn}
+              checkedIds={checkedIds}
+              onToggleCheck={onToggleCheck}
+              undoRedo={undoRedo}
+              pageNav={pageNav}
+              zoomControls={zoomControls}
+              annotationSaveStatus={annotationSaveStatus}
+              onAnnotationSaveStateChange={setAnnotationSaveStatus}
+              onBack={() => navigate("/home")}
             />
+            <div id="pdfw_toolbar_host" ref={setToolbarHostEl} />
           </div>
-        ))}
+          {tabs.length > 1 && (
+            <button
+              id="pdfw_split_toggle"
+              className={splitModeOn ? "pdfw_split_toggle--active" : ""}
+              onClick={toggleSplitMode}
+              title={splitModeOn ? "Stop selecting tabs to split" : "Check two or more tabs to view their pages side by side"}
+            >
+              <i className={splitModeOn ? "bx bx-checkbox" : "bx bx-columns"} />
+              {splitModeOn ? "Done" : "Split view"}
+            </button>
+          )}
+        </div>
+
+        <div id="pdfw_panes" className={panesToShow.length > 1 ? "pdfw_panes--split" : ""}>
+          {panesToShow.map((tab, i) => (
+            <div className="pdfw_pane" key={tab?.id ?? `empty_${i}`}>
+              <PaneBody
+                tab={tab}
+                onTabTypeChange={onTabTypeChange}
+                isActive={Boolean(tab) && tab.id === activeId}
+                pdfPageRef={activePageRef}
+                onUndoRedoStateChange={setUndoRedoState}
+                onPageNavStateChange={setPageNavState}
+                onZoomStateChange={setZoomState}
+                onAnnotationSaveStateChange={setAnnotationSaveStatus}
+                toolbarHost={toolbarHostEl}
+                entityBuilderHost={entityBuilderHostEl}
+                markdownHost={markdownHostEl}
+                markdownHostRef={setMarkdownHostEl}
+              />
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

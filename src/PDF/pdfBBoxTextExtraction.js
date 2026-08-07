@@ -16,11 +16,11 @@ export const bboxTextMatchesSpan = (bbox, span) => {
   const bboxBottom = bboxTop + (bbox.h ?? 0);
   const overlapX = Math.max(0, Math.min(right, bboxRight) - Math.max(left, bboxLeft));
   const overlapY = Math.max(0, Math.min(bottom, bboxBottom) - Math.max(top, bboxTop));
-  const spanWidth = Math.max(1, right - left);
   const spanHeight = Math.max(1, bottom - top);
-  const spanArea = spanWidth * spanHeight;
-  const overlapArea = overlapX * overlapY;
-  return overlapArea / spanArea >= 0.9;
+  // A BBox must cover at least half of a text span vertically. This avoids
+  // selecting a line when the rectangle only grazes its top or bottom.
+  return overlapX > 0.01
+    && overlapY / spanHeight >= 0.5;
 };
 
 const spanPageLeft = (span) => span.pageLeft ?? span.geoLeft ?? 0;
@@ -46,6 +46,8 @@ export const clipSpanToHorizontalBBox = (span, bbox) => {
   const bboxTop = bbox.y ?? 0;
   const bboxBottom = bboxTop + (bbox.h ?? 0);
   if (right <= bboxLeft || left >= bboxRight || top + height <= bboxTop || top >= bboxBottom) return null;
+  const overlapY = Math.max(0, Math.min(top + height, bboxBottom) - Math.max(top, bboxTop));
+  if (overlapY / Math.max(1, height) < 0.5) return null;
   if (left >= bboxLeft && right <= bboxRight) return span;
 
   const length = text.length;

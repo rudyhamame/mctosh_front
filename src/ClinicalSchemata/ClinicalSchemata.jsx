@@ -5,8 +5,10 @@ import "./morphePanels.css";
 import { listMorphe, morpheSchemas, morpheInstances, morpheTraceSchemas, morpheTraceInstances, morpheTextRelations } from "./amctoshsMorpheClient";
 import { buildMorpheIndex } from "./amctoshsMorpheGraph";
 import MorpheDomainPanel from "./MorpheDomainPanel";
-import MorpheEntityNav from "./MorpheEntityNav";
+import MorpheEntityNav, { MorpheEntityTabs } from "./MorpheEntityNav";
 import MorpheEditorPanel from "./MorpheEditorPanel";
+import MorpheInfoTab from "./MorpheInfoTab";
+import MorpheTraceTable from "./MorpheTraceTable";
 
 // AMCTOSHS Morphe — the structured DESTINATION where accepted AMCTOSHS
 // Sub-Entity Schemata/Instances, Trace Schemata/Instances, and Relations
@@ -33,10 +35,12 @@ export default function ClinicalSchemata() {
 
   const [activeDomain, setActiveDomain] = useState("all");
   const [activeEntityType, setActiveEntityType] = useState("schemas");
+  const [selectedItemType, setSelectedItemType] = useState("schemas");
   const [selectedItemId, setSelectedItemId] = useState(null);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [activeMorpheView, setActiveMorpheView] = useState("entities");
 
   const refreshMorphe = async () => {
     setMorpheLoading(true);
@@ -74,7 +78,7 @@ export default function ClinicalSchemata() {
     return map;
   }, [index]);
 
-  const selectedItem = selectedItemId ? index[`${activeEntityType}ById`]?.get(selectedItemId) || null : null;
+  const selectedItem = selectedItemId ? index[`${selectedItemType}ById`]?.get(selectedItemId) || null : null;
 
   const selectDomain = (domain) => {
     setActiveDomain(domain);
@@ -84,11 +88,13 @@ export default function ClinicalSchemata() {
 
   const selectEntityType = (type) => {
     setActiveEntityType(type);
+    setSelectedItemType(type === "traces" ? "traceSchemas" : type);
     setSelectedItemId(null);
   };
 
   const selectItem = (type, id) => {
-    setActiveEntityType(type);
+    setActiveEntityType(type === "traceSchemas" || type === "traceInstances" ? "traces" : type);
+    setSelectedItemType(type);
     setSelectedItemId(id);
     setEditError("");
     setDrawerOpen(false);
@@ -98,7 +104,7 @@ export default function ClinicalSchemata() {
     setEditSaving(true);
     setEditError("");
     try {
-      await ENTITY_MODEL_CLIENT[activeEntityType].update(selectedItemId, patch);
+      await ENTITY_MODEL_CLIENT[selectedItemType].update(selectedItemId, patch);
       await refreshMorphe();
     } catch (err) {
       setEditError(err.message || "Failed to save changes.");
@@ -113,7 +119,7 @@ export default function ClinicalSchemata() {
       || "this item";
     if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
     try {
-      await ENTITY_MODEL_CLIENT[activeEntityType].remove(selectedItemId);
+      await ENTITY_MODEL_CLIENT[selectedItemType].remove(selectedItemId);
       setSelectedItemId(null);
       await refreshMorphe();
     } catch (err) {
@@ -125,6 +131,12 @@ export default function ClinicalSchemata() {
     + morpheData.traceInstances.length + morpheData.textRelations.length;
 
   const domainPanelEl = <MorpheDomainPanel activeDomain={activeDomain} onSelectDomain={selectDomain} countsByDomain={countsByDomain} />;
+  const entityCounts = {
+    schemas: activeDomain === "all" ? morpheData.schemas.length : (countsByDomain.get(activeDomain)?.schemas || 0),
+    instances: activeDomain === "all" ? morpheData.instances.length : (countsByDomain.get(activeDomain)?.instances || 0),
+    traces: activeDomain === "all" ? morpheData.traceSchemas.length + morpheData.traceInstances.length : ((countsByDomain.get(activeDomain)?.traceSchemas || 0) + (countsByDomain.get(activeDomain)?.traceInstances || 0)),
+    textRelations: morpheData.textRelations.length,
+  };
 
   return (
     <div id="cs_root">
@@ -136,7 +148,21 @@ export default function ClinicalSchemata() {
           <i className="fi fi-rr-menu-burger" />
         </button>
         <div id="cs_header_titles">
-          <span id="cs_title">AMCTOSHS Morphe</span>
+          <span id="cs_title">
+            AMCTOSHS Morphe
+            <button
+              type="button"
+              id="cs_info_btn"
+              className={activeMorpheView === "information" ? "cs_info_btn--active" : undefined}
+              onClick={() => setActiveMorpheView((view) => (view === "information" ? "entities" : "information"))}
+              aria-label="Open AMCTOSHS Morphe information"
+              aria-expanded={activeMorpheView === "information"}
+              aria-controls="mrp_information"
+              title="About AMCTOSHS Morphe Entities"
+            >
+              <i className="bx bx-info-circle" aria-hidden="true" />
+            </button>
+          </span>
           <span id="cs_subtitle">Sub-Entity Schema / Instance / Trace Schema / Trace Instance / Relation</span>
         </div>
         <div id="cs_header_meta">
@@ -151,8 +177,21 @@ export default function ClinicalSchemata() {
         </div>
       )}
 
-      <div id="cs_body">
-        <div id="cs_left">{domainPanelEl}</div>
+      <div id="cs_body" className={activeMorpheView === "information" ? "cs_body--information" : undefined}>
+        {activeMorpheView === "information" ? (
+          <MorpheInfoTab onBackToEntities={() => setActiveMorpheView("entities")} />
+        ) : (
+          <>
+        <div id="mrp_tab_header">
+          <div className="mrp_tab_row mrp_domain_tab_row">
+            <div className="mrp_tab_row_title">AMCTOSHS Domain</div>
+            {domainPanelEl}
+          </div>
+          <div className="mrp_tab_row mrp_entity_tab_row">
+            <div className="mrp_tab_row_title">AMCTOSHS Morphe Mode</div>
+            <MorpheEntityTabs activeEntityType={activeEntityType} onSelectEntityType={selectEntityType} counts={entityCounts} />
+          </div>
+        </div>
 
         {drawerOpen && (
           <div id="cs_drawer_backdrop" onClick={() => setDrawerOpen(false)}>
@@ -160,7 +199,8 @@ export default function ClinicalSchemata() {
           </div>
         )}
 
-        <div id="mrp_middle">
+        <div id="mrp_content">
+        <aside id="mrp_items_aside">
           {morpheLoading ? (
             <div id="cs_no_selection"><i className="bx bx-loader-circle mrp_icon_spin" /><p>Loading AMCTOSHS Morphe…</p></div>
           ) : (
@@ -172,13 +212,15 @@ export default function ClinicalSchemata() {
               selectedItemId={selectedItemId}
               onSelectItem={selectItem}
               textRelations={morpheData.textRelations}
+              showTabs={false}
             />
           )}
-        </div>
+        </aside>
 
-        <div id="cs_right">
+        <main id="cs_right">
+          {!morpheLoading && <MorpheTraceTable index={index} activeDomain={activeDomain} onSelectItem={selectItem} selectedItemId={selectedItemId} />}
           <MorpheEditorPanel
-            itemType={activeEntityType}
+            itemType={selectedItemType}
             item={selectedItem}
             index={index}
             saving={editSaving}
@@ -186,7 +228,10 @@ export default function ClinicalSchemata() {
             onSave={handleEditSave}
             onDelete={handleEditDelete}
           />
+        </main>
         </div>
+          </>
+        )}
       </div>
     </div>
   );

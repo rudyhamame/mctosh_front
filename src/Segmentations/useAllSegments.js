@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
-import { BBOX_CARD_TYPES, bboxTypeHas, buildHyleBBoxIdMap } from "../PDF/pdfBBoxTypes";
+import { buildHyleBBoxIdMap } from "../PDF/pdfBBoxTypes";
 
 // useAllSegments — the reservoir fetch + flatten logic originally inline
 // in SegmentationsPage.jsx, extracted so AMCTOSHS Morphe's own segment
@@ -19,6 +19,16 @@ const isDocumentSource = (s) => (
 );
 
 export const segmentKeyFor = (sourceId, pageNum, bboxId) => `${sourceId}::${pageNum}::${bboxId}`;
+
+// Hyle's raw paragraph is an ordered stack of extracted visual lines. Keep
+// those line boundaries for the Original processing stage; later processing
+// owns the explicit paragraph-gluing step.
+const lineBlockText = (value) => String(value || "")
+  .replace(/\r\n?/gu, "\n")
+  .split("\n")
+  .map((line) => line.replace(/[ \t]+/gu, " ").trim())
+  .join("\n")
+  .trim();
 
 // SourceAnnotation.layers used to be the flat { [page]: annotations[] }
 // object. The PDF reader now persists an array of named annotation layers,
@@ -99,9 +109,8 @@ export const useAllSegments = () => {
     return () => { cancelled = true; };
   }, []);
 
-  // One group per source, each holding every one of its content segments
-  // (page roots plus paragraph and figure BBoxes) across all source pages,
-  // sorted page-then-appearance order.
+  // One group per source, each holding paragraph Line Blocks across all
+  // source pages, sorted in page-then-appearance order.
   const sourceGroups = useMemo(() => (
     sources.map((source, sourceIndex) => {
       const layers = flattenPersistedAnnotationLayers(layersBySource[source._id]);
@@ -112,27 +121,39 @@ export const useAllSegments = () => {
 
       const segments = [];
       for (const pageNum of pageNums) {
-        const pageAnnotations = (layers[pageNum] || []).filter((bbox) => bbox && (
-          BBOX_CARD_TYPES.has(bbox.type) || bbox.type === "pageBBox"
-        ));
-        const pageContainers = pageAnnotations
+        const allPageAnnotations = (layers[pageNum] || []).filter(Boolean);
+        // Line Blocks are paragraph BBoxes only. Page, partition, and figure
+        // BBoxes provide context but are not Line Block records themselves.
+        const pageAnnotations = allPageAnnotations.filter((bbox) => bbox.type === "bbox");
+        const partitionAnnotations = allPageAnnotations.filter((bbox) => bbox.type === "columnBBox");
+        const pageContainers = allPageAnnotations
           .filter((bbox) => bbox.type === "pageBBox")
           .map((container, index) => ({
             ...container,
             _displayName: container.title?.trim() || `Page ${pageNum}`,
           }));
-        const hyleIds = buildHyleBBoxIdMap(pageAnnotations, sourceIndex + 1, pageNum);
+        const hyleIds = buildHyleBBoxIdMap(allPageAnnotations, sourceIndex + 1, pageNum);
 
         pageAnnotations
           .forEach((bbox, index) => {
             const containingContainer = pageContainers.find((container) => (
               bbox.parentId === container.id || isBBoxWithinContainer(bbox, container)
             ));
+            const containingPartition = partitionAnnotations.find((partition) => (
+              bbox.parentId === partition.id || isBBoxWithinContainer(bbox, partition)
+            ));
             const hyleId = hyleIds[bbox.id];
             if (!hyleId) return;
-            const isPage = bbox.type === "pageBBox";
-            const isFigure = bboxTypeHas(bbox.type, "capturesImage");
-            const typeLabel = isPage ? "Page Segment" : isFigure ? "Figure Segment" : "Segment";
+            const partitionIndex = containingPartition
+              ? partitionAnnotations.indexOf(containingPartition) + 1
+              : null;
+            const partitionName = containingPartition
+              ? containingPartition.title?.trim() || `Partition ${partitionIndex}`
+              : null;
+            const typeLabel = "Paragraph";
+            // Prefer the PDF-layer raw text because `text` may be an older
+            // normalized/corrected snapshot from a previous segmentation.
+            const renderedText = lineBlockText(bbox.rawPdfText || bbox.text || "");
             segments.push({
               key: hyleId,
               sourceId: source._id,
@@ -140,8 +161,10 @@ export const useAllSegments = () => {
               pageNum,
               hyleId,
               bbox: { ...bbox, hyleId },
-              isImage: bboxTypeHas(bbox.type, "capturesImage"),
+              renderedText,
+              isImage: false,
               typeLabel,
+              partition_name: partitionName,
               displayTitle: bbox.title?.trim()
                 || `${typeLabel} ${index + 1}`,
               container_name: containingContainer ? containingContainer._displayName : null,

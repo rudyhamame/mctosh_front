@@ -43,6 +43,36 @@
 }
 
 #cs_title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+#cs_info_btn {
+  width: 1.55rem;
+  height: 1.55rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+#cs_info_btn:hover,
+#cs_info_btn:focus-visible,
+#cs_info_btn.cs_info_btn--active {
+  border-color: color-mix(in srgb, #26c6da 55%, var(--color-border));
+  background: color-mix(in srgb, #26c6da 13%, transparent);
+  color: #26c6da;
+  outline: none;
+}
+
+#cs_title {
   font-size: 0.82rem;
   font-weight: 700;
   letter-spacing: 0.07em;
@@ -107,10 +137,40 @@
    Instances/Traces list, see morphePanels.css) | #cs_right (editor) ── */
 #cs_body {
   display: flex;
+  flex-direction: column;
   flex: 1;
   min-height: 0;
   overflow: hidden;
   position: relative;
+}
+
+/* Morphe navigation is a two-level tab header above the workspace. */
+#mrp_tab_header { flex-shrink: 0; display: flex; flex-direction: column; border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
+.mrp_tab_row { display: flex; align-items: stretch; min-width: 0; border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent); }
+.mrp_tab_row:last-child { border-bottom: 0; }
+.mrp_tab_row_title { display: flex; align-items: center; width: 185px; flex: 0 0 185px; padding: 0.55rem 0.9rem; color: var(--color-text-muted); font-size: 0.64rem; font-weight: 800; letter-spacing: 0.07em; text-transform: uppercase; }
+.mrp_domain_tab_row #mrp_domain_panel { flex: 1; flex-direction: row; align-items: center; gap: 0.25rem; height: auto; min-width: 0; padding: 0.35rem 0.75rem 0.35rem 0; overflow-x: auto; overflow-y: hidden; }
+.mrp_domain_tab_row #mrp_domain_panel .mrp_panel_label { display: none; }
+.mrp_domain_tab_row #mrp_domain_panel .mrp_domain_row { flex: 0 0 auto; }
+.mrp_entity_tab_row #mrp_entity_tabs { flex: 1; min-width: 0; }
+#mrp_content { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+#mrp_items_aside { width: 300px; flex: 0 0 300px; min-height: 0; border-right: 1px solid var(--color-border); overflow: hidden; }
+#mrp_items_aside #mrp_entity_nav { height: 100%; }
+#mrp_items_aside #mrp_entity_list { padding: 0.7rem; }
+#mrp_content #cs_right { min-width: 0; }
+
+@media (max-width: 860px) {
+  .mrp_tab_row_title { width: 132px; flex-basis: 132px; padding-inline: 0.6rem; }
+  #mrp_items_aside { width: 240px; flex-basis: 240px; }
+}
+@media (max-width: 620px) {
+  .mrp_tab_row { display: block; }
+  .mrp_tab_row_title { width: auto; padding: 0.4rem 0.7rem 0.15rem; }
+  .mrp_domain_tab_row #mrp_domain_panel { padding: 0 0.7rem 0.35rem; }
+  .mrp_entity_tab_row #mrp_entity_tabs { overflow-x: auto; }
+  #mrp_content { flex-direction: column; overflow-y: auto; }
+  #mrp_items_aside { width: 100%; flex-basis: auto; max-height: 38vh; border-right: 0; border-bottom: 1px solid var(--color-border); }
+  #mrp_content #cs_right { min-height: 620px; }
 }
 
 #cs_left {

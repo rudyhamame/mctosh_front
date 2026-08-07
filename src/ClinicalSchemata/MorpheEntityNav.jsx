@@ -1,11 +1,10 @@
 import React from "react";
 import { DOMAIN_LABELS } from "./amctoshsMorpheConstants";
 
-const ENTITY_TABS = [
+export const ENTITY_TABS = [
   { key: "schemas", label: "Schemata" },
   { key: "instances", label: "Instances" },
-  { key: "traceSchemas", label: "Trace Schemata" },
-  { key: "traceInstances", label: "Trace Instances" },
+  { key: "traces", label: "Traces" },
   { key: "textRelations", label: "Relations" },
 ];
 
@@ -25,7 +24,7 @@ const formatDate = (iso) => {
 // ignoring `activeDomain`.
 export default function MorpheEntityNav({
   index, activeDomain, activeEntityType, onSelectEntityType,
-  selectedItemId, onSelectItem, textRelations = [],
+  selectedItemId, onSelectItem, textRelations = [], showTabs = true,
 }) {
   const groups = activeDomain === "all"
     ? [...index.byDomain.values()]
@@ -38,27 +37,13 @@ export default function MorpheEntityNav({
 
   const counts = {
     schemas: schemas.length, instances: instances.length,
-    traceSchemas: traceSchemas.length, traceInstances: traceInstances.length,
+    traces: traceSchemas.length + traceInstances.length,
     textRelations: textRelations.length,
   };
 
   return (
     <div id="mrp_entity_nav">
-      <div id="mrp_entity_tabs" role="tablist">
-        {ENTITY_TABS.map(({ key, label }) => (
-          <button
-            key={key}
-            type="button"
-            role="tab"
-            aria-selected={activeEntityType === key}
-            className={`mrp_entity_tab${activeEntityType === key ? " mrp_entity_tab--active" : ""}`}
-            onClick={() => onSelectEntityType(key)}
-          >
-            {label}
-            <span className="mrp_entity_tab_count">{counts[key]}</span>
-          </button>
-        ))}
-      </div>
+      {showTabs && <MorpheEntityTabs activeEntityType={activeEntityType} onSelectEntityType={onSelectEntityType} counts={counts} />}
 
       <div id="mrp_entity_list">
         {activeEntityType === "schemas" && (
@@ -107,9 +92,9 @@ export default function MorpheEntityNav({
           ))
         )}
 
-        {activeEntityType === "traceSchemas" && (
+        {(activeEntityType === "traces" || activeEntityType === "traceSchemas") && (
           traceSchemas.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS Trace Schemata in this domain yet.</p>
+            activeEntityType === "traces" ? null : <p className="mrp_empty_hint">No AMCTOSHS Trace Schemata in this domain yet.</p>
           ) : traceSchemas.map((ts) => {
             const { traceInstanceCount } = index.traceSchemaCounts(ts);
             return (
@@ -135,9 +120,9 @@ export default function MorpheEntityNav({
           })
         )}
 
-        {activeEntityType === "traceInstances" && (
+        {(activeEntityType === "traces" || activeEntityType === "traceInstances") && (
           traceInstances.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS Trace Instances in this domain yet.</p>
+            activeEntityType === "traces" ? null : <p className="mrp_empty_hint">No AMCTOSHS Trace Instances in this domain yet.</p>
           ) : traceInstances.map((ti) => (
             <button
               key={ti._id}
@@ -157,6 +142,9 @@ export default function MorpheEntityNav({
               </span>
             </button>
           ))
+        )}
+        {activeEntityType === "traces" && traceSchemas.length === 0 && traceInstances.length === 0 && (
+          <p className="mrp_empty_hint">No AMCTOSHS Traces in this domain yet.</p>
         )}
 
         {activeEntityType === "textRelations" && (
@@ -178,6 +166,26 @@ export default function MorpheEntityNav({
           ))
         )}
       </div>
+    </div>
+  );
+}
+
+export function MorpheEntityTabs({ activeEntityType, onSelectEntityType, counts }) {
+  return (
+    <div id="mrp_entity_tabs" role="tablist" aria-label="AMCTOSHS Morphe Mode">
+      {ENTITY_TABS.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          role="tab"
+          aria-selected={activeEntityType === key}
+          className={`mrp_entity_tab${activeEntityType === key ? " mrp_entity_tab--active" : ""}`}
+          onClick={() => onSelectEntityType(key)}
+        >
+          {label}
+          <span className="mrp_entity_tab_count">{counts[key]}</span>
+        </button>
+      ))}
     </div>
   );
 }

@@ -3,7 +3,7 @@ import { weightedEditDistance, similarityFromDistance } from "./pdfFuzzySearch.j
 import { analyzePageLayout, blockToText, buildLines } from "./pdfPageLayout.js";
 
 // Deterministic, local text-matching — no AI/LLM call. The page's Markdown
-// (already cached server-side from Mistral OCR — see getPageText in
+// (already cached server-side from Tesseract OCR — see getPageText in
 // PDFPage.jsx) gives real paragraph boundaries; the PDF's own text layer
 // gives real geometry. Matching one against the other with the same
 // fuzzy/normalization tools the search bar already uses is enough to place
@@ -428,7 +428,7 @@ export const splitMarkdownIntoParagraphs = (markdown) => (
 // from poisoning every match after it.
 //
 // Returns [{ text, rect }] — one entry per paragraph it could confidently
-// place. A paragraph it can't confidently match (e.g. a table Mistral
+// place. A paragraph it can't confidently match (e.g. a table OCR
 // rendered very differently from the PDF's own text layer, or a caption
 // pulled from a figure) is just skipped rather than force-matched to the
 // wrong lines — better to under-segment than to draw a wrong box.

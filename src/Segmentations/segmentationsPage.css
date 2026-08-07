@@ -3,7 +3,9 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--app-footer-height, 44px));
+  height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px));
+  min-height: 0;
+  box-sizing: border-box;
   background: var(--color-bg);
   color: var(--color-text);
   overflow: hidden;
@@ -199,7 +201,9 @@
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.4rem 1.25rem;
+  padding: 0.4rem 1.25rem max(0.4rem, env(safe-area-inset-bottom, 0px));
+  min-height: 2.2rem;
+  box-sizing: border-box;
   border-top: 1px solid var(--color-border);
   color: var(--color-text-muted);
   font-size: 0.72rem;
@@ -346,6 +350,7 @@
   text-align: left;
   cursor: pointer;
   color: inherit;
+  text-transform: none;
 }
 .segp_segment_row:hover {
   background: color-mix(in srgb, var(--color-surface) 60%, #4fc3f7 8%);
@@ -378,6 +383,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-transform: none;
 }
 .segp_segment_row_page {
   font-size: 0.62rem;
@@ -519,17 +525,90 @@
 }
 
 #segp_seg_content {
+  order: 0;
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: var(--color-surface);
   padding: 0.85rem 1rem;
 }
+#segp_topic_section { order: 1; }
+#segp_sentence_section { order: 2; }
+#segp_coreference_section { order: 3; }
+#segp_relations_section, #segp_predicates_section, #segp_analysis_section { order: 4; }
 #segp_seg_text {
   margin: 0;
   font-size: 0.85rem;
   line-height: 1.6;
   color: var(--color-text);
   white-space: pre-wrap;
+  text-transform: none;
+}
+
+.segp_processing_container {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  overflow: hidden;
+}
+.segp_processing_header, .segp_processing_toolbar, .segp_stage_details_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.segp_processing_header { padding: 0.8rem 1rem; border-bottom: 1px solid var(--color-border); }
+.segp_processing_header > div { display: flex; align-items: baseline; gap: 0.55rem; min-width: 0; }
+.segp_processing_header strong { color: var(--color-text); font-size: 0.82rem; }
+.segp_processing_header span { color: var(--color-text-muted); font-size: 0.68rem; }
+.segp_processing_status { padding: 0.2rem 0.45rem; border: 1px solid var(--color-border); border-radius: 999px; white-space: nowrap; }
+.segp_processing_status--processing { color: #0f766e; border-color: #0f766e; }
+.segp_processing_status--failed { color: #b42318; border-color: #b42318; }
+.segp_processing_toolbar { align-items: stretch; border-bottom: 1px solid var(--color-border); }
+.segp_processing_tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.segp_processing_tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  flex: 0 0 auto;
+  padding: 0.58rem 0.65rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.68rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.segp_processing_tabs button:hover, .segp_processing_tabs button.is-active { color: #0f766e; background: color-mix(in srgb, #0f766e 5%, transparent); }
+.segp_processing_tabs button.is-active { border-bottom-color: #0f766e; font-weight: 700; }
+.segp_processing_tabs button > span { color: #0f766e; font-weight: 800; }
+.segp_processing_tabs button small { color: var(--color-text-muted); font-size: 0.56rem; }
+.segp_processing_options { display: flex; align-items: center; gap: 0.55rem; padding: 0 0.75rem; white-space: nowrap; }
+.segp_processing_options label, .segp_stage_sentence_controls label { color: var(--color-text-muted); font-size: 0.63rem; }
+.segp_processing_options input, .segp_stage_sentence_controls input { accent-color: #0f766e; }
+.segp_stage_viewport { min-height: 8rem; padding: 1rem; }
+.segp_stage_text { margin: 0; color: var(--color-text); font-size: 0.86rem; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.segp_stage_placeholder { margin: 0; color: var(--color-text-muted); font-size: 0.78rem; }
+.segp_stage_inserted { padding: 0 0.12rem; border-bottom: 2px solid #0f766e; background: color-mix(in srgb, #0f766e 14%, transparent); color: var(--color-text); }
+.segp_stage_details { padding: 0.7rem 1rem 0.85rem; border-top: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-surface) 94%, #0f766e); }
+.segp_stage_details_header { margin-bottom: 0.45rem; font-size: 0.7rem; }
+.segp_stage_details_header span { color: var(--color-text-muted); }
+.segp_stage_metadata { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.segp_stage_metadata span { display: inline-flex; gap: 0.28rem; padding: 0.2rem 0.38rem; border: 1px solid var(--color-border); border-radius: 5px; color: var(--color-text-muted); font-size: 0.62rem; }
+.segp_stage_metadata strong { color: var(--color-text); }
+.segp_stage_transformations { display: flex; flex-direction: column; gap: 0.18rem; margin-top: 0.5rem; color: var(--color-text-muted); font-size: 0.64rem; }
+.segp_stage_sentence_controls { display: flex; flex-direction: column; gap: 0.28rem; margin-top: 0.55rem; }
+.segp_stage_sentence_controls > span { color: var(--color-text-muted); font-size: 0.65rem; }
+.segp_stage_sentence_controls label { display: flex; align-items: center; gap: 0.3rem; }
+.segp_stage_sentence_controls label small { margin-left: auto; color: var(--color-text-muted); }
+.segp_stage_warning { margin: 0.5rem 0 0; color: #b45309; font-size: 0.66rem; }
+@media (max-width: 700px) {
+  .segp_processing_toolbar { display: block; }
+  .segp_processing_options { padding: 0.45rem 0.75rem; }
 }
 /* Marks where each numbered relation's evidence sits within the raw
    segment text — same reference numbering as .arv_row_ref in
@@ -538,6 +617,130 @@
   color: #4fc3f7;
   font-weight: 700;
   margin: 0 0.05rem;
+}
+
+#segp_sentence_section {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, #4fc3f7 28%, var(--color-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, #4fc3f7 5%, var(--color-surface));
+}
+.segp_sentence_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.55rem;
+  font-size: 0.75rem;
+}
+.segp_sentence_header strong { color: #4fc3f7; }
+.segp_sentence_header span { color: var(--color-text-muted); font-size: 0.68rem; }
+.segp_sentence_list { display: flex; flex-direction: column; gap: 0.35rem; }
+.segp_sentence_row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.4rem 0.45rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.segp_sentence_row:hover { background: color-mix(in srgb, #4fc3f7 8%, transparent); }
+.segp_sentence_row input { margin-top: 0.18rem; accent-color: #4fc3f7; flex-shrink: 0; }
+.segp_sentence_content { display: flex; flex-direction: column; gap: 0.18rem; min-width: 0; }
+.segp_sentence_content strong { color: #4fc3f7; font-size: 0.68rem; }
+.segp_sentence_content small { color: var(--color-text-muted); font-size: 0.62rem; line-height: 1.35; }
+.segp_sentence_refresh {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.55rem;
+  padding: 0.28rem 0.45rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.66rem;
+  cursor: pointer;
+}
+.segp_sentence_refresh:hover { color: #4fc3f7; }
+#segp_coreference_section {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, #8b5cf6 30%, var(--color-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, #8b5cf6 5%, var(--color-surface));
+}
+#segp_coreference_section .segp_sentence_header strong { color: #8b5cf6; }
+.segp_coreference_compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem; }
+.segp_coreference_compare > div { padding: 0.5rem; border: 1px solid var(--color-border); border-radius: 6px; }
+.segp_coreference_compare strong { font-size: 0.68rem; color: var(--color-text-muted); }
+.segp_coreference_compare p { margin: 0.35rem 0 0; font-size: 0.74rem; line-height: 1.45; }
+.segp_coreference_stats { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.6rem 0; color: var(--color-text-muted); font-size: 0.66rem; }
+.segp_coreference_stats span { padding: 0.18rem 0.4rem; border: 1px solid var(--color-border); border-radius: 999px; }
+.segp_coreference_cluster { margin-top: 0.5rem; padding: 0.5rem; border-top: 1px dashed var(--color-border); font-size: 0.7rem; }
+.segp_coreference_mention { display: flex; justify-content: space-between; gap: 0.5rem; padding-top: 0.25rem; }
+.segp_coreference_mention small { color: var(--color-text-muted); }
+#segp_coreference_btn { color: #8b5cf6; border-color: color-mix(in srgb, #8b5cf6 40%, var(--color-border)); }
+#segp_extraction_autosave_status {
+  align-self: center;
+  margin-right: auto;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+#segp_topic_section {
+  margin-top: 0.85rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, #0f766e 32%, var(--color-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, #0f766e 5%, var(--color-surface));
+}
+.segp_topic_grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+.segp_topic_grid > div { padding: 0.5rem; border: 1px solid var(--color-border); border-radius: 6px; }
+.segp_topic_grid strong, .segp_topic_sentence span { color: var(--color-text-muted); font-size: 0.68rem; }
+.segp_topic_grid p, .segp_topic_sentence p { margin: 0.3rem 0 0; font-size: 0.75rem; line-height: 1.45; }
+.segp_topic_sentence_list { margin-top: 0.65rem; }
+.segp_topic_sentence { padding: 0.45rem 0; border-top: 1px dashed var(--color-border); }
+#segp_extract_topic_btn { color: #0f766e; border-color: color-mix(in srgb, #0f766e 40%, var(--color-border)); }
+#segp_predicate_pipeline {
+  display: grid;
+  gap: 0.35rem;
+  flex: 0 0 14rem;
+  align-self: flex-start;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface) 92%, #0f766e);
+}
+#segp_processing_layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.8rem;
+  min-width: 0;
+}
+#segp_processing_layout .segp_processing_container {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.segp_pipeline_step { display: grid; grid-template-columns: 1.2rem minmax(0, 1fr) auto; align-items: center; gap: 0.45rem; color: var(--color-text-muted); font-size: 0.72rem; }
+.segp_pipeline_step_number { display: inline-grid; place-items: center; width: 1.1rem; height: 1.1rem; border: 1px solid var(--color-border); border-radius: 50%; font-size: 0.62rem; }
+.segp_pipeline_step small { color: var(--color-text-muted); font-size: 0.62rem; }
+.segp_pipeline_step--running { color: #0f766e; font-weight: 600; }
+.segp_pipeline_step--running .segp_pipeline_step_number { border-color: #0f766e; animation: segp_pipeline_pulse 1s ease-in-out infinite; }
+.segp_pipeline_step--completed { color: var(--color-text); }
+.segp_pipeline_step--completed .segp_pipeline_step_number { color: #0f766e; border-color: #0f766e; }
+.segp_pipeline_step--failed { color: #b42318; }
+@keyframes segp_pipeline_pulse { 50% { opacity: 0.45; } }
+@media (max-width: 700px) { .segp_coreference_compare { grid-template-columns: 1fr; } }
+@media (max-width: 860px) {
+  #segp_processing_layout { flex-direction: column; }
+  #segp_processing_layout #segp_predicate_pipeline { width: 100%; flex-basis: auto; box-sizing: border-box; }
 }
 #segp_seg_image { max-width: 100%; border-radius: 6px; display: block; }
 
@@ -583,7 +786,8 @@
    linguistic pipeline parallel to the Relations one above. Two own review
    lists (AmctoshsPredicateExtractionReviewList.jsx,
    AmctoshsPredicateAnalysisReviewList.jsx) render alongside the Relations
-   list on this same page, so they use their OWN ids (pev_*/pav_*) rather
+   list on this same page, so they use their OWN predicate-extraction ids
+   (pev and pav) rather
    than reusing #mrv_root/#mrv_head/#mrv_list/#mrv_save_accepted_btn from
    morphePanels.css — those are already claimed by the always-mounted
    AmctoshsRelationsReviewList and duplicate DOM ids would be a real bug
@@ -593,21 +797,54 @@
 #segp_extract_predicates_btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
-  font-size: 0.76rem;
-  font-weight: 600;
-  border-radius: 7px;
-  padding: 0.4rem 0.75rem;
+  min-width: 0;
+  min-height: 0;
+  font-size: 0.74rem;
+  font-weight: 650;
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
   cursor: pointer;
-  border: 1px solid color-mix(in srgb, #4fc3f7 45%, transparent);
-  background: color-mix(in srgb, #4fc3f7 12%, transparent);
-  color: #4fc3f7;
-  transition: background 0.12s, border-color 0.12s;
+  border: 1px solid color-mix(in srgb, #0f766e 38%, var(--color-border));
+  background: color-mix(in srgb, #0f766e 8%, var(--color-surface));
+  color: #0f766e;
+  transition: background 0.12s ease, border-color 0.12s ease;
   font-family: inherit;
   white-space: nowrap;
 }
-#segp_extract_predicates_btn:hover:not(:disabled) { background: color-mix(in srgb, #4fc3f7 20%, transparent); }
-#segp_extract_predicates_btn:disabled { opacity: 0.65; cursor: default; }
+#segp_extract_predicates_copy { display: contents; }
+#segp_extract_predicates_copy strong { font-size: inherit; font-weight: inherit; line-height: 1; }
+#segp_extract_predicates_copy small { display: none; }
+#segp_extract_predicates_arrow { color: currentColor; font-size: 0.85rem; line-height: 1; }
+#segp_extract_predicates_btn:hover:not(:disabled) {
+  background: color-mix(in srgb, #0f766e 15%, var(--color-surface));
+  border-color: #0f766e;
+}
+#segp_extract_predicates_btn:hover:not(:disabled) #segp_extract_predicates_arrow { transform: translateX(2px); }
+#segp_extract_predicates_btn:focus-visible { outline: 3px solid color-mix(in srgb, #0f766e 34%, transparent); outline-offset: 3px; }
+#segp_extract_predicates_btn:disabled { opacity: 0.72; cursor: wait; }
+#segp_delete_predicate_results_btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid color-mix(in srgb, #b42318 38%, var(--color-border));
+  border-radius: 6px;
+  background: color-mix(in srgb, #b42318 6%, var(--color-surface));
+  color: #b42318;
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+#segp_delete_predicate_results_btn:hover:not(:disabled) { background: color-mix(in srgb, #b42318 13%, var(--color-surface)); }
+#segp_delete_predicate_results_btn:disabled { opacity: 0.65; cursor: wait; }
+
+@media (max-width: 700px) {
+  #segp_seg_actions { align-items: stretch; }
+  #segp_extract_predicates_btn { width: auto; min-width: 0; align-self: flex-start; }
+  #segp_extraction_autosave_status { width: 100%; margin-right: 0; }
+}
 
 #segp_predicates_section {
   border: 1px solid var(--color-border);
@@ -672,6 +909,38 @@
   padding: 0.1rem 0.5rem;
 }
 .pev_argument_chip strong { color: var(--color-text); font-weight: 600; }
+.pev_arguments--explicit {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.45rem;
+}
+.pev_argument_field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+  min-width: 0;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: 0.45rem;
+  background: var(--color-bg);
+}
+.pev_argument_field strong {
+  color: var(--color-text-muted);
+  font-size: 0.63rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pev_argument_field span {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 0.76rem;
+  overflow-wrap: anywhere;
+}
+.pev_arguments--additional { margin-top: 0.3rem; }
+@media (max-width: 720px) {
+  .pev_arguments--explicit { grid-template-columns: 1fr; }
+}
 
 /* Per-argument collapsible linguistic breakdown in Predicate Analysis
    review rows (ArgumentPanel) — same collapsible/field-row pattern as

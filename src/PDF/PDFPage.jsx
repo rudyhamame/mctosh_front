@@ -12,7 +12,6 @@ import HyleCards from "./HyleCards";
 import PDFTextAssistant from "./PDFTextAssistant";
 import SmartVideoPanel from "./SmartVideoPanel";
 import EntityBuilderPanel from "./EntityBuilderPanel";
-import ClinicalVignetteBuilderPanel from "./ClinicalVignetteBuilderPanel";
 import { drawAnnotation, drawMaskedHighlightText } from "./annotationDraw";
 import { PDF_TYPE_ICON } from "./pdfTypeIcon";
 import { createPageIndexCache } from "./pdfSearchIndex.js";
@@ -37,6 +36,15 @@ import {
 import { buildRawHyle, buildSegmentedHyle, computeMarkerPosition } from "./pdfHyleStats.js";
 import { segmentPageIntoParagraphBBoxes } from "./pdfSmartSegment.js";
 import { extractPlacedImageRects } from "./pdfImageGeometry.js";
+import InfoPopupButton from "./InfoPopupButton";
+import { getPageExtractionEvidence, resolveDocumentId } from "./pdfPageStructureClient.js";
+import {
+  listMorpheSchemaNames,
+  upsertSmartPenSchema,
+  upsertSmartPenTrace,
+  morpheSchemas as morpheSchemasApi,
+  morpheTraceSchemas as morpheTraceSchemasApi,
+} from "../ClinicalSchemata/amctoshsMorpheClient.js";
 import {
   SEMANTIC_DETECTION_SCOPE,
   buildSemanticCandidates,
@@ -75,6 +83,8 @@ import {
   InsertPageIcon,
   LabeledPercentKnob,
   MODE_TOOL_ORDER,
+  OPACITY_MAX_PCT,
+  OPACITY_MIN_PCT,
   OpacityKnob,
   PDF_TYPE_LABEL,
   PenToolIcon,
@@ -89,6 +99,490 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.j
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+const isPenToolKey = (key) => key === "pen" || key === "smartPen";
+const cleanSchemaWord = (value) => String(value || "")
+  .normalize("NFKC")
+  .trim()
+  .replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, "")
+  .trim();
+const schemaWordKey = (value) => cleanSchemaWord(value).toLocaleLowerCase();
+const areConsecutiveRawInstances = (previousRow, currentRow) => {
+  const previous = Number(previousRow?.instanceNumber);
+  const current = Number(currentRow?.instanceNumber);
+  // Some fallback extraction rows do not carry an instance number. Preserve
+  // their spatial grouping, but enforce source order whenever both values
+  // are available.
+  return !Number.isFinite(previous) || !Number.isFinite(current) || current === previous + 1;
+};
+const isRectFullyContainedByBBox = (rect, bbox, tolerance = 0.35) => {
+  if (!rect || !bbox) return false;
+  const left = Number(rect.x);
+  const top = Number(rect.y);
+  const width = Number(rect.w);
+  const height = Number(rect.h);
+  const bboxLeft = Number(bbox.x);
+  const bboxTop = Number(bbox.y);
+  const bboxWidth = Number(bbox.w);
+  const bboxHeight = Number(bbox.h);
+  if (![left, top, width, height, bboxLeft, bboxTop, bboxWidth, bboxHeight].every(Number.isFinite)) return false;
+  return left >= bboxLeft - tolerance
+    && top >= bboxTop - tolerance
+    && left + Math.max(0, width) <= bboxLeft + bboxWidth + tolerance
+    && top + Math.max(0, height) <= bboxTop + bboxHeight + tolerance;
+};
+
+const isSmartPenRectangularStroke = (stroke) => {
+  const points = Array.isArray(stroke?.points) ? stroke.points : [];
+  if (points.length < 8) return false;
+  const xs = points.map((point) => Number(point.x)).filter(Number.isFinite);
+  const ys = points.map((point) => Number(point.y)).filter(Number.isFinite);
+  if (!xs.length || !ys.length) return false;
+  const left = Math.min(...xs);
+  const right = Math.max(...xs);
+  const top = Math.min(...ys);
+  const bottom = Math.max(...ys);
+  const width = right - left;
+  const height = bottom - top;
+  if (width < 4 || height < 4) return false;
+
+  // A rectangle is one closed stroke with evidence of all four sides. A
+  // straight line over a word has neither the required closure nor side
+  // coverage, even if its bounding box happens to span the word's width.
+  const closureTolerance = Math.max(2, Math.min(width, height) * 0.45);
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (Math.hypot(Number(first.x) - Number(last.x), Number(first.y) - Number(last.y)) > closureTolerance) return false;
+  const sideTolerance = Math.max(1.5, Math.min(width, height) * 0.28);
+  const sideSpan = (side, axis) => {
+    const sidePoints = points.filter((point) => Math.abs(Number(point[axis]) - side) <= sideTolerance);
+    if (sidePoints.length < 2) return 0;
+    const values = sidePoints.map((point) => Number(point[axis === "x" ? "y" : "x"]));
+    return Math.max(...values) - Math.min(...values);
+  };
+  return sideSpan(top, "y") >= width * 0.45
+    && sideSpan(bottom, "y") >= width * 0.45
+    && sideSpan(left, "x") >= height * 0.45
+    && sideSpan(right, "x") >= height * 0.45;
+};
+
+const getSmartPenCoveredSpanRecords = (stroke, spans) => {
+  if (!Array.isArray(stroke?.points) || stroke.points.length < 2) return [];
+  const xs = stroke.points.map((point) => Number(point.x)).filter(Number.isFinite);
+  const ys = stroke.points.map((point) => Number(point.y)).filter(Number.isFinite);
+  if (!xs.length || !ys.length) return [];
+  const strokePadding = Math.max(0.5, Number(stroke.lineWidth || 1) / 2);
+  const strokeLeft = Math.min(...xs) - strokePadding;
+  const strokeRight = Math.max(...xs) + strokePadding;
+  const strokeTop = Math.min(...ys) - strokePadding;
+  const strokeBottom = Math.max(...ys) + strokePadding;
+
+  const matches = new Map();
+  for (const span of spans || []) {
+    const word = cleanSchemaWord(span?.text);
+    if (!word || /\s/u.test(word) || !/[\p{L}\p{N}]/u.test(word)) continue;
+    const left = Math.min(Number(span.pageLeft), Number(span.pageRight));
+    const right = Math.max(Number(span.pageLeft), Number(span.pageRight));
+    const top = Number(span.pageTop);
+    const bottom = Number(span.pageBottom);
+    if (![left, right, top, bottom].every(Number.isFinite) || right <= left || bottom <= top) continue;
+    const centerY = (top + bottom) / 2;
+    // Full rectangle containment is deliberate: a line passing across only
+    // the word's width must never qualify as a contained word.
+    if (left >= strokeLeft && right <= strokeRight && top >= strokeTop && bottom <= strokeBottom) {
+      matches.set(schemaWordKey(word), { word, left, right, top, bottom, centerX: (left + right) / 2, centerY });
+    }
+  }
+  return [...matches.values()];
+};
+
+const getSmartPenCoveredWords = (stroke, spans) => (
+  getSmartPenCoveredSpanRecords(stroke, spans).map(({ word }) => word)
+);
+
+// A rectangular Smart Pen stroke may contain a phrase. Group covered words
+// by visual line and join only neighboring words; this prevents two columns
+// or separate lines inside one large rectangle from becoming one schema.
+const getSmartPenCoveredSchemaNames = (stroke, spans) => {
+  const records = getSmartPenCoveredSpanRecords(stroke, spans)
+    .sort((a, b) => (a.centerY - b.centerY) || (a.left - b.left));
+  const lines = [];
+  records.forEach((record) => {
+    const line = lines.find((candidate) => Math.abs(candidate.centerY - record.centerY) <= Math.max(3, Math.min(candidate.records[0].bottom - candidate.records[0].top, record.bottom - record.top) * 0.65));
+    if (line) {
+      line.records.push(record);
+      line.centerY = (line.centerY * (line.records.length - 1) + record.centerY) / line.records.length;
+    } else {
+      lines.push({ centerY: record.centerY, records: [record] });
+    }
+  });
+  const names = [];
+  lines.forEach((line) => {
+    line.records.sort((a, b) => a.left - b.left);
+    let run = [];
+    const flush = () => {
+      const name = run.map((record) => record.word).join(" ").trim();
+      if (name) names.push(name);
+      run = [];
+    };
+    line.records.forEach((record, index) => {
+      const previous = line.records[index - 1];
+      const gap = previous ? record.left - previous.right : 0;
+      const lineHeight = Math.max(1, record.bottom - record.top, previous ? previous.bottom - previous.top : 1);
+      if (previous && gap > lineHeight * 1.8) flush();
+      run.push(record);
+    });
+    flush();
+  });
+  return names;
+};
+
+const isSmartPenRectangularEndpoint = (stroke, targetRecords) => {
+  if (!targetRecords.length) return false;
+  const left = Math.min(...targetRecords.map((record) => record.left));
+  const right = Math.max(...targetRecords.map((record) => record.right));
+  const top = Math.min(...targetRecords.map((record) => record.top));
+  const bottom = Math.max(...targetRecords.map((record) => record.bottom));
+  const width = right - left;
+  const height = bottom - top;
+  if (width <= 0 || height <= 0) return false;
+  const points = Array.isArray(stroke?.points) ? stroke.points : [];
+  const tolerance = Math.max(1.5, Math.min(width, height) * 0.4, Number(stroke.lineWidth || 1));
+  const projectedSpan = (side, axis, alongAxis, outward) => {
+    const sidePoints = points.filter((point) => Math.abs(Number(point[axis]) - side) <= tolerance);
+    if (sidePoints.length < 2) return 0;
+    const sideCoordinates = sidePoints.map((point) => Number(point[axis])).filter(Number.isFinite);
+    const outermost = outward === "min" ? Math.min(...sideCoordinates) : Math.max(...sideCoordinates);
+    // The stroke must reach the outside of the target boundary. Points that
+    // merely run through the target interior are not a container side.
+    if (outward === "min" && outermost > side + 0.5) return 0;
+    if (outward === "max" && outermost < side - 0.5) return 0;
+    const values = sidePoints
+      .map((point) => Number(point[alongAxis]))
+      .filter(Number.isFinite);
+    return values.length > 1 ? Math.max(...values) - Math.min(...values) : 0;
+  };
+  // The endpoint must have all four sides. A simple stroke through the text
+  // has no top/bottom enclosure and therefore cannot create a Trace.
+  return projectedSpan(top, "y", "x", "min") >= width * 0.45
+    && projectedSpan(bottom, "y", "x", "max") >= width * 0.45
+    && projectedSpan(left, "x", "y", "min") >= height * 0.45
+    && projectedSpan(right, "x", "y", "max") >= height * 0.45;
+};
+
+const withoutTemporarySmartPenStrokes = (annotations = {}) => Object.fromEntries(
+  Object.entries(annotations || {}).map(([page, pageAnnotations]) => [
+    page,
+    (pageAnnotations || []).filter((annotation) => !annotation?.smartPen),
+  ]),
+);
+const hasTemporarySmartPenStrokes = (storedLayers) => {
+  const annotationMaps = Array.isArray(storedLayers)
+    ? storedLayers.map((layer) => layer?.annotations || {})
+    : [storedLayers || {}];
+  return annotationMaps.some((annotations) => Object.values(annotations).some(
+    (pageAnnotations) => (pageAnnotations || []).some((annotation) => annotation?.smartPen),
+  ));
+};
+
+const hasSmartPenFourDTraceScribble = (stroke, targetRecords) => {
+  if (!targetRecords.length || !Array.isArray(stroke?.points)) return false;
+  const left = Math.min(...targetRecords.map((record) => record.left));
+  const right = Math.max(...targetRecords.map((record) => record.right));
+  const top = Math.min(...targetRecords.map((record) => record.top));
+  const bottom = Math.max(...targetRecords.map((record) => record.bottom));
+  const width = right - left;
+  const height = bottom - top;
+  if (width <= 0 || height <= 0) return false;
+
+  // A 4D gesture is the existing directional container followed by an
+  // interior scribble. Boundary-only rectangles remain 3D. Requiring the
+  // scribble to occupy the interior and reverse direction several times
+  // avoids treating the rectangle's closing side as a temporal gesture.
+  const innerLeft = left + width * 0.18;
+  const innerRight = right - width * 0.18;
+  const innerTop = top + height * 0.18;
+  const innerBottom = bottom - height * 0.18;
+  const interior = stroke.points
+    .map((point, index) => ({ point, index }))
+    .filter(({ point }) => (
+      Number(point.x) >= innerLeft
+      && Number(point.x) <= innerRight
+      && Number(point.y) >= innerTop
+      && Number(point.y) <= innerBottom
+    ));
+  if (interior.length < 6) return false;
+
+  const interiorPoints = interior.map(({ point }) => point);
+  const interiorWidth = Math.max(...interiorPoints.map((point) => Number(point.x))) - Math.min(...interiorPoints.map((point) => Number(point.x)));
+  const interiorHeight = Math.max(...interiorPoints.map((point) => Number(point.y))) - Math.min(...interiorPoints.map((point) => Number(point.y)));
+  if (interiorWidth < width * 0.38 || interiorHeight < height * 0.28) return false;
+
+  let pathLength = 0;
+  let directionChanges = 0;
+  let previousDirection = null;
+  for (let index = 1; index < interiorPoints.length; index += 1) {
+    const dx = Number(interiorPoints[index].x) - Number(interiorPoints[index - 1].x);
+    const dy = Number(interiorPoints[index].y) - Number(interiorPoints[index - 1].y);
+    const segmentLength = Math.hypot(dx, dy);
+    if (segmentLength < 0.5) continue;
+    pathLength += segmentLength;
+    const direction = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : Math.sign(dy) * 2;
+    if (previousDirection !== null && direction !== previousDirection) directionChanges += 1;
+    previousDirection = direction;
+  }
+  return pathLength >= Math.max(width, height) * 0.9 && directionChanges >= 3;
+};
+
+const getSmartPenDirectionalTraceRecords = (stroke, spans, schemaRecords) => {
+  const covered = getSmartPenCoveredSpanRecords(stroke, spans);
+  if (!covered.length || !Array.isArray(stroke?.points) || stroke.points.length < 2) return [];
+  const first = stroke.points[0];
+  const last = stroke.points[stroke.points.length - 1];
+  const distance = (point, record) => Math.hypot(record.centerX - point.x, record.centerY - point.y);
+  const sourceCandidates = spans
+    .map((span) => {
+      const word = cleanSchemaWord(span?.text);
+      const left = Math.min(Number(span?.pageLeft), Number(span?.pageRight));
+      const right = Math.max(Number(span?.pageLeft), Number(span?.pageRight));
+      const top = Number(span?.pageTop);
+      const bottom = Number(span?.pageBottom);
+      return { word, left, right, top, bottom, centerX: (left + right) / 2, centerY: (top + bottom) / 2 };
+    })
+    .filter((record) => (
+      record.word
+      && schemaRecords.has(schemaWordKey(record.word))
+      && [record.left, record.right, record.top, record.bottom].every(Number.isFinite)
+      && first.x >= record.left - 1.5
+      && first.x <= record.right + 1.5
+      && first.y >= record.top - 1.5
+      && first.y <= record.bottom + 1.5
+    ));
+  if (!sourceCandidates.length) return [];
+
+  // The stroke must begin inside the existing Schema word. The far endpoint
+  // is therefore always the last point, preserving the user's direction.
+  const source = sourceCandidates.sort((a, b) => distance(first, a) - distance(first, b))[0];
+  const sourcePoint = first;
+  const farPoint = last;
+  const farCandidates = covered
+    .filter((record) => !schemaRecords.has(schemaWordKey(record.word)))
+    .map((record) => ({ record, farDistance: distance(farPoint, record), sourceDistance: distance(sourcePoint, record) }))
+    .filter(({ farDistance, sourceDistance }) => farDistance < sourceDistance)
+    .sort((a, b) => a.farDistance - b.farDistance);
+  if (!farCandidates.length) return [];
+
+  // Keep the complete contiguous far-end word group. Distance from the final
+  // point alone is sufficient for one word, but it drops the other words in a
+  // phrase because their centers are naturally farther from the closing
+  // corner of the container.
+  const nearestFar = farCandidates[0].record;
+  const targetLineTolerance = Math.max(
+    4,
+    (source.bottom - source.top) * 1.25,
+    (nearestFar.bottom - nearestFar.top) * 1.25,
+  );
+  const sameLineCandidates = farCandidates
+    .filter(({ record }) => Math.abs(record.centerY - nearestFar.centerY) <= targetLineTolerance)
+    .sort((a, b) => a.record.left - b.record.left);
+  const nearestIndex = sameLineCandidates.findIndex(({ record }) => record === nearestFar);
+  if (nearestIndex < 0) return [];
+  const gapLimit = Math.max(6, (source.bottom - source.top) * 1.8);
+  let start = nearestIndex;
+  let end = nearestIndex;
+  while (start > 0) {
+    const previous = sameLineCandidates[start - 1].record;
+    const current = sameLineCandidates[start].record;
+    if (current.left - previous.right > gapLimit) break;
+    start -= 1;
+  }
+  while (end >= 0 && end < sameLineCandidates.length - 1) {
+    const current = sameLineCandidates[end].record;
+    const next = sameLineCandidates[end + 1].record;
+    if (next.left - current.right > gapLimit) break;
+    end += 1;
+  }
+  const targetRecords = sameLineCandidates.slice(Math.max(0, start), end + 1).map(({ record }) => record);
+  if (!isSmartPenRectangularEndpoint(stroke, targetRecords)) return [];
+  const traceDimension = hasSmartPenFourDTraceScribble(stroke, targetRecords) ? "4D" : "3D";
+  return targetRecords.map((target) => ({ source, target, traceDimension }));
+};
+
+const RAW_COLUMN_NOTES = {
+  ID: "Stable identifier assigned to the extracted Tesseract word row.",
+  PAGE: "PDF page number that produced this Tesseract row.",
+  LEVEL: "Tesseract TSV hierarchy level. Word rows are level 5.",
+  ENGINE: "OCR engine used to produce this row.",
+  "COORDINATE SPACE": "Coordinate system for the OCR geometry: rendered page pixels.",
+  STRING: "PDF.js row type. This row represents one PDF.js text item, not necessarily one word or one visual line.",
+  VALUE: "The exact text in TextItem.str. It is the text PDF.js exposes for copy, search, and text-layer construction.",
+  TX: "Transformed text-origin X in page coordinates. This is the baseline origin after the page viewport transform is applied.",
+  TY: "Transformed text-origin Y in page coordinates. This is normally the baseline origin, so it is usually below the visible top of the glyphs.",
+  X: "Visible text-box left X in page coordinates. It is derived from the transformed origin and font ascent.",
+  Y: "Visible text-box top Y in page coordinates. It is derived from the baseline minus the font ascent.",
+  "FONT SIZE": "Per-item font size in page units, calculated from the transformed text matrix vertical axis.",
+  TOP: "Top of the extracted visible text box. PDF.js does not provide a separate leading line, so this equals the ascent line here.",
+  ASCENT: "Ascent line in page coordinates. It is the baseline moved upward by the PDF.js font ascent ratio.",
+  BASELINE: "Baseline in page coordinates. PDF text is positioned from this line; it is not the top edge of the letters.",
+  DESCENT: "Descent line in page coordinates. It is the baseline moved downward using the font descent metric.",
+  BOTTOM: "Bottom of the extracted text box. It is based on the item height and is distinct from the baseline.",
+  "FONT FAMILY": "PDF.js generic family classification or resolved fallback family. Embedded PDFs may not expose the exact original typeface name.",
+  WEIGHT: "Detected font weight from the resolved PDF.js font object. Bold/black detection can be unavailable for unresolved fonts.",
+  STYLE: "Detected font style from the resolved PDF.js font object, normally normal or italic.",
+  "FONT NAME": "Internal PDF.js font resource name, often a subset identifier rather than a human-readable font name.",
+  DIR: "Text direction reported by PDF.js, such as ltr or rtl.",
+  EOL: "PDF.js hasEOL flag. It indicates that this text item is marked as ending a text line in the extracted content.",
+  ROTATION: "Text angle in degrees, calculated from the original transform matrix.",
+  "SCALE X": "Horizontal scale magnitude from the original transform matrix. It includes the text matrix's horizontal sizing.",
+  "SCALE Y": "Vertical scale magnitude from the original transform matrix. It commonly corresponds closely to the font size.",
+  "CHAR COUNT": "Number of Unicode code points in VALUE. This counts characters rather than UTF-16 code units.",
+  WHITESPACE: "True when VALUE contains no non-whitespace characters. Whitespace items may still have geometry.",
+  CODEPOINTS: "Unicode code points for VALUE, displayed as U+ hexadecimal values.",
+  "ORIGINAL A": "A from the raw PDF.js TextItem.transform matrix, before the page viewport transform.",
+  "ORIGINAL B": "B from the raw PDF.js TextItem.transform matrix, before the page viewport transform.",
+  "ORIGINAL C": "C from the raw PDF.js TextItem.transform matrix, before the page viewport transform.",
+  "ORIGINAL D": "D from the raw PDF.js TextItem.transform matrix, before the page viewport transform.",
+  "ORIGINAL E": "E from the raw PDF.js TextItem.transform matrix. It is the raw PDF text origin X component.",
+  "ORIGINAL F": "F from the raw PDF.js TextItem.transform matrix. It is the raw PDF text origin Y component.",
+  "FULL A": "A from the combined page viewport transform and text-item transform. This is used for rendered page geometry.",
+  "FULL B": "B from the combined page viewport transform and text-item transform.",
+  "FULL C": "C from the combined page viewport transform and text-item transform.",
+  "FULL D": "D from the combined page viewport transform and text-item transform.",
+  "FULL E": "E from the combined page viewport transform and text-item transform. It is the transformed origin X component.",
+  "FULL F": "F from the combined page viewport transform and text-item transform. It is the transformed origin Y component.",
+  "RAW WIDTH": "The width supplied directly by PDF.js TextItem.width, before viewport normalization.",
+  "RAW HEIGHT": "The height supplied directly by PDF.js TextItem.height, before viewport normalization. Some PDFs leave this unset.",
+  "PAGE WIDTH": "Text-item width converted into the page coordinate system used by this RAW table.",
+  "PAGE HEIGHT": "Text-item height converted into the page coordinate system used by this RAW table.",
+  "SOURCE ORDER": "The PDF.js content-stream order for this text item. This is the current Instance # and does not necessarily match its visual left-to-right position on the page.",
+  "VISUAL ORDER": "One-based rank after spatial sorting by page Y and then page X. This derived order describes page placement without changing PDF.js source order.",
+  "DELTA X": "This item's X minus the previous PDF.js source item's X. A positive value moves right; a negative value moves left.",
+  "ITEM FLOW": "Derived X direction for the consecutive source items in this visual Y band: ascending-X, descending-X, or mixed.",
+  CLASS: "Application classification inferred from text, size, position, and geometry. It is not a native PDF.js semantic tag.",
+  OMISSION: "Unicode general category/categories represented by this instance, with a Unicode character name when known. Checking the box omits the instance from Visual rendering.",
+  "READING STATUS": "INCLUDED means the PDF.js string participates in selectable and reconstructed reading text. OMITTED means its full page rectangle is contained by one or more persisted Omission BBoxes; the row remains visible here for diagnosis.",
+  "BLOCK #": "One-based order of the saved Block BBox on this PDF page.",
+  "LINE REFERENCES": "MD Viewer line IDs containing at least one PDF.js string selected by this saved Block BBox.",
+  "STRING REFERENCES": "PDF.js string instance numbers selected by this saved Block BBox. Membership requires horizontal intersection and at least 50% vertical coverage.",
+  TYPE: "OCR block type supplied by the OCR service, such as title, heading, header, or paragraph.",
+  HEADING: "True when the OCR block type is treated as heading-like for rendering.",
+  WRAP: "Whether the imported OCR text is allowed to wrap inside its mapped bounding box.",
+  "OCR SOURCE": "Indicates that the value came from persisted OCR output rather than native PDF.js text extraction.",
+  "SOURCE PAGE": "The original PDF page from which this OCR fragment was imported.",
+  ALIGN: "Text alignment assigned to the imported OCR fragment.",
+  "TEXT BASELINE": "Text baseline mode used when rendering this OCR fragment.",
+  PADDING: "Internal annotation padding value used by the OCR companion renderer.",
+  CONFIDENCE: "OCR confidence reported by the engine when available. It is not a calibrated probability; Tesseract commonly reports 0 to 100.",
+  BLOCK: "Tesseract block number from its TSV output.",
+  PARAGRAPH: "Tesseract paragraph number within the block from its TSV output.",
+  LINE: "Tesseract line number within the paragraph from its TSV output.",
+  WORD: "Tesseract word number within the line from its TSV output.",
+  "TESSERACT SOURCE": "Indicates that the row came from Tesseract OCR output.",
+  "BLOCK ID": "The stable block identifier assigned while the OCR page was normalized and persisted.",
+};
+
+const TESSERACT_COLUMN_NOTES = {
+  ID: "Stable identifier assigned to this Tesseract TSV word row.",
+  "INSTANCE #": "Sequential instance number for this Tesseract OCR row on the currently displayed page.",
+  VALUE: "The exact recognized word returned in the Tesseract TSV text field.",
+  PAGE: "One-based PDF page number rendered and processed by Tesseract.",
+  LEVEL: "The original Tesseract TSV hierarchy level: 1 page, 2 block, 3 paragraph, 4 line, and 5 recognized word.",
+  X: "Left coordinate of the recognized word in the rendered image, measured in pixels from the page's left edge.",
+  Y: "Top coordinate of the recognized word in the rendered image, measured in pixels from the page's top edge.",
+  WIDTH: "Width of the recognized word bounding box in rendered image pixels.",
+  HEIGHT: "Height of the recognized word bounding box in rendered image pixels.",
+  "PAGE WIDTH": "Width of the rendered OCR image in pixels. This is the coordinate-space width for X and WIDTH.",
+  "PAGE HEIGHT": "Height of the rendered OCR image in pixels. This is the coordinate-space height for Y and HEIGHT.",
+  CONFIDENCE: "Tesseract's recognition confidence for this word, normally reported from 0 to 100. It is not a calibrated probability.",
+  ENGINE: "OCR engine that produced the row. The current engine is Tesseract.",
+  "COORDINATE SPACE": "Geometry coordinate system used by Tesseract: rendered page pixels with origin at the top-left.",
+  BLOCK: "Tesseract block_num identifying the layout block containing this word.",
+  PARAGRAPH: "Tesseract par_num identifying the paragraph within the layout block.",
+  LINE: "Tesseract line_num identifying the text line within the paragraph.",
+  WORD: "Tesseract word_num identifying the word position within the line.",
+  "TESSERACT SOURCE": "Source label confirming that the row came from Tesseract OCR rather than PDF.js text extraction.",
+};
+
+const RawColumnHeader = ({ label, notes }) => (
+  <span className="pdf_ocr_blank_raw_column_header">
+    <span>{label}</span>
+    <InfoPopupButton info={notes || RAW_COLUMN_NOTES[label] || label} label={`${label} column note`} />
+  </span>
+);
+
+const formatSignedRotation = (value) => {
+  if (!Number.isFinite(value)) return "-";
+  const rounded = Number(value.toFixed(2));
+  return `${rounded > 0 ? "+" : ""}${rounded.toFixed(2)}°`;
+};
+
+const VALID_MARKDOWN_ASIDE_MODES = new Set(["raw", "visual-only", "visual-raw", "tree-lines"]);
+const VALID_MARKDOWN_VISUAL_MODES = new Set(["visual-only", "visual-raw"]);
+const VALID_MARKDOWN_COLUMN_GROUPS = new Set(["text", "position", "font", "transform", "blocks"]);
+const VALID_MARKDOWN_SPACING_TARGETS = new Set(["str", "line", "paragraph"]);
+
+const UNICODE_CHARACTER_NAMES = {
+  "\u003C": "LESS-THAN SIGN",
+  "\u003E": "GREATER-THAN SIGN",
+  "\u002B": "PLUS SIGN",
+  "\u002D": "HYPHEN-MINUS",
+  "\u003D": "EQUALS SIGN",
+  "\u002A": "ASTERISK",
+  "\u002F": "SOLIDUS",
+  "\u00B1": "PLUS-MINUS SIGN",
+  "\u00D7": "MULTIPLICATION SIGN",
+  "\u00F7": "DIVISION SIGN",
+  "\u2022": "BULLET",
+  "\u2023": "TRIANGULAR BULLET",
+  "\u2043": "HYPHEN BULLET",
+  "\u25A0": "BLACK SQUARE",
+  "\u25AA": "BLACK SMALL SQUARE",
+  "\u25AB": "WHITE SMALL SQUARE",
+  "\u25CF": "BLACK CIRCLE",
+  "\u25E6": "WHITE BULLET",
+  "\u221E": "INFINITY",
+  "\u221A": "SQUARE ROOT",
+};
+
+const getUnicodeGeneralCategory = (character) => {
+  if (/\p{Lu}/u.test(character)) return "Lu";
+  if (/\p{Ll}/u.test(character)) return "Ll";
+  if (/\p{Lt}/u.test(character)) return "Lt";
+  if (/\p{Nd}/u.test(character)) return "Nd";
+  if (/\p{Z}/u.test(character)) return "Zs";
+  if (/\p{P}/u.test(character)) return "P";
+  if (/\p{Sc}/u.test(character)) return "Sc";
+  if (/\p{Sk}/u.test(character)) return "Sk";
+  if (/\p{Sm}/u.test(character)) return "Sm";
+  if (/\p{So}/u.test(character)) return "So";
+  if (/\p{M}/u.test(character)) return "M";
+  return "Cn";
+};
+
+const getUnicodeOmissionLabel = (value) => {
+  const characters = Array.from(String(value || "").trim());
+  if (!characters.length) return "-";
+  const categories = [...new Set(characters.map(getUnicodeGeneralCategory))];
+  const names = [...new Set(characters.map((character) => UNICODE_CHARACTER_NAMES[character]).filter(Boolean))];
+  return `${categories.join(", ")}${names.length ? ` (${names.join(", ")})` : ""}`;
+};
+
+const SegmentBuilderClosedEyeIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="m21.95 12.32-1.9-.64C19.98 11.9 18.16 17 12 17s-7.98-5.1-8.05-5.32l-1.9.63s.28.8.93 1.81L.7 15.85l1.21 1.6 2.3-1.74c.58.62 1.29 1.24 2.16 1.77l-1.51 2.48L6.57 21l1.62-2.65c.83.3 1.78.5 2.82.59v3.05h2v-3.05c1.05-.08 1.99-.29 2.82-.59L17.45 21l1.71-1.04-1.51-2.48c.87-.53 1.58-1.15 2.16-1.77l2.3 1.74 1.21-1.6-2.28-1.73c.65-1.01.92-1.79.93-1.81Z" />
+  </svg>
+);
+
+const SegmentBuilderOpenEyeIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8" />
+    <path d="M12 4c-7.67 0-9.94 7.65-9.96 7.73-.05.18-.05.37 0 .55.02.08 2.3 7.73 9.96 7.73s9.94-7.65 9.96-7.73c.05-.18.05-.37 0-.55C21.94 11.65 19.66 4 12 4m0 14c-5.47 0-7.51-4.77-7.95-6 .44-1.23 2.48-6 7.95-6s7.51 4.78 7.95 6c-.44 1.23-2.48 6-7.95 6" />
+  </svg>
+);
+
+const OCR_COMPANION_SERVICES = "Tesseract · pdftoppm";
+const TESSERACT_COMPANION_SERVICES = "Tesseract · pdftoppm";
+const RAW_COMPANION_SERVICES = "PDF.js Native Text";
+const VISUAL_RAW_COMPANION_SERVICES = "PDF.js Visual Text";
 // Matches the backend's ConceptExtractRequestSchema surfaceText.max(2000) —
 // truncated client-side too so an overly ambitious multi-screenshot capture
 // fails softly (a shorter search) instead of a 400 from the API.
@@ -98,10 +592,183 @@ const SMART_VIDEO_MAX_SURFACE_TEXT = 2000;
 // the zoom value can never hit 0 or go negative, which would divide-by-zero the
 // viewport/scale math elsewhere.
 const PINCH_ZOOM_FLOOR = 0.02;
+const RAW_Y_COLOR_PALETTE = [
+  "#fee2e2", "#dbeafe", "#dcfce7", "#fef3c7", "#ede9fe", "#fce7f3",
+  "#cffafe", "#ffedd5", "#e2e8f0", "#fef9c3", "#dbeafe", "#d1fae5",
+];
+const IBM_PLEX_MONO_FONT = '"IBM Plex Mono", ui-monospace, monospace';
+const getRawVisibleHeight = (row) => {
+  const top = Number(row?.top);
+  const bottom = Number(row?.bottom);
+  if (Number.isFinite(top) && Number.isFinite(bottom) && bottom > top) return bottom - top;
+  return Math.max(1, Number(row?.height) || Number(row?.fontSize) || 1);
+};
+const OCR_BLANK_TITLE_MIN_SCALE = 0.82;
+const OCR_BLANK_HEADER_FONT_SIZE = 10;
+const OCR_BLANK_HEADER_TOP = 8;
+const OCR_BLANK_HEADER_RIGHT = 10;
+const OCR_BLANK_HEADER_PAD_Y = 3;
+const OCR_BLANK_HEADER_PAD_X = 7;
+const OCR_BLANK_FOOTER_FONT_SIZE = 10;
+const OCR_BLANK_FOOTER_PAD_TOP = 8;
+const OCR_BLANK_FOOTER_PAD_X = 13;
+const OCR_BLANK_FOOTER_PAD_BOTTOM = 10;
+const OCR_BLANK_FOOTER_LINE_HEIGHT = 1.2;
+const EMPTY_AREA_MIN_WIDTH = 36;
+const EMPTY_AREA_MIN_HEIGHT = 18;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const roundZoom = (value) => Math.round(value * 100) / 100;
 const normalizeZoom = (value) => clamp(roundZoom(value), MIN_ZOOM, MAX_ZOOM);
 const normalizePinchZoom = (value) => Math.max(PINCH_ZOOM_FLOOR, roundZoom(value));
+const classifyPdfJsTextItem = ({ value, x = 0, y = 0, width = 0, height = 0, pageWidth = 1, pageHeight = 1, medianHeight = 0 }) => {
+  const text = String(value || "");
+  const trimmed = text.trim();
+  const topRatio = pageHeight > 0 ? y / pageHeight : 0;
+  const bottomRatio = pageHeight > 0 ? (y + height) / pageHeight : 0;
+  const leftRatio = pageWidth > 0 ? x / pageWidth : 0;
+  const centerX = x + (width / 2);
+  const centerRatio = pageWidth > 0 ? centerX / pageWidth : 0.5;
+  const isNearHorizontalCenter = centerRatio >= 0.38 && centerRatio <= 0.62;
+  const isLargeText = medianHeight > 0 ? height >= medianHeight * 1.45 : height >= 16;
+  const isSmallText = medianHeight > 0 ? height <= medianHeight * 0.85 : height <= 8;
+  if (!trimmed) return "empty";
+  if (/^\d+$/.test(trimmed) && (topRatio <= 0.1 || bottomRatio >= 0.9) && isNearHorizontalCenter) return "page number";
+  if (topRatio <= 0.12 && (isSmallText || trimmed.length <= 50)) return "header";
+  if (bottomRatio >= 0.88 && (isSmallText || trimmed.length <= 70)) return "footer";
+  if (/^[\u25A0\u25AA\u25AB\u25CF\u25E6\u2022]$/.test(trimmed)) return "square bullet";
+  if (/^[<>]$/.test(trimmed)) return "math/operator";
+  if (/^[\p{P}\p{S}]+$/u.test(trimmed)) return "punctuation";
+  if (/^(fig|figure|table|chapter|section|appendix)\b[:.\s-]*/i.test(trimmed)) return "label";
+  if (isLargeText && (isNearHorizontalCenter || leftRatio <= 0.2) && trimmed.length <= 120) return "title";
+  if (/^[A-Z0-9\s\-–—/&(),.:;%]+$/.test(trimmed) && /[A-Z]/.test(trimmed) && trimmed.length <= 80) return "all-caps heading";
+  if (/^#{1,6}\s+/.test(trimmed)) return "markdown heading";
+  if (/^[\u2022\u25AA\u25CF\u25E6\-*]\s+/.test(trimmed)) return "bullet";
+  if (/^\(?\d+(\.\d+)*\)?[:.)\s-]/.test(trimmed)) return "numbered item";
+  if (/^[A-Za-z][A-Za-z\s/-]{0,40}:\s*$/.test(trimmed)) return "field label";
+  if (/^\d+(?:[.,]\d+)?(?:\s*(?:%|mg|g|kg|mcg|mm|cm|mL|L|bpm|mmHg|ms|sec|min|hr|yrs?))?$/i.test(trimmed)) return "numeric";
+  if (/^[A-Z][A-Za-z0-9\s,;:'"()\-/%]+$/.test(trimmed) && trimmed.length <= 60 && !/[.?!]$/.test(trimmed)) return "title fragment";
+  if (/[.?!:]$/.test(trimmed) || trimmed.split(/\s+/).length >= 8) return "paragraph fragment";
+  return "text fragment";
+};
+
+const computeEmptyTextRects = (rows, pageWidth, pageHeight) => {
+  if (!Number.isFinite(pageWidth) || !Number.isFinite(pageHeight) || pageWidth <= 0 || pageHeight <= 0) return [];
+  const rawItems = (Array.isArray(rows) ? rows : [])
+    .map((row) => {
+      const x = Math.max(0, Number(row?.x) || 0);
+      const y = Math.max(0, Number(row?.y) || 0);
+      const width = Math.max(0, Number(row?.width) || 0);
+      const height = Math.max(0, Number(row?.height) || 0);
+      if (!width || !height) return null;
+      return {
+        x1: clamp(x, 0, pageWidth),
+        y1: clamp(y, 0, pageHeight),
+        x2: clamp(x + width, 0, pageWidth),
+        y2: clamp(y + height, 0, pageHeight),
+        height,
+        midY: y + (height / 2),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.midY - b.midY || a.x1 - b.x1);
+  const rowHeights = rawItems.map((item) => item.height).sort((a, b) => a - b);
+  const medianHeight = rowHeights[Math.floor(rowHeights.length / 2)] || 10;
+  const lineTolerance = clamp(medianHeight * 0.7, 4, 18);
+  const linePadX = clamp(medianHeight * 0.9, 8, 28);
+  const linePadY = clamp(medianHeight * 0.55, 4, 18);
+  const lines = [];
+  rawItems.forEach((item) => {
+    const line = lines.find((candidate) => Math.abs(candidate.midY - item.midY) <= lineTolerance);
+    if (!line) {
+      lines.push({
+        midY: item.midY,
+        x1: item.x1,
+        y1: item.y1,
+        x2: item.x2,
+        y2: item.y2,
+        count: 1,
+      });
+      return;
+    }
+    line.x1 = Math.min(line.x1, item.x1);
+    line.y1 = Math.min(line.y1, item.y1);
+    line.x2 = Math.max(line.x2, item.x2);
+    line.y2 = Math.max(line.y2, item.y2);
+    line.midY = ((line.midY * line.count) + item.midY) / (line.count + 1);
+    line.count += 1;
+  });
+  const occupied = lines
+    .map((line) => ({
+      x1: clamp(line.x1 - linePadX, 0, pageWidth),
+      y1: clamp(line.y1 - linePadY, 0, pageHeight),
+      x2: clamp(line.x2 + linePadX, 0, pageWidth),
+      y2: clamp(line.y2 + linePadY, 0, pageHeight),
+    }))
+    .sort((a, b) => a.y1 - b.y1 || a.x1 - b.x1)
+    .reduce((merged, rect) => {
+      const last = merged[merged.length - 1];
+      if (
+        last
+        && rect.y1 <= (last.y2 + linePadY)
+        && rect.x1 <= (last.x2 + linePadX)
+        && rect.x2 >= (last.x1 - linePadX)
+      ) {
+        last.x1 = Math.min(last.x1, rect.x1);
+        last.y1 = Math.min(last.y1, rect.y1);
+        last.x2 = Math.max(last.x2, rect.x2);
+        last.y2 = Math.max(last.y2, rect.y2);
+        return merged;
+      }
+      merged.push({ ...rect });
+      return merged;
+    }, []);
+  if (!occupied.length) return [{ x: 0, y: 0, w: pageWidth, h: pageHeight }];
+
+  const yBreaks = Array.from(new Set([0, pageHeight, ...occupied.flatMap((rect) => [rect.y1, rect.y2])]))
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
+  const emptyRects = [];
+  for (let i = 0; i < yBreaks.length - 1; i += 1) {
+    const bandTop = yBreaks[i];
+    const bandBottom = yBreaks[i + 1];
+    const bandHeight = bandBottom - bandTop;
+    if (bandHeight < EMPTY_AREA_MIN_HEIGHT) continue;
+    const intervals = occupied
+      .filter((rect) => rect.y1 < bandBottom && rect.y2 > bandTop)
+      .map((rect) => [rect.x1, rect.x2])
+      .sort((a, b) => a[0] - b[0]);
+    const merged = [];
+    intervals.forEach(([start, end]) => {
+      const last = merged[merged.length - 1];
+      if (!last || start > last[1]) merged.push([start, end]);
+      else last[1] = Math.max(last[1], end);
+    });
+    let cursor = 0;
+    merged.forEach(([start, end]) => {
+      if ((start - cursor) >= EMPTY_AREA_MIN_WIDTH) {
+        emptyRects.push({ x: cursor, y: bandTop, w: start - cursor, h: bandHeight });
+      }
+      cursor = Math.max(cursor, end);
+    });
+    if ((pageWidth - cursor) >= EMPTY_AREA_MIN_WIDTH) {
+      emptyRects.push({ x: cursor, y: bandTop, w: pageWidth - cursor, h: bandHeight });
+    }
+  }
+  return emptyRects.reduce((merged, rect) => {
+    const last = merged[merged.length - 1];
+    if (
+      last
+      && Math.abs(last.x - rect.x) <= 1
+      && Math.abs(last.w - rect.w) <= 1
+      && Math.abs((last.y + last.h) - rect.y) <= 1
+    ) {
+      last.h += rect.h;
+      return merged;
+    }
+    merged.push({ ...rect });
+    return merged;
+  }, []);
+};
 // Mirrors PDF.js TextLayer's own ascent fallback. Using a fixed 0.8 ratio
 // shifts boxes vertically for fonts whose embedded metrics differ.
 const getPdfTextAscentRatio = (style) => {
@@ -348,7 +1015,7 @@ const annotationHitByEraser = (ann, x, y, radius) => {
   if (ann.type === "line" || ann.type === "arrow") {
     return distancePointToSegment(x, y, ann.x1 ?? 0, ann.y1 ?? 0, ann.x2 ?? 0, ann.y2 ?? 0) <= radius;
   }
-  if (["rect", "circle", "underline", "strikethrough", "drawTextSelection", "smartVideoCapture"].includes(ann.type)) {
+  if (["rect", "circle", "underline", "strikethrough", "smartVideoCapture"].includes(ann.type)) {
     const left = ann.x ?? 0;
     const top = ann.y ?? 0;
     const right = left + (ann.w ?? 0);
@@ -363,6 +1030,7 @@ const eraseAnnotationsAtPoint = (annotations, x, y, radius, mode) => {
   const hitRadius = mode === "precise" ? radius * 0.45 : radius;
   const kept = [];
   let erasedCount = 0;
+  let changed = false;
 
   annotations.forEach((ann) => {
     if (mode === "precise" && (ann.type === "pen" || ann.type === "highlight" || ann.type === "freeshape") && Array.isArray(ann.points)) {
@@ -379,17 +1047,19 @@ const eraseAnnotationsAtPoint = (annotations, x, y, radius, mode) => {
       } else {
         erasedCount += 1;
       }
+      if (nextPoints.length !== ann.points.length) changed = true;
       return;
     }
 
     if (annotationHitByEraser(ann, x, y, hitRadius)) {
       erasedCount += 1;
+      changed = true;
     } else {
       kept.push(ann);
     }
   });
 
-  return { kept, erasedCount };
+  return { kept, erasedCount, changed };
 };
 const PDF_TOOLBAR_SETTINGS_STORAGE_KEY = "mctoshs_pdf_toolbar_tool_settings";
 const COLOR_PRESET_SLOT_COUNT = 4;
@@ -449,6 +1119,7 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   shapeBorderStyle: "solid",
   shapeBorderRadius: 0,
   bboxBorderSize: 2,
+  bboxCreationType: null,
   shapeBackground: false, // fill always uses the shape's own border/ink color — no independent fill color setting
   shapeToolSettings: DEFAULT_SHAPE_TOOL_SETTINGS,
 };
@@ -544,6 +1215,9 @@ const normalizePdfToolbarSettings = (parsed) => {
     shapeBorderStyle: ["solid", "dashed", "dotted"].includes(parsed.shapeBorderStyle) ? parsed.shapeBorderStyle : DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderStyle,
     shapeBorderRadius: readNumberSetting(parsed.shapeBorderRadius, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBorderRadius, 0, 60),
     bboxBorderSize: readNumberSetting(parsed.bboxBorderSize, DEFAULT_PDF_TOOLBAR_SETTINGS.bboxBorderSize, 1, 12),
+    bboxCreationType: ["pageBBox", "bbox", "subLineBBox", "imageBBox", "columnBBox"].includes(parsed.bboxCreationType)
+      ? parsed.bboxCreationType
+      : DEFAULT_PDF_TOOLBAR_SETTINGS.bboxCreationType,
     shapeBackground: readBooleanSetting(parsed.shapeBackground, DEFAULT_PDF_TOOLBAR_SETTINGS.shapeBackground),
     shapeToolSettings,
   };
@@ -706,31 +1380,50 @@ const getSpanBounds = (span) => {
   return { x, y, w: Math.max(0, right - x), h: Math.max(0, bottom - y) };
 };
 
-const getSelectedTextSpanEntries = (points, spans, expandToSelectedLines = false) => {
+const getSelectedTextSpanEntries = (points, spans, expandToSelectedLines = false, singleLine = false) => {
   const drawnBounds = pointsToBounds(points);
   if (!drawnBounds || !Array.isArray(spans)) return [];
   const intersected = spans.map((source) => ({ source, bounds: getSpanBounds(source) })).filter(({ bounds }) => bounds).filter(({ bounds: span }) => {
     const overlapX = Math.max(0, Math.min(drawnBounds.x + drawnBounds.w, span.x + span.w) - Math.max(drawnBounds.x, span.x));
     const overlapY = Math.max(0, Math.min(drawnBounds.y + drawnBounds.h, span.y + span.h) - Math.max(drawnBounds.y, span.y));
-    // PDF.js text spans are word-level in many documents. Any genuine
-    // intersection selects the complete word span, never a partial word.
-    return overlapX > 0.01 && overlapY > 0.01;
+    // PDF.js text spans are word-level in many documents. A BBox must cover
+    // at least half of a span from top to bottom before it selects that line.
+    return overlapX > 0.01 && overlapY / Math.max(1, span.h) >= 0.5;
   });
   if (!intersected.length) return [];
   const lineKey = (source, bounds) => source.rowIndex != null
     ? `${source.columnIndex ?? "full"}:${source.rowIndex}`
     : `${source.columnIndex ?? "full"}:${Math.round((bounds.y + bounds.h / 2) * 2) / 2}`;
-  const selectedLineKeys = new Set(intersected.map(({ source, bounds }) => lineKey(source, bounds)));
-  return expandToSelectedLines
-    ? spans
-      .map((source) => ({ source, bounds: getSpanBounds(source) }))
-      .filter(({ source, bounds }) => bounds && selectedLineKeys.has(lineKey(source, bounds)))
-    : intersected;
+  // A bbox selects complete touched lines, not individual glyph fragments.
+  // Crucially, a line is eligible only when its center is inside the drawn
+  // rectangle; a neighboring line merely grazed at its edge is excluded.
+  const lineGroups = new Map();
+  intersected.forEach((entry) => {
+    const key = lineKey(entry.source, entry.bounds);
+    const group = lineGroups.get(key) || { top: Infinity, bottom: -Infinity };
+    group.top = Math.min(group.top, entry.bounds.y);
+    group.bottom = Math.max(group.bottom, entry.bounds.y + entry.bounds.h);
+    lineGroups.set(key, group);
+  });
+  const selectedLineKeys = new Set([...lineGroups.entries()]
+    .filter(([, group]) => {
+      const overlapTop = Math.max(drawnBounds.y, group.top);
+      const overlapBottom = Math.min(drawnBounds.y + drawnBounds.h, group.bottom);
+      const overlapHeight = Math.max(0, overlapBottom - overlapTop);
+      // The line itself is the selection unit. Once the BBox covers at least
+      // half of that line's top-to-bottom extent, keep the complete line,
+      // even when its center is just outside the drawn rectangle.
+      return overlapHeight / Math.max(1, group.bottom - group.top) >= 0.5;
+    })
+    .map(([key]) => key));
+  return spans
+    .map((source) => ({ source, bounds: getSpanBounds(source) }))
+    .filter(({ source, bounds }) => bounds && selectedLineKeys.has(lineKey(source, bounds)));
 };
 
-const unionSelectedTextLines = (points, spans, expandToSelectedLines = false, selectedEntries = null, clipToDrawnBounds = false) => {
+const unionSelectedTextLines = (points, spans, expandToSelectedLines = false, selectedEntries = null, clipToDrawnBounds = false, singleLine = false) => {
   const drawnBounds = clipToDrawnBounds ? pointsToBounds(points) : null;
-  const selected = (selectedEntries || getSelectedTextSpanEntries(points, spans, expandToSelectedLines))
+  const selected = (selectedEntries || getSelectedTextSpanEntries(points, spans, expandToSelectedLines, singleLine))
     .map(({ bounds }) => bounds)
     .filter(Boolean)
     .map((bounds) => {
@@ -757,17 +1450,20 @@ const unionSelectedTextLines = (points, spans, expandToSelectedLines = false, se
 // line geometry; image/blank selections fall back to the minimum-area shape.
 const finalizeBBoxAsRectangle = (points, type, spans, selectedEntries = null) => {
   const drawnBounds = pointsToBounds(points);
-  const selectedLineBounds = type !== "imageBBox"
+  const selectedLineBounds = bboxTypeHas(type, "extractsText")
     ? unionSelectedTextLines(
         points,
         spans,
         ["bbox", "subLineBBox", "columnBBox"].includes(type),
         selectedEntries,
-        ["bbox", "columnBBox"].includes(type),
+        ["bbox", "subLineBBox", "columnBBox"].includes(type),
+        type === "subLineBBox",
       )
     : null;
   const rectangle = type === "pageBBox"
     ? (selectedLineBounds ? rectanglePointsFromBounds(selectedLineBounds) : drawnBounds ? rectanglePointsFromBounds(drawnBounds) : null)
+    : type === "omissionBBox"
+      ? (drawnBounds ? rectanglePointsFromBounds(drawnBounds) : null)
     : selectedLineBounds
     ? rectanglePointsFromBounds(selectedLineBounds)
     : minimumAreaRectangle(points);
@@ -857,46 +1553,18 @@ const buildEditableBBoxOutline = (annotation) => {
   ];
 };
 
-const sampleClosedOutlineHandles = (annotation, scale = 1) => {
-  const outline = buildEditableBBoxOutline(annotation);
-  if (outline.length < 2) return [];
-  const closed = isBBoxOutlineClosed(annotation);
-  const safeScale = Math.max(0.25, Number(scale) || 1);
-  const dashLength = 8 / safeScale;
-  const gapLength = 6 / safeScale;
-  const baseStride = dashLength + gapLength;
-  const stride = baseStride * 3.5;
-  const offset = stride / 2;
-  const segments = [];
-  let totalLength = 0;
-  const segmentCount = closed ? outline.length : Math.max(0, outline.length - 1);
-  for (let i = 0; i < segmentCount; i++) {
-    const a = outline[i];
-    const b = outline[(i + 1) % outline.length];
-    const length = Math.hypot((b.x ?? 0) - (a.x ?? 0), (b.y ?? 0) - (a.y ?? 0));
-    if (length <= 0.001) continue;
-    segments.push({ startIndex: i, a, b, length, startLength: totalLength });
-    totalLength += length;
-  }
-  if (!segments.length || totalLength <= 0.001) return [];
-  const maxHandles = 14;
-  const minHandles = 4;
-  const desiredCount = Math.max(minHandles, Math.min(maxHandles, Math.round(totalLength / stride)));
-  const finalStride = desiredCount > 0 ? totalLength / desiredCount : stride;
-  const finalOffset = finalStride / 2;
-  const handles = [];
-  for (let distance = finalOffset; distance < totalLength; distance += finalStride) {
-    const segment = segments.find((item) => distance >= item.startLength && distance <= item.startLength + item.length) || segments[segments.length - 1];
-    const localDistance = distance - segment.startLength;
-    const t = Math.max(0, Math.min(1, localDistance / Math.max(0.001, segment.length)));
-    handles.push({
-      x: segment.a.x + (segment.b.x - segment.a.x) * t,
-      y: segment.a.y + (segment.b.y - segment.a.y) * t,
-      insertAfterIndex: segment.startIndex,
-      t,
-    });
-  }
-  return handles;
+const sampleClosedOutlineHandles = (annotation) => {
+  if (!annotation) return [];
+  const left = Number(annotation.x) || 0;
+  const top = Number(annotation.y) || 0;
+  const width = Math.max(1, Number(annotation.w) || 1);
+  const height = Math.max(1, Number(annotation.h) || 1);
+  return [
+    { side: "top", x: left + width / 2, y: top, cursor: "ns-resize" },
+    { side: "right", x: left + width, y: top + height / 2, cursor: "ew-resize" },
+    { side: "bottom", x: left + width / 2, y: top + height, cursor: "ns-resize" },
+    { side: "left", x: left, y: top + height / 2, cursor: "ew-resize" },
+  ];
 };
 
 const deformClosedOutlineAroundPoint = (points, pointIndex, dx, dy, scale = 1, closed = true) => {
@@ -975,35 +1643,6 @@ const findNearestOutlinePointIndex = (points, x, y) => {
     }
   }
   return bestIndex;
-};
-
-const findNearestOutlineSegmentPoint = (points, x, y, closed = true) => {
-  if (!Array.isArray(points) || points.length < 2) return null;
-  let best = null;
-  const segmentCount = closed ? points.length : Math.max(0, points.length - 1);
-  for (let index = 0; index < segmentCount; index++) {
-    const start = points[index];
-    const end = points[(index + 1) % points.length];
-    const dx = (end.x ?? 0) - (start.x ?? 0);
-    const dy = (end.y ?? 0) - (start.y ?? 0);
-    const lengthSquared = dx * dx + dy * dy;
-    const t = lengthSquared <= 0.000001
-      ? 0
-      : Math.max(0, Math.min(1, (((x - start.x) * dx) + ((y - start.y) * dy)) / lengthSquared));
-    const projectedX = start.x + dx * t;
-    const projectedY = start.y + dy * t;
-    const distance = Math.hypot(projectedX - x, projectedY - y);
-    if (!best || distance < best.distance) {
-      best = { x: projectedX, y: projectedY, insertAfterIndex: index, distance };
-    }
-  }
-  return best;
-};
-
-const buildBBoxOutlinePath = (annotation, scale = 1) => {
-  const points = buildEditableBBoxOutline(annotation);
-  if (points.length < 2) return "";
-  return `${points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x * scale} ${point.y * scale}`).join(" ")}${isBBoxOutlineClosed(annotation) ? " Z" : ""}`;
 };
 
 const stripTitleFromBBoxTextValue = (text, title) => {
@@ -1187,12 +1826,13 @@ const initStatus   = () => ({ value: "pending", at: new Date().toISOString() });
 const currentStatus = (item) => item.status?.value || "pending";
 
 const BBOX_TYPE_ABBREVIATIONS = Object.freeze({
-  bbox: "P",
+  bbox: "B",
   subLineBBox: "SL",
   columnBBox: "Part",
   pageBBox: "Pg",
   bboxTitle: "T",
   imageBBox: "Fig",
+  omissionBBox: "Omit",
 });
 
 const SEMANTIC_TYPE_ABBREVIATIONS = Object.freeze({
@@ -1259,9 +1899,13 @@ const PDFPage = forwardRef(({
   onUndoRedoStateChange = null,    // (state) => void — fired whenever canUndo/canRedo/hasHistory/historyOpen change, so an external driver's own buttons (disabled state, active state) can stay in sync without polling the ref
   hidePageNav = false,             // same idea as hideUndoRedo, for the prev/page-number/next row
   onPageNavStateChange = null,     // (state) => void — fired whenever pageNum/pageCount/disabled change
+  onZoomStateChange = null,        // (state) => void — fired whenever zoom changes so an external driver can render zoom controls
+  onAnnotationSaveStateChange = null, // (status) => void — mirrors annotation DB persistence in an external tab strip
   fitToContainer = false,          // force the fit-to-container initial zoom even though embedded is true — PDFReaderWorkspace's own reading pane is a full dedicated area, unlike a genuinely cramped embedding (e.g. Units Extraction), so it opts into this instead of "embedded" defaulting to native/1:1 scale for it too
   disableZoom = false,             // disable all zoom controls/gestures for fixed-size reader views like /pdf-reader
   toolbarHost = null,              // optional external DOM mount for this instance's real toolbar
+  entityBuilderHost = null,        // optional external DOM mount for AMCTOSHS Illumination
+  markdownHost = null,             // optional external DOM mount for the current page's Markdown aside
 }, ref) => {
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
@@ -1331,7 +1975,6 @@ const PDFPage = forwardRef(({
   const [annotHistoryPanelWidth, setAnnotHistoryPanelWidth] = useState(300);
   const [smartVideoPanelWidth, setSmartVideoPanelWidth] = useState(380);
   const [entityBuilderPanelWidth, setEntityBuilderPanelWidth] = useState(360);
-  const [amctoshsVignettePanelWidth, setAmctoshsVignettePanelWidth] = useState(360);
   const [extractionOpen, setExtractionOpen] = useState(false);
   const savedRatioRef                 = useRef(0.42);
   const contentRef                    = useRef(null);
@@ -1410,7 +2053,7 @@ const PDFPage = forwardRef(({
   // Declared here (ahead of most other state) because textSelectable below
   // reads it immediately.
   const [annotTool,      setAnnotTool]      = useState(null);
-  const navigationBlocked = Boolean(annotTool && annotTool !== "shapes"); // true only when a real drawing tool is selected
+  const navigationBlocked = Boolean(annotTool && !["shapes", "mdController"].includes(annotTool)); // true only when a real drawing tool is selected
   const toolActive = navigationBlocked;
   const annotToolRef = useRef(null); // mirrors navigationBlocked ? annotTool : null — read inside the pan-gesture effect, whose deps are just [pdfDoc], so annotTool itself would be stale there
 
@@ -1488,6 +2131,7 @@ const PDFPage = forwardRef(({
   const [mdDraftError, setMdDraftError] = useState("");
   const [mdPageIdx,     setMdPageIdx]     = useState(0); // index into mdPages — which single real page of the fetched range is displayed
   const [mdPageInputVal, setMdPageInputVal] = useState("1"); // editable page-number field's raw text, synced from mdCurrentPage.page
+  const [mdViewMode, setMdViewMode] = useState("draft"); // "draft" | "ocr" — cleaned reader view vs persisted OCR markdown
   const [pdfMdCountHighlight, setPdfMdCountHighlight] = useState(null); // null | "words" | "chars" — which markdown count is currently overlaid on the PDF page
   const [mdFontScale,   setMdFontScale]   = useState(1); // multiplier on the panel's base rem size — relative, so it scales with the root font-size same as everything else
   const [voiceListening, setVoiceListening] = useState(false);
@@ -1576,7 +2220,7 @@ const PDFPage = forwardRef(({
           key="shapes"
           ref={(el) => { toolButtonRefs.current.shapes = el; }}
           type="button"
-          className={`annot_trigger annot_tool_btn${(shapesActive || annotTool === "shapes") ? " annot_trigger--active" : ""}`}
+          className={`annot_trigger annot_tool_btn${(shapesActive || annotTool === "shapes") ? " annot_trigger--active" : ""}${pdfToolbarSettingsSaving && (shapesActive || annotTool === "shapes") ? " annot_tool_btn--saving" : ""}`}
           onClick={() => {
             setAnnotTool((current) => (current === "shapes" ? null : "shapes"));
             setColorMenuOpen(false);
@@ -1596,12 +2240,12 @@ const PDFPage = forwardRef(({
         <button
           ref={(el) => { toolButtonRefs.current[key] = el; }}
           type="button"
-          className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}`}
+          className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}${pdfToolbarSettingsSaving && annotTool === key ? " annot_tool_btn--saving" : ""}`}
           onClick={() => toggleAnnotTool(key)}
           title={tool.label}
           aria-label={tool.label}
         >
-          {key === "pen" ? <PenToolIcon /> : tool.iconSvg || <i className={tool.icon} />}
+          {isPenToolKey(key) ? <PenToolIcon /> : tool.iconSvg || <i className={tool.icon} />}
         </button>
       </React.Fragment>
     );
@@ -1613,6 +2257,7 @@ const PDFPage = forwardRef(({
   // you did and when, not just the current end result.
   const [annotHistory,     setAnnotHistory]     = useState([]);
   const [annotHistoryOpen, setAnnotHistoryOpen] = useState(false);
+  const [annotHistorySource, setAnnotHistorySource] = useState("pdf");
   const appendAnnotHistoryEntry = useCallback((history, entry) => (
     [...history, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300)
   ), []);
@@ -1820,37 +2465,649 @@ const PDFPage = forwardRef(({
     }
   }, [smartVideoSavedId, fetchSmartVideoSaved]);
 
-  // ── AMCTOSHS Segments Builder (formerly "AMCTOSHS Entity Builder") ──────
+  // ── AMCTOSHS Illumination (formerly "AMCTOSHS Entity Builder") ─────────
   // It only builds from explicit user-provided text: the latest manual
   // text selection or text typed into the panel. It intentionally does not
   // read the current page text.
-  const [entityBuilderOpen, setEntityBuilderOpen] = useState(false);
   const [entityBuilderSelectedText, setEntityBuilderSelectedText] = useState("");
+  const [markdownAsideOpen, setMarkdownAsideOpen] = useState(false);
+  const [markdownModeMenuOpen, setMarkdownModeMenuOpen] = useState(false);
+  const [markdownModeMenuPosition, setMarkdownModeMenuPosition] = useState(null);
+  const [markdownAsideMode, setMarkdownAsideMode] = useState("raw");
+  const [markdownRetainedVisualMode, setMarkdownRetainedVisualMode] = useState(null);
+  const [mdLineSpacing, setMdLineSpacing] = useState(0);
+  const [mdSpacingTarget, setMdSpacingTarget] = useState("str");
+  const [mdOpenLineId, setMdOpenLineId] = useState(null);
+  const [mdLineOrders, setMdLineOrders] = useState({});
+  const [mdLineTagsVisible, setMdLineTagsVisible] = useState(true);
+  const markdownVisualMode = markdownAsideMode.includes("visual")
+    ? markdownAsideMode
+    : markdownRetainedVisualMode;
+  const markdownVisualActive = markdownAsideOpen && Boolean(markdownVisualMode);
+  const [entityBuilderOpen, setEntityBuilderOpen] = useState(false);
+  const markdownVisualLayerRef = useRef(null);
+  const markdownAnnotationCanvasRef = useRef(null);
+  const [markdownAsideColumnGroup, setMarkdownAsideColumnGroup] = useState("text");
+  const [entityBuilderOcrBlankPageOpen, setEntityBuilderOcrBlankPageOpen] = useState(false);
+  const [entityBuilderOcrBlankPageBusy, setEntityBuilderOcrBlankPageBusy] = useState(false);
+  const [entityBuilderOcrBlankPageError, setEntityBuilderOcrBlankPageError] = useState("");
+  const [entityBuilderBlankPageMode, setEntityBuilderBlankPageMode] = useState("raw");
+  const [entityBuilderRawColumnGroup, setEntityBuilderRawColumnGroup] = useState("text");
+  const [entityBuilderRawValueQuery, setEntityBuilderRawValueQuery] = useState("");
+  const [entityBuilderRawBlankPageRows, setEntityBuilderRawBlankPageRows] = useState([]);
+  const [pymupdfPageExtraction, setPymupdfPageExtraction] = useState(null);
+  const [pymupdfExtractionBusy, setPymupdfExtractionBusy] = useState(false);
+  const pymupdfDocumentIdRef = useRef(null);
+  const pymupdfSourceIdRef = useRef(null);
+  const pymupdfPageCacheRef = useRef(new Map());
+  const [entityBuilderOmittedRawCategories, setEntityBuilderOmittedRawCategories] = useState(() => new Set());
+  const [entityBuilderVisualFocusId, setEntityBuilderVisualFocusId] = useState(null);
+  const [entityBuilderRawBlankPageMeta, setEntityBuilderRawBlankPageMeta] = useState({ pageWidth: 0, pageHeight: 0, viewportScale: 0, pageRotation: 0, mediaBox: [] });
+  const [entityBuilderVisualRawBlankPageText, setEntityBuilderVisualRawBlankPageText] = useState("");
+  const [entityBuilderOcrBlankPageAnnotations, setEntityBuilderOcrBlankPageAnnotations] = useState([]);
+  const [entityBuilderTesseractRows, setEntityBuilderTesseractRows] = useState([]);
+  const [entityBuilderTesseractMeta, setEntityBuilderTesseractMeta] = useState({ pageWidth: 0, pageHeight: 0, pageNumber: 0, renderDpi: 200, coordinateSpace: "ocr_page_pixels" });
+  const [entityBuilderTesseractBusy, setEntityBuilderTesseractBusy] = useState(false);
+  const [entityBuilderTesseractError, setEntityBuilderTesseractError] = useState("");
+  const [entityBuilderEmptyAreaHighlightsOpen, setEntityBuilderEmptyAreaHighlightsOpen] = useState(false);
+
+  useEffect(() => {
+    setEntityBuilderOmittedRawCategories(new Set());
+    setMdLineOrders({});
+    setMdOpenLineId(null);
+  }, [pageNum]);
+
+  useEffect(() => {
+    const sourceId = currentSourceIdRef.current;
+    if (!hasSourceId || !sourceId || !filename || !pageCount || !pageNum) {
+      setPymupdfPageExtraction(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const loadPyMuPDF = async () => {
+      setPymupdfExtractionBusy(true);
+      try {
+        if (pymupdfSourceIdRef.current !== sourceId) {
+          const resolvedDocumentId = await resolveDocumentId({
+            filename,
+            pageCount,
+            type: pdfType || "text-based",
+            sourceId,
+          });
+          if (!/^[a-f\d]{24}$/i.test(String(resolvedDocumentId || "").trim())) {
+            throw new Error("The PDF document identity could not be resolved.");
+          }
+          pymupdfDocumentIdRef.current = resolvedDocumentId;
+          pymupdfSourceIdRef.current = sourceId;
+          pymupdfPageCacheRef.current = new Map();
+        }
+        if (!/^[a-f\d]{24}$/i.test(String(pymupdfDocumentIdRef.current || "").trim())) {
+          throw new Error("The PDF document identity is unavailable.");
+        }
+        const cached = pymupdfPageCacheRef.current.get(pageNum);
+        const extraction = cached || await getPageExtractionEvidence(pymupdfDocumentIdRef.current, pageNum, { nativeOnly: true });
+        if (!cached) pymupdfPageCacheRef.current.set(pageNum, extraction);
+        if (!cancelled) setPymupdfPageExtraction(extraction);
+      } catch {
+        if (!cancelled) setPymupdfPageExtraction(null);
+      } finally {
+        if (!cancelled) setPymupdfExtractionBusy(false);
+      }
+    };
+    void loadPyMuPDF();
+    return () => { cancelled = true; };
+  }, [filename, hasSourceId, pageCount, pageNum, pdfType]);
+
+  const entityBuilderFilteredRawRows = useMemo(() => {
+    const query = entityBuilderRawValueQuery.trim().toLocaleLowerCase();
+    if (!query) return entityBuilderRawBlankPageRows;
+    return entityBuilderRawBlankPageRows.filter((row) => String(row.value || "").toLocaleLowerCase().includes(query));
+  }, [entityBuilderRawBlankPageRows, entityBuilderRawValueQuery]);
+
+  const entityBuilderRawSpatialMetadata = useMemo(() => {
+    const metadata = new Map();
+    const rows = entityBuilderRawBlankPageRows;
+    const rowsByY = [...rows].sort((left, right) => {
+      const yDifference = (Number(left.y) || 0) - (Number(right.y) || 0);
+      return Math.abs(yDifference) > 0.01
+        ? yDifference
+        : (Number(left.instanceNumber) || 0) - (Number(right.instanceNumber) || 0);
+    });
+    const visualBands = [];
+    rowsByY.forEach((row) => {
+      const rowY = Number(row.y) || 0;
+      const currentBand = visualBands.at(-1);
+      if (!currentBand || Math.abs(rowY - currentBand.anchorY) > 1) {
+        visualBands.push({ anchorY: rowY, rows: [row] });
+      } else {
+        currentBand.rows.push(row);
+      }
+    });
+    const visualRows = visualBands.flatMap((band) => band.rows.sort((left, right) => {
+      const xDifference = (Number(left.x) || 0) - (Number(right.x) || 0);
+      return Math.abs(xDifference) > 0.01
+        ? xDifference
+        : (Number(left.instanceNumber) || 0) - (Number(right.instanceNumber) || 0);
+    }));
+
+    visualRows.forEach((row, index) => {
+      metadata.set(row.id, { visualOrder: index + 1, deltaX: null, itemFlow: "mixed" });
+    });
+
+    rows.forEach((row, index) => {
+      const previous = rows[index - 1];
+      const currentX = Number(row.x);
+      const previousX = Number(previous?.x);
+      const entry = metadata.get(row.id) || {};
+      entry.deltaX = index > 0 && Number.isFinite(currentX) && Number.isFinite(previousX)
+        ? currentX - previousX
+        : null;
+      metadata.set(row.id, entry);
+    });
+
+    let runStart = 0;
+    while (runStart < rows.length) {
+      const startTy = Number(rows[runStart]?.ty);
+      let runEnd = runStart;
+      while (runEnd + 1 < rows.length) {
+        const nextTy = Number(rows[runEnd + 1]?.ty);
+        if (!Number.isFinite(startTy) || !Number.isFinite(nextTy) || Math.abs(nextTy - startTy) > 1) break;
+        runEnd += 1;
+      }
+
+      let hasAscending = false;
+      let hasDescending = false;
+      for (let index = runStart + 1; index <= runEnd; index += 1) {
+        const delta = (Number(rows[index]?.x) || 0) - (Number(rows[index - 1]?.x) || 0);
+        if (delta > 0.01) hasAscending = true;
+        else if (delta < -0.01) hasDescending = true;
+      }
+      const itemFlow = hasAscending && !hasDescending
+        ? "ascending-X"
+        : hasDescending && !hasAscending
+          ? "descending-X"
+          : "mixed";
+      for (let index = runStart; index <= runEnd; index += 1) {
+        const entry = metadata.get(rows[index].id) || {};
+        entry.itemFlow = itemFlow;
+        metadata.set(rows[index].id, entry);
+      }
+      runStart = runEnd + 1;
+    }
+
+    return metadata;
+  }, [entityBuilderRawBlankPageRows]);
+
+  const entityBuilderPyMuPdfRows = useMemo(() => {
+    const spans = Array.isArray(pymupdfPageExtraction?.native?.spans) ? pymupdfPageExtraction.native.spans : [];
+    const used = new Set();
+    return new Map(entityBuilderRawBlankPageRows.map((row) => {
+      const value = String(row.value || "").trim();
+      const candidates = spans
+        .map((span, index) => ({ span, index }))
+        .filter(({ span, index }) => !used.has(index) && String(span.text || "").trim() === value)
+        .sort((a, b) => {
+          const aBox = a.span.bbox || [];
+          const bBox = b.span.bbox || [];
+          const aDistance = Math.hypot((Number(aBox[0]) || 0) - (Number(row.x) || 0), (Number(aBox[1]) || 0) - (Number(row.y) || 0));
+          const bDistance = Math.hypot((Number(bBox[0]) || 0) - (Number(row.x) || 0), (Number(bBox[1]) || 0) - (Number(row.y) || 0));
+          return aDistance - bDistance;
+        });
+      const match = candidates[0];
+      if (!match) return [row.id, null];
+      used.add(match.index);
+      const span = match.span;
+      return [row.id, {
+        fontName: span.fontName || "-",
+        fontSize: Number.isFinite(span.fontSize) ? span.fontSize : null,
+        weight: span.bold ? "bold" : "normal",
+        style: span.italic ? "italic" : "normal",
+        flags: Number.isFinite(span.flags) ? span.flags : null,
+        color: Number.isFinite(span.color) ? span.color : null,
+        lineId: span.lineId || "-",
+        blockId: span.blockId || "-",
+        bbox: Array.isArray(span.bbox) ? span.bbox : [],
+        ascender: Number.isFinite(span.ascender) ? span.ascender : null,
+        descender: Number.isFinite(span.descender) ? span.descender : null,
+      }];
+    }));
+  }, [entityBuilderRawBlankPageRows, pymupdfPageExtraction]);
+
+  // Visual Raw uses the same matched records exposed by the Original Text
+  // table. PyMuPDF's rotated, page-relative bbox is preferred because it is
+  // the backend's native geometry; PDF.js remains the safe fallback while a
+  // page is loading or when a native span has no exact text match.
+  const entityBuilderVisualRawRows = useMemo(() => {
+    return entityBuilderRawBlankPageRows.map((row) => {
+      const native = entityBuilderPyMuPdfRows.get(row.id);
+      const bbox = Array.isArray(native?.bbox) && native.bbox.length >= 4 ? native.bbox : null;
+      const x = bbox ? Number(bbox[0]) : Number(row.x) || 0;
+      const y = bbox ? Number(bbox[1]) : Number(row.y) || 0;
+      const width = bbox ? Math.max(1, Number(bbox[2]) - Number(bbox[0])) : Math.max(1, Number(row.width) || 1);
+      const height = bbox ? Math.max(1, Number(bbox[3]) - Number(bbox[1])) : getRawVisibleHeight(row);
+      return {
+        ...row,
+        visualX: Number.isFinite(x) ? x : 0,
+        visualY: Number.isFinite(y) ? y : 0,
+        visualWidth: Number.isFinite(width) ? width : Math.max(1, Number(row.width) || 1),
+        visualHeight: Number.isFinite(height) ? height : getRawVisibleHeight(row),
+        visualFontSize: Number.isFinite(native?.fontSize) ? native.fontSize : Math.max(1, Number(row.fontSize) || 1),
+        visualFontWeight: native?.weight || row.fontWeight || "normal",
+        visualFontStyle: native?.style || row.fontStyle || "normal",
+      };
+    });
+  }, [entityBuilderPyMuPdfRows, entityBuilderRawBlankPageRows]);
+
+  const toggleRawCategoryOmission = useCallback((category) => {
+    setEntityBuilderOmittedRawCategories((previous) => {
+      const next = new Set(previous);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }, []);
+
+  const entityBuilderRawYColors = useMemo(() => {
+    const colors = new Map();
+    let colorIndex = 0;
+    entityBuilderRawBlankPageRows.forEach((row) => {
+      if (!Number.isFinite(row.ty)) return;
+      const tyKey = Number(row.ty).toFixed(2);
+      if (!colors.has(tyKey)) {
+        colors.set(tyKey, RAW_Y_COLOR_PALETTE[colorIndex % RAW_Y_COLOR_PALETTE.length]);
+        colorIndex += 1;
+      }
+    });
+    return colors;
+  }, [entityBuilderRawBlankPageRows]);
+
+  const focusOriginalTextValue = useCallback((row) => {
+    if (!row?.id) return;
+    setEntityBuilderVisualFocusId(row.id);
+    setMarkdownAsideMode("visual-raw");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const layer = markdownVisualLayerRef.current;
+        const target = layer
+          ? Array.from(layer.querySelectorAll("[data-raw-row-id]")).find((element) => element.dataset.rawRowId === String(row.id))
+          : null;
+        target?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!entityBuilderVisualFocusId) return undefined;
+    const timeout = window.setTimeout(() => setEntityBuilderVisualFocusId(null), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [entityBuilderVisualFocusId]);
+
+  const entityBuilderVisualRawLines = useMemo(() => {
+    const visualRowsById = new Map(entityBuilderVisualRawRows.map((row) => [row.id, row]));
+    // The MD table is the sole source of line membership. Consecutive items
+    // remain chained while each TY stays within five units of the prior item.
+    const tableLines = [];
+    let tableIndex = 0;
+    while (tableIndex < entityBuilderRawBlankPageRows.length) {
+      const startIndex = tableIndex;
+      const startRow = entityBuilderRawBlankPageRows[startIndex];
+      let endIndex = startIndex;
+
+      while (endIndex + 1 < entityBuilderRawBlankPageRows.length) {
+        const currentRow = entityBuilderRawBlankPageRows[endIndex];
+        const nextRow = entityBuilderRawBlankPageRows[endIndex + 1];
+        if (!areConsecutiveRawInstances(currentRow, nextRow)) break;
+        const currentTy = Number(currentRow.ty);
+        const nextTy = Number(nextRow.ty);
+        if (!Number.isFinite(currentTy) || !Number.isFinite(nextTy) || Math.abs(nextTy - currentTy) > 5) break;
+        endIndex += 1;
+      }
+
+      tableLines.push({
+        id: `visual-line-${startRow.id}`,
+        tableRows: entityBuilderRawBlankPageRows.slice(startIndex, endIndex + 1),
+      });
+      tableIndex = endIndex + 1;
+    }
+
+    return tableLines.map((tableLine) => {
+      const sourceRows = tableLine.tableRows
+        .map((tableRow) => {
+          const visualRow = visualRowsById.get(tableRow.id);
+          return visualRow ? {
+            ...visualRow,
+            value: tableRow.value,
+            ty: tableRow.ty,
+            instanceNumber: tableRow.instanceNumber,
+          } : null;
+        })
+        .filter((row) => row && !row.omitted && String(row.value || "").trim() && !entityBuilderOmittedRawCategories.has(getUnicodeOmissionLabel(row.value)));
+      if (!sourceRows.length) return null;
+      const visualRows = [...sourceRows].sort((left, right) => {
+        const leftOrder = entityBuilderRawSpatialMetadata.get(left.id)?.visualOrder ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder = entityBuilderRawSpatialMetadata.get(right.id)?.visualOrder ?? Number.MAX_SAFE_INTEGER;
+        return leftOrder - rightOrder;
+      });
+      const hasOrderDiscrepancy = visualRows.some((row, index) => row.id !== sourceRows[index]?.id);
+      const xMin = Math.min(...visualRows.map((row) => Number(row.visualX) || 0));
+      const xMax = Math.max(...visualRows.map((row) => (Number(row.visualX) || 0) + Math.max(1, Number(row.visualWidth) || 1)));
+      const y = Math.min(...visualRows.map((row) => Number(row.visualY) || 0));
+      const height = Math.max(...visualRows.map((row) => Number(row.visualHeight) || getRawVisibleHeight(row)));
+      return { id: tableLine.id, rows: visualRows, sourceRows, visualRows, x: xMin, xMin, xMax, y, height, hasOrderDiscrepancy };
+    }).filter(Boolean);
+  }, [entityBuilderRawBlankPageRows, entityBuilderVisualRawRows, entityBuilderOmittedRawCategories, entityBuilderRawSpatialMetadata]);
+
+  const entityBuilderVisualRawTextScale = useMemo(() => {
+    if (typeof document === "undefined") return 1;
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) return 1;
+    let sharedScale = 1;
+    entityBuilderVisualRawRows
+      .filter((row) => !row.omitted && String(row.value || "").trim() && !entityBuilderOmittedRawCategories.has(getUnicodeOmissionLabel(row.value)))
+      .forEach((row) => {
+        const fontSize = Math.max(1, Number(row.visualFontSize) || 1);
+        const width = Math.max(1, Number(row.visualWidth) || 1);
+        context.font = `${row.visualFontStyle || "normal"} ${row.visualFontWeight || "normal"} ${fontSize}px ${IBM_PLEX_MONO_FONT}`;
+        const measuredWidth = context.measureText(String(row.value || "")).width;
+        if (measuredWidth > width) sharedScale = Math.min(sharedScale, width / measuredWidth);
+      });
+    return Math.max(0.65, Math.min(1, sharedScale));
+  }, [entityBuilderVisualRawRows, entityBuilderOmittedRawCategories]);
+
+  const entityBuilderVisualRawPageWidth = Math.max(1, Number(pymupdfPageExtraction?.page?.widthPt) || Number(entityBuilderRawBlankPageMeta.pageWidth) || 1);
+  const entityBuilderVisualRawPageHeight = Math.max(1, Number(pymupdfPageExtraction?.page?.heightPt) || Number(entityBuilderRawBlankPageMeta.pageHeight) || 1);
+
+  const entityBuilderOcrTableRows = useMemo(() => (
+    entityBuilderOcrBlankPageAnnotations.map((annotation) => ({
+      id: annotation.id,
+      stringKey: "ocr",
+      type: annotation.type || "text",
+      value: annotation.text || "",
+      x: annotation.x,
+      y: annotation.y,
+      width: annotation.w,
+      height: annotation.h,
+      fontSize: annotation.fontSize,
+      fontFamily: annotation.fontFamily || "sans-serif",
+      fontWeight: annotation.fontBold ? "bold" : "normal",
+      fontStyle: annotation.fontItalic ? "italic" : "normal",
+      isHeadingLike: Boolean(annotation.isHeadingLike),
+      wrap: Boolean(annotation.wrap),
+      ocrSource: annotation.ocrImported ? "Tesseract OCR" : "OCR",
+      sourcePage: annotation.pageImportedFrom,
+      align: annotation.textAlign || "left",
+      baseline: annotation.textBaseline || "top",
+      padding: annotation.padding,
+    }))
+  ), [entityBuilderOcrBlankPageAnnotations]);
+
+  const entityBuilderOcrRawTableRows = useMemo(() => (
+    entityBuilderOcrBlankPageAnnotations.map((annotation) => ({
+      id: annotation.id,
+      stringKey: "ocr-raw",
+      value: annotation.text || "",
+      type: annotation.ocrBlockType || annotation.type || "text",
+      x: annotation.x,
+      y: annotation.y,
+      width: annotation.w,
+      height: annotation.h,
+      confidence: annotation.ocrConfidence,
+      blockId: annotation.ocrBlockId,
+      sourcePage: annotation.pageImportedFrom,
+      source: annotation.ocrImported ? "Tesseract OCR" : "OCR",
+    }))
+  ), [entityBuilderOcrBlankPageAnnotations]);
+
+  const activeTesseractTableRows = useMemo(() => {
+    if (entityBuilderTesseractRows.length) {
+      return entityBuilderTesseractRows.map((row, index) => ({
+        ...row,
+        stringKey: "tesseract",
+        instanceNumber: index + 1,
+        source: "Tesseract",
+        text: String(row.text ?? ""),
+        confidence: Number.isFinite(Number(row.confidence)) ? Number(row.confidence) : null,
+        x: Number(row.x),
+        y: Number(row.y),
+        width: Number(row.width),
+        height: Number(row.height),
+        block: row.block ?? "",
+        paragraph: row.paragraph ?? "",
+        line: row.line ?? "",
+        word: row.word ?? "",
+        pageNumber: Number(row.page) || pageNum,
+        pageWidth: Number(entityBuilderTesseractMeta.pageWidth) || 0,
+        pageHeight: Number(entityBuilderTesseractMeta.pageHeight) || 0,
+      }));
+    }
+
+    // Sources-table OCR is persisted as normalized OCR blocks. Use those
+    // blocks when no manual page-level run has populated the word rows.
+    return entityBuilderOcrBlankPageAnnotations.map((annotation, index) => ({
+      id: annotation.id,
+      stringKey: "tesseract",
+      instanceNumber: index + 1,
+      text: String(annotation.text ?? ""),
+      confidence: Number.isFinite(Number(annotation.ocrConfidence)) ? Number(annotation.ocrConfidence) : null,
+      x: Number(annotation.x),
+      y: Number(annotation.y),
+      width: Number(annotation.w),
+      height: Number(annotation.h),
+      pageNumber: Number(annotation.pageImportedFrom) || pageNum,
+      pageWidth: Number(entityBuilderRawBlankPageMeta.pageWidth) || 0,
+      pageHeight: Number(entityBuilderRawBlankPageMeta.pageHeight) || 0,
+      block: annotation.ocrBlockId || "",
+      paragraph: "-",
+      line: "-",
+      word: "-",
+      source: "Tesseract",
+      level: null,
+    }));
+  }, [entityBuilderTesseractRows, entityBuilderTesseractMeta.pageWidth, entityBuilderTesseractMeta.pageHeight, entityBuilderOcrBlankPageAnnotations, entityBuilderRawBlankPageMeta.pageWidth, entityBuilderRawBlankPageMeta.pageHeight, pageNum]);
+
+  const markdownAsideColumnGroups = [
+    ["text", "TEXT"],
+    ["position", "POSITION"],
+    ["font", "FONT"],
+    ["transform", "TRANSFORM"],
+    ["blocks", "BLOCKS"],
+  ];
+
+  const markdownAsideRawColumns = useMemo(() => ({
+    text: [
+      ["INSTANCE #", (row) => Number.isFinite(row.instanceNumber) ? row.instanceNumber : "-"],
+      ["VALUE", (row) => row.value],
+      ["READING STATUS", (row) => row.omitted ? `OMITTED${row.omissionBBoxIds?.length ? ` (${row.omissionBBoxIds.length} bbox)` : ""}` : "INCLUDED"],
+      ["DIR", (row) => row.direction || "-"],
+      ["EOL", (row) => row.eol ? "true" : "false"],
+      ["CHAR COUNT", (row) => Number.isFinite(row.charCount) ? row.charCount : "-"],
+      ["WHITESPACE", (row) => row.whitespaceOnly ? "true" : "false"],
+      ["OMISSION", (row) => getUnicodeOmissionLabel(row.value)],
+    ],
+    position: [
+      ["INSTANCE #", (row) => Number.isFinite(row.instanceNumber) ? row.instanceNumber : "-"],
+      ["VALUE", (row) => row.value || "-"],
+      ["SOURCE ORDER", (row) => Number.isFinite(row.instanceNumber) ? row.instanceNumber : "-"],
+      ["VISUAL ORDER", (row) => entityBuilderRawSpatialMetadata.get(row.id)?.visualOrder || "-"],
+      ["DELTA X", (row) => Number.isFinite(entityBuilderRawSpatialMetadata.get(row.id)?.deltaX) ? entityBuilderRawSpatialMetadata.get(row.id).deltaX.toFixed(2) : "-"],
+      ["ITEM FLOW", (row) => entityBuilderRawSpatialMetadata.get(row.id)?.itemFlow || "mixed"],
+      ["TX", (row) => Number.isFinite(row.tx) ? row.tx.toFixed(2) : "-"],
+      ["TY", (row) => Number.isFinite(row.ty) ? row.ty.toFixed(2) : "-"],
+      ["X", (row) => Number.isFinite(row.x) ? row.x.toFixed(2) : "-"],
+      ["Y", (row) => Number.isFinite(row.y) ? row.y.toFixed(2) : "-"],
+      ["WIDTH", (row) => Number.isFinite(row.width) ? row.width.toFixed(2) : "-"],
+      ["HEIGHT", (row) => Number.isFinite(row.height) ? row.height.toFixed(2) : "-"],
+      ["TOP", (row) => Number.isFinite(row.top) ? row.top.toFixed(2) : "-"],
+      ["ASCENT", (row) => Number.isFinite(row.ascent) ? row.ascent.toFixed(2) : "-"],
+      ["BASELINE", (row) => Number.isFinite(row.baseline) ? row.baseline.toFixed(2) : "-"],
+      ["DESCENT", (row) => Number.isFinite(row.descent) ? row.descent.toFixed(2) : "-"],
+      ["BOTTOM", (row) => Number.isFinite(row.bottom) ? row.bottom.toFixed(2) : "-"],
+      ["RAW WIDTH", (row) => Number.isFinite(row.rawWidth) ? row.rawWidth.toFixed(4) : "-"],
+      ["RAW HEIGHT", (row) => Number.isFinite(row.rawHeight) ? row.rawHeight.toFixed(4) : "-"],
+      ["PAGE WIDTH", (row) => Number.isFinite(row.width) ? row.width.toFixed(2) : "-"],
+      ["PAGE HEIGHT", (row) => Number.isFinite(row.height) ? row.height.toFixed(2) : "-"],
+      ["PYMUPDF X", (row) => Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.bbox?.[0]) ? entityBuilderPyMuPdfRows.get(row.id).bbox[0].toFixed(2) : "-"],
+      ["PYMUPDF Y", (row) => Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.bbox?.[1]) ? entityBuilderPyMuPdfRows.get(row.id).bbox[1].toFixed(2) : "-"],
+      ["PYMUPDF WIDTH", (row) => Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.bbox?.[2]) && Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.bbox?.[0]) ? (entityBuilderPyMuPdfRows.get(row.id).bbox[2] - entityBuilderPyMuPdfRows.get(row.id).bbox[0]).toFixed(2) : "-"],
+      ["PYMUPDF HEIGHT", (row) => Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.bbox?.[3]) && Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.bbox?.[1]) ? (entityBuilderPyMuPdfRows.get(row.id).bbox[3] - entityBuilderPyMuPdfRows.get(row.id).bbox[1]).toFixed(2) : "-"],
+    ],
+    font: [
+      ["INSTANCE #", (row) => Number.isFinite(row.instanceNumber) ? row.instanceNumber : "-"],
+      ["VALUE", (row) => row.value || "-"],
+      ["FONT SIZE", (row) => Number.isFinite(row.fontSize) ? row.fontSize.toFixed(2) : "-"],
+      ["FONT FAMILY", (row) => row.fontFamily || "-"],
+      ["WEIGHT", (row) => row.fontWeight || "-"],
+      ["STYLE", (row) => row.fontStyle || "-"],
+      ["FONT NAME", (row) => row.fontName || "-"],
+      ["PYMUPDF FONT", (row) => entityBuilderPyMuPdfRows.get(row.id)?.fontName || "-"],
+      ["PYMUPDF WEIGHT", (row) => entityBuilderPyMuPdfRows.get(row.id)?.weight || "-"],
+      ["PYMUPDF STYLE", (row) => entityBuilderPyMuPdfRows.get(row.id)?.style || "-"],
+      ["PYMUPDF FLAGS", (row) => Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.flags) ? entityBuilderPyMuPdfRows.get(row.id).flags : "-"],
+      ["PYMUPDF COLOR", (row) => Number.isFinite(entityBuilderPyMuPdfRows.get(row.id)?.color) ? entityBuilderPyMuPdfRows.get(row.id).color : "-"],
+    ],
+    transform: [
+      ["INSTANCE #", (row) => Number.isFinite(row.instanceNumber) ? row.instanceNumber : "-"],
+      ["VALUE", (row) => row.value || "-"],
+      ["ROTATION", (row) => formatSignedRotation(row.rotation)],
+      ["SCALE X", (row) => Number.isFinite(row.scaleX) ? row.scaleX.toFixed(4) : "-"],
+      ["SCALE Y", (row) => Number.isFinite(row.scaleY) ? row.scaleY.toFixed(4) : "-"],
+      ["ORIGINAL A", (row) => Number.isFinite(row.matrixA) ? row.matrixA.toFixed(4) : "-"],
+      ["ORIGINAL B", (row) => Number.isFinite(row.matrixB) ? row.matrixB.toFixed(4) : "-"],
+      ["ORIGINAL C", (row) => Number.isFinite(row.matrixC) ? row.matrixC.toFixed(4) : "-"],
+      ["ORIGINAL D", (row) => Number.isFinite(row.matrixD) ? row.matrixD.toFixed(4) : "-"],
+      ["ORIGINAL E", (row) => Number.isFinite(row.matrixE) ? row.matrixE.toFixed(4) : "-"],
+      ["ORIGINAL F", (row) => Number.isFinite(row.matrixF) ? row.matrixF.toFixed(4) : "-"],
+      ["FULL A", (row) => Number.isFinite(row.fullMatrixA) ? row.fullMatrixA.toFixed(4) : "-"],
+      ["FULL B", (row) => Number.isFinite(row.fullMatrixB) ? row.fullMatrixB.toFixed(4) : "-"],
+      ["FULL C", (row) => Number.isFinite(row.fullMatrixC) ? row.fullMatrixC.toFixed(4) : "-"],
+      ["FULL D", (row) => Number.isFinite(row.fullMatrixD) ? row.fullMatrixD.toFixed(4) : "-"],
+      ["FULL E", (row) => Number.isFinite(row.fullMatrixE) ? row.fullMatrixE.toFixed(4) : "-"],
+      ["FULL F", (row) => Number.isFinite(row.fullMatrixF) ? row.fullMatrixF.toFixed(4) : "-"],
+      ["PYMUPDF LINE", (row) => entityBuilderPyMuPdfRows.get(row.id)?.lineId || "-"],
+      ["PYMUPDF BLOCK", (row) => entityBuilderPyMuPdfRows.get(row.id)?.blockId || "-"],
+    ],
+    blocks: [
+      ["BLOCK #", (row) => Number.isFinite(row.blockNumber) ? row.blockNumber : "-"],
+      ["LINE REFERENCES", (row) => row.lineReferences || "-"],
+      ["STRING REFERENCES", (row) => row.stringReferences || "-"],
+    ],
+    classification: [["CLASS", (row) => row.classification || "-"]],
+  }), [entityBuilderPyMuPdfRows, entityBuilderRawSpatialMetadata]);
+
+  const runTesseractOcr = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId || !pageNum || entityBuilderTesseractBusy) return;
+    setEntityBuilderTesseractBusy(true);
+    setEntityBuilderTesseractError("");
+    setEntityBuilderTesseractRows([]);
+    try {
+      const response = await authFetch(apiUrl(`/api/sources/${sourceId}/tesseract?page=${pageNum}`), { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error?.message || data.error || "Tesseract OCR failed.");
+      setEntityBuilderTesseractRows(Array.isArray(data.rows) ? data.rows : []);
+      setEntityBuilderTesseractMeta({
+        pageWidth: Number(data.pageWidth) || 0,
+        pageHeight: Number(data.pageHeight) || 0,
+        pageNumber: Number(data.page) || pageNum,
+        renderDpi: Number(data.renderDpi) || 200,
+        coordinateSpace: data.coordinateSpace || "ocr_page_pixels",
+      });
+      setEntityBuilderBlankPageMode("tesseract");
+    } catch (error) {
+      setEntityBuilderTesseractError(error.message || "Tesseract OCR failed.");
+    } finally {
+      setEntityBuilderTesseractBusy(false);
+    }
+  }, [entityBuilderTesseractBusy, pageNum]);
 
   const toggleEntityBuilder = useCallback(() => {
     setEntityBuilderOpen((open) => !open);
   }, []);
-
-  // Mount the aside the moment the Segmentation tool (annotTool "bbox",
-  // formerly labeled "BBox") is picked — same convention as Smart Video's
-  // own annotTool effect above — rather than requiring the separate
-  // toolbar trigger that used to open this panel (now removed).
-  useEffect(() => {
-    if (annotTool === "bbox") setEntityBuilderOpen(true);
-  }, [annotTool]);
-
-  // ── AMCTOSHS Clinical Vignette Generator ─────────────────────────────────
-  // Also independent of the annotTool tool-strip — generates a clinical
-  // vignette from the same Entity Schema library the Builder above writes to.
-  const [amctoshsVignetteOpen, setAmctoshsVignetteOpen] = useState(false);
-  const toggleAmctoshsVignette = useCallback(() => {
-    setAmctoshsVignetteOpen((open) => !open);
+  const toggleOcrBlankPage = useCallback(() => {
+    setEntityBuilderOcrBlankPageOpen((open) => !open);
+    setEntityBuilderOcrBlankPageError("");
+  }, []);
+  const toggleMarkdownAside = useCallback(() => {
+    if (markdownModeMenuOpen) {
+      setMarkdownModeMenuOpen(false);
+      return;
+    }
+    if (!markdownAsideOpen) {
+      setReadingMode("single");
+    }
+    const button = document.getElementById("pdf_ocr_companion_toggle");
+    const rect = button?.getBoundingClientRect();
+    if (rect) {
+      const styles = window.getComputedStyle(button);
+      setMarkdownModeMenuPosition({
+        left: rect.left,
+        top: rect.bottom - 1,
+        width: rect.width,
+        height: rect.height,
+        radius: styles.borderRadius,
+      });
+    }
+    setMarkdownModeMenuOpen(true);
+  }, [markdownAsideOpen, markdownModeMenuOpen]);
+  const setReaderReadingMode = useCallback((mode) => {
+    setReadingMode(mode);
+    setMarkdownAsideOpen(false);
+    setMarkdownModeMenuOpen(false);
+    setMarkdownRetainedVisualMode(null);
   }, []);
   useEffect(() => {
-    if (!amctoshsVignetteOpen) return;
-    fetchAiProviderModelsOnce();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amctoshsVignetteOpen]);
+    if (!markdownModeMenuOpen) return undefined;
+    const update = () => {
+      const rect = document.getElementById("pdf_ocr_companion_toggle")?.getBoundingClientRect();
+      const button = document.getElementById("pdf_ocr_companion_toggle");
+      if (rect && button) {
+        const styles = window.getComputedStyle(button);
+        setMarkdownModeMenuPosition({
+          left: rect.left,
+          top: rect.bottom,
+          width: rect.width,
+          height: rect.height,
+          radius: styles.borderRadius,
+        });
+      }
+    };
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    const button = document.getElementById("pdf_ocr_companion_toggle");
+    const navGroup = button?.closest(".pdfw_page_nav_group");
+    const observer = typeof ResizeObserver !== "undefined" && button
+      ? new ResizeObserver(update)
+      : null;
+    observer?.observe(button);
+    if (navGroup && navGroup !== button) observer?.observe(navGroup);
+    const frame = requestAnimationFrame(update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [markdownModeMenuOpen]);
+  useEffect(() => {
+    if (!markdownModeMenuOpen) return undefined;
+    const closeOnOutsidePointer = (event) => {
+      const button = document.getElementById("pdf_ocr_companion_toggle");
+      const menu = document.querySelector(".pdf_markdown_mode_menu");
+      if (button?.contains(event.target) || menu?.contains(event.target)) return;
+      setMarkdownModeMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer, true);
+  }, [markdownModeMenuOpen]);
+  const entityBuilderEmptyAreaRects = useMemo(
+    () => computeEmptyTextRects(
+      entityBuilderRawBlankPageRows,
+      Number(entityBuilderRawBlankPageMeta?.pageWidth) || 0,
+      Number(entityBuilderRawBlankPageMeta?.pageHeight) || 0,
+    ),
+    [entityBuilderRawBlankPageMeta, entityBuilderRawBlankPageRows],
+  );
 
   // ── AMCTOSHS Hyle layers (floating button, bottom-left of the canvas) ───
   // Per this app's own AMCTOSHS vocabulary — a word/page is Hyle
@@ -1869,6 +3126,7 @@ const PDFPage = forwardRef(({
   //                 drawn as boxes + numbered markers (form actually
   //                 imposed on the page).
   const [hyleFabOpen, setHyleFabOpen] = useState(false);
+  const [annotationLayerTab, setAnnotationLayerTab] = useState("pdf");
   const [hyleMode, setHyleMode] = useState("raw"); // "raw" | "segmented" (never null — Raw is always the default/active layer)
   // Named distinctly from the existing hyleData/setHyleData state above
   // (the Hyles noun-extraction feature) — same "Hyle" vocabulary, but a
@@ -1920,6 +3178,7 @@ const PDFPage = forwardRef(({
   // shared-dash handling for how these render.
   const [shapeToolSettings, setShapeToolSettings] = useState(savedToolbarSettings.shapeToolSettings);
   const [bboxBorderSize, setBBoxBorderSize] = useState(savedToolbarSettings.bboxBorderSize);
+  const [activeBBoxCreationType, setActiveBBoxCreationType] = useState(savedToolbarSettings.bboxCreationType);
   // Fill for closed shapes only (rect/circle — line/arrow have no
   // interior to fill), same low-alpha wash convention as textBackground.
   // Always uses the shape's own border/ink color (annotationDraw.js) —
@@ -1929,9 +3188,6 @@ const PDFPage = forwardRef(({
   // tool's background swatch, or one of the per-tool saved preset slots.
   // Not persisted — always resets to plain ink targeting on reload.
   const [colorMenuTarget, setColorMenuTarget] = useState({ type: "ink", presetIndex: null });
-  const [drawTextBusy, setDrawTextBusy] = useState(false);
-  const [drawTextStatus, setDrawTextStatus] = useState("");
-  const [drawTextProgress, setDrawTextProgress] = useState(0);
   const [colorMenuOpen,  setColorMenuOpen]  = useState(false); // floating color dropdown
   const [textMenuOpen, setTextMenuOpen] = useState(false); // floating text controls dropdown
   const colorMenuRef = useRef(null);
@@ -1954,6 +3210,68 @@ const PDFPage = forwardRef(({
   const [annotationLayers, setAnnotationLayers] = useState(() => [createAnnotationLayer(1, {})]);
   const [activeAnnotationLayerId, setActiveAnnotationLayerId] = useState(null);
   const [annotations, setAnnotations] = useState({});   // active layer only: { [pageNum]: [...] }
+  const entityBuilderRawBlockTableRows = useMemo(() => {
+    const blockBBoxes = (annotations[pageNum] || []).filter((annotation) => annotation?.type === "bbox");
+    return blockBBoxes.map((block, blockIndex) => {
+      const blockLeft = Number(block.x);
+      const blockTop = Number(block.y);
+      const blockWidth = Number(block.w);
+      const blockHeight = Number(block.h);
+      const selectedRows = entityBuilderRawBlankPageRows.filter((row) => {
+        if (row.omitted || !String(row.value || "").trim()) return false;
+        if (entityBuilderOmittedRawCategories.has(getUnicodeOmissionLabel(row.value))) return false;
+        const rowLeft = Number(row.x);
+        const rowTop = Number(row.y);
+        const rowWidth = Math.max(0, Number(row.width) || 0);
+        const rowHeight = Math.max(1, Number(row.height) || 1);
+        if (![rowLeft, rowTop, blockLeft, blockTop, blockWidth, blockHeight].every(Number.isFinite)) return false;
+        const overlapX = Math.max(0, Math.min(rowLeft + rowWidth, blockLeft + blockWidth) - Math.max(rowLeft, blockLeft));
+        const overlapY = Math.max(0, Math.min(rowTop + rowHeight, blockTop + blockHeight) - Math.max(rowTop, blockTop));
+        return overlapX > 0.01 && overlapY / rowHeight >= 0.5;
+      });
+      const selectedIds = new Set(selectedRows.map((row) => row.id));
+      const lineReferences = entityBuilderVisualRawLines
+        .map((line, lineIndex) => line.sourceRows.some((row) => selectedIds.has(row.id)) ? `L${lineIndex + 1}` : null)
+        .filter(Boolean);
+      const stringReferences = selectedRows
+        .map((row) => Number.isFinite(row.instanceNumber) ? `str #${row.instanceNumber}` : null)
+        .filter(Boolean);
+      return {
+        id: block.id || `block-${blockIndex + 1}`,
+        blockNumber: blockIndex + 1,
+        lineReferences: lineReferences.join(", "),
+        stringReferences: stringReferences.join(", "),
+      };
+    });
+  }, [annotations, entityBuilderOmittedRawCategories, entityBuilderRawBlankPageRows, entityBuilderVisualRawLines, pageNum]);
+  const [markdownAnnotations, setMarkdownAnnotations] = useState({}); // MD-only layer, never merged into PDF annotations
+  const saveMarkdownAnnotations = useCallback((nextLayers) => {
+    const sourceId = currentSourceIdRef.current || embeddedSourceId || null;
+    if (!sourceId) return;
+    void authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ markdownLayers: nextLayers }),
+    }).catch((error) => console.error("[PDF] Failed to save Markdown annotations", error));
+  }, [embeddedSourceId]);
+  const markdownHistoryEntries = useMemo(() => Object.entries(markdownAnnotations || {})
+    .flatMap(([page, pageAnnotations]) => (Array.isArray(pageAnnotations) ? pageAnnotations : []).map((annotation, index) => {
+      const timestamp = Number(String(annotation?.id || "").split("_")[0]);
+      return {
+        ...annotation,
+        id: annotation?.id || `md_${page}_${index}`,
+        page: Number(page) || page,
+        time: Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp) : null,
+      };
+    }))
+    .sort((a, b) => (b.time?.getTime?.() || 0) - (a.time?.getTime?.() || 0)), [markdownAnnotations]);
+  const clearMarkdownAnnotations = useCallback(() => {
+    if (!markdownHistoryEntries.length) return;
+    setMarkdownAnnotations({});
+    saveMarkdownAnnotations({});
+  }, [markdownHistoryEntries.length, saveMarkdownAnnotations]);
+  const [annotationSaveStatus, setAnnotationSaveStatus] = useState("idle"); // idle | saving | saved | error
+  const annotationSaveRequestRef = useRef(0);
   const annotationsRef = useRef(annotations);
   annotationsRef.current = annotations;
   const [redoStacks, setRedoStacks] = useState({});     // { [pageNum]: [...] } — annotations popped by Undo, available to Redo
@@ -1999,6 +3317,18 @@ const PDFPage = forwardRef(({
     return merged;
   }, [annotationLayersForView]);
   const visiblePageAnnotations = visibleAnnotations[pageNum] || [];
+  const displayPageDescriptors = useMemo(() => {
+    if (!pageNum) return [];
+    const descriptors = (
+      readingMode === "booklet" && bookletRightPage && bookletRightPage !== pageNum
+        ? [{ kind: "pdf", page: pageNum }, { kind: "pdf", page: bookletRightPage }]
+        : [{ kind: "pdf", page: pageNum }]
+    );
+    if (entityBuilderOcrBlankPageOpen && readingMode === "single") {
+      descriptors.push({ kind: "ocr-blank", page: pageNum });
+    }
+    return descriptors;
+  }, [bookletRightPage, entityBuilderOcrBlankPageOpen, pageNum, readingMode]);
   const totalAnnotationCount = useMemo(
     () => annotationLayersForView.reduce(
       (sum, layer) => sum + Object.values(layer.annotations || {}).reduce((layerSum, list) => layerSum + list.length, 0),
@@ -2016,8 +3346,16 @@ const PDFPage = forwardRef(({
     return {
       pageNum,
       zoom,
+      viewMode: markdownAsideOpen ? "md" : "pdf",
       readingMode,
       bookletRightPage: readingMode === "booklet" ? bookletRightPage : null,
+      markdownAsideOpen,
+      markdownAsideMode,
+      markdownRetainedVisualMode,
+      markdownAsideColumnGroup,
+      mdLineSpacing,
+      mdSpacingTarget,
+      mdLineTagsVisible,
       searchOpen,
       searchQuery,
       pageRatioX: previewEl && currentPageEl
@@ -2027,7 +3365,21 @@ const PDFPage = forwardRef(({
         ? clamp(((previewEl.scrollTop + (previewEl.clientHeight / 2)) - pageTop) / pageHeight, 0, 1)
         : null,
     };
-  }, [bookletRightPage, pageNum, readingMode, searchOpen, searchQuery, zoom]);
+  }, [
+    bookletRightPage,
+    markdownAsideColumnGroup,
+    markdownAsideMode,
+    markdownAsideOpen,
+    markdownRetainedVisualMode,
+    mdLineSpacing,
+    mdLineTagsVisible,
+    mdSpacingTarget,
+    pageNum,
+    readingMode,
+    searchOpen,
+    searchQuery,
+    zoom,
+  ]);
   const buildAnnotationSavePayload = useCallback(({ activeAnnotations = annotations, history = annotHistory, layers = null } = {}) => {
     const sourceLayers = layers || annotationLayersForView;
     const targetLayerId = activeAnnotationLayer?.id
@@ -2036,8 +3388,8 @@ const PDFPage = forwardRef(({
       || null;
     const nextLayers = sourceLayers.map((layer) => (
       layer.id === targetLayerId
-        ? { ...layer, annotations: activeAnnotations }
-        : layer
+        ? { ...layer, annotations: withoutTemporarySmartPenStrokes(activeAnnotations) }
+        : { ...layer, annotations: withoutTemporarySmartPenStrokes(layer.annotations) }
     ));
     return {
       layers: nextLayers,
@@ -2046,6 +3398,8 @@ const PDFPage = forwardRef(({
       readerState: buildReaderStatePayload(),
     };
   }, [annotationLayersForView, activeAnnotationLayer, activeAnnotationLayerId, annotations, annotHistory, buildReaderStatePayload]);
+  const buildReaderStatePayloadRef = useRef(buildReaderStatePayload);
+  buildReaderStatePayloadRef.current = buildReaderStatePayload;
   const mapOcrPageToPdfSpace = useCallback(async (ocrPage, targetPage) => {
     if (!ocrPage || !(ocrPage.width > 0) || !(ocrPage.height > 0) || !pdfDoc) return ocrPage;
     const pdfPage = await pdfDoc.getPage(targetPage);
@@ -2074,6 +3428,207 @@ const PDFPage = forwardRef(({
         };
       }).filter(Boolean),
     };
+  }, [pdfDoc]);
+  const getPersistedOcrTextForSelection = useCallback(async (selection, targetPage = pageNum) => {
+    const sourceId = currentSourceIdRef.current;
+    if (!selection || !sourceId) return "";
+
+    try {
+      const response = await authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?page=${targetPage}`));
+      const data = await response.json().catch(() => ({}));
+      const ocrPage = data.pages?.[0];
+      if (!response.ok || !ocrPage) return "";
+
+      const alignedOcrPage = await mapOcrPageToPdfSpace(ocrPage, targetPage);
+      const selectionBox = {
+        left: Number(selection.x) || 0,
+        top: Number(selection.y) || 0,
+        right: (Number(selection.x) || 0) + Math.max(0, Number(selection.w) || 0),
+        bottom: (Number(selection.y) || 0) + Math.max(0, Number(selection.h) || 0),
+      };
+      const selectionArea = Math.max(1, (selectionBox.right - selectionBox.left) * (selectionBox.bottom - selectionBox.top));
+
+      const matches = (alignedOcrPage?.lines || [])
+        .map((line) => {
+          const bbox = line?.bbox || {};
+          const left = Number(bbox.x) || 0;
+          const top = Number(bbox.y) || 0;
+          const right = left + Math.max(0, Number(bbox.width) || 0);
+          const bottom = top + Math.max(0, Number(bbox.height) || 0);
+          const overlapWidth = Math.max(0, Math.min(selectionBox.right, right) - Math.max(selectionBox.left, left));
+          const overlapHeight = Math.max(0, Math.min(selectionBox.bottom, bottom) - Math.max(selectionBox.top, top));
+          const overlapArea = overlapWidth * overlapHeight;
+          const lineArea = Math.max(1, (right - left) * (bottom - top));
+          return {
+            text: String(line?.text || "").trim(),
+            x: left,
+            y: top,
+            overlapRatio: overlapArea / Math.min(selectionArea, lineArea),
+          };
+        })
+        .filter((line) => line.text && line.overlapRatio >= 0.2)
+        .sort((a, b) => a.y - b.y || a.x - b.x);
+
+      return normalizeOcrText(matches.map((line) => line.text).join("\n"));
+    } catch (error) {
+      console.warn("[PDF] persisted OCR selection lookup failed", error);
+      return "";
+    }
+  }, [mapOcrPageToPdfSpace, pageNum]);
+  const getOcrBlankTextStyle = useCallback((ann, scale) => {
+    const pageBoxWidth = Math.max(1, ann.w || 0);
+    const pageFontSize = Math.max(1, ann.fontSize || 0);
+    const fontWeight = ann.fontBold ? 700 : 400;
+    const toRenderStyle = (fontSizePageUnits, wrap) => ({
+      fontSize: `${Math.max(1, fontSizePageUnits * scale)}px`,
+      lineHeight: `${Math.max(1, fontSizePageUnits * scale * 1.15)}px`,
+      fontWeight,
+      whiteSpace: wrap ? "normal" : "nowrap",
+      overflowWrap: wrap ? "break-word" : "normal",
+      wordBreak: wrap ? "normal" : "keep-all",
+    });
+    const fallbackStyle = toRenderStyle(pageFontSize, ann.wrap);
+    if (typeof document === "undefined" || !ann?.text) return fallbackStyle;
+
+    if (!ocrBlankMeasureCanvasRef.current) {
+      ocrBlankMeasureCanvasRef.current = document.createElement("canvas");
+    }
+    const ctx = ocrBlankMeasureCanvasRef.current.getContext("2d");
+    if (!ctx) return fallbackStyle;
+
+    const fontFamily = ann.fontFamily || "sans-serif";
+    const quotedFamily = fontFamily.includes(" ") ? `"${fontFamily}"` : fontFamily;
+    const measureWidth = (fontPx) => {
+      ctx.font = `${ann.fontItalic ? "italic " : ""}${fontWeight} ${fontPx}px ${quotedFamily}`;
+      return ctx.measureText(ann.text).width;
+    };
+
+    const baseWidth = measureWidth(pageFontSize);
+    if (!ann.isHeadingLike) {
+      return toRenderStyle(pageFontSize, ann.wrap || baseWidth > pageBoxWidth * 1.02);
+    }
+
+    if (baseWidth <= pageBoxWidth * 1.01) return toRenderStyle(pageFontSize, false);
+
+    const fitScale = Math.min(1, (pageBoxWidth / Math.max(1, baseWidth)) * 0.99);
+    const shrunkFontSize = Math.max(7, pageFontSize * Math.max(OCR_BLANK_TITLE_MIN_SCALE, fitScale));
+    const shrunkWidth = measureWidth(shrunkFontSize);
+    if (shrunkWidth <= pageBoxWidth * 1.01) return toRenderStyle(shrunkFontSize, false);
+
+    return toRenderStyle(shrunkFontSize, true);
+  }, []);
+  const buildOcrTextAnnotationsForBlankPage = useCallback(async ({ ocrPage, referencePage, destinationPage }) => {
+    if (!ocrPage || !pdfDoc || !Number.isFinite(referencePage) || !Number.isFinite(destinationPage)) return [];
+    const pdfPage = await pdfDoc.getPage(referencePage);
+    const viewport = pdfPage.getViewport({ scale: 1 });
+    const scaleX = (ocrPage.width > 0) ? (viewport.width / ocrPage.width) : 1;
+    const scaleY = (ocrPage.height > 0) ? (viewport.height / ocrPage.height) : 1;
+
+    const normalizeRect = (source = {}) => {
+      const x = Number(source.x ?? source.left ?? source.top_left_x);
+      const y = Number(source.y ?? source.top ?? source.top_left_y);
+      const right = Number(source.right ?? source.bottom_right_x);
+      const bottom = Number(source.bottom ?? source.bottom_right_y);
+      const width = Number.isFinite(Number(source.width)) ? Number(source.width) : (Number.isFinite(x) && Number.isFinite(right) ? right - x : NaN);
+      const height = Number.isFinite(Number(source.height)) ? Number(source.height) : (Number.isFinite(y) && Number.isFinite(bottom) ? bottom - y : NaN);
+      if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+      return { x, y, width, height };
+    };
+
+    const normalizeText = (value) => String(value || "").replace(/\r/g, "").trim();
+    const buildFragment = ({ text, bbox, type = "paragraph", confidence = null, blockId = "" }) => {
+      const safeText = normalizeText(text);
+      if (!safeText || !bbox) return null;
+      const isHeadingLike = ["title", "heading", "header"].includes(type);
+      const mappedBox = {
+        x: bbox.x * scaleX,
+        y: bbox.y * scaleY,
+        width: bbox.width * scaleX,
+        height: bbox.height * scaleY,
+      };
+      const estimatedCharWidth = safeText.length > 0 ? (mappedBox.width / Math.max(1, safeText.length * 0.58)) : mappedBox.height;
+      const fontSize = Math.max(7, Math.min(mappedBox.height * 0.72, estimatedCharWidth));
+      const estimatedTextWidth = safeText.length * fontSize * 0.58;
+      const shouldWrap = !isHeadingLike && estimatedTextWidth > mappedBox.width * 1.02;
+      return {
+        id: Date.now() + Math.random(),
+        type: "text",
+        x: mappedBox.x,
+        y: mappedBox.y,
+        w: mappedBox.width,
+        h: mappedBox.height,
+        text: safeText,
+        color: "#111111",
+        fontSize,
+        fontFamily: "sans-serif",
+        textAlign: "left",
+        fontBold: isHeadingLike,
+        fontItalic: false,
+        textUnderline: false,
+        textBackground: false,
+        textBackgroundColor: "#ffffff",
+        textBaseline: "top",
+        padding: 100,
+        wrap: shouldWrap,
+        isHeadingLike,
+        ocrImported: true,
+        ocrBlockType: type,
+        ocrConfidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+        ocrBlockId: blockId,
+        pageImportedFrom: referencePage,
+      };
+    };
+
+    const fragments = [];
+    (ocrPage.blocks || []).forEach((block, blockIndex) => {
+      const blockType = String(block?.type || "paragraph");
+      const blockText = normalizeText(block?.text || block?.markdown || "");
+      const blockBox = normalizeRect(block?.bbox || {});
+      const rawLines = Array.isArray(block?.raw?.lines) ? block.raw.lines : [];
+
+      if (rawLines.length) {
+        rawLines.forEach((line, lineIndex) => {
+          const lineText = normalizeText(line?.text || line?.content || line?.markdown || "");
+          const lineBox = normalizeRect(line?.bbox || line?.bounding_box || line || {});
+          const fragment = buildFragment({
+            text: lineText,
+            bbox: lineBox,
+            type: blockType,
+            confidence: line?.confidence ?? block?.confidence,
+            blockId: block?.blockId || `p${referencePage}-b${blockIndex + 1}`,
+          });
+          if (fragment) {
+            fragment.id = `ocr_${destinationPage}_${blockIndex}_${lineIndex}_${Date.now()}`;
+            fragments.push(fragment);
+          }
+        });
+        return;
+      }
+
+      if (!blockText || !blockBox) return;
+      const lines = blockText.split("\n").map((line) => normalizeText(line)).filter(Boolean);
+      const lineHeight = blockBox.height / Math.max(1, lines.length);
+      lines.forEach((lineText, lineIndex) => {
+        const fragment = buildFragment({
+          text: lineText,
+          bbox: {
+            x: blockBox.x,
+            y: blockBox.y + (lineIndex * lineHeight),
+            width: blockBox.width,
+            height: lineHeight,
+          },
+          type: blockType,
+          confidence: block?.confidence,
+          blockId: block?.blockId || `p${referencePage}-b${blockIndex + 1}`,
+        });
+        if (fragment) {
+          fragment.id = `ocr_${destinationPage}_${blockIndex}_${lineIndex}_${Date.now()}`;
+          fragments.push(fragment);
+        }
+      });
+    });
+
+    return fragments;
   }, [pdfDoc]);
   const correctBBoxAnnotationFromOcr = useCallback(async ({ annotationId, targetPage, rawPdfText, bboxPdf, sourceId }) => {
     if (!annotationId || !rawPdfText?.trim() || !sourceId) return;
@@ -2197,6 +3752,10 @@ const PDFPage = forwardRef(({
   );
   const managedBboxes = useMemo(
     () => (annotations[pageNum] || []).filter((ann) => EDITABLE_BBOX_TYPES.has(ann.type)),
+    [annotations, pageNum],
+  );
+  const omissionBBoxes = useMemo(
+    () => (annotations[pageNum] || []).filter((ann) => ann?.type === "omissionBBox"),
     [annotations, pageNum],
   );
   const drawAnnotationWithOwnerClip = useCallback((ctx, ann, scale, pageAnnotations = []) => {
@@ -2400,17 +3959,17 @@ const PDFPage = forwardRef(({
   // whatever was genuinely saved server-side with those stale local ones —
   // which is exactly "my settings vanished after a refresh": the account's
   // real saved settings got clobbered by defaults on the very reload meant
-  // to restore them. Also re-set to true right before the hydration effect
-  // itself applies the account's settings, so THAT bulk 30-setter update
-  // doesn't immediately turn around and PATCH the exact same values
-  // straight back either — same skip-flag pattern skipNextAnnotationAutosaveRef
-  // already uses for the same reason.
+  // to restore them. This flag is mount-only: re-arming it during hydration
+  // can swallow the user's first real edit when the hydrated values happen
+  // to equal the local values and React therefore performs no state update.
   const skipNextPdfToolbarServerSaveRef = useRef(true);
   const pdfToolbarServerSaveTimerRef = useRef(null);
   const pdfToolbarHydrationPendingRef = useRef(true);
-  const pdfToolbarChangedBeforeHydrationRef = useRef(false);
-  const pdfToolbarSaveEffectMountedRef = useRef(false);
+  const pdfToolbarSettingsDirtyRef = useRef(false);
   const pdfToolbarSettingsRef = useRef(savedToolbarSettings);
+  const pdfToolbarSettingsSignatureRef = useRef(JSON.stringify(savedToolbarSettings));
+  const pdfToolbarSettingsPatchRef = useRef({});
+  const [pdfToolbarSettingsSaving, setPdfToolbarSettingsSaving] = useState(false);
   useEffect(() => {
     const settings = {
       annotToolColors,
@@ -2440,34 +3999,75 @@ const PDFPage = forwardRef(({
       textBackground,
       textBackgroundColor,
       textPadding,
+      arrowSize: shapeToolSettings.arrow?.strokeWidth ?? DEFAULT_PDF_TOOLBAR_SETTINGS.arrowSize,
+      shapeBorderStyle,
+      shapeBorderRadius,
       bboxBorderSize,
+      bboxCreationType: activeBBoxCreationType,
+      shapeBackground,
       shapeToolSettings,
     };
+    const previousSettings = pdfToolbarSettingsRef.current;
+    const settingsSignature = JSON.stringify(settings);
+    const settingsChanged = pdfToolbarSettingsSignatureRef.current !== settingsSignature;
+    const changedSettings = Object.fromEntries(
+      Object.keys(settings).filter((key) => (
+        JSON.stringify(previousSettings?.[key]) !== JSON.stringify(settings[key])
+      )).map((key) => [key, settings[key]]),
+    );
     pdfToolbarSettingsRef.current = settings;
+    pdfToolbarSettingsSignatureRef.current = settingsSignature;
     // Instant, synchronous, offline-safe — unaffected by the server debounce
     // below, and still the first thing a fresh mount reads (loadPdfToolbarSettings).
     savePdfToolbarSettings(settings);
-
-    if (pdfToolbarSaveEffectMountedRef.current && pdfToolbarHydrationPendingRef.current) {
-      pdfToolbarChangedBeforeHydrationRef.current = true;
-    }
-    pdfToolbarSaveEffectMountedRef.current = true;
 
     if (skipNextPdfToolbarServerSaveRef.current) {
       skipNextPdfToolbarServerSaveRef.current = false;
       return;
     }
+    // React StrictMode repeats mount effects in development. Do not treat
+    // that identical second pass as a user edit or it blocks DB hydration.
+    if (!settingsChanged) return;
+    // The account copy is authoritative at startup. Existing annotations,
+    // hidden PDFPage instances, or StrictMode must never overwrite it with
+    // local/default values before the GET below has completed.
+    if (pdfToolbarHydrationPendingRef.current) return;
+    pdfToolbarSettingsPatchRef.current = {
+      ...pdfToolbarSettingsPatchRef.current,
+      ...changedSettings,
+    };
+    pdfToolbarSettingsDirtyRef.current = true;
+    setPdfToolbarSettingsSaving(true);
     // Debounced: several of these controls (the opacity/size/stabilization
     // knobs especially) fire onChange continuously while being dragged —
     // PATCHing the server on every tick of a drag would spam it for no
     // benefit, since only the final value after release matters.
     if (pdfToolbarServerSaveTimerRef.current) clearTimeout(pdfToolbarServerSaveTimerRef.current);
     pdfToolbarServerSaveTimerRef.current = setTimeout(() => {
+      pdfToolbarServerSaveTimerRef.current = null;
+      const patchToSave = pdfToolbarSettingsPatchRef.current;
+      pdfToolbarSettingsPatchRef.current = {};
       authFetch(apiUrl("/api/user/me/pdf-toolbar-settings"), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdfToolbarSettings: settings }),
-      }).catch(() => {});
+        body: JSON.stringify({ pdfToolbarSettingsPatch: patchToSave }),
+      }).then(async (response) => {
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw new Error(payload.error || `Toolbar settings save failed (${response.status}).`);
+        }
+        if (pdfToolbarSettingsRef.current === settings) {
+          pdfToolbarSettingsDirtyRef.current = false;
+          setPdfToolbarSettingsSaving(false);
+        }
+      }).catch((error) => {
+        pdfToolbarSettingsPatchRef.current = {
+          ...patchToSave,
+          ...pdfToolbarSettingsPatchRef.current,
+        };
+        if (pdfToolbarSettingsRef.current === settings) setPdfToolbarSettingsSaving(false);
+        console.error("PDF toolbar settings were not saved to the database:", error);
+      });
     }, 700);
   }, [
     annotToolColors,
@@ -2497,12 +4097,17 @@ const PDFPage = forwardRef(({
     textBackground,
     textBackgroundColor,
     textPadding,
+    shapeBorderStyle,
+    shapeBorderRadius,
     bboxBorderSize,
+    activeBBoxCreationType,
+    shapeBackground,
     shapeToolSettings,
   ]);
   useEffect(() => {
     const persistPdfToolbarSettingsNow = () => {
-      if (pdfToolbarHydrationPendingRef.current && !pdfToolbarChangedBeforeHydrationRef.current) return;
+      if (pdfToolbarHydrationPendingRef.current) return;
+      if (!pdfToolbarSettingsDirtyRef.current && !pdfToolbarServerSaveTimerRef.current) return;
       if (pdfToolbarServerSaveTimerRef.current) {
         clearTimeout(pdfToolbarServerSaveTimerRef.current);
         pdfToolbarServerSaveTimerRef.current = null;
@@ -2511,8 +4116,14 @@ const PDFPage = forwardRef(({
         method: "PATCH",
         keepalive: true,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdfToolbarSettings: pdfToolbarSettingsRef.current }),
-      }).catch(() => {});
+        body: JSON.stringify({ pdfToolbarSettingsPatch: pdfToolbarSettingsPatchRef.current }),
+      }).then((response) => {
+        if (!response.ok) throw new Error(`Toolbar settings save failed (${response.status}).`);
+        pdfToolbarSettingsPatchRef.current = {};
+        pdfToolbarSettingsDirtyRef.current = false;
+      }).catch((error) => {
+        console.error("PDF toolbar settings were not saved to the database:", error);
+      });
     };
     window.addEventListener("pagehide", persistPdfToolbarSettingsNow);
     return () => {
@@ -2530,14 +4141,17 @@ const PDFPage = forwardRef(({
     let cancelled = false;
     (async () => {
       try {
-        const res = await authFetch(apiUrl("/api/user/me/pdf-toolbar-settings"));
+        const res = await authFetch(apiUrl("/api/user/me/pdf-toolbar-settings"), { cache: "no-store" });
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (!data.pdfToolbarSettings || !Object.keys(data.pdfToolbarSettings).length) return;
-        pdfToolbarHydrationPendingRef.current = false;
-        if (pdfToolbarChangedBeforeHydrationRef.current) return;
         const s = normalizePdfToolbarSettings(data.pdfToolbarSettings);
-        skipNextPdfToolbarServerSaveRef.current = true;
+        // Commit the authoritative account snapshot before React rerenders.
+        // Previously this depended on the state-save effect running later;
+        // a remount/refresh in between left localStorage on stale defaults.
+        savePdfToolbarSettings(s);
+        pdfToolbarSettingsRef.current = s;
+        pdfToolbarSettingsSignatureRef.current = JSON.stringify(s);
         setAnnotToolColors(s.annotToolColors);
         setAnnotToolColorPresets(s.annotToolColorPresets);
         setAnnotSize(s.annotSize);
@@ -2566,44 +4180,17 @@ const PDFPage = forwardRef(({
         setTextBackgroundColor(s.textBackgroundColor);
         setTextPadding(s.textPadding);
         setBBoxBorderSize(s.bboxBorderSize);
+        setActiveBBoxCreationType(s.bboxCreationType);
         setShapeToolSettings(s.shapeToolSettings);
-      } catch {
+      } catch (error) {
         // Keep the localStorage-loaded defaults if the fetch fails.
+        console.error("PDF toolbar settings could not be loaded from the database:", error);
       } finally {
         pdfToolbarHydrationPendingRef.current = false;
       }
     })();
     return () => { cancelled = true; };
   }, []);
-  const getOcrWorker = useCallback(async () => {
-    if (ocrWorkerRef.current) return ocrWorkerRef.current;
-    if (ocrWorkerPromiseRef.current) return ocrWorkerPromiseRef.current;
-
-    const workerPromise = (async () => {
-      const { createWorker, PSM } = await import("tesseract.js");
-      const worker = await createWorker("eng", 1, {
-        logger: (message) => {
-          if (drawTextJobRef.current === 0) return;
-          if (message.status) setDrawTextStatus(message.status);
-          if (typeof message.progress === "number") setDrawTextProgress(message.progress);
-        },
-      });
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-        preserve_interword_spaces: "1",
-      });
-      ocrWorkerRef.current = worker;
-      return worker;
-    })();
-
-    ocrWorkerPromiseRef.current = workerPromise;
-    try {
-      return await workerPromise;
-    } finally {
-      ocrWorkerPromiseRef.current = null;
-    }
-  }, []);
-
   const getTextAnnotationBounds = useCallback((ann, scale) => {
     const ctx = annotCanvasRef.current?.getContext?.("2d");
     const fontSize = (ann.fontSize || 16) * scale;
@@ -2676,14 +4263,6 @@ const PDFPage = forwardRef(({
     return null;
   }, [annotations, pageNum]);
 
-  useEffect(() => () => {
-    drawTextJobRef.current = 0;
-    const worker = ocrWorkerRef.current;
-    ocrWorkerRef.current = null;
-    ocrWorkerPromiseRef.current = null;
-    worker?.terminate?.().catch?.(() => {});
-  }, []);
-
   // Autosave the annotation session in the background — debounced so a whole
   // stroke's worth of state updates only writes once, a beat after the user
   // pauses. Server-side model (SourceAnnotation) already existed, just unused.
@@ -2695,15 +4274,24 @@ const PDFPage = forwardRef(({
     if (skipNextAnnotationAutosaveRef.current) { skipNextAnnotationAutosaveRef.current = false; return; }
     const sourceId = currentSourceIdRef.current;
     if (!sourceId) return; // local/unsaved file — nothing to persist against
+    const requestId = ++annotationSaveRequestRef.current;
+    setAnnotationSaveStatus("saving");
     const timer = setTimeout(() => {
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildAnnotationSavePayload()),
-      }).catch(() => {}); // best-effort background autosave — a failed write shouldn't interrupt reading/annotating
+        body: JSON.stringify(buildAnnotationSavePayloadRef.current()),
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error(`Annotation save failed (${response.status}).`);
+          if (requestId === annotationSaveRequestRef.current) setAnnotationSaveStatus("saved");
+        })
+        .catch(() => {
+          if (requestId === annotationSaveRequestRef.current) setAnnotationSaveStatus("error");
+        });
     }, 1500);
     return () => clearTimeout(timer);
-  }, [annotations, annotHistory, buildAnnotationSavePayload]);
+  }, [annotations, annotHistory]);
   const [annotTextInput, setAnnotTextInput] = useState(null); // { vx, vy, cx, cy }
   const [textActionMenu, setTextActionMenu] = useState(null); // { vx, vy, editingId }
   const [textStyleTargetId, setTextStyleTargetId] = useState(null); // id of an existing text annotation being style-edited
@@ -2713,12 +4301,12 @@ const PDFPage = forwardRef(({
   const [bboxActionMenu, setBBoxActionMenu] = useState(null); // { vx, vy, editingId }
   const [bboxMinibarOpenId, setBBoxMinibarOpenId] = useState(null);
   const [bboxResizeTargetId, setBBoxResizeTargetId] = useState(null); // id of an existing bbox armed for resize
+  const [bboxResizePreview, setBBoxResizePreview] = useState(null);
   const [bboxOverlayTick, setBBoxOverlayTick] = useState(0);
   const bboxLabelRefs = useRef({});
   const [bboxLabelPositions, setBBoxLabelPositions] = useState({});
   const bboxActionRefs = useRef({});
   const [bboxActionPositions, setBBoxActionPositions] = useState({});
-  const [activeBBoxCreationType, setActiveBBoxCreationType] = useState(null);
   const toggleBBoxCreationType = useCallback((type) => {
     setActiveBBoxCreationType((current) => (current === type ? null : type));
   }, []);
@@ -2958,10 +4546,8 @@ const PDFPage = forwardRef(({
   // it without needing to be tracked separately.
   const lastEraseRef = useRef(null);
   const eraserCursorRef = useRef(null);  // eraser-size preview circle, see the effect below
-  const ocrWorkerRef = useRef(null);
-  const ocrWorkerPromiseRef = useRef(null);
-  const drawTextJobRef = useRef(0);
-
+  const ocrBlankMeasureCanvasRef = useRef(null);
+  const blankPageStructureDocumentRef = useRef({ key: "", documentId: null });
   // Close the floating color/text/highlight action dropdowns on an outside
   // click. Listens on "click" (fires after mouseup), not "mousedown" —
   // mousedown fires before a button's own onClick, so with mousedown a
@@ -3015,6 +4601,7 @@ const PDFPage = forwardRef(({
       setBBoxActionMenu(null);
       setBBoxMinibarOpenId(null);
       setBBoxResizeTargetId(null);
+      setBBoxResizePreview(null);
       setActiveBBoxCreationType(null);
       setBBoxContainerBBoxTarget(null);
     }
@@ -3214,9 +4801,11 @@ const PDFPage = forwardRef(({
   }, [bboxActionMenu, annotations, pageNum, markAnnotationCleared]);
 
   const beginBBoxResize = useCallback((bbox, handle, event) => {
-    if (!bbox || !handle) return;
+    if (!bbox || !handle || event.pointerType !== "pen") return;
     event.preventDefault();
     event.stopPropagation();
+    const pointerId = event.pointerId;
+    event.currentTarget?.setPointerCapture?.(pointerId);
     const getClientPoint = (inputEvent) => (
       inputEvent.touches?.[0]
         ? { x: inputEvent.touches[0].clientX, y: inputEvent.touches[0].clientY }
@@ -3234,25 +4823,22 @@ const PDFPage = forwardRef(({
     const startClient = getClientPoint(event);
     const start = toCanvasFromClient(startClient.x, startClient.y);
     if (!start) return;
-    const basePoints = buildEditableBBoxOutline(bbox);
-    let workingPoints = basePoints.map((point) => ({ ...point }));
-    let pointIndex = Number.isInteger(handle.pointIndex) ? handle.pointIndex : null;
-    if (pointIndex == null && handle.insertAfterIndex != null) {
-      const insertAt = Math.min(workingPoints.length, Math.max(1, handle.insertAfterIndex + 1));
-      workingPoints.splice(insertAt, 0, { x: handle.x, y: handle.y, manualControl: true });
-      pointIndex = insertAt;
-    }
-    const workingBounds = pointsToBounds(workingPoints) || { x: bbox.x, y: bbox.y, w: bbox.w, h: bbox.h };
+    const workingBounds = {
+      x: Number(bbox.x) || 0,
+      y: Number(bbox.y) || 0,
+      w: Math.max(1, Number(bbox.w) || 1),
+      h: Math.max(1, Number(bbox.h) || 1),
+    };
     activeAnnotRef.current = {
       ...bbox,
       closed: isBBoxOutlineClosed(bbox),
       _editingId: bbox.id,
-      points: workingPoints,
+      points: buildEditableBBoxOutline(workingBounds),
       x: workingBounds.x,
       y: workingBounds.y,
       w: workingBounds.w,
       h: workingBounds.h,
-      _pointEditIndex: pointIndex,
+      _resizeSide: handle.side,
       _resizeStartX: start.x,
       _resizeStartY: start.y,
       _lastDragX: start.x,
@@ -3262,55 +4848,50 @@ const PDFPage = forwardRef(({
     setBBoxActionMenu(null);
     setBBoxResizeTargetId(bbox.id);
     const onMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId || moveEvent.pointerType !== "pen") return;
       const client = getClientPoint(moveEvent);
       const next = toCanvasFromClient(client.x, client.y);
       const ann = activeAnnotRef.current;
-      if (!next || !ann || ann.id !== bbox.id || !Array.isArray(ann.points)) return;
+      if (!next || !ann || ann.id !== bbox.id) return;
       moveEvent.preventDefault?.();
       const dx = next.x - (ann._lastDragX ?? next.x);
       const dy = next.y - (ann._lastDragY ?? next.y);
-      const draggedIndex = ann._pointEditIndex ?? findNearestOutlinePointIndex(ann.points, next.x, next.y);
-      if (draggedIndex >= 0 && (dx !== 0 || dy !== 0)) {
+      if (ann._resizeSide && (dx !== 0 || dy !== 0)) {
         if (!ann._dragMoved && Math.hypot(next.x - ann._resizeStartX, next.y - ann._resizeStartY) < 0.8) return;
         ann._dragMoved = true;
-        ann.points = deformClosedOutlineAroundPoint(ann.points, draggedIndex, dx, dy, fitScaleRef.current * zoomRef.current, ann.closed !== false);
-        ann._pointEditIndex = draggedIndex;
+        const right = ann.x + ann.w;
+        const bottom = ann.y + ann.h;
+        const minimumSize = 1;
+        if (ann._resizeSide === "top") {
+          const nextTop = Math.min(next.y, bottom - minimumSize);
+          ann.y = nextTop;
+          ann.h = bottom - nextTop;
+        } else if (ann._resizeSide === "right") {
+          ann.w = Math.max(minimumSize, next.x - ann.x);
+        } else if (ann._resizeSide === "bottom") {
+          ann.h = Math.max(minimumSize, next.y - ann.y);
+        } else if (ann._resizeSide === "left") {
+          const nextLeft = Math.min(next.x, right - minimumSize);
+          ann.x = nextLeft;
+          ann.w = right - nextLeft;
+        }
+        ann.points = buildEditableBBoxOutline(ann);
+        setBBoxResizePreview({ id: bbox.id, x: ann.x, y: ann.y, w: ann.w, h: ann.h });
         ann._lastDragX = next.x;
         ann._lastDragY = next.y;
-        const nextBounds = pointsToBounds(ann.points);
-        if (nextBounds) {
-          ann.x = nextBounds.x;
-          ann.y = nextBounds.y;
-          ann.w = nextBounds.w;
-          ann.h = nextBounds.h;
-        }
-        const scale = fitScaleRef.current * zoomRef.current;
-        const ctx = annotCanvasRef.current?.getContext?.("2d");
-        if (ctx && annotCanvasRef.current) {
-          ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
-          const pageAnnotations = visiblePageAnnotations;
-          for (const savedAnn of pageAnnotations) drawAnnotationWithOwnerClip(ctx, savedAnn, scale, pageAnnotations);
-          drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
-        }
       }
     };
     const onEnd = (endEvent) => {
+      if (endEvent?.pointerId !== pointerId || endEvent?.pointerType !== "pen") return;
       endEvent?.preventDefault?.();
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onEnd);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onEnd);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+      window.removeEventListener("pointercancel", onEnd);
       const ann = activeAnnotRef.current;
       activeAnnotRef.current = null;
       if (!ann || ann.id !== bbox.id || !ann._editingId) return;
       if (!ann._dragMoved) {
-        const scale = fitScaleRef.current * zoomRef.current;
-        const ctx = annotCanvasRef.current?.getContext?.("2d");
-        if (ctx && annotCanvasRef.current) {
-          ctx.clearRect(0, 0, annotCanvasRef.current.clientWidth, annotCanvasRef.current.clientHeight);
-          const pageAnnotations = visiblePageAnnotations;
-          for (const savedAnn of pageAnnotations) drawAnnotationWithOwnerClip(ctx, savedAnn, scale, pageAnnotations);
-        }
+        setBBoxResizePreview(null);
         return;
       }
       setAnnotations((prev) => {
@@ -3398,49 +4979,12 @@ const PDFPage = forwardRef(({
       });
       setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
       logAnnotHistory({ action: "edit", type: ann.type, page: pageNum });
+      setBBoxResizePreview(null);
     };
-    window.addEventListener("mousemove", onMove, { passive: false });
-    window.addEventListener("mouseup", onEnd, { passive: false });
-    window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onEnd, { passive: false });
-  }, [annotations, pageNum, logAnnotHistory, bboxTextMatchesSpan]);
-
-  const addBBoxResizePoint = useCallback((bbox, event) => {
-    if (!bbox || bboxResizeTargetId !== bbox.id) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const source = event.touches?.[0] || event;
-    const rect = annotCanvasRef.current?.getBoundingClientRect?.();
-    const viewport = pageViewportsRef.current[pageNum - 1] || pageViewport;
-    if (!rect || !viewport) return;
-    const pagePoint = clientPointToBBoxPagePoint({
-      clientX: source.clientX,
-      clientY: source.clientY,
-      rect,
-      viewport,
-    });
-    const points = buildEditableBBoxOutline(bbox);
-    const projected = findNearestOutlineSegmentPoint(points, pagePoint.x, pagePoint.y, isBBoxOutlineClosed(bbox));
-    if (!projected) return;
-    const insertAt = projected.insertAfterIndex + 1;
-    const nextPoints = points.map((point) => ({ ...point }));
-    nextPoints.splice(insertAt, 0, {
-      x: projected.x,
-      y: projected.y,
-      manualControl: true,
-    });
-    const bounds = pointsToBounds(nextPoints);
-    setAnnotations((prev) => ({
-      ...prev,
-      [pageNum]: (prev[pageNum] || []).map((annotation) => (
-        annotation.id === bbox.id
-          ? { ...annotation, ...bounds, points: nextPoints, closed: isBBoxOutlineClosed(bbox) }
-          : annotation
-      )),
-    }));
-    setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
-    logAnnotHistory({ action: "edit", type: bbox.type, page: pageNum });
-  }, [bboxResizeTargetId, logAnnotHistory, pageNum, pageViewport]);
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onEnd, { passive: false });
+    window.addEventListener("pointercancel", onEnd, { passive: false });
+  }, [annotations, pageNum, pageViewport, visiblePageAnnotations, logAnnotHistory, bboxTextMatchesSpan]);
 
   const updateBBoxName = useCallback((bboxId, nextName, targetPage = pageNum) => {
     const title = typeof nextName === "string" ? nextName.trim() : "";
@@ -3796,6 +5340,34 @@ const PDFPage = forwardRef(({
     }
   }, [annotHistory, pageNum, logAnnotHistory]);
 
+  const setBBoxTitleFromLine = useCallback((bboxId, lineText, targetPage = pageNum) => {
+    const title = String(lineText || "").replace(/\s+/g, " ").trim();
+    if (!bboxId || !title) return;
+    const currentAnnotations = annotationsRef.current;
+    const pageAnnotations = currentAnnotations[targetPage] || [];
+    if (!pageAnnotations.some((annotation) => annotation.id === bboxId && annotation.type === "bbox")) return;
+    const nextAnnotations = {
+      ...currentAnnotations,
+      [targetPage]: pageAnnotations.map((annotation) => (
+        annotation.id === bboxId
+          ? { ...annotation, title, titleSourceLine: title }
+          : annotation
+      )),
+    };
+    annotationsRef.current = nextAnnotations;
+    setAnnotations(nextAnnotations);
+    setRedoStacks((prev) => (prev[targetPage]?.length ? { ...prev, [targetPage]: [] } : prev));
+    logAnnotHistory({ action: "edit", type: "bbox", page: targetPage });
+    const sourceId = currentSourceIdRef.current;
+    if (sourceId) {
+      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildAnnotationSavePayload({ activeAnnotations: nextAnnotations })),
+      }).catch(() => {});
+    }
+  }, [buildAnnotationSavePayload, logAnnotHistory, pageNum]);
+
   const expandContainerToIncludeBBox = useCallback((pageAnnotations, containerId, bbox) => {
     if (!containerId || !bbox) return pageAnnotations;
     const containerIndex = pageAnnotations.findIndex((ann) => ann.id === containerId && bboxTypeHas(ann.type, "containsChildren"));
@@ -3957,8 +5529,11 @@ const PDFPage = forwardRef(({
       // Title BBoxes are real persisted page annotations. Removing them here
       // made their border disappear on every reload and also discarded the
       // owner's geometry link.
-      const restored = (pageAnnotations || []).filter((ann) => !removedBBoxTypes.has(ann?.type)).map((ann) => {
-        const migrated = { ...ann };
+      const restored = (pageAnnotations || [])
+        .filter((ann) => !removedBBoxTypes.has(ann?.type) && ann?.type !== "bboxTitle")
+        .map((ann) => {
+        const { titleBBox: _discardedTitleBBox, ...withoutTitleBBox } = ann || {};
+        const migrated = { ...withoutTitleBBox };
         if (bboxTypeHas(migrated.type, "extractsText")) {
           migrated.rawPdfText = migrated.rawPdfText ?? migrated.text ?? "";
           migrated.text = migrated.text ?? migrated.rawPdfText;
@@ -3975,25 +5550,6 @@ const PDFPage = forwardRef(({
       restored.forEach((ann) => {
         if (ann.parentId && !restoredIds.has(ann.parentId)) delete ann.parentId;
       });
-      const titleOwnerIds = new Set(
-        restored.filter((ann) => ann?.type === "bboxTitle").map((ann) => ann.ownerId).filter(Boolean),
-      );
-      for (const owner of restored) {
-        const legacyTitle = owner?.titleBBox;
-        if (!legacyTitle || titleOwnerIds.has(owner.id) || !(legacyTitle.w > 0) || !(legacyTitle.h > 0)) continue;
-        restored.push({
-          ...legacyTitle,
-          id: legacyTitle.id || `${owner.id}-title`,
-          type: "bboxTitle",
-          ownerId: owner.id,
-          color: legacyTitle.color || owner.color,
-          lineWidth: legacyTitle.lineWidth ?? owner.lineWidth,
-          closed: legacyTitle.closed !== false,
-          geometry: legacyTitle.geometry || "rectangle",
-          text: legacyTitle.text || owner.title || "",
-        });
-        titleOwnerIds.add(owner.id);
-      }
       nextLayers[pageKey] = normalizePagePartitionHierarchy(restored);
     }
     return nextLayers;
@@ -4005,7 +5561,7 @@ const PDFPage = forwardRef(({
         id: layer?.id || `annot-layer-${index + 1}`,
         name: String(layer?.name || `Layer ${index + 1}`),
         visible: layer?.visible !== false,
-        annotations: rehydrateBBoxTitleLayers(layer?.annotations || {}),
+        annotations: rehydrateBBoxTitleLayers(withoutTemporarySmartPenStrokes(layer?.annotations || {})),
       }));
       const activeId = normalized.some((layer) => layer.id === storedActiveLayerId)
         ? storedActiveLayerId
@@ -4013,7 +5569,7 @@ const PDFPage = forwardRef(({
       return { layers: normalized, activeId };
     }
     return {
-      layers: [createAnnotationLayer(1, rehydrateBBoxTitleLayers(storedLayers || {}))],
+      layers: [createAnnotationLayer(1, rehydrateBBoxTitleLayers(withoutTemporarySmartPenStrokes(storedLayers || {})))],
       activeId: null,
     };
   }, [createAnnotationLayer, rehydrateBBoxTitleLayers]);
@@ -4127,13 +5683,474 @@ const PDFPage = forwardRef(({
 
   const textLayerRef  = useRef(null);
   const [textLayerRenderTick, setTextLayerRenderTick] = useState(0); // bumps after the text layer finishes rebuilding so dependent overlays can repaint against the new spans
-  // Markdown panel's read-only text panes — selection only turns on after a
-  // long press (see useLongPressSelect), so a quick click/scroll never
-  // accidentally starts selecting.
+  // Markdown analyser text panes keep their existing long-press behavior.
+  // The visual MD page uses the PDF-style custom double-touch selector below
+  // and must never attach the native long-press selector.
   const mdTextRef        = useRef(null);
   useLongPressSelect(mdTextRef);
+
+  useEffect(() => {
+    const page = markdownVisualLayerRef.current;
+    const canvas = markdownAnnotationCanvasRef.current;
+    if (!page || !canvas || !markdownVisualActive || !pageViewport) return undefined;
+    const rect = page.getBoundingClientRect();
+    const backingScale = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.round(rect.width * backingScale));
+    canvas.height = Math.max(1, Math.round(rect.height * backingScale));
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    const context = canvas.getContext("2d");
+    if (!context) return undefined;
+    context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+    context.clearRect(0, 0, rect.width, rect.height);
+    const scaleX = rect.width / Math.max(1, pageViewport.width);
+    const scaleY = rect.height / Math.max(1, pageViewport.height);
+    const scale = pageViewport.scale * Math.min(scaleX, scaleY);
+    (markdownAnnotations[pageNum] || []).forEach((annotation) => drawAnnotationWithOwnerClip(context, annotation, scale, markdownAnnotations[pageNum] || []));
+    return undefined;
+  }, [drawAnnotationWithOwnerClip, markdownAnnotations, markdownVisualActive, pageNum, pageViewport]);
+
+  // Independent Markdown annotation surface. These strokes use the same
+  // page coordinate system and drawing renderer as PDF annotations, but are
+  // stored only in markdownLayers and never enter the PDF layer state.
+  useEffect(() => {
+    const page = markdownVisualLayerRef.current;
+    const canvas = markdownAnnotationCanvasRef.current;
+    if (!page || !canvas || !markdownVisualActive || !pageViewport || !isPenToolKey(annotTool)) return undefined;
+    let active = null;
+    const getSurface = () => {
+      const rect = page.getBoundingClientRect();
+      const scale = pageViewport.scale * (rect.width / Math.max(1, pageViewport.width));
+      return { rect, scale };
+    };
+    const drawSurface = (extra = null) => {
+      const { rect, scale } = getSurface();
+      const backingScale = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(rect.width * backingScale));
+      canvas.height = Math.max(1, Math.round(rect.height * backingScale));
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+      context.clearRect(0, 0, rect.width, rect.height);
+      const ownAnnotations = markdownAnnotations[pageNum] || [];
+      ownAnnotations.forEach((annotation) => drawAnnotationWithOwnerClip(context, annotation, scale, ownAnnotations));
+      if (extra) drawAnnotationWithOwnerClip(context, extra, scale, ownAnnotations);
+    };
+    const pointFromEvent = (event) => {
+      const { rect, scale } = getSurface();
+      return {
+        x: (event.clientX - rect.left) / scale,
+        y: (event.clientY - rect.top) / scale,
+        t: performance.now(),
+        pressure: Number.isFinite(event.pressure) && event.pressure > 0 ? event.pressure : 0.5,
+      };
+    };
+    const onDown = (event) => {
+      if (event.pointerType !== "pen") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const point = pointFromEvent(event);
+      active = {
+        id: `${Date.now()}_md`,
+        type: "pen",
+        smartPen: annotTool === "smartPen",
+        color: annotColor,
+        lineWidth: penSize,
+        penType,
+        points: [point],
+      };
+      drawSurface(active);
+    };
+    const onMove = (event) => {
+      if (event.pointerType !== "pen" || !active) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const point = pointFromEvent(event);
+      const nextPoint = smoothStrokePoint(active.points, point, penStabilization, getSurface().scale);
+      if (!nextPoint) return;
+      active.points.push(nextPoint);
+      drawSurface(active);
+    };
+    const onUp = (event) => {
+      if (event.pointerType !== "pen" || !active) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const finished = active;
+      active = null;
+      if (finished.points.length < 2 || polylineLength(finished.points) < 1) {
+        drawSurface();
+        return;
+      }
+      const nextLayers = {
+        ...markdownAnnotations,
+        [pageNum]: [...(markdownAnnotations[pageNum] || []), finished],
+      };
+      setMarkdownAnnotations(nextLayers);
+      saveMarkdownAnnotations(nextLayers);
+      drawSurface();
+    };
+    page.addEventListener("pointerdown", onDown, { passive: false });
+    page.addEventListener("pointermove", onMove, { passive: false });
+    page.addEventListener("pointerup", onUp, { passive: false });
+    page.addEventListener("pointercancel", onUp, { passive: false });
+    return () => {
+      page.removeEventListener("pointerdown", onDown);
+      page.removeEventListener("pointermove", onMove);
+      page.removeEventListener("pointerup", onUp);
+      page.removeEventListener("pointercancel", onUp);
+    };
+  }, [annotColor, annotTool, drawAnnotationWithOwnerClip, markdownAnnotations, markdownVisualActive, pageNum, pageViewport, penSize, penStabilization, penType, saveMarkdownAnnotations]);
+
+  useEffect(() => {
+    const mdTools = new Set(["highlight", "underline", "strikethrough", "rect", "circle", "line", "arrow", "freeshape", "bbox", "pageBBox", "columnBBox", "subLineBBox", "imageBBox", "eraser"]);
+    const page = markdownVisualLayerRef.current;
+    const canvas = markdownAnnotationCanvasRef.current;
+    if (!page || !canvas || !markdownVisualActive || !pageViewport || !mdTools.has(annotTool)) return undefined;
+    let active = null;
+    const getSurface = () => {
+      const rect = page.getBoundingClientRect();
+      return { rect, scale: pageViewport.scale * (rect.width / Math.max(1, pageViewport.width)) };
+    };
+    const drawSurface = (extra = null, layers = markdownAnnotations) => {
+      const { rect, scale } = getSurface();
+      const backingScale = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(rect.width * backingScale));
+      canvas.height = Math.max(1, Math.round(rect.height * backingScale));
+      canvas.style.width = `${rect.width}px`;
+      canvas.style.height = `${rect.height}px`;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+      context.clearRect(0, 0, rect.width, rect.height);
+      (layers[pageNum] || []).forEach((annotation) => drawAnnotationWithOwnerClip(context, annotation, scale, layers[pageNum] || []));
+      if (extra) drawAnnotationWithOwnerClip(context, extra, scale, layers[pageNum] || []);
+    };
+    const pointFromEvent = (event) => {
+      const { rect, scale } = getSurface();
+      return { x: (event.clientX - rect.left) / scale, y: (event.clientY - rect.top) / scale };
+    };
+    const onDown = (event) => {
+      if (event.pointerType !== "pen") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const point = pointFromEvent(event);
+      if (annotTool === "eraser") {
+        active = { type: "eraser", changed: false, lastKept: markdownAnnotations[pageNum] || [], lastErasePoint: null };
+        const result = eraseAnnotationsAtPoint(active.lastKept, point.x, point.y, eraserSize / getSurface().scale, eraserMode);
+        active.lastKept = result.kept;
+        active.changed = result.changed;
+        drawSurface(null, { ...markdownAnnotations, [pageNum]: active.lastKept });
+        return;
+      }
+      const type = ["bbox", "pageBBox", "columnBBox", "subLineBBox", "imageBBox"].includes(annotTool) ? "rect" : annotTool;
+      active = type === "line" || type === "arrow"
+        ? { type, color: annotColor, lineWidth: shapeStrokeWidth / getSurface().scale, x1: point.x, y1: point.y, x2: point.x, y2: point.y }
+        : ["rect", "circle"].includes(type)
+          ? { type, color: annotColor, lineWidth: shapeStrokeWidth / getSurface().scale, x: point.x, y: point.y, w: 0, h: 0, shapeBackground: false }
+          : ["highlight", "underline", "strikethrough"].includes(type)
+            ? { type, color: annotColor, lineWidth: annotSize / getSurface().scale, points: [point, point], opacity: annotOpacity / 100 }
+            : { type: "freeshape", color: annotColor, lineWidth: shapeStrokeWidth / getSurface().scale, points: [point], shapeBackground: false };
+      drawSurface(active);
+    };
+    const onMove = (event) => {
+      if (event.pointerType !== "pen" || !active) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const point = pointFromEvent(event);
+      if (active.type === "eraser") {
+        const result = eraseAnnotationsAtPoint(active.lastKept, point.x, point.y, eraserSize / getSurface().scale, eraserMode);
+        active.lastKept = result.kept;
+        active.changed = active.changed || result.changed;
+      } else if (active.type === "line" || active.type === "arrow") {
+        active.x2 = point.x; active.y2 = point.y;
+      } else if (["rect", "circle"].includes(active.type)) {
+        active.w = point.x - active.x; active.h = point.y - active.y;
+      } else if (["highlight", "underline", "strikethrough"].includes(active.type)) {
+        active.points[1] = point;
+      } else {
+        const nextPoint = smoothStrokePoint(active.points, { ...point, t: performance.now(), pressure: 0.5 }, penStabilization, getSurface().scale);
+        if (nextPoint) active.points.push(nextPoint);
+      }
+      drawSurface(active.type === "eraser" ? null : active, active.type === "eraser" ? { ...markdownAnnotations, [pageNum]: active.lastKept } : markdownAnnotations);
+    };
+    const onUp = (event) => {
+      if (event.pointerType !== "pen" || !active) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const finished = active;
+      active = null;
+      if (finished.type === "eraser") {
+        if (finished.changed) {
+          const nextLayers = { ...markdownAnnotations, [pageNum]: finished.lastKept };
+          setMarkdownAnnotations(nextLayers);
+          saveMarkdownAnnotations(nextLayers);
+        }
+        drawSurface();
+        return;
+      }
+      const nextLayers = { ...markdownAnnotations, [pageNum]: [...(markdownAnnotations[pageNum] || []), { ...finished, id: `${Date.now()}_md` }] };
+      setMarkdownAnnotations(nextLayers);
+      saveMarkdownAnnotations(nextLayers);
+      drawSurface(null, nextLayers);
+    };
+    page.addEventListener("pointerdown", onDown, { passive: false });
+    page.addEventListener("pointermove", onMove, { passive: false });
+    page.addEventListener("pointerup", onUp, { passive: false });
+    page.addEventListener("pointercancel", onUp, { passive: false });
+    return () => {
+      page.removeEventListener("pointerdown", onDown);
+      page.removeEventListener("pointermove", onMove);
+      page.removeEventListener("pointerup", onUp);
+      page.removeEventListener("pointercancel", onUp);
+    };
+  }, [annotColor, annotOpacity, annotSize, annotTool, drawAnnotationWithOwnerClip, eraserMode, eraserSize, markdownAnnotations, markdownVisualActive, pageNum, pageViewport, penStabilization, saveMarkdownAnnotations, shapeStrokeWidth]);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
+
+  // Match the PDF text layer's touch-selection model: native selection is
+  // disabled on coarse pointers and a double-touch draws app-owned selection
+  // chrome. This avoids Safari's long-touch selection entirely.
+  useEffect(() => {
+    const mdPage = markdownVisualLayerRef.current;
+    const preview = previewRef.current;
+    if (!mdPage || !preview || !markdownVisualActive) return undefined;
+    const MD_DOUBLE_TAP_MS = 350;
+    const MD_DOUBLE_TAP_DIST = 30;
+    const mapToPdfPoint = (clientX, clientY) => {
+      const sourceRect = mdPage.getBoundingClientRect();
+      const targetRect = preview.getBoundingClientRect();
+      if (!sourceRect.width || !sourceRect.height || !targetRect.width || !targetRect.height) return null;
+      return {
+        x: targetRect.left + ((clientX - sourceRect.left) / sourceRect.width) * targetRect.width,
+        y: targetRect.top + ((clientY - sourceRect.top) / sourceRect.height) * targetRect.height,
+      };
+    };
+    const dispatchDoubleClick = (clientX, clientY) => {
+      const point = mapToPdfPoint(clientX, clientY);
+      if (!point) return;
+      preview.dispatchEvent(new MouseEvent("dblclick", {
+        bubbles: true,
+        cancelable: true,
+        clientX: point.x,
+        clientY: point.y,
+      }));
+    };
+    const clearMarkdownSelection = () => {
+      mdPage.querySelectorAll(".pdf_markdown_word_selection, .pdf_markdown_selection_handle").forEach((node) => node.remove());
+    };
+    let markdownSelectionModel = null;
+    let activeHandleCleanup = null;
+    const textPositionAtPoint = (clientX, clientY) => {
+      let node = null;
+      let offset = 0;
+      const caret = document.caretRangeFromPoint?.(clientX, clientY);
+      if (caret?.startContainer?.nodeType === Node.TEXT_NODE) {
+        node = caret.startContainer;
+        offset = caret.startOffset;
+      }
+      let item = node?.parentElement?.closest?.(".pdf_markdown_aside_visual_line_item");
+      if (!item || !mdPage.contains(item)) {
+        item = document.elementsFromPoint(clientX, clientY)
+          .map((element) => element.closest?.(".pdf_markdown_aside_visual_line_item"))
+          .find((element) => element && mdPage.contains(element));
+        node = item ? [...item.childNodes].find((child) => child.nodeType === Node.TEXT_NODE) : null;
+        if (!node) return null;
+        const rect = item.getBoundingClientRect();
+        const ratio = rect.width > 0 ? Math.max(0, Math.min(1, (clientX - rect.left) / rect.width)) : 0;
+        offset = Math.round(ratio * (node.textContent?.length || 0));
+      }
+      return { item, node, offset: Math.max(0, Math.min(node.textContent?.length || 0, offset)) };
+    };
+    const orderedTextItems = () => [...mdPage.querySelectorAll(".pdf_markdown_aside_visual_line_item")];
+    const normalizedMarkdownEndpoints = () => {
+      if (!markdownSelectionModel) return null;
+      const items = orderedTextItems();
+      const startIndex = items.indexOf(markdownSelectionModel.start.item);
+      const endIndex = items.indexOf(markdownSelectionModel.end.item);
+      if (startIndex < 0 || endIndex < 0) return null;
+      const startFirst = startIndex < endIndex
+        || (startIndex === endIndex && markdownSelectionModel.start.offset <= markdownSelectionModel.end.offset);
+      return {
+        items,
+        start: startFirst ? markdownSelectionModel.start : markdownSelectionModel.end,
+        end: startFirst ? markdownSelectionModel.end : markdownSelectionModel.start,
+        startIndex: startFirst ? startIndex : endIndex,
+        endIndex: startFirst ? endIndex : startIndex,
+      };
+    };
+    const selectedMarkdownText = ({ items, start, end, startIndex, endIndex }) => {
+      if (startIndex === endIndex) return start.node.textContent.slice(start.offset, end.offset);
+      const parts = items.slice(startIndex, endIndex + 1).map((item, relativeIndex) => {
+        const textNode = [...item.childNodes].find((child) => child.nodeType === Node.TEXT_NODE);
+        const text = textNode?.textContent || "";
+        if (relativeIndex === 0) return text.slice(start.offset);
+        if (relativeIndex === endIndex - startIndex) return text.slice(0, end.offset);
+        return text;
+      });
+      return parts.join(" ");
+    };
+    const renderMarkdownSelection = () => {
+      const endpoints = normalizedMarkdownEndpoints();
+      if (!endpoints) return false;
+      const range = document.createRange();
+      range.setStart(endpoints.start.node, endpoints.start.offset);
+      range.setEnd(endpoints.end.node, endpoints.end.offset);
+      const pageRect = mdPage.getBoundingClientRect();
+      const rects = [...range.getClientRects()].filter((rect) => rect.width > 0 && rect.height > 0);
+      if (!rects.length || !pageRect.width || !pageRect.height) return false;
+      clearMarkdownSelection();
+      window.getSelection()?.removeAllRanges();
+      const scaleX = mdPage.offsetWidth / pageRect.width;
+      const scaleY = mdPage.offsetHeight / pageRect.height;
+      const localRects = rects.map((rect) => ({
+        left: (rect.left - pageRect.left) * scaleX,
+        top: (rect.top - pageRect.top) * scaleY,
+        width: rect.width * scaleX,
+        height: rect.height * scaleY,
+      }));
+      localRects.forEach((rect) => {
+        const highlight = document.createElement("div");
+        highlight.className = "pdf_markdown_word_selection";
+        Object.assign(highlight.style, {
+          left: `${rect.left}px`, top: `${rect.top}px`,
+          width: `${rect.width}px`, height: `${rect.height}px`,
+        });
+        mdPage.appendChild(highlight);
+      });
+      const addHandle = (edge, rect, x) => {
+        const handle = document.createElement("div");
+        handle.className = `sel_selection_handle sel_selection_handle--${edge} pdf_markdown_selection_handle`;
+        handle.setAttribute("aria-label", `${edge} selection handle`);
+        Object.assign(handle.style, { left: `${x}px`, top: `${rect.top + rect.height}px` });
+        const onPointerDown = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          activeHandleCleanup?.();
+          const pointerId = event.pointerId;
+          const onPointerMove = (moveEvent) => {
+            if (moveEvent.pointerId !== pointerId) return;
+            moveEvent.preventDefault();
+            const position = textPositionAtPoint(moveEvent.clientX, moveEvent.clientY);
+            if (!position) return;
+            markdownSelectionModel[edge] = position;
+            renderMarkdownSelection();
+          };
+          const stop = (endEvent) => {
+            if (endEvent.pointerId !== pointerId) return;
+            document.removeEventListener("pointermove", onPointerMove);
+            document.removeEventListener("pointerup", stop);
+            document.removeEventListener("pointercancel", stop);
+            activeHandleCleanup = null;
+          };
+          activeHandleCleanup = () => {
+            document.removeEventListener("pointermove", onPointerMove);
+            document.removeEventListener("pointerup", stop);
+            document.removeEventListener("pointercancel", stop);
+          };
+          document.addEventListener("pointermove", onPointerMove, { passive: false });
+          document.addEventListener("pointerup", stop);
+          document.addEventListener("pointercancel", stop);
+        };
+        handle.addEventListener("pointerdown", onPointerDown, { passive: false });
+        mdPage.appendChild(handle);
+      };
+      const firstRect = localRects[0];
+      const lastRect = localRects[localRects.length - 1];
+      addHandle("start", firstRect, firstRect.left);
+      addHandle("end", lastRect, lastRect.left + lastRect.width);
+      const selectedText = sanitizeSelectedText(selectedMarkdownText(endpoints));
+      if (!selectedText) return false;
+      setManualSelection({
+        surface: "md",
+        text: selectedText,
+        startIdx: endpoints.startIndex,
+        endIdx: endpoints.endIndex,
+        startCharOffset: endpoints.start.offset,
+        endCharOffset: endpoints.end.offset,
+        x: firstRect.left,
+        y: lastRect.top + lastRect.height + 8,
+      });
+      return true;
+    };
+    const selectMarkdownWordAt = (clientX, clientY) => {
+      const position = textPositionAtPoint(clientX, clientY);
+      const target = position?.item;
+      const textNode = position?.node;
+      if (!target || !textNode) return false;
+      const text = textNode?.textContent || "";
+      if (!text.trim()) return false;
+      let offset = position.offset;
+      let start = offset;
+      let end = offset;
+      while (start > 0 && /\S/.test(text[start - 1])) start -= 1;
+      while (end < text.length && /\S/.test(text[end])) end += 1;
+      if (start === end) return false;
+      markdownSelectionModel = {
+        start: { item: target, node: textNode, offset: start },
+        end: { item: target, node: textNode, offset: end },
+      };
+      return renderMarkdownSelection();
+    };
+    let lastTouch = null;
+    const onDoubleClick = (event) => {
+      if (markdownVisualMode === "visual-only") {
+        event.preventDefault();
+        event.stopPropagation();
+        selectMarkdownWordAt(event.clientX, event.clientY);
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      dispatchDoubleClick(event.clientX, event.clientY);
+    };
+    const onTouchEnd = (event) => {
+      if (event.changedTouches.length !== 1) return;
+      const touch = event.changedTouches[0];
+      const now = Date.now();
+      const isDoubleTouch = lastTouch
+        && now - lastTouch.time < MD_DOUBLE_TAP_MS
+        && Math.hypot(touch.clientX - lastTouch.x, touch.clientY - lastTouch.y) < MD_DOUBLE_TAP_DIST;
+      if (isDoubleTouch) {
+        event.preventDefault();
+        event.stopPropagation();
+        lastTouch = null;
+        if (markdownVisualMode === "visual-only") {
+          selectMarkdownWordAt(touch.clientX, touch.clientY);
+        } else {
+          dispatchDoubleClick(touch.clientX, touch.clientY);
+        }
+      } else {
+        lastTouch = { time: now, x: touch.clientX, y: touch.clientY };
+      }
+    };
+    const onTouchCancel = () => {
+      lastTouch = null;
+    };
+    const onContextMenu = (event) => {
+      if (markdownVisualMode === "visual-only") event.preventDefault();
+    };
+    mdPage.addEventListener("dblclick", onDoubleClick, { passive: false });
+    mdPage.addEventListener("touchend", onTouchEnd, { passive: false });
+    mdPage.addEventListener("touchcancel", onTouchCancel, { passive: false });
+    mdPage.addEventListener("contextmenu", onContextMenu, { passive: false });
+    return () => {
+      activeHandleCleanup?.();
+      clearMarkdownSelection();
+      mdPage.removeEventListener("dblclick", onDoubleClick);
+      mdPage.removeEventListener("touchend", onTouchEnd);
+      mdPage.removeEventListener("touchcancel", onTouchCancel);
+      mdPage.removeEventListener("contextmenu", onContextMenu);
+    };
+  }, [markdownVisualActive, markdownVisualMode]);
+
+  useEffect(() => {
+    if (manualSelection?.surface === "md") return;
+    markdownVisualLayerRef.current
+      ?.querySelectorAll(".pdf_markdown_word_selection, .pdf_markdown_selection_handle")
+      .forEach((node) => node.remove());
+  }, [manualSelection]);
 
   // Click-to-select an existing text annotation without first having to
   // arm the Text tool — a plain click while just reading selects it and
@@ -4190,8 +6207,171 @@ const PDFPage = forwardRef(({
   const zoomHoldIntervalRef = useRef(null);
   const selBarRef          = useRef(null);
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
+  const pendingSmartPenStrokesRef = useRef([]);
   const pageImageRectsRef  = useRef([]);
   const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
+  const [schemaWordKeys, setSchemaWordKeys] = useState(() => new Set());
+  const schemaWordKeysRef = useRef(schemaWordKeys);
+  const schemaRecordsRef = useRef(new Map());
+  const [traceSourcesByWord, setTraceSourcesByWord] = useState(() => new Map());
+  const [smartPenMarkerPopup, setSmartPenMarkerPopup] = useState(null);
+  const [smartPenMorphePreview, setSmartPenMorphePreview] = useState(null);
+  const morpheUndoRef = useRef([]);
+  const morpheRedoRef = useRef([]);
+  useEffect(() => { schemaWordKeysRef.current = schemaWordKeys; }, [schemaWordKeys]);
+
+  const rememberMorpheCreation = useCallback((action) => {
+    if (!action?.id) return;
+    morpheUndoRef.current.push(action);
+    morpheRedoRef.current = [];
+    logAnnotHistory({
+      action: "add",
+      type: `morphe-${action.kind}`,
+      page: action.page,
+      annotationId: action.id,
+      morpheEntityId: action.id,
+    });
+  }, [logAnnotHistory]);
+
+  const refreshSchemaWordKeys = useCallback(async () => {
+    try {
+      const data = await listMorpheSchemaNames();
+      const keys = new Set(
+      (data.schemas || [])
+          .map((schema) => schemaWordKey(schema?.name))
+          .filter(Boolean),
+      );
+      schemaRecordsRef.current = new Map(
+        (data.schemas || [])
+          .map((schema) => [schemaWordKey(schema?.name), schema])
+          .filter(([key]) => Boolean(key)),
+      );
+      const nextTraceSources = new Map();
+      (data.traceSchemas || []).forEach((trace) => {
+        const traceKey = schemaWordKey(trace?.name);
+        const sourceName = cleanSchemaWord(trace?.sourceSchemaName);
+        if (!traceKey || !sourceName) return;
+        const sources = nextTraceSources.get(traceKey) || [];
+        if (!sources.some((source) => schemaWordKey(source.name) === schemaWordKey(sourceName))) {
+          sources.push({ name: sourceName, dimension: trace?.traceDimension === "4D" ? "4D" : "3D" });
+        }
+        nextTraceSources.set(traceKey, sources);
+      });
+      schemaWordKeysRef.current = keys;
+      setSchemaWordKeys(keys);
+      setTraceSourcesByWord(nextTraceSources);
+    } catch (error) {
+      console.error("[PDF] Failed to load Smart Pen Schema markers", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSchemaWordKeys();
+    const refreshOnFocus = () => { void refreshSchemaWordKeys(); };
+    window.addEventListener("focus", refreshOnFocus);
+    window.addEventListener("amctoshs:morphe-updated", refreshOnFocus);
+    return () => {
+      window.removeEventListener("focus", refreshOnFocus);
+      window.removeEventListener("amctoshs:morphe-updated", refreshOnFocus);
+    };
+  }, [refreshSchemaWordKeys]);
+
+  const registerSmartPenStrokeSchemas = useCallback((stroke) => {
+    if (!spansRef.current.length) {
+      pendingSmartPenStrokesRef.current.push(stroke);
+      return;
+    }
+    const coveredRecords = getSmartPenCoveredSpanRecords(stroke, spansRef.current);
+    const coveredWords = coveredRecords.map(({ word }) => word);
+    const newWords = coveredWords.filter((word) => !schemaWordKeysRef.current.has(schemaWordKey(word)));
+    if (!newWords.length) return;
+
+    const sourceId = currentSourceIdRef.current || embeddedSourceId || null;
+    const directionalTraces = getSmartPenDirectionalTraceRecords(stroke, spansRef.current, schemaRecordsRef.current);
+    if (directionalTraces.length) {
+      directionalTraces.forEach(({ target, traceDimension }) => {
+        window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated", { detail: { phase: "saving", kind: "trace", name: target.word, traceDimension } }));
+      });
+      void Promise.allSettled(directionalTraces.map(({ source, target, traceDimension }) => {
+        const sourceSchema = schemaRecordsRef.current.get(schemaWordKey(source.word));
+        return upsertSmartPenTrace({
+          name: target.word,
+          sourceSchemaId: sourceSchema?._id,
+          sourceSchemaName: source.word,
+          sourceId,
+          page: pageNum,
+          traceDimension,
+        });
+      })).then((results) => {
+        results.forEach((result, index) => {
+          if (result.status !== "fulfilled" || result.value?.created === false) return;
+          const trace = result.value?.traceSchema;
+          const source = directionalTraces[index]?.source;
+          const target = directionalTraces[index]?.target;
+          if (!trace?._id || !source || !target) return;
+          rememberMorpheCreation({
+            kind: "trace",
+            id: trace._id,
+            name: target.word,
+            sourceSchemaId: trace.sourceSchemaId || schemaRecordsRef.current.get(schemaWordKey(source.word))?._id,
+            sourceSchemaName: source.word,
+            sourceId,
+            page: pageNum,
+            traceDimension: directionalTraces[index]?.traceDimension || "3D",
+          });
+          window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated", { detail: { phase: "saved", kind: "trace", name: trace.name, id: trace._id, traceDimension: trace.traceDimension || directionalTraces[index]?.traceDimension || "3D" } }));
+        });
+        results.forEach((result, index) => {
+          if (result.status === "rejected") {
+            window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated", { detail: { phase: "failed", kind: "trace", name: directionalTraces[index]?.target?.word || "" } }));
+          }
+        });
+        if (results.some((result) => result.status === "fulfilled")) {
+          window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated"));
+        }
+      });
+      return;
+    }
+    // Once a stroke touches an existing Schema, it is a relationship gesture
+    // rather than permission to turn every other covered word into a Schema.
+    if (coveredRecords.some((record) => schemaRecordsRef.current.has(schemaWordKey(record.word)))) return;
+    if (!isSmartPenRectangularStroke(stroke)) return;
+
+    const schemaNames = getSmartPenCoveredSchemaNames(stroke, spansRef.current)
+      .filter((name) => !schemaWordKeysRef.current.has(schemaWordKey(name)));
+    if (!schemaNames.length) return;
+    const optimisticKeys = new Set(schemaWordKeysRef.current);
+    schemaNames.forEach((name) => optimisticKeys.add(schemaWordKey(name)));
+    schemaWordKeysRef.current = optimisticKeys;
+    setSchemaWordKeys(optimisticKeys);
+    schemaNames.forEach((name) => {
+      window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated", { detail: { phase: "saving", kind: "schema", name } }));
+    });
+    void Promise.allSettled(schemaNames.map((name) => upsertSmartPenSchema({ name, sourceId, page: pageNum })))
+      .then((results) => {
+        results.forEach((result) => {
+          const schema = result.status === "fulfilled" ? result.value?.schema : null;
+          if (schema?._id) {
+            schemaRecordsRef.current.set(schemaWordKey(schema.name), schema);
+            if (result.value?.created !== false) {
+              rememberMorpheCreation({ kind: "schema", id: schema._id, name: schema.name, sourceId, page: pageNum });
+              window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated", { detail: { phase: "saved", kind: "schema", name: schema.name, id: schema._id } }));
+            }
+          }
+        });
+        results.forEach((result, index) => {
+          if (result.status === "rejected") {
+            window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated", { detail: { phase: "failed", kind: "schema", name: schemaNames[index] || "" } }));
+          }
+        });
+        if (results.some((result) => result.status === "fulfilled")) {
+          window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated"));
+        }
+        return refreshSchemaWordKeys();
+      });
+  }, [embeddedSourceId, pageNum, refreshSchemaWordKeys, rememberMorpheCreation]);
+
+  const schemaTextLayerActive = textSelectable || annotTool === "smartPen" || schemaWordKeys.size > 0;
   const [hyleSources, setHyleSources] = useState([]);
   const [hyleSourcesLoading, setHyleSourcesLoading] = useState(false);
   const bboxCardsForBuilder = useMemo(() => {
@@ -4203,33 +6383,37 @@ const PDFPage = forwardRef(({
     return entityBuilderPageAnnotations
       .filter((bbox) => BBOX_CARD_TYPES.has(bbox.type) || bboxTypeHas(bbox.type, "containsChildren") || ["columnBBox", "subLineBBox"].includes(bbox.type))
       .map((bbox, index) => {
-        typeOrdinals[bbox.type] = (typeOrdinals[bbox.type] || 0) + 1;
-        const partitionedText = bbox.type === "bbox"
+        const viewBBox = bboxResizePreview?.id === bbox.id
+          ? { ...bbox, ...bboxResizePreview }
+          : bbox;
+        typeOrdinals[viewBBox.type] = (typeOrdinals[viewBBox.type] || 0) + 1;
+        const partitionedText = viewBBox.type === "bbox"
           ? buildPartitionOrderedTextLines(
               spansRef.current,
-              bbox,
+              viewBBox,
               entityBuilderPageAnnotations.filter((item) => item?.type === "columnBBox"),
               bboxTextMatchesSpanUtil,
             )
           : { lines: [], groups: [], partitionIds: [] };
-        const derivedTextLines = bboxTypeHas(bbox.type, "extractsText")
+        const derivedTextLines = bboxTypeHas(viewBBox.type, "extractsText")
           ? (partitionedText.lines.length
               ? partitionedText.lines
               : buildTextLines(
                   selectSpansForBoundingBox(
                     spansRef.current,
-                    bbox,
+                    viewBBox,
                     bboxTextMatchesSpanUtil,
                     [],
-                    { preserveColumns: true, splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(bbox.type) },
+                    { preserveColumns: true, splitLines: ["bbox", "columnBBox", "subLineBBox"].includes(viewBBox.type) },
                   ),
                 )).map((line) => line.text).filter(Boolean)
           : null;
-        const bodyTextLines = bbox.type === "bbox" && derivedTextLines?.length
-          ? removeParagraphTitleLine(derivedTextLines, bbox.title).bodyLines
-          : derivedTextLines;
+        // Keep every extracted line in Illumination, including a line that
+        // may also be stored as paragraph title metadata. A SubLine child
+        // must remain visible in the parent's line group after reparenting.
+        const bodyTextLines = derivedTextLines;
         return {
-          ...bbox,
+          ...viewBBox,
           ...(bodyTextLines?.length || derivedTextLines?.length ? { textLines: bodyTextLines || [] } : {}),
           ...(partitionedText.partitionIds.length > 1 ? {
             partitionIds: partitionedText.partitionIds,
@@ -4238,7 +6422,7 @@ const PDFPage = forwardRef(({
               lines: group.lines.map((line) => line.text).filter(Boolean),
             })),
           } : {}),
-          hyleId: hyleIds[bbox.id] || getSemanticHyleBBoxId(currentSourceIdRef.current, pageNum, bbox.type, typeOrdinals[bbox.type]),
+          hyleId: hyleIds[bbox.id] || getSemanticHyleBBoxId(currentSourceIdRef.current, pageNum, viewBBox.type, typeOrdinals[viewBBox.type]),
           _index: index + 1,
           _displayTitle: bbox.title?.trim()
             || (bboxTypeHas(bbox.type, "containsChildren")
@@ -4247,7 +6431,33 @@ const PDFPage = forwardRef(({
           text: bbox.text || "",
         };
       });
-  }, [annotations, hyleSources, pageNum, textLayerRenderTick]);
+  }, [annotations, bboxResizePreview, hyleSources, pageNum, textLayerRenderTick]);
+  const isCurrentPageFullySegmented = useMemo(() => {
+    const meaningfulLines = buildTextLines(spansRef.current || []).filter((line) => {
+      const text = String(line?.text || "").replace(/\s+/g, " ").trim();
+      return text.length >= 2 && /[\p{L}\p{N}]/u.test(text);
+    });
+    if (!meaningfulLines.length) return false;
+
+    const contentBboxes = (annotations[pageNum] || []).filter((annotation) => (
+      bboxTypeHas(annotation?.type, "extractsText")
+      && annotation.type !== "subLineBBox"
+      && Number(annotation?.w) > 0
+      && Number(annotation?.h) > 0
+    ));
+    if (!contentBboxes.length) return false;
+
+    const lineCoveredByBBox = (line, bbox) => {
+      const rect = line?.rect;
+      if (!rect || !bbox) return false;
+      const overlapX = Math.max(0, Math.min(rect.x + rect.w, bbox.x + bbox.w) - Math.max(rect.x, bbox.x));
+      const overlapY = Math.max(0, Math.min(rect.y + rect.h, bbox.y + bbox.h) - Math.max(rect.y, bbox.y));
+      const lineArea = Math.max(1, rect.w * rect.h);
+      return (overlapX * overlapY) / lineArea >= 0.9;
+    };
+
+    return meaningfulLines.every((line) => contentBboxes.some((bbox) => lineCoveredByBBox(line, bbox)));
+  }, [annotations, pageNum, textLayerRenderTick]);
   useEffect(() => {
     const sourceId = currentSourceIdRef.current;
     if (!entityBuilderOpen || !sourceId) return undefined;
@@ -4773,11 +6983,14 @@ const PDFPage = forwardRef(({
       authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildAnnotationSavePayload()),
+        // Zoom and scroll changes only modify readerState. Avoid rebuilding
+        // and serializing every annotation layer during high-frequency
+        // viewport interaction.
+        body: JSON.stringify({ readerState: buildReaderStatePayloadRef.current() }),
       }).catch(() => {});
     }, 900);
     return () => clearTimeout(timer);
-  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, readerStateSaveTick, buildAnnotationSavePayload]);
+  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, readerStateSaveTick, buildReaderStatePayload]);
 
   // buildAnnotationSavePayload is read through a ref, and this effect's own
   // deps are deliberately [] (mount/unmount only) — NOT [buildAnnotationSavePayload].
@@ -4798,7 +7011,7 @@ const PDFPage = forwardRef(({
         method: "PUT",
         keepalive: true,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildAnnotationSavePayloadRef.current()),
+        body: JSON.stringify({ readerState: buildReaderStatePayloadRef.current() }),
       }).catch(() => {});
     };
     window.addEventListener("pagehide", persistReaderStateNow);
@@ -4903,6 +7116,35 @@ const PDFPage = forwardRef(({
     paintCurrentAnnotationLayers();
   }, [paintCurrentAnnotationLayers]);
 
+  // Resize previews are not committed to `annotations` until pointer-up, so
+  // the normal annotation repaint cannot see them. Paint the transient
+  // rectangle whenever its React state changes; this keeps the moved side
+  // synchronized with the handle instead of waiting for a later click.
+  useLayoutEffect(() => {
+    const preview = bboxResizePreview;
+    const ac = annotCanvasRef.current;
+    if (!preview || !ac || !pageViewport) return;
+    const saved = visiblePageAnnotations.find((annotation) => annotation.id === preview.id);
+    if (!saved) return;
+    const backingScale = currentBackingScaleRef.current || 1;
+    const scale = pageViewport.scale || (fitScaleRef.current * zoom);
+    const ctx = ac.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
+    for (const annotation of visiblePageAnnotations) {
+      if (annotation.id === preview.id) continue;
+      drawAnnotationWithOwnerClip(ctx, annotation, scale, visiblePageAnnotations);
+    }
+    drawAnnotationWithOwnerClip(ctx, {
+      ...saved,
+      ...preview,
+      points: rectanglePointsFromBounds(preview),
+      closed: true,
+      geometry: "rectangle",
+    }, scale, visiblePageAnnotations);
+  }, [bboxResizePreview, drawAnnotationWithOwnerClip, pageViewport, visiblePageAnnotations, zoom]);
+
   // Single-page mode keys each page's container on its own page number (see
   // the .map(n => ...) render below), so navigating away and back mounts a
   // BRAND NEW <canvas> — freshly zero-sized, nothing drawn to it yet. The
@@ -4988,6 +7230,266 @@ const PDFPage = forwardRef(({
     pageTextItemsCacheRef.current[n] = items;
     return items;
   }, [pdfDoc]);
+  const buildRawRowsForBlankPage = useCallback(async () => {
+    if (!pageNum || !pdfDoc) return { rows: [], pageWidth: 0, pageHeight: 0 };
+    const [page, items] = await Promise.all([
+      pdfDoc.getPage(pageNum),
+      getPageTextItems(pageNum),
+    ]);
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent().catch(() => null);
+    const styleMap = content?.styles || {};
+    const viewportScale = Math.hypot(viewport.transform[0], viewport.transform[1]) || 1;
+    const getTextMetadata = (item, text, matrix = null) => {
+      const safeMatrix = Array.isArray(matrix) && matrix.length >= 6 ? matrix : [0, 0, 0, 0, 0, 0];
+      const codePoints = Array.from(text)
+        .map((character) => `U+${character.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}`)
+        .join(" ");
+      return {
+        direction: item?.dir || "ltr",
+        eol: Boolean(item?.hasEOL),
+        charCount: Array.from(text).length,
+        whitespaceOnly: !text.trim(),
+        codePoints,
+        rotation: Math.atan2(safeMatrix[1], safeMatrix[0]) * (180 / Math.PI),
+        scaleX: Math.hypot(safeMatrix[0], safeMatrix[1]),
+        scaleY: Math.hypot(safeMatrix[2], safeMatrix[3]),
+        matrixA: safeMatrix[0],
+        matrixB: safeMatrix[1],
+        matrixC: safeMatrix[2],
+        matrixD: safeMatrix[3],
+        matrixE: safeMatrix[4],
+        matrixF: safeMatrix[5],
+      };
+    };
+    const getFontMetadata = (item) => {
+      const style = styleMap?.[item?.fontName] || {};
+      let fontFamily = String(style.fontFamily || "").trim() || "unknown";
+      let fontWeight = "normal";
+      let fontStyle = "normal";
+      try {
+        if (item?.fontName && page.commonObjs?.has(item.fontName)) {
+          const fontObj = page.commonObjs.get(item.fontName);
+          fontFamily = String(fontObj?.fallbackName || fontFamily).trim() || "unknown";
+          fontWeight = fontObj?.black ? "900" : fontObj?.bold ? "bold" : "normal";
+          fontStyle = fontObj?.italic ? "italic" : "normal";
+        }
+      } catch {
+        // PDF.js may not have resolved the embedded font object yet.
+      }
+      return {
+        fontName: item?.fontName || "unknown",
+        fontFamily,
+        fontWeight,
+        fontStyle,
+      };
+    };
+    const rawRows = (Array.isArray(items) ? items : [])
+      .map((item, index) => {
+        const text = String(item?.str || "");
+        if (!text) return null;
+        const font = getFontMetadata(item);
+        const textMetadata = getTextMetadata(item, text, item?.transform);
+        const style = styleMap?.[item?.fontName] || {};
+        const ascentRatio = Number.isFinite(style.ascent) ? style.ascent : 0.8;
+        const descentRatio = Number.isFinite(style.descent) ? style.descent : -0.2;
+        const transform = Array.isArray(item?.transform) ? item.transform : null;
+        if (!transform || transform.length < 6) {
+          const fallbackHeight = Math.max(1, Math.abs(Number(item?.height) || 12));
+          const fallbackBaseline = index * fallbackHeight;
+          return {
+            id: `raw-item-${pageNum}-${index}`,
+            key: "str",
+            value: text,
+            x: 0,
+            y: fallbackBaseline - (fallbackHeight * ascentRatio),
+            tx: 0,
+            ty: fallbackBaseline,
+            fontSize: fallbackHeight,
+            width: Math.max(1, Number(item?.width) || 0),
+            height: fallbackHeight,
+            rawWidth: Number(item?.width) || 0,
+            rawHeight: Number(item?.height) || fallbackHeight,
+            top: fallbackBaseline - (fallbackHeight * ascentRatio),
+            ascent: fallbackBaseline - (fallbackHeight * ascentRatio),
+            baseline: fallbackBaseline,
+            descent: fallbackBaseline - (fallbackHeight * descentRatio),
+            bottom: fallbackBaseline - (fallbackHeight * descentRatio),
+            ...font,
+            ...textMetadata,
+            fullMatrixA: 0,
+            fullMatrixB: 0,
+            fullMatrixC: 0,
+            fullMatrixD: 0,
+            fullMatrixE: 0,
+            fullMatrixF: 0,
+          };
+        }
+        const tx = pdfjsLib.Util.transform(viewport.transform, transform);
+        const fontSize = Math.max(1, Math.hypot(tx[2], tx[3]));
+        const itemWidth = Math.max(1, (Number(item?.width) || 0) * viewportScale);
+        const originX = Number(tx[4]) || 0;
+        const originY = Number(tx[5]) || 0;
+        const itemX = originX / viewportScale;
+        const itemY = (originY - (fontSize * ascentRatio)) / viewportScale;
+        const itemHeight = fontSize / viewportScale;
+        const baseline = originY / viewportScale;
+        const descent = (originY - (fontSize * descentRatio)) / viewportScale;
+        return {
+          id: `raw-item-${pageNum}-${index}`,
+          key: "str",
+          value: text,
+          x: itemX,
+          y: itemY,
+          tx: originX / viewportScale,
+          ty: originY / viewportScale,
+          fontSize: fontSize / viewportScale,
+          width: itemWidth,
+          height: itemHeight,
+          rawWidth: Number(item?.width) || 0,
+          rawHeight: Number(item?.height) || 0,
+          top: itemY,
+          ascent: itemY,
+          baseline,
+          descent,
+          bottom: itemY + itemHeight,
+          ...font,
+          ...getTextMetadata(item, text, transform),
+          fullMatrixA: tx[0],
+          fullMatrixB: tx[1],
+          fullMatrixC: tx[2],
+          fullMatrixD: tx[3],
+          fullMatrixE: tx[4],
+          fullMatrixF: tx[5],
+        };
+      })
+      .filter(Boolean)
+      .map((row, index) => ({ ...row, instanceNumber: index + 1 }));
+    if (!rawRows.length) {
+      return {
+        rows: [],
+        pageWidth: viewport.width,
+        pageHeight: viewport.height,
+        viewportScale,
+        pageRotation: Number(page.rotate) || 0,
+        mediaBox: Array.isArray(page.view) ? page.view : [],
+      };
+    }
+    const heights = rawRows
+      .map((row) => row.height)
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    const medianHeight = heights[Math.floor(heights.length / 2)] || 0;
+    return {
+      rows: rawRows.map((row) => {
+        const omissionBBoxIds = omissionBBoxes
+          .filter((bbox) => isRectFullyContainedByBBox({ x: row.x, y: row.y, w: row.width, h: row.height }, bbox))
+          .map((bbox) => bbox.id)
+          .filter(Boolean);
+        return {
+          ...row,
+          omitted: omissionBBoxIds.length > 0,
+          omissionBBoxIds,
+          classification: classifyPdfJsTextItem({
+          value: row.value,
+          x: row.x,
+          y: row.y,
+          width: row.width,
+          height: row.height,
+          pageWidth: viewport.width,
+          pageHeight: viewport.height,
+          medianHeight,
+        }),
+        };
+      }),
+      pageWidth: viewport.width,
+      pageHeight: viewport.height,
+      viewportScale,
+      pageRotation: Number(page.rotate) || 0,
+      mediaBox: Array.isArray(page.view) ? page.view : [],
+    };
+  }, [getPageTextItems, omissionBBoxes, pageNum, pdfDoc]);
+  const buildVisualRawTextForBlankPage = useCallback(async () => {
+    if (!pageNum || !pdfDoc) return "";
+    const [page, items] = await Promise.all([
+      pdfDoc.getPage(pageNum),
+      getPageTextItems(pageNum),
+    ]);
+    const viewport = page.getViewport({ scale: 1 });
+    const visualItems = (Array.isArray(items) ? items : [])
+      .map((item, index) => {
+        const text = String(item?.str || "");
+        if (!text.trim()) return null;
+        const transform = Array.isArray(item?.transform) ? item.transform : null;
+        if (!transform || transform.length < 6) {
+          return {
+            index,
+            text,
+            x: 0,
+            y: index * 12,
+            width: Number(item?.width) || 0,
+            height: Number(item?.height) || 12,
+          };
+        }
+        const height = Math.max(1, Math.abs(Number(item?.height) || transform[3] || 12));
+        const width = Math.max(1, Number(item?.width) || 0);
+        return {
+          index,
+          text,
+          x: Number(transform[4]) || 0,
+          y: viewport.height - (Number(transform[5]) || 0) - height,
+          width,
+          height,
+        };
+      })
+      .filter(Boolean);
+    if (!visualItems.length) return "";
+
+    visualItems.sort((a, b) => {
+      const aMid = a.y + (a.height / 2);
+      const bMid = b.y + (b.height / 2);
+      const lineTolerance = Math.max(a.height, b.height) * 0.6;
+      if (Math.abs(aMid - bMid) > lineTolerance) return aMid - bMid;
+      if (Math.abs(a.x - b.x) > 0.5) return a.x - b.x;
+      return a.index - b.index;
+    });
+
+    const lines = [];
+    visualItems.forEach((item) => {
+      const itemMid = item.y + (item.height / 2);
+      const targetLine = lines.find((line) => Math.abs(line.midY - itemMid) <= Math.max(line.avgHeight, item.height) * 0.65);
+      if (targetLine) {
+        targetLine.items.push(item);
+        targetLine.midY = ((targetLine.midY * (targetLine.items.length - 1)) + itemMid) / targetLine.items.length;
+        targetLine.avgHeight = ((targetLine.avgHeight * (targetLine.items.length - 1)) + item.height) / targetLine.items.length;
+      } else {
+        lines.push({
+          midY: itemMid,
+          avgHeight: item.height,
+          items: [item],
+        });
+      }
+    });
+
+    return lines
+      .sort((a, b) => a.midY - b.midY)
+      .map((line) => line.items
+        .sort((a, b) => a.x - b.x || a.index - b.index)
+        .map((item, index, arr) => {
+          const next = arr[index + 1];
+          const currentText = item.text;
+          if (!next) return currentText;
+          const currentRight = item.x + item.width;
+          const gap = next.x - currentRight;
+          const spaceThreshold = Math.max(item.height * 0.18, 2);
+          const needsSpace = gap > spaceThreshold && !/\s$/.test(currentText) && !/^\s/.test(next.text);
+          return `${currentText}${needsSpace ? " " : ""}`;
+        })
+        .join(""))
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }, [getPageTextItems, pageNum, pdfDoc]);
 
   // Scans every page's text for the query, debounced so fast typing doesn't
   // re-scan on every keystroke. Runs sequentially page-by-page (cheap after
@@ -5250,132 +7752,12 @@ const PDFPage = forwardRef(({
     };
   }, [hyleActiveSegment]);
 
-  const runDrawToTextRecognition = useCallback(async (selection) => {
-    const pageCanvas = canvasRef.current;
-    const annotCanvas = annotCanvasRef.current;
-    const viewport = pageViewportsRef.current[pageNum - 1] || pageViewport;
-    if (!pageCanvas || !annotCanvas || !viewport) return;
-
-    const scale = fitScaleRef.current * zoomRef.current;
-    const pageCssWidth = Math.max(1, viewport.width);
-    const pageCssHeight = Math.max(1, viewport.height);
-    const pageScaleX = pageCanvas.width / pageCssWidth;
-    const pageScaleY = pageCanvas.height / pageCssHeight;
-    const cropLeftCss = clamp(selection.x * scale, 0, pageCssWidth);
-    const cropTopCss = clamp(selection.y * scale, 0, pageCssHeight);
-    const cropWidthCss = clamp(selection.w * scale, 1, pageCssWidth - cropLeftCss);
-    const cropHeightCss = clamp(selection.h * scale, 1, pageCssHeight - cropTopCss);
-    if (cropWidthCss < 12 || cropHeightCss < 12) return;
-
-    const cropCanvas = document.createElement("canvas");
-    cropCanvas.width = Math.max(1, Math.round(cropWidthCss * pageScaleX));
-    cropCanvas.height = Math.max(1, Math.round(cropHeightCss * pageScaleY));
-    const cropCtx = cropCanvas.getContext("2d", { willReadFrequently: true });
-    cropCtx.fillStyle = "#ffffff";
-    cropCtx.fillRect(0, 0, cropCanvas.width, cropCanvas.height);
-    cropCtx.drawImage(
-      pageCanvas,
-      cropLeftCss * pageScaleX,
-      cropTopCss * pageScaleY,
-      cropWidthCss * pageScaleX,
-      cropHeightCss * pageScaleY,
-      0,
-      0,
-      cropCanvas.width,
-      cropCanvas.height
-    );
-    const annotScaleX = annotCanvas.width / Math.max(1, pageCssWidth);
-    const annotScaleY = annotCanvas.height / Math.max(1, pageCssHeight);
-    cropCtx.drawImage(
-      annotCanvas,
-      cropLeftCss * annotScaleX,
-      cropTopCss * annotScaleY,
-      cropWidthCss * annotScaleX,
-      cropHeightCss * annotScaleY,
-      0,
-      0,
-      cropCanvas.width,
-      cropCanvas.height
-    );
-
-    // A light grayscale/contrast pass helps handwriting and low-contrast pen
-    // strokes read more like intentional ink before OCR sees the crop.
-    const image = cropCtx.getImageData(0, 0, cropCanvas.width, cropCanvas.height);
-    const { data } = image;
-    for (let i = 0; i < data.length; i += 4) {
-      const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-      const boosted = gray < 185 ? gray * 0.68 : 255 - ((255 - gray) * 0.42);
-      data[i] = boosted;
-      data[i + 1] = boosted;
-      data[i + 2] = boosted;
-      data[i + 3] = 255;
-    }
-    cropCtx.putImageData(image, 0, 0);
-
-    const jobId = Date.now();
-    drawTextJobRef.current = jobId;
-    setDrawTextBusy(true);
-    setDrawTextProgress(0);
-    setDrawTextStatus("Preparing OCR…");
-
-    try {
-      const worker = await getOcrWorker();
-      const { data: { text } } = await worker.recognize(cropCanvas);
-      if (drawTextJobRef.current !== jobId) return;
-      const recognizedText = normalizeOcrText(text);
-      if (!recognizedText) {
-        setDrawTextStatus("No text detected");
-        setTimeout(() => {
-          if (drawTextJobRef.current === jobId) {
-            setDrawTextBusy(false);
-            setDrawTextStatus("");
-            setDrawTextProgress(0);
-            drawTextJobRef.current = 0;
-          }
-        }, 1200);
-        return;
-      }
-
-      const rect = annotCanvas.getBoundingClientRect();
-      const inputLeft = cropLeftCss + 8;
-      const inputTop = cropTopCss + 8;
-      setAnnotTextInput({
-        vx: rect.left + inputLeft,
-        vy: rect.top + inputTop,
-        cx: selection.x + (8 / scale),
-        cy: selection.y + (8 / scale),
-        width: Math.max(160, cropWidthCss - 16),
-      });
-      setAnnotTextVal(recognizedText);
-      setDrawTextBusy(false);
-      setDrawTextStatus("");
-      setDrawTextProgress(0);
-      drawTextJobRef.current = 0;
-    } catch (error) {
-      console.error(error);
-      if (drawTextJobRef.current !== jobId) return;
-      setDrawTextStatus("OCR failed");
-      setTimeout(() => {
-        if (drawTextJobRef.current === jobId) {
-          setDrawTextBusy(false);
-          setDrawTextStatus("");
-          setDrawTextProgress(0);
-          drawTextJobRef.current = 0;
-        }
-      }, 1600);
-    }
-  }, [getOcrWorker, pageNum, pageViewport]);
-
   // Screenshot capture for the "smartVideo" tool — drag a rectangle on the
   // page (handled in the annotation-drawing effect's smartVideoCapture
-  // branch below), crop it out of the rendered page canvas, and OCR it with
-  // the same lazy-singleton Tesseract worker the Draw-to-Text tool already
-  // uses (see getOcrWorker/runDrawToTextRecognition above) — reused, not
-  // reimplemented. Unlike Draw-to-Text, this never touches the annotation
-  // canvas or opens a text-annotation input; it only records the crop +
-  // recognized text into smartVideoScreenshots. The thumbnail appears
-  // immediately (status "reading") and updates once OCR resolves, so
-  // capturing a second area doesn't have to wait on the first one's OCR.
+  // branch below), crop it out of the rendered page canvas for the preview,
+  // then read the matching text from the persisted OCR already saved
+  // for that page. This keeps Smart Video on the same OCR source of truth
+  // and avoids re-running another OCR engine on the crop.
   // Declared here (before the annotation-drawing effect below, which
   // references it in its dependency array) rather than near the other
   // Smart Video handlers further down — that array is evaluated as part of
@@ -5415,9 +7797,7 @@ const PDFPage = forwardRef(({
     setSmartVideoScreenshots((prev) => [...prev, { id, dataUrl, text: "", pageNum, status: "reading" }]);
     setSmartVideoCaptureBusy(true);
     try {
-      const worker = await getOcrWorker();
-      const { data: { text } } = await worker.recognize(cropCanvas);
-      const recognizedText = normalizeOcrText(text);
+      const recognizedText = await getPersistedOcrTextForSelection(selection, pageNum);
       setSmartVideoScreenshots((prev) => prev.map((s) => (
         s.id === id ? { ...s, text: recognizedText, status: recognizedText ? "done" : "empty" } : s
       )));
@@ -5427,7 +7807,7 @@ const PDFPage = forwardRef(({
     } finally {
       setSmartVideoCaptureBusy(false);
     }
-  }, [pageNum, pageViewport, getOcrWorker]);
+  }, [getPersistedOcrTextForSelection, pageNum, pageViewport]);
 
   const captureImageBBoxSnippet = useCallback((selection) => {
     const pageCanvas = canvasRef.current;
@@ -5720,7 +8100,7 @@ const PDFPage = forwardRef(({
       };
     };
 
-    const redraw = (extra) => {
+    const redraw = (extra, annotationsOverride = visiblePageAnnotations) => {
       const scale = getScale();
       const ctx = ac.getContext("2d");
       // clientWidth/Height (CSS pixels), not ac.width/height (the device-
@@ -5729,10 +8109,57 @@ const PDFPage = forwardRef(({
       // here needs to stay in the same post-transform CSS-pixel space
       // everything else in this function draws in.
       ctx.clearRect(0, 0, ac.clientWidth, ac.clientHeight);
-      const pageAnnotations = visiblePageAnnotations;
+      const pageAnnotations = annotationsOverride;
       for (const ann of pageAnnotations) drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
       if (extra) drawAnnotationWithOwnerClip(ctx, extra, scale, pageAnnotations);
+
+      const mc = maskCanvasRef.current;
+      if (mc) {
+        const maskCtx = mc.getContext("2d");
+        maskCtx.clearRect(0, 0, mc.clientWidth, mc.clientHeight);
+        for (const annotation of pageAnnotations) {
+          if (annotation.type === "highlight") drawMaskedHighlightText(maskCtx, annotation, scale);
+        }
+        if (extra?.type === "highlight") drawMaskedHighlightText(maskCtx, extra, scale);
+      }
       syncLiveBBoxPreview(extra);
+    };
+
+    const eraseAtPoint = (ann, point) => {
+      const eraserRadius = eraserSize / getScale();
+      const previousPoint = ann.lastErasePoint;
+      const distance = previousPoint
+        ? Math.hypot(point.x - previousPoint.x, point.y - previousPoint.y)
+        : 0;
+      const sampleSpacing = Math.max(0.5 / getScale(), eraserRadius * 0.4);
+      const sampleCount = Math.max(1, Math.ceil(distance / sampleSpacing));
+      let workingAnnotations = ann.lastKept || ann.eraseSnapshot || [];
+
+      // Fill the path between browser pointer events so a fast stylus sweep
+      // cannot jump over a thin annotation between two sampled positions.
+      for (let index = 1; index <= sampleCount; index += 1) {
+        const ratio = index / sampleCount;
+        const sampleX = previousPoint
+          ? previousPoint.x + (point.x - previousPoint.x) * ratio
+          : point.x;
+        const sampleY = previousPoint
+          ? previousPoint.y + (point.y - previousPoint.y) * ratio
+          : point.y;
+        const result = eraseAnnotationsAtPoint(
+          workingAnnotations,
+          sampleX,
+          sampleY,
+          eraserRadius,
+          eraserMode,
+        );
+        workingAnnotations = result.kept;
+        ann.erasedCount = (ann.erasedCount || 0) + result.erasedCount;
+        ann.changed = Boolean(ann.changed || result.changed);
+      }
+
+      ann.lastErasePoint = { x: point.x, y: point.y };
+      ann.lastKept = workingAnnotations;
+      redraw(null, workingAnnotations);
     };
 
     const clearLiveBBoxPreview = () => {
@@ -5752,13 +8179,17 @@ const PDFPage = forwardRef(({
         : { x: ann.x, y: ann.y, w: ann.w, h: ann.h };
       if (!previewBox || previewBox.w < 4 || previewBox.h < 4) return;
 
-      const matchedSpans = spansRef.current.filter((span) => span?.el && bboxTextMatchesSpan(previewBox, span));
+      // Runtime selection should be responsive to partial overlap while the
+      // rectangle is still being drawn. The stricter matcher remains used
+      // for committed extraction; creation matching is intentionally more
+      // forgiving for a moving selection boundary.
+      const matchedSpans = spansRef.current.filter((span) => span?.el && bboxCreationMatchesSpan(previewBox, span));
       if (!matchedSpans.length) return;
       matchedSpans.forEach((span) => span.el.classList.add("bbox_preview_span_selected"));
     };
 
     const preventNativeTouchDrawingGesture = (e) => {
-      if (e.cancelable && (e.touches || e.type === "contextmenu")) e.preventDefault();
+      if (e.cancelable && (e.touches || e.pointerType === "pen" || e.type === "contextmenu")) e.preventDefault();
       if (annotTool === "highlight") {
         window.getSelection?.()?.removeAllRanges();
         setManualSelection(null);
@@ -5770,9 +8201,9 @@ const PDFPage = forwardRef(({
       preventNativeTouchDrawingGesture(e);
       if (e.touches && e.touches.length >= 2) {
         activeAnnotRef.current = null; // cancel any in-progress stroke
+        setSmartPenMorphePreview(null);
         return;
       }
-      if (drawTextBusy) return;
       if (annotTool === "text") {
         const p = toCanvas(e);
         const hit = findTextAnnotationAt(p.x, p.y);
@@ -5807,6 +8238,7 @@ const PDFPage = forwardRef(({
         return;
       }
       const p = toCanvas(e);
+      setSmartPenMorphePreview(null);
       const strokeColor = annotColor;
       const bboxColor = nextDistinctBBoxColor(annotations[pageNum] || []);
       if (annotTool === "bbox" && !activeBBoxCreationType) return;
@@ -5894,7 +8326,9 @@ const PDFPage = forwardRef(({
       } else if (annotTool === "bbox" && activeBBoxCreationType) {
           const bboxPoint = toBBoxPagePoint(e);
           activeAnnotRef.current = createBBoxDraft(activeBBoxCreationType, bboxPoint, {
-            color: bboxTypeHas(activeBBoxCreationType, "extractsTitle") ? strokeColor : bboxColor,
+            color: activeBBoxCreationType === "omissionBBox"
+              ? "#dc2626"
+              : bboxTypeHas(activeBBoxCreationType, "extractsTitle") ? strokeColor : bboxColor,
             lineWidth: bboxBorderSize,
             borderStyle: shapeBorderStyle,
           });
@@ -5907,8 +8341,6 @@ const PDFPage = forwardRef(({
             shapeBackground,
             ...(annotTool === "rect" ? { borderRadius: shapeBorderRadius } : {}),
           };
-      } else if (annotTool === "drawText") {
-        activeAnnotRef.current = { type: "drawTextSelection", color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (annotTool === "smartVideo" && smartVideoSelecting && !smartVideoCaptureBusy) {
         activeAnnotRef.current = { type: "smartVideoCapture", color: strokeColor, x: p.x, y: p.y, w: 0, h: 0, _sx: p.x, _sy: p.y };
       } else if (["line","arrow"].includes(annotTool)) {
@@ -5931,9 +8363,10 @@ const PDFPage = forwardRef(({
           shapeBackground,
           points: [{ x: p.x, y: p.y }],
         };
-      } else if (annotTool === "pen") {
+      } else if (isPenToolKey(annotTool)) {
         activeAnnotRef.current = {
           type: "pen",
+          smartPen: annotTool === "smartPen",
           color: strokeColor,
           lineWidth: penSize,
           penType,
@@ -5953,16 +8386,14 @@ const PDFPage = forwardRef(({
         // Snapshot BEFORE this gesture touches anything — the one true
         // "undo target" for the whole drag, however many separate erase
         // hits it ends up covering. See lastEraseRef's own comment.
-        activeAnnotRef.current = { type: "eraser", erasedCount: 0, eraseSnapshot: annotations[pageNum] || [] };
-        const er = eraserSize / getScale();
-        setAnnotations((prev) => {
-          const pts = [...(prev[pageNum] || [])];
-          const { kept, erasedCount } = eraseAnnotationsAtPoint(pts, p.x, p.y, er, eraserMode);
-          activeAnnotRef.current.erasedCount += erasedCount;
-          activeAnnotRef.current.lastKept = kept;
-          return { ...prev, [pageNum]: kept };
-        });
-        setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+        activeAnnotRef.current = {
+          type: "eraser",
+          erasedCount: 0,
+          changed: false,
+          eraseSnapshot: annotations[pageNum] || [],
+          lastKept: annotations[pageNum] || [],
+        };
+        eraseAtPoint(activeAnnotRef.current, p);
       }
     };
 
@@ -5970,6 +8401,7 @@ const PDFPage = forwardRef(({
       preventNativeTouchDrawingGesture(e);
       if (e.touches && e.touches.length >= 2) {
         activeAnnotRef.current = null;
+        setSmartPenMorphePreview(null);
         return;
       }
       const ann = activeAnnotRef.current;
@@ -6019,6 +8451,23 @@ const PDFPage = forwardRef(({
             : { x: p.x, y: p.y };
           if (!nextPoint) return;
           ann.points.push(nextPoint);
+        }
+        if (ann.type === "pen" && ann.smartPen) {
+          const tracePreview = getSmartPenDirectionalTraceRecords(ann, spansRef.current, schemaRecordsRef.current);
+          if (tracePreview.length) {
+            setSmartPenMorphePreview({
+              kind: "trace",
+              dimension: tracePreview[0].traceDimension,
+              source: tracePreview[0].source.word,
+              targets: tracePreview.map(({ target }) => target.word),
+            });
+          } else {
+            const covered = getSmartPenCoveredSpanRecords(ann, spansRef.current);
+            const newSchemaWords = isSmartPenRectangularStroke(ann)
+              ? getSmartPenCoveredSchemaNames(ann, spansRef.current).filter((name) => !schemaRecordsRef.current.has(schemaWordKey(name)))
+              : [];
+            setSmartPenMorphePreview(newSchemaWords.length ? { kind: "schema", words: newSchemaWords } : null);
+          }
         }
         redraw(ann);
       } else if (isBBoxType(ann.type) && ann._editingId && Array.isArray(ann.points)) {
@@ -6076,7 +8525,7 @@ const PDFPage = forwardRef(({
           ann.h = Math.max(ann.h, span.height);
         }
         redraw(ann);
-      } else if (["underline","strikethrough","rect","circle","drawTextSelection","smartVideoCapture"].includes(ann.type)) {
+      } else if (["underline","strikethrough","rect","circle","smartVideoCapture"].includes(ann.type)) {
         ann.x = Math.min(ann._sx, p.x); ann.y = Math.min(ann._sy, p.y);
         ann.w = Math.abs(p.x - ann._sx); ann.h = Math.abs(p.y - ann._sy);
         redraw(ann);
@@ -6084,15 +8533,7 @@ const PDFPage = forwardRef(({
         ann.x2 = p.x; ann.y2 = p.y;
         redraw(ann);
       } else if (ann.type === "eraser") {
-        const er = eraserSize / getScale();
-        setAnnotations((prev) => {
-          const pts = [...(prev[pageNum] || [])];
-          const { kept, erasedCount } = eraseAnnotationsAtPoint(pts, p.x, p.y, er, eraserMode);
-          ann.erasedCount = (ann.erasedCount || 0) + erasedCount;
-          ann.lastKept = kept;
-          return { ...prev, [pageNum]: kept };
-        });
-        setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
+        eraseAtPoint(ann, p);
       }
     };
 
@@ -6102,9 +8543,11 @@ const PDFPage = forwardRef(({
       activeAnnotRef.current = null;
       if (!ann) return;
       if (ann.type === "eraser") {
-        if (ann.erasedCount > 0) {
+        if (ann.changed) {
+          setAnnotations((prev) => ({ ...prev, [pageNum]: ann.lastKept || [] }));
+          setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
           lastEraseRef.current = { pageNum, before: ann.eraseSnapshot, after: ann.lastKept };
-          logAnnotHistory({ action: "erase", page: pageNum, count: ann.erasedCount });
+          logAnnotHistory({ action: "erase", page: pageNum, count: Math.max(1, ann.erasedCount || 0) });
         }
         clearLiveBBoxPreview();
         return;
@@ -6116,14 +8559,6 @@ const PDFPage = forwardRef(({
           ann.penType ?? penType,
           fitScaleRef.current * zoomRef.current
         );
-      }
-      if (ann.type === "drawTextSelection") {
-        if (ann.w < 8 || ann.h < 8) return;
-        const { _sx, _sy, ...selection } = ann;
-        void runDrawToTextRecognition(selection);
-        redraw();
-        clearLiveBBoxPreview();
-        return;
       }
       if (isBBoxType(ann.type) && !bboxTypeHas(ann.type, "extractsTitle")) {
         if (Array.isArray(ann.points) && !ann._editingId) {
@@ -6162,17 +8597,31 @@ const PDFPage = forwardRef(({
           // usual causes). Treat that small difference as the same owner,
           // then clamp the visible child rectangle back inside it.
           const parentTolerance = 4;
-          const containingParagraph = (annotations[pageNum] || [])
-            .filter((item) => (
-              item.id !== ann._editingId
-              && item.type === "bbox"
-              && canBBoxContain(item.type, "subLineBBox")
-              && ann.x >= item.x - parentTolerance
-              && ann.y >= item.y - parentTolerance
-              && ann.x + ann.w <= item.x + item.w + parentTolerance
-              && ann.y + ann.h <= item.y + item.h + parentTolerance
+          const paragraphCandidates = (annotationsRef.current[pageNum] || [])
+            .filter((item) => item.id !== ann._editingId && item.type === "bbox" && canBBoxContain(item.type, "subLineBBox"));
+          const containingParagraph = paragraphCandidates
+            .map((item) => {
+              const intersectionWidth = Math.max(0, Math.min(ann.x + ann.w, item.x + item.w) - Math.max(ann.x, item.x));
+              const intersectionHeight = Math.max(0, Math.min(ann.y + ann.h, item.y + item.h) - Math.max(ann.y, item.y));
+              const intersectionArea = intersectionWidth * intersectionHeight;
+              const drawnArea = Math.max(1, ann.w * ann.h);
+              const fullyInside = ann.x >= item.x - parentTolerance
+                && ann.y >= item.y - parentTolerance
+                && ann.x + ann.w <= item.x + item.w + parentTolerance
+                && ann.y + ann.h <= item.y + item.h + parentTolerance;
+              return { item, intersectionArea, overlapRatio: intersectionArea / drawnArea, fullyInside };
+            })
+            // A line selection may include generous whitespace around a
+            // narrow partitioned paragraph. Any real intersection is enough
+            // to identify the parent; the best candidate is selected below
+            // and the child is clamped to that paragraph afterward.
+            .filter(({ fullyInside, overlapRatio }) => fullyInside || overlapRatio > 0.01)
+            .sort((a, b) => (
+              Number(b.fullyInside) - Number(a.fullyInside)
+              || b.overlapRatio - a.overlapRatio
+              || (a.item.w * a.item.h) - (b.item.w * b.item.h)
             ))
-            .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null;
+            .map(({ item }) => item)[0] || null;
           if (!containingParagraph) return;
           const clampedLeft = Math.max(ann.x, containingParagraph.x);
           const clampedTop = Math.max(ann.y, containingParagraph.y);
@@ -6346,20 +8795,19 @@ const PDFPage = forwardRef(({
                           [],
                           { preserveColumns: true, splitLines: item.type === "bbox" },
                         )).map((line) => line.text).filter(Boolean);
-                        const { bodyLines, removedLine } = removeParagraphTitleLine(sourceTextLines, nextTitle);
                         const sourceRawPdfText = item.sourceRawPdfText || item.rawPdfText || item.text || sourceTextLines.join("\n");
-                        const bodyRawText = removedLine
-                          ? bodyLines.join("\n")
-                          : removeParagraphTitleFromText(sourceRawPdfText, nextTitle);
                         return {
-                          titleSourceLine: removedLine || item.titleSourceLine || "",
+                          // Keep the titled line in the parent's line group.
+                          // The title is metadata; assigning it must not make
+                          // the original child/subline text disappear.
+                          titleSourceLine: nextTitle || item.titleSourceLine || "",
                           sourceTextLines,
                           sourceRawPdfText,
-                          textLines: bodyLines,
-                          text: bodyRawText,
-                          rawPdfText: bodyRawText,
-                          correctedText: removeParagraphTitleFromText(item.correctedText, nextTitle),
-                          ocrCorrectedText: removeParagraphTitleFromText(item.ocrCorrectedText, nextTitle),
+                          textLines: sourceTextLines,
+                          text: sourceRawPdfText,
+                          rawPdfText: sourceRawPdfText,
+                          correctedText: item.correctedText || sourceRawPdfText,
+                          ocrCorrectedText: item.ocrCorrectedText || sourceRawPdfText,
                           textCorrection: {
                             ...(item.textCorrection || {}),
                             audit: null,
@@ -6414,6 +8862,13 @@ const PDFPage = forwardRef(({
         clearLiveBBoxPreview();
         return;
       }
+      if (ann.type === "pen" && ann.smartPen) {
+        setSmartPenMorphePreview(null);
+        registerSmartPenStrokeSchemas(ann);
+        redraw();
+        clearLiveBBoxPreview();
+        return;
+      }
       const { _sx, _sy, _startLeft, textAligned, _editingId, points, ...clean } = ann;
       // points is pulled out above (alongside the truly transient drag-only
       // fields) so the BBox branch below can normalize/obstacle-adjust it
@@ -6457,19 +8912,47 @@ const PDFPage = forwardRef(({
               })(),
             }
           : clean;
-        const box = initialBox;
+        let box = initialBox;
         const typeOrdinal = pageAnnotations.filter((item) => item?.type === clean.type).length + 1;
         const containingSubLineParagraph = clean.type === "subLineBBox"
           ? pageAnnotations
-            .filter((item) => (
-              item?.type === "bbox"
-              && box.x >= item.x
-              && box.y >= item.y
-              && box.x + box.w <= item.x + item.w
-              && box.y + box.h <= item.y + item.h
+            .filter((item) => item?.type === "bbox" && canBBoxContain(item.type, "subLineBBox"))
+            .map((item) => {
+              const overlapWidth = Math.max(0, Math.min(box.x + box.w, item.x + item.w) - Math.max(box.x, item.x));
+              const overlapHeight = Math.max(0, Math.min(box.y + box.h, item.y + item.h) - Math.max(box.y, item.y));
+              const overlapRatio = (overlapWidth * overlapHeight) / Math.max(1, box.w * box.h);
+              const tolerance = 4;
+              const fullyInside = box.x >= item.x - tolerance
+                && box.y >= item.y - tolerance
+                && box.x + box.w <= item.x + item.w + tolerance
+                && box.y + box.h <= item.y + item.h + tolerance;
+              return { item, fullyInside, overlapRatio };
+            })
+            .filter(({ fullyInside, overlapRatio }) => fullyInside || overlapRatio > 0.01)
+            .sort((a, b) => (
+              Number(b.fullyInside) - Number(a.fullyInside)
+              || b.overlapRatio - a.overlapRatio
+              || (a.item.w * a.item.h) - (b.item.w * b.item.h)
             ))
-            .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null
+            .map(({ item }) => item)[0] || null
           : null;
+        if (containingSubLineParagraph) {
+          const parentRight = containingSubLineParagraph.x + containingSubLineParagraph.w;
+          const parentBottom = containingSubLineParagraph.y + containingSubLineParagraph.h;
+          const left = Math.max(box.x, containingSubLineParagraph.x);
+          const top = Math.max(box.y, containingSubLineParagraph.y);
+          const right = Math.min(box.x + box.w, parentRight);
+          const bottom = Math.min(box.y + box.h, parentBottom);
+          if (right <= left || bottom <= top) return { ...prev, [pageNum]: pageAnnotations };
+          box = {
+            ...box,
+            x: left,
+            y: top,
+            w: right - left,
+            h: bottom - top,
+            points: rectanglePointsFromBounds({ x: left, y: top, w: right - left, h: bottom - top }),
+          };
+        }
         const containingColumn = ["bbox", "imageBBox"].includes(clean.type)
           ? pageAnnotations
             .filter((item) => (
@@ -6689,6 +9172,7 @@ const PDFPage = forwardRef(({
       preventNativeTouchDrawingGesture(e);
       const ann = activeAnnotRef.current;
       activeAnnotRef.current = null;
+      setBBoxResizePreview(null);
       clearLiveBBoxPreview();
       if (ann?.type === "highlight") {
         redraw();
@@ -6700,27 +9184,41 @@ const PDFPage = forwardRef(({
       }
     };
 
-    ac.addEventListener("mousedown",  onDown, { passive: true });
-    ac.addEventListener("mousemove",  onMove, { passive: true });
-    ac.addEventListener("mouseup",    onUp);
-    ac.addEventListener("touchstart", onDown, { passive: false });
-    ac.addEventListener("touchmove",  onMove, { passive: false });
-    ac.addEventListener("touchend",   onUp, { passive: false });
-    ac.addEventListener("touchcancel", onTouchCancel, { passive: false });
+    let activeStylusPointerId = null;
+    const onPointerDown = (event) => {
+      if (event.pointerType !== "pen") return;
+      activeStylusPointerId = event.pointerId;
+      if (!event.__pdfMarkdownProxy) ac.setPointerCapture?.(event.pointerId);
+      onDown(event);
+    };
+    const onPointerMove = (event) => {
+      if (event.pointerType !== "pen" || event.pointerId !== activeStylusPointerId) return;
+      onMove(event);
+    };
+    const finishStylusPointer = (event, cancelled = false) => {
+      if (event.pointerType !== "pen" || event.pointerId !== activeStylusPointerId) return;
+      if (cancelled) onTouchCancel(event);
+      else onUp(event);
+      if (!event.__pdfMarkdownProxy && ac.hasPointerCapture?.(event.pointerId)) ac.releasePointerCapture(event.pointerId);
+      activeStylusPointerId = null;
+    };
+    const onPointerUp = (event) => finishStylusPointer(event, false);
+    const onPointerCancel = (event) => finishStylusPointer(event, true);
+    ac.addEventListener("pointerdown", onPointerDown, { passive: false });
+    ac.addEventListener("pointermove", onPointerMove, { passive: false });
+    ac.addEventListener("pointerup", onPointerUp, { passive: false });
+    ac.addEventListener("pointercancel", onPointerCancel, { passive: false });
     ac.addEventListener("contextmenu", preventNativeTouchDrawingGesture);
     return () => {
-      ac.removeEventListener("mousedown",  onDown);
-      ac.removeEventListener("mousemove",  onMove);
-      ac.removeEventListener("mouseup",    onUp);
-      ac.removeEventListener("touchstart", onDown);
-      ac.removeEventListener("touchmove",  onMove);
-      ac.removeEventListener("touchend",   onUp);
-      ac.removeEventListener("touchcancel", onTouchCancel);
+      ac.removeEventListener("pointerdown", onPointerDown);
+      ac.removeEventListener("pointermove", onPointerMove);
+      ac.removeEventListener("pointerup", onPointerUp);
+      ac.removeEventListener("pointercancel", onPointerCancel);
       ac.removeEventListener("contextmenu", preventNativeTouchDrawingGesture);
       clearLiveBBoxPreview();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, shapeStrokeWidth, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, drawTextBusy, runDrawToTextRecognition, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, captureImageBBoxSnippet, shapeBorderStyle, shapeBorderRadius, shapeBackground, activeBBoxCreationType, bboxContainerBBoxTarget, correctBBoxAnnotationFromOcr, expandContainerToIncludeBBox, findContainingBBoxContainer, updateBBoxName]);
+  }, [annotTool, annotColor, annotSize, penSize, shapeStrokeWidth, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, captureImageBBoxSnippet, shapeBorderStyle, shapeBorderRadius, shapeBackground, activeBBoxCreationType, bboxContainerBBoxTarget, correctBBoxAnnotationFromOcr, expandContainerToIncludeBBox, findContainingBBoxContainer, registerSmartPenStrokeSchemas, updateBBoxName]);
 
   // Eraser-size cursor circle — a real hit-test-radius preview, not just a
   // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
@@ -6728,7 +9226,7 @@ const PDFPage = forwardRef(({
   // the "eraser" branches in onDown/onMove above), so the on-screen circle
   // diameter is simply eraserSize * 2 — no extra scale conversion needed.
   // Mutates the DOM node directly via a ref rather than React state, since
-  // this fires on every mousemove; matches the same performance pattern the
+  // this fires on every pointermove; matches the same performance pattern the
   // manual-selection-handle drag code above already uses.
   useEffect(() => {
     const ac = annotCanvasRef.current;
@@ -6742,18 +9240,29 @@ const PDFPage = forwardRef(({
     cursorEl.style.width  = `${diameter}px`;
     cursorEl.style.height = `${diameter}px`;
 
-    const onMove = (e) => {
+    const moveCursor = (e) => {
+      if (e.pointerType !== "pen") return;
+      const samples = e.getCoalescedEvents?.() || [];
+      const latest = samples[samples.length - 1] || e;
       cursorEl.style.display = "block";
-      cursorEl.style.left = `${e.clientX}px`;
-      cursorEl.style.top  = `${e.clientY}px`;
+      cursorEl.style.left = `${latest.clientX}px`;
+      cursorEl.style.top  = `${latest.clientY}px`;
     };
-    const onLeave = () => { cursorEl.style.display = "none"; };
+    const hideCursor = (e) => {
+      if (!e || e.pointerType === "pen") cursorEl.style.display = "none";
+    };
 
-    ac.addEventListener("mousemove", onMove);
-    ac.addEventListener("mouseleave", onLeave);
+    ac.addEventListener("pointerenter", moveCursor);
+    ac.addEventListener("pointerdown", moveCursor);
+    ac.addEventListener("pointermove", moveCursor);
+    ac.addEventListener("pointerleave", hideCursor);
+    ac.addEventListener("pointercancel", hideCursor);
     return () => {
-      ac.removeEventListener("mousemove", onMove);
-      ac.removeEventListener("mouseleave", onLeave);
+      ac.removeEventListener("pointerenter", moveCursor);
+      ac.removeEventListener("pointerdown", moveCursor);
+      ac.removeEventListener("pointermove", moveCursor);
+      ac.removeEventListener("pointerleave", hideCursor);
+      ac.removeEventListener("pointercancel", hideCursor);
       cursorEl.style.display = "none";
     };
   }, [annotTool, eraserSize, pageNum]);
@@ -6828,8 +9337,11 @@ const PDFPage = forwardRef(({
   // edge moved, so the OPPOSITE edge stays fixed in place — the way a real
   // resize handle behaves — instead of the whole box sliding.
   const beginTextInputResize = useCallback((dir, e) => {
+    if (e.pointerType !== "pen") return;
     e.preventDefault();
     e.stopPropagation();
+    const pointerId = e.pointerId;
+    e.currentTarget?.setPointerCapture?.(pointerId);
     const startX = e.touches ? e.touches[0].clientX : e.clientX;
     const startY = e.touches ? e.touches[0].clientY : e.clientY;
     const rect = annotTextInputRef.current?.getBoundingClientRect();
@@ -6838,6 +9350,7 @@ const PDFPage = forwardRef(({
     const startVx = annotTextInput?.vx || 0;
     const startVy = annotTextInput?.vy || 0;
     const onMove = (ev) => {
+      if (ev.pointerId !== pointerId || ev.pointerType !== "pen") return;
       const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
       const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
       const dx = clientX - startX;
@@ -6859,16 +9372,15 @@ const PDFPage = forwardRef(({
       }
       setAnnotTextInput((cur) => (cur ? { ...cur, ...patch } : cur));
     };
-    const onEnd = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onEnd);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onEnd);
+    const onEnd = (ev) => {
+      if (ev.pointerId !== pointerId || ev.pointerType !== "pen") return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+      window.removeEventListener("pointercancel", onEnd);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onEnd);
-    window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onEnd);
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onEnd);
+    window.addEventListener("pointercancel", onEnd);
   }, [annotTextInput?.vx, annotTextInput?.vy]);
 
   // n/s/e/w edges resize one axis; corners resize both — same convention
@@ -6884,7 +9396,58 @@ const PDFPage = forwardRef(({
     { dir: "w",  cursor: "ew-resize" },
   ];
 
+  const undoMorpheCreation = useCallback(async (action) => {
+    if (!action?.id) return;
+    try {
+      if (action.kind === "schema") await morpheSchemasApi.remove(action.id);
+      else await morpheTraceSchemasApi.remove(action.id);
+      morpheUndoRef.current = morpheUndoRef.current.slice(0, -1);
+      morpheRedoRef.current.push(action);
+      logAnnotHistory({ action: "undo", type: `morphe-${action.kind}`, page: action.page, morpheEntityId: action.id });
+      window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated"));
+    } catch (error) {
+      console.error("[PDF] Failed to undo Smart Pen Morphe creation", error);
+    }
+  }, [logAnnotHistory]);
+
+  const redoMorpheCreation = useCallback(async (action) => {
+    if (!action) return;
+    try {
+      const result = action.kind === "schema"
+        ? await upsertSmartPenSchema({ name: action.name, sourceId: action.sourceId, page: action.page })
+        : await upsertSmartPenTrace({
+          name: action.name,
+          sourceSchemaId: action.sourceSchemaId,
+          sourceSchemaName: action.sourceSchemaName,
+          sourceId: action.sourceId,
+          page: action.page,
+          traceDimension: action.traceDimension,
+        });
+      const entity = result?.schema || result?.traceSchema;
+      if (!entity?._id) return;
+      const restored = { ...action, id: entity._id };
+      morpheRedoRef.current = morpheRedoRef.current.slice(0, -1);
+      morpheUndoRef.current.push(restored);
+      logAnnotHistory({ action: "redo", type: `morphe-${action.kind}`, page: action.page, morpheEntityId: entity._id });
+      window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated"));
+    } catch (error) {
+      console.error("[PDF] Failed to redo Smart Pen Morphe creation", error);
+    }
+  }, [logAnnotHistory]);
+
   const handleAnnotUndo = useCallback(() => {
+    const latestHistory = annotHistory[annotHistory.length - 1];
+    const latestMorphe = morpheUndoRef.current[morpheUndoRef.current.length - 1];
+    if (
+      latestMorphe
+      && latestHistory?.action === "add"
+      && latestHistory?.type === `morphe-${latestMorphe.kind}`
+      && latestHistory?.page === latestMorphe.page
+      && latestHistory?.annotationId === latestMorphe.id
+    ) {
+      void undoMorpheCreation(latestMorphe);
+      return;
+    }
     // The eraser removes from wherever it hits (or, in "precise" mode,
     // shrinks a stroke's own points in place) — not from the end of the
     // array — so "pop whatever's now last" below is the wrong undo for it:
@@ -6907,16 +9470,27 @@ const PDFPage = forwardRef(({
     setAnnotations((prev) => ({ ...prev, [pageNum]: (prev[pageNum] || []).slice(0, -1) }));
     setRedoStacks((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), popped] }));
     logAnnotHistory({ action: "undo", type: popped.type, page: pageNum });
-  }, [pageNum, annotations, logAnnotHistory]);
+  }, [annotHistory, pageNum, annotations, logAnnotHistory, undoMorpheCreation]);
 
   const handleAnnotRedo = useCallback(() => {
+    const latestHistory = annotHistory[annotHistory.length - 1];
+    const latestMorphe = morpheRedoRef.current[morpheRedoRef.current.length - 1];
+    if (
+      latestMorphe
+      && latestHistory?.action === "undo"
+      && latestHistory?.type === `morphe-${latestMorphe.kind}`
+      && latestHistory?.page === latestMorphe.page
+    ) {
+      void redoMorpheCreation(latestMorphe);
+      return;
+    }
     const stack = redoStacks[pageNum] || [];
     if (stack.length === 0) return;
     const restored = stack[stack.length - 1];
     setRedoStacks((prev) => ({ ...prev, [pageNum]: prev[pageNum].slice(0, -1) }));
     setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), restored] }));
     logAnnotHistory({ action: "redo", type: restored.type, page: pageNum });
-  }, [pageNum, redoStacks, logAnnotHistory]);
+  }, [annotHistory, pageNum, redoStacks, logAnnotHistory, redoMorpheCreation]);
 
   // Whole-document wipe — every page's annotations AND the entire history
   // log, gone with nothing left to retrieve. Deliberately not routed
@@ -7086,8 +9660,8 @@ const PDFPage = forwardRef(({
   // just exposed on the ref) because a parent can't otherwise know WHEN to
   // re-render its own buttons — refs don't trigger renders on their own.
   const undoRedoState = useMemo(() => ({
-    canUndo: (annotations[pageNum]?.length || 0) > 0,
-    canRedo: (redoStacks[pageNum]?.length || 0) > 0,
+    canUndo: (annotations[pageNum]?.length || 0) > 0 || morpheUndoRef.current.some((action) => action.page === pageNum),
+    canRedo: (redoStacks[pageNum]?.length || 0) > 0 || morpheRedoRef.current.some((action) => action.page === pageNum),
     hasHistory: annotHistory.length > 0,
     historyOpen: annotHistoryOpen,
   }), [annotations, pageNum, redoStacks, annotHistory.length, annotHistoryOpen]);
@@ -7095,6 +9669,10 @@ const PDFPage = forwardRef(({
   useEffect(() => {
     onUndoRedoStateChange?.(undoRedoState);
   }, [undoRedoState]); // eslint-disable-line react-hooks/exhaustive-deps -- onUndoRedoStateChange is a stable-enough callback prop, not a reactive dep
+
+  useEffect(() => {
+    onAnnotationSaveStateChange?.(annotationSaveStatus);
+  }, [annotationSaveStatus, onAnnotationSaveStateChange]);
 
   // Same pattern as undoRedoState above, for the prev/page-number/next row.
   // readingMode/bookletRightPage ride along here too so an embedding
@@ -7112,6 +9690,9 @@ const PDFPage = forwardRef(({
     disabled: pinchActive,
     readingMode,
     bookletRightPage,
+    ocrBlankPageOpen: entityBuilderOcrBlankPageOpen,
+    markdownOpen: markdownAsideOpen,
+    markdownMenuOpen: markdownModeMenuOpen,
     insertingBlankPage,
     canInsertBlankPage: hasSourceId,
     searchOpen,
@@ -7122,28 +9703,23 @@ const PDFPage = forwardRef(({
     searchActiveMatchType: searchActiveMatch?.matchType ?? null,
     searchActiveConfidence: searchActiveMatch?.confidence ?? null,
     searchActiveMatchedText: searchActiveMatch?.originalMatchedText ?? null,
-  }), [pageNum, pageCount, pinchActive, readingMode, bookletRightPage, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
+  }), [pageNum, pageCount, pinchActive, readingMode, bookletRightPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, markdownModeMenuOpen, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
 
   useEffect(() => {
     onPageNavStateChange?.(pageNavState);
   }, [pageNavState]); // eslint-disable-line react-hooks/exhaustive-deps -- onPageNavStateChange is a stable-enough callback prop, not a reactive dep
 
-  useImperativeHandle(ref, () => ({
-    undo: handleAnnotUndo,
-    redo: handleAnnotRedo,
-    toggleHistory: () => setAnnotHistoryOpen((v) => !v),
-    ...undoRedoState,
-    goToPrevPage: () => setPageNum((n) => Math.max(1, n - 1)),
-    goToNextPage: () => setPageNum((n) => Math.min(pageCount, n + 1)),
-    setReadingMode,
-    setBookletRightPage,
-    insertBlankPageAfterCurrent: () => insertBlankPageRef.current?.(),
-    setSearchOpen,
-    setSearchQuery,
-    goToSearchMatch,
-    closeSearch: () => { setSearchOpen(false); setSearchQuery(""); },
-    ...pageNavState,
-  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch]);
+  const zoomState = useMemo(() => ({
+    zoom,
+    percent: Math.round(zoom * 100),
+    canZoomOut: !zoomingDisabled && zoom > MIN_ZOOM,
+    canZoomIn: !zoomingDisabled && zoom < MAX_ZOOM,
+    disabled: zoomingDisabled,
+  }), [zoom, zoomingDisabled]);
+
+  useEffect(() => {
+    onZoomStateChange?.(zoomState);
+  }, [zoomState]); // eslint-disable-line react-hooks/exhaustive-deps -- callback prop is externally stable enough
 
   // Commits zoom through the PDF.js viewport. The page wrapper is never
   // visually transformed; the overlay and canvas are rerendered from the
@@ -7251,6 +9827,28 @@ const PDFPage = forwardRef(({
     };
   }, [pdfDoc, handleAnnotUndo, captureZoomAnchor, commitLiveZoom, zoomingDisabled]);
 
+  // Keep browser-level page zoom from resizing the reader chrome and Markdown
+  // aside. The preview's own Ctrl/Cmd-wheel handler still receives the event
+  // and applies zoom to the PDF page only.
+  useEffect(() => {
+    const preventBrowserZoomWheel = (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (event.cancelable) event.preventDefault();
+    };
+    const preventBrowserZoomKeys = (event) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (["+", "=", "-", "_", "0"].includes(event.key)) {
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("wheel", preventBrowserZoomWheel, { capture: true, passive: false });
+    document.addEventListener("keydown", preventBrowserZoomKeys, { capture: true });
+    return () => {
+      document.removeEventListener("wheel", preventBrowserZoomWheel, { capture: true });
+      document.removeEventListener("keydown", preventBrowserZoomKeys, { capture: true });
+    };
+  }, []);
+
   const zoomFromCenter = useCallback((nextZoom) => {
     if (zoomingDisabled) return;
     const el = previewRef.current;
@@ -7306,6 +9904,63 @@ const PDFPage = forwardRef(({
     // from the el-frame origin computed above.
     commitLiveZoom();
   }, [commitLiveZoom, zoomingDisabled]);
+
+  // Toolbar zoom is a discrete command, not a live gesture. Keep it out of
+  // the wheel/pinch transaction state so a stale gesture or a temporarily
+  // unmounted MD layout can never swallow a +/- click.
+  const zoomFromToolbar = useCallback((nextZoom) => {
+    if (zoomingDisabled) return;
+    const currentZoom = zoomRef.current;
+    const rawTarget = typeof nextZoom === "function" ? nextZoom(currentZoom) : nextZoom;
+    const targetZoom = normalizeZoom(rawTarget);
+    if (targetZoom === currentZoom) return;
+
+    const el = previewRef.current;
+    const wrap = canvasWrapRef.current;
+    if (el) {
+      const rect = el.getBoundingClientRect();
+      scrollAfterZoomRef.current = captureZoomAnchor(
+        rect.left + el.clientWidth / 2,
+        rect.top + el.clientHeight / 2,
+      ) || { left: el.scrollLeft, top: el.scrollTop };
+    }
+    const gesture = wheelZoomStateRef.current;
+    if (gesture.timer) clearTimeout(gesture.timer);
+    gesture.timer = null;
+    gesture.baseZoom = targetZoom;
+    gesture.pendingZoom = targetZoom;
+    if (wrap) {
+      wrap.style.transform = "";
+      wrap.style.transformOrigin = "";
+      wrap.style.willChange = "";
+      wrap.style.removeProperty("--pdf-live-zoom-inverse");
+    }
+    setZoom(targetZoom);
+  }, [captureZoomAnchor, zoomingDisabled]);
+
+  useImperativeHandle(ref, () => ({
+    undo: handleAnnotUndo,
+    redo: handleAnnotRedo,
+    toggleHistory: () => setAnnotHistoryOpen((v) => !v),
+    ...undoRedoState,
+    goToPrevPage: () => setPageNum((n) => Math.max(1, n - 1)),
+    goToNextPage: () => setPageNum((n) => Math.min(pageCount, n + 1)),
+    setReadingMode: setReaderReadingMode,
+    setBookletRightPage,
+    toggleOcrBlankPage,
+    toggleMarkdownAside,
+    insertBlankPageAfterCurrent: () => insertBlankPageRef.current?.(),
+    setSearchOpen,
+    setSearchQuery,
+    goToSearchMatch,
+    closeSearch: () => { setSearchOpen(false); setSearchQuery(""); },
+    zoomIn: () => zoomFromToolbar((z) => z + 0.01),
+    zoomOut: () => zoomFromToolbar((z) => z - 0.01),
+    resetZoom: () => zoomFromToolbar(1),
+    setZoomLevel: (value) => zoomFromToolbar(value),
+    ...zoomState,
+    ...pageNavState,
+  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch, toggleOcrBlankPage, toggleMarkdownAside, setReaderReadingMode, zoomFromToolbar, zoomState]);
 
   const stopZoomHold = useCallback(() => {
     if (zoomHoldTimerRef.current) {
@@ -7795,6 +10450,10 @@ const PDFPage = forwardRef(({
       }
 
       if (e.touches.length === 2) {
+        // A two-finger gesture is owned by the PDF reader. Prevent Safari/
+        // Chrome from synthesizing a single-finger click after the gesture,
+        // which could otherwise activate the nearby Insert Blank Page button.
+        if (e.cancelable) e.preventDefault();
         touchInteractionActive = true; // wasn't being set for the 2-finger case at all — left text selection unblocked during a pinch
         if (zoomingDisabled) {
           hasMoved = true;
@@ -7991,6 +10650,7 @@ const PDFPage = forwardRef(({
     };
 
     const onTouchEnd = (e) => {
+      if ((twoFingerUndoCandidate || startDist !== null) && e.cancelable) e.preventDefault();
       touchInteractionActive = e.touches.length > 0;
 
       if (e.touches.length < 2 && twoFingerUndoCandidate) {
@@ -8088,10 +10748,10 @@ const PDFPage = forwardRef(({
       if (touchInteractionActive || annotToolRef.current) e.preventDefault();
     };
 
-    el.addEventListener("touchstart",  onTouchStart,  { passive: true });
+    el.addEventListener("touchstart",  onTouchStart,  { passive: false });
     el.addEventListener("touchmove",   onTouchMove,   { passive: false });
-    el.addEventListener("touchend",    onTouchEnd,    { passive: true });
-    el.addEventListener("touchcancel", onTouchEnd,    { passive: true });
+    el.addEventListener("touchend",    onTouchEnd,    { passive: false });
+    el.addEventListener("touchcancel", onTouchEnd,    { passive: false });
     el.addEventListener("contextmenu", onContextMenu);
     el.addEventListener("selectstart", onSelectStart);
     el.addEventListener("dblclick",    onDblClick);
@@ -8204,7 +10864,7 @@ const PDFPage = forwardRef(({
   // ── Render text layer for Manual mode (or a plain reader that still needs word-selection) ──
   useEffect(() => {
     const div = textLayerRef.current;
-    if (!textSelectable || !pdfDoc || !div) return;
+    if (!schemaTextLayerActive || !pdfDoc || !div) return;
     if (!pageViewport) return;
     div.innerHTML = "";
     spansRef.current = [];
@@ -8254,7 +10914,13 @@ const PDFPage = forwardRef(({
           // must not be reused as height or boxes drift vertically.
           const fontSize = Math.hypot(tx[2], tx[3]);
           if (fontSize < 1) continue;
-          const ascentRatio = getPdfTextAscentRatio(content.styles?.[item.fontName]);
+          const textStyle = content.styles?.[item.fontName];
+          const ascentRatio = getPdfTextAscentRatio(textStyle);
+          // PDF.js describes the vertical glyph interval from the baseline:
+          // ascent is above it and descent is normally a negative value below
+          // it. Use that interval for the Morphe frame instead of assuming
+          // that one font-size equals the visible ascent+descent height.
+          const descentRatio = Number.isFinite(textStyle?.descent) ? textStyle.descent : -0.2;
 
           const angle      = Math.atan2(tx[1], tx[0]);
           const itemWidth  = item.width * scale; // PDF advance width → canvas pixels
@@ -8286,7 +10952,11 @@ const PDFPage = forwardRef(({
             // back to sans-serif for this item's masked-text rendering
           }
 
-          measureCtx.font = `${fontSize}px sans-serif`;
+          // Use PDF.js's resolved fallback metrics when available. Measuring
+          // every item as generic sans-serif accumulates horizontal error as
+          // word tokens are split from one PDF.js item, which makes the shared
+          // selection/Morphe overlay drift from the embedded PDF glyphs.
+          measureCtx.font = `${itemFontStyle} ${itemFontWeight} ${fontSize}px ${itemFontFamily}`;
           const fullNaturalWidth = measureCtx.measureText(item.str).width;
           // Corrects for the measurement font not being the PDF's real
           // (often embedded/subset) font — every token's measured width is
@@ -8329,12 +10999,13 @@ const PDFPage = forwardRef(({
             spansRef.current.push({
               text: token, el: span, fontFamily: itemFontFamily, fontWeight: itemFontWeight, fontStyle: itemFontStyle,
               geoLeft: originX, geoRight: originX + tokenWidth,
-              geoTop: originY - fontSize * ascentRatio, geoHeight: fontSize,
+              geoTop: originY - fontSize * ascentRatio,
+              geoHeight: fontSize * (ascentRatio - descentRatio),
               pageLeft: originX / scale,
               pageRight: (originX + tokenWidth) / scale,
               pageTop: (originY - fontSize * ascentRatio) / scale,
-              pageBottom: (originY - fontSize * ascentRatio + fontSize) / scale,
-              pageHeight: fontSize / scale,
+              pageBottom: (originY - fontSize * ascentRatio + (fontSize * (ascentRatio - descentRatio))) / scale,
+              pageHeight: (fontSize * (ascentRatio - descentRatio)) / scale,
               pdfItemIndex, // which raw content.items entry this token came from
               tokenIndex,   // stable within the page: item index + token order
               spanKey: `${pdfItemIndex}:${tokenIndex}`,
@@ -8343,8 +11014,19 @@ const PDFPage = forwardRef(({
             span.style.position     = "absolute";
             span.style.left         = `${originX}px`;
             span.style.top          = `${originY - fontSize * ascentRatio}px`;
-            span.style.height       = `${fontSize}px`;
-            span.style.fontSize     = `${fontSize}px`;
+            // Keep the DOM metrics in the PDF's original user-space units.
+            // The previous implementation stored the viewport-scaled value
+            // here (for example 40px at high zoom). That made the Morphe
+            // outline depend on the browser's zoomed font metrics and caused
+            // its saturated frame to grow/shrink relative to the canvas
+            // glyphs. The span is still placed at viewport coordinates, but
+            // its local box is scaled as one unit below, so its font-size is
+            // the actual PDF font size again.
+            const originalFontSize = fontSize / scale;
+            const originalTextBoxHeight = (fontSize * (ascentRatio - descentRatio)) / scale;
+            const originalTokenWidth = tokenWidth / scale;
+            span.style.height       = `${originalTextBoxHeight}px`;
+            span.style.fontSize     = `${originalFontSize}px`;
             span.style.whiteSpace   = "pre";
             span.style.color        = "transparent";
             span.style.transformOrigin = "0% 0%";
@@ -8354,12 +11036,29 @@ const PDFPage = forwardRef(({
             // select a range or fight that custom highlight.
             span.style.userSelect   = "none";
             span.style.webkitUserSelect = "none";
-            if (tokenWidth > 0) span.style.width = `${tokenWidth}px`;
-            if (Math.abs(angle) > 0.01) span.style.transform = `rotate(${angle}rad)`;
+            if (originalTokenWidth > 0) span.style.width = `${originalTokenWidth}px`;
+            span.style.transform = `${Math.abs(angle) > 0.01 ? `rotate(${angle}rad) ` : ""}scale(${scale})`;
             div.appendChild(span);
 
             cursorNatural += tokenNaturalWidth;
           }
+        }
+
+        // Omission BBoxes suppress fully enclosed text tokens from every
+        // selectable/reading flow while leaving PDF.js extraction intact for
+        // the diagnostic RAW table. Removing the transparent DOM span also
+        // prevents browser selection and assistant tools from reading it.
+        if (omissionBBoxes.length) {
+          spansRef.current = spansRef.current.filter((span) => {
+            const omitted = omissionBBoxes.some((bbox) => isRectFullyContainedByBBox({
+              x: span.pageLeft,
+              y: span.pageTop,
+              w: Number(span.pageRight) - Number(span.pageLeft),
+              h: Number(span.pageBottom) - Number(span.pageTop),
+            }, bbox));
+            if (omitted) span.el?.remove();
+            return !omitted;
+          });
         }
 
         // PDF content streams are not guaranteed to match visual reading
@@ -8402,7 +11101,119 @@ const PDFPage = forwardRef(({
     );
 
     return () => { cancelled = true; if (textLayerRef.current) textLayerRef.current.innerHTML = ""; };
-  }, [textSelectable, pdfDoc, pageNum, pageViewport]);
+  }, [schemaTextLayerActive, pdfDoc, pageNum, pageViewport, omissionBBoxes]);
+
+  useEffect(() => {
+    const schemaPhraseBySpan = new Map();
+    const schemaPhraseGroupBySpan = new Map();
+    const wordSpans = spansRef.current.filter((span) => {
+      const value = cleanSchemaWord(span?.text);
+      return value && !/\s/u.test(value) && /[\p{L}\p{N}]/u.test(value);
+    });
+    [...schemaWordKeys].filter((key) => /\s/u.test(key)).forEach((phraseKey) => {
+      const phraseWords = phraseKey.split(/\s+/u).filter(Boolean);
+      for (let index = 0; index <= wordSpans.length - phraseWords.length; index += 1) {
+        const candidate = wordSpans.slice(index, index + phraseWords.length);
+        const sameLine = candidate.every((span) => span.rowIndex === candidate[0].rowIndex && span.columnIndex === candidate[0].columnIndex);
+        const matches = sameLine && candidate.every((span, wordIndex) => schemaWordKey(span.text) === phraseWords[wordIndex]);
+        if (!matches) continue;
+        candidate.forEach((span) => {
+          schemaPhraseBySpan.set(span, phraseKey);
+          schemaPhraseGroupBySpan.set(span, candidate);
+        });
+      }
+    });
+
+    for (const span of spansRef.current) {
+      const key = schemaWordKey(span?.text);
+      const element = span?.el;
+      if (!element) continue;
+      const schemaName = schemaPhraseBySpan.get(span) || cleanSchemaWord(span?.text);
+      const phraseGroup = schemaPhraseGroupBySpan.get(span) || null;
+      const isPhraseStart = !phraseGroup || phraseGroup[0] === span;
+      const isSchema = Boolean((key && schemaWordKeys.has(key)) || schemaPhraseBySpan.has(span));
+      const traceSources = key ? (traceSourcesByWord.get(key) || []) : [];
+      const isTrace = !isSchema && traceSources.length > 0;
+      element.classList.toggle("pdf_schema_word_span", isSchema);
+      element.classList.toggle("pdf_morphe_unit_span", isSchema || isTrace);
+      element.classList.toggle("pdf_morphe_unit_span--schema", isSchema);
+      element.classList.toggle("pdf_morphe_unit_span--trace", isTrace);
+      element.querySelectorAll(".pdf_morphe_frame").forEach((frame) => frame.remove());
+      element.querySelectorAll(".pdf_schema_word_marker").forEach((marker) => marker.remove());
+      if (!isSchema && !traceSources.length) continue;
+
+      if (isPhraseStart) {
+        // Use a real SVG frame rather than a CSS border. For a multi-word
+        // Schema, the frame begins at the first word and ends at the last
+        // word, while remaining vector geometry at every zoom level.
+        const frame = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        const frameRect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+        const ownWidth = parseFloat(element.style.width) || element.getBoundingClientRect().width;
+        const frameWidth = phraseGroup
+          ? Math.max(ownWidth, (phraseGroup[phraseGroup.length - 1].pageRight || 0) - (phraseGroup[0].pageLeft || 0))
+          : Math.max(1, ownWidth);
+        const frameHeight = Math.max(1, parseFloat(element.style.height) || element.getBoundingClientRect().height);
+        const frameStroke = Math.max(0.35, (parseFloat(element.style.fontSize) || frameHeight) * 0.06);
+        frame.className.baseVal = "pdf_morphe_frame";
+        frame.setAttribute("viewBox", `0 0 ${frameWidth} ${frameHeight}`);
+        frame.setAttribute("preserveAspectRatio", "none");
+        frame.setAttribute("aria-hidden", "true");
+        frame.style.width = `${frameWidth}px`;
+        frameRect.setAttribute("x", String(frameStroke / 2));
+        frameRect.setAttribute("y", String(frameStroke / 2));
+        frameRect.setAttribute("width", String(Math.max(0, frameWidth - frameStroke)));
+        frameRect.setAttribute("height", String(Math.max(0, frameHeight - frameStroke)));
+        frameRect.setAttribute("rx", String(Math.min(frameHeight * 0.16, 2)));
+        frameRect.setAttribute("fill", "none");
+        frameRect.setAttribute("stroke-width", String(frameStroke));
+        frameRect.classList.add(isSchema ? "pdf_morphe_frame--schema" : "pdf_morphe_frame--trace");
+        frame.appendChild(frameRect);
+        element.appendChild(frame);
+      }
+
+      // A phrase has one Morphe marker at its first word, not one marker per
+      // token inside the shared frame.
+      if (!isPhraseStart) continue;
+
+      const marker = document.createElement("button");
+      marker.type = "button";
+      marker.className = `pdf_schema_word_marker ${isSchema ? "pdf_schema_word_marker--schema" : "pdf_schema_word_marker--trace"}`;
+      marker.setAttribute("aria-label", isSchema ? `Schema: ${schemaName}` : `Trace: ${span.text}`);
+      marker.title = isSchema ? `Schema: ${schemaName}` : `Trace: ${span.text}`;
+      marker.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = marker.getBoundingClientRect();
+        setSmartPenMarkerPopup({
+          kind: isSchema ? "schema" : "trace",
+          word: schemaName,
+          sources: traceSources,
+          rect: { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom },
+        });
+      });
+      element.appendChild(marker);
+    }
+    return () => {
+      for (const span of spansRef.current) span?.el?.querySelectorAll(".pdf_schema_word_marker").forEach((marker) => marker.remove());
+    };
+  }, [schemaWordKeys, textLayerRenderTick, traceSourcesByWord]);
+
+  useEffect(() => {
+    if (!smartPenMarkerPopup) return undefined;
+    const close = (event) => {
+      if (!event.target.closest?.(".pdf_schema_marker_popup, .pdf_schema_word_marker")) {
+        setSmartPenMarkerPopup(null);
+      }
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, [smartPenMarkerPopup]);
+
+  useEffect(() => {
+    if (!textLayerRenderTick || !pendingSmartPenStrokesRef.current.length) return;
+    const pendingStrokes = pendingSmartPenStrokesRef.current.splice(0);
+    pendingStrokes.forEach(registerSmartPenStrokeSchemas);
+  }, [registerSmartPenStrokeSchemas, textLayerRenderTick]);
 
   // Highlight selected text: group spans by line → one even rect per line.
   // Uses getBoundingClientRect() for real visual bounds (glyph height > em-size, width overflow, etc.)
@@ -8413,7 +11224,7 @@ const PDFPage = forwardRef(({
     layer?.querySelectorAll(".sel_highlight, .sel_selection_handle").forEach((el) => el.remove());
     spans.forEach(({ el }) => el.classList.remove("span_selected"));
 
-    if (!manualSelection || !layer) {
+    if (!manualSelection || manualSelection.surface === "md" || !layer) {
       selectionDraggingEdgeRef.current = null;
       selectionHandleDragRef.current = null;
       return;
@@ -9033,6 +11844,14 @@ const PDFPage = forwardRef(({
     pendingReaderRestoreRef.current = null;
     setReadingMode("single");
     setBookletRightPage(null);
+    setMarkdownAsideOpen(false);
+    setMarkdownModeMenuOpen(false);
+    setMarkdownAsideMode("raw");
+    setMarkdownRetainedVisualMode(null);
+    setMarkdownAsideColumnGroup("text");
+    setMdLineSpacing(0);
+    setMdSpacingTarget("str");
+    setMdLineTagsVisible(true);
     setPageNum(1); setPageViewport(null); setZoom(1);
     renderTasksRef.current.forEach(t => t?.cancel());
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
@@ -9139,19 +11958,61 @@ const PDFPage = forwardRef(({
             Math.max(1, parseInt(persistedReaderState?.pageNum, 10) || 1),
             numPages || Math.max(1, parseInt(persistedReaderState?.pageNum, 10) || 1),
           );
+          const persistedMarkdownMode = VALID_MARKDOWN_ASIDE_MODES.has(persistedReaderState?.markdownAsideMode)
+            ? persistedReaderState.markdownAsideMode
+            : "raw";
+          const restoreMarkdown = Boolean(
+            persistedReaderState?.markdownAsideOpen
+            || persistedReaderState?.viewMode === "md",
+          );
+          const persistedRetainedVisualMode = VALID_MARKDOWN_VISUAL_MODES.has(persistedReaderState?.markdownRetainedVisualMode)
+            ? persistedReaderState.markdownRetainedVisualMode
+            : null;
+          const persistedColumnGroup = VALID_MARKDOWN_COLUMN_GROUPS.has(persistedReaderState?.markdownAsideColumnGroup)
+            ? persistedReaderState.markdownAsideColumnGroup
+            : "text";
+          const persistedSpacingTarget = VALID_MARKDOWN_SPACING_TARGETS.has(persistedReaderState?.mdSpacingTarget)
+            ? persistedReaderState.mdSpacingTarget
+            : "str";
+          const persistedLineSpacing = Number.isFinite(Number(persistedReaderState?.mdLineSpacing))
+            ? clamp(Number(persistedReaderState.mdLineSpacing), -40, 80)
+            : 0;
           setAnnotationLayers(normalizedAnnotationState.layers);
           setActiveAnnotationLayerId(restoredActiveLayerId);
+          setMarkdownAnnotations(annData.markdownLayers || {});
           setAnnotations(
             normalizedAnnotationState.layers.find((layer) => layer.id === restoredActiveLayerId)?.annotations
             || normalizedAnnotationState.layers[0]?.annotations
             || {}
           );
-          setReadingMode(persistedReaderState?.readingMode === "booklet" ? "booklet" : "single");
+          if (hasTemporarySmartPenStrokes(annData.layers || {})) {
+            void authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                layers: normalizedAnnotationState.layers,
+                activeLayerId: restoredActiveLayerId,
+                history: annData.history || [],
+                readerState: annData.readerState || null,
+              }),
+            }).catch((error) => {
+              console.error("[PDF] Failed to remove persisted temporary Smart Pen strokes", error);
+            });
+          }
+          setReadingMode(!restoreMarkdown && persistedReaderState?.readingMode === "booklet" ? "booklet" : "single");
           setBookletRightPage(
-            persistedReaderState?.readingMode === "booklet" && persistedReaderState?.bookletRightPage
+            !restoreMarkdown && persistedReaderState?.readingMode === "booklet" && persistedReaderState?.bookletRightPage
               ? Math.min(Math.max(1, parseInt(persistedReaderState.bookletRightPage, 10) || 1), numPages || 1)
               : null
           );
+          setMarkdownAsideOpen(restoreMarkdown);
+          setMarkdownModeMenuOpen(false);
+          setMarkdownAsideMode(persistedMarkdownMode);
+          setMarkdownRetainedVisualMode(restoreMarkdown ? persistedRetainedVisualMode : null);
+          setMarkdownAsideColumnGroup(persistedColumnGroup);
+          setMdLineSpacing(persistedLineSpacing);
+          setMdSpacingTarget(persistedSpacingTarget);
+          setMdLineTagsVisible(persistedReaderState?.mdLineTagsVisible !== false);
           setZoom(Number.isFinite(persistedReaderState?.zoom) ? normalizeZoom(persistedReaderState.zoom) : 1);
           setSearchOpen(Boolean(persistedReaderState?.searchOpen));
           setSearchQuery(typeof persistedReaderState?.searchQuery === "string" ? persistedReaderState.searchQuery : "");
@@ -9236,6 +12097,119 @@ const PDFPage = forwardRef(({
       setInsertingBlankPage(false);
     }
   }, [pageNum, annotations, annotHistory, filename, loadFromSource, insertingBlankPage]);
+  useEffect(() => {
+    const sourceId = currentSourceIdRef.current;
+    const companionContentOpen = entityBuilderOcrBlankPageOpen || markdownAsideOpen;
+    if (!companionContentOpen) {
+      setEntityBuilderRawBlankPageRows([]);
+      setEntityBuilderRawBlankPageMeta({ pageWidth: 0, pageHeight: 0 });
+      setEntityBuilderVisualRawBlankPageText("");
+      setEntityBuilderOcrBlankPageAnnotations([]);
+      setEntityBuilderEmptyAreaHighlightsOpen(false);
+      setEntityBuilderOcrBlankPageBusy(false);
+      setEntityBuilderOcrBlankPageError("");
+      setEntityBuilderTesseractRows([]);
+      setEntityBuilderTesseractMeta({ pageWidth: 0, pageHeight: 0 });
+      setEntityBuilderTesseractError("");
+      return undefined;
+    }
+    if (!sourceId || !pageNum) {
+      setEntityBuilderRawBlankPageRows([]);
+      setEntityBuilderRawBlankPageMeta({ pageWidth: 0, pageHeight: 0 });
+      setEntityBuilderVisualRawBlankPageText("");
+      setEntityBuilderOcrBlankPageAnnotations([]);
+      setEntityBuilderEmptyAreaHighlightsOpen(false);
+      setEntityBuilderOcrBlankPageBusy(false);
+      setEntityBuilderOcrBlankPageError("No source page is available for OCR rendering.");
+      setEntityBuilderTesseractRows([]);
+      setEntityBuilderTesseractMeta({ pageWidth: 0, pageHeight: 0 });
+      setEntityBuilderTesseractError("");
+      return undefined;
+    }
+    let cancelled = false;
+    setEntityBuilderTesseractRows([]);
+    setEntityBuilderTesseractMeta({ pageWidth: 0, pageHeight: 0, pageNumber: 0, renderDpi: 200, coordinateSpace: "ocr_page_pixels" });
+    setEntityBuilderTesseractError("");
+    setEntityBuilderOcrBlankPageBusy(true);
+    setEntityBuilderOcrBlankPageError("");
+
+    buildRawRowsForBlankPage()
+      .then((result) => {
+        if (cancelled) return;
+        setEntityBuilderRawBlankPageRows(Array.isArray(result?.rows) ? result.rows : []);
+        setEntityBuilderRawBlankPageMeta({
+          pageWidth: Number(result?.pageWidth) || 0,
+          pageHeight: Number(result?.pageHeight) || 0,
+          viewportScale: Number(result?.viewportScale) || 0,
+          pageRotation: Number(result?.pageRotation) || 0,
+          mediaBox: Array.isArray(result?.mediaBox) ? result.mediaBox : [],
+        });
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEntityBuilderRawBlankPageRows([]);
+          setEntityBuilderRawBlankPageMeta({ pageWidth: 0, pageHeight: 0 });
+        }
+      });
+    buildVisualRawTextForBlankPage()
+      .then((text) => {
+        if (!cancelled) setEntityBuilderVisualRawBlankPageText(String(text || ""));
+      })
+      .catch(() => {
+        if (!cancelled) setEntityBuilderVisualRawBlankPageText("");
+      });
+
+    authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?page=${pageNum}&includeRaw=1`))
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (response.status === 202 && ["queued", "uploading", "processing"].includes(data.status)) {
+          setEntityBuilderOcrBlankPageAnnotations([]);
+          setEntityBuilderOcrBlankPageError("OCR is still processing for this page.");
+          return;
+        }
+        const ocrPage = data.pages?.[0];
+        if (!response.ok || !ocrPage) {
+          setEntityBuilderOcrBlankPageAnnotations([]);
+          setEntityBuilderOcrBlankPageError(typeof data.error === "string" ? data.error : data.error?.message || "Could not load OCR for this page.");
+          return;
+        }
+        const persistedTesseractRows = Array.isArray(ocrPage.rawPage?.words) ? ocrPage.rawPage.words : [];
+        if (persistedTesseractRows.length) {
+          setEntityBuilderTesseractRows(persistedTesseractRows);
+          setEntityBuilderTesseractMeta({
+            pageWidth: Number(ocrPage.width) || Number(ocrPage.rawPage?.width) || 0,
+            pageHeight: Number(ocrPage.height) || Number(ocrPage.rawPage?.height) || 0,
+            pageNumber: Number(ocrPage.pageIndex) + 1 || pageNum,
+            renderDpi: Number(ocrPage.rawPage?.renderDpi) || 200,
+            coordinateSpace: ocrPage.coordinateSpace || ocrPage.rawPage?.coordinateSpace || "ocr_page_pixels",
+          });
+        }
+        const importedTextAnnotations = await buildOcrTextAnnotationsForBlankPage({
+          ocrPage,
+          referencePage: pageNum,
+          destinationPage: pageNum,
+        });
+        if (cancelled) return;
+        if (!importedTextAnnotations.length) {
+          setEntityBuilderOcrBlankPageAnnotations([]);
+          setEntityBuilderOcrBlankPageError("No OCR text with usable coordinates was found for this page.");
+          return;
+        }
+        setEntityBuilderOcrBlankPageAnnotations(importedTextAnnotations);
+        setEntityBuilderOcrBlankPageError("");
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setEntityBuilderOcrBlankPageAnnotations([]);
+        setEntityBuilderOcrBlankPageError("Could not build the OCR blank page.");
+      })
+      .finally(() => {
+        if (!cancelled) setEntityBuilderOcrBlankPageBusy(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [buildOcrTextAnnotationsForBlankPage, buildRawRowsForBlankPage, buildVisualRawTextForBlankPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, pageNum]);
   // Ref-mirrored (same pattern as textSelectableRef/onSelectionActionRef
   // above) so useImperativeHandle — declared earlier in this component,
   // before insertBlankPageAfterCurrent even exists as a binding — can
@@ -9629,7 +12603,7 @@ const PDFPage = forwardRef(({
   }, [semanticDetectionPreview, visiblePageAnnotations, nextDistinctBBoxColor, annotations, pageNum, bboxBorderSize, shapeBorderStyle, logAnnotHistory, buildAnnotationSavePayload]);
 
   // BBox tool's "Smart Segmenting" action — one bbox per paragraph on the
-  // current page, matched from the page's own (cached, Mistral-OCR-derived)
+  // current page, matched from the page's own cached OCR
   // Markdown against the PDF's real text geometry. Deliberately no AI/LLM
   // call: paragraph boundaries already exist in the Markdown, geometry
   // already exists in the PDF's text layer, and matching one against the
@@ -10525,6 +13499,29 @@ const PDFPage = forwardRef(({
     window.addEventListener("touchmove", onMove, { passive: true });
     window.addEventListener("touchend",  onEnd);
   }, [mdPanelWidth]);
+  const handleMarkdownAsideResizeStart = useCallback((e) => {
+    e.preventDefault();
+    const handleEl = e.currentTarget;
+    const startX = e.touches ? e.touches[0].clientX : e.clientX;
+    const startWidth = mdPanelWidth;
+    handleEl.classList.add("pdf_aside_resize_handle--active");
+    const onMove = (ev) => {
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const next = Math.max(220, Math.min(720, startWidth - (clientX - startX)));
+      setMdPanelWidth(next);
+    };
+    const onEnd = () => {
+      handleEl.classList.remove("pdf_aside_resize_handle--active");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onEnd);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onEnd);
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend", onEnd);
+  }, [mdPanelWidth]);
   const createAsideResizeStart = useCallback((startWidth, setWidth, min = 240, max = 720) => (e) => {
     e.preventDefault();
     const handleEl = e.currentTarget;
@@ -10559,11 +13556,6 @@ const PDFPage = forwardRef(({
     createAsideResizeStart(entityBuilderPanelWidth, setEntityBuilderPanelWidth, 280, 760),
     [entityBuilderPanelWidth, createAsideResizeStart]
   );
-  const handleAmctoshsVignettePanelResizeStart = useCallback(
-    createAsideResizeStart(amctoshsVignettePanelWidth, setAmctoshsVignettePanelWidth, 280, 760),
-    [amctoshsVignettePanelWidth, createAsideResizeStart]
-  );
-
   const togglePreview = useCallback(() => {
     setSplitRatio((r) => {
       if (r === 0) return savedRatioRef.current || 0.42;
@@ -10607,9 +13599,9 @@ const PDFPage = forwardRef(({
   // inside either group so the two can live in separate containers.
   const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
   const shapeToolbarOpen = annotTool === "shapes";
-  const hasSize = annotTool === "pen" || annotTool === "highlight" || annotTool === "eraser" || SHAPE_TOOL_KEYS.includes(annotTool);
+  const hasSize = isPenToolKey(annotTool) || annotTool === "highlight" || annotTool === "eraser" || SHAPE_TOOL_KEYS.includes(annotTool);
   const sizeProps =
-    annotTool === "pen"     ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
+    isPenToolKey(annotTool)  ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
     annotTool === "eraser"  ? { min: 6, max: 72, step: 2,   value: eraserSize, onChange: setEraserSize } :
     annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
     SHAPE_TOOL_KEYS.includes(annotTool) ? {
@@ -10630,11 +13622,166 @@ const PDFPage = forwardRef(({
     SHAPE_TOOL_KEYS.includes(annotTool) ? "Stroke color" :
     `${activeToolMeta?.label || "Tool"} color`;
   const sizeKnobLabel =
-    annotTool === "pen"      ? "Stroke width" :
+    isPenToolKey(annotTool)  ? "Stroke width" :
     annotTool === "eraser"   ? "Eraser size" :
     annotTool === "highlight" ? "Highlighter size" :
     SHAPE_TOOL_KEYS.includes(annotTool) ? "Stroke width" :
     "Size";
+  const markdownVisualPageScale = Math.max(0.0001, fitScaleRef.current * zoomRef.current);
+  const liveRenderedPageSize = renderedCssSizeRef.current[pageNum - 1];
+  const liveRenderedPageScale = renderedScaleRef.current[pageNum - 1];
+  const liveRenderedPageRatio = liveRenderedPageScale
+    ? markdownVisualPageScale / Math.max(0.0001, liveRenderedPageScale)
+    : null;
+  const markdownVisualPageWidth = liveRenderedPageSize?.width && liveRenderedPageRatio
+    ? Math.max(1, liveRenderedPageSize.width * liveRenderedPageRatio)
+    : pageViewport?.scale
+      ? Math.max(1, pageViewport.width * (markdownVisualPageScale / Math.max(0.0001, pageViewport.scale)))
+      : Math.max(1, entityBuilderVisualRawPageWidth * markdownVisualPageScale);
+  const markdownVisualPageHeight = liveRenderedPageSize?.height && liveRenderedPageRatio
+    ? Math.max(1, liveRenderedPageSize.height * liveRenderedPageRatio)
+    : pageViewport?.scale
+      ? Math.max(1, pageViewport.height * (markdownVisualPageScale / Math.max(0.0001, pageViewport.scale)))
+      : Math.max(1, entityBuilderVisualRawPageHeight * markdownVisualPageScale);
+  const renderOriginalMarkdownVisualPage = () => (
+    <div
+      ref={markdownVisualLayerRef}
+      className="pdf_markdown_aside_visual_page"
+      style={{
+        aspectRatio: `${entityBuilderVisualRawPageWidth} / ${entityBuilderVisualRawPageHeight}`,
+        width: `${markdownVisualPageWidth}px`,
+        height: `${markdownVisualPageHeight}px`,
+        minWidth: `${markdownVisualPageWidth}px`,
+        minHeight: `${markdownVisualPageHeight}px`,
+        maxWidth: "none",
+      }}
+    >
+      <canvas ref={markdownAnnotationCanvasRef} className="pdf_markdown_visual_annotation_layer" aria-hidden="true" />
+      <svg
+        className="pdf_markdown_visual_line_rules"
+        viewBox={`0 0 ${entityBuilderVisualRawPageWidth} ${entityBuilderVisualRawPageHeight}`}
+        preserveAspectRatio="none"
+        aria-hidden="true"
+      >
+        {entityBuilderVisualRawLines.map((line, lineIndex) => {
+          const paragraphIndex = entityBuilderVisualRawLines
+            .slice(0, lineIndex)
+            .reduce((count, previousLine, previousIndex) => {
+              const nextLine = entityBuilderVisualRawLines[previousIndex + 1];
+              if (!nextLine) return count;
+              const verticalGap = (Number(nextLine.y) || 0) - ((Number(previousLine.y) || 0) + (Number(previousLine.height) || 1));
+              return verticalGap > Math.max(4, (Number(previousLine.height) || 1) * 0.8) ? count + 1 : count;
+            }, 0);
+          const lineOffset = mdSpacingTarget === "line"
+            ? lineIndex * mdLineSpacing
+            : mdSpacingTarget === "paragraph"
+              ? paragraphIndex * mdLineSpacing
+              : 0;
+          const ruleY = line.y + lineOffset + line.height;
+          return <line key={`${line.id}-rule`} x1="0" x2={entityBuilderVisualRawPageWidth} y1={ruleY} y2={ruleY} />;
+        })}
+      </svg>
+      {entityBuilderVisualRawLines.map((line, lineIndex) => {
+        const lineOrder = mdLineOrders[line.id] || "source";
+        const lineRows = lineOrder === "source" ? line.sourceRows : line.visualRows;
+        const paragraphIndex = entityBuilderVisualRawLines
+          .slice(0, lineIndex)
+          .reduce((count, previousLine, previousIndex) => {
+            const nextLine = entityBuilderVisualRawLines[previousIndex + 1];
+            if (!nextLine) return count;
+            const verticalGap = (Number(nextLine.y) || 0) - ((Number(previousLine.y) || 0) + (Number(previousLine.height) || 1));
+            return verticalGap > Math.max(4, (Number(previousLine.height) || 1) * 0.8) ? count + 1 : count;
+          }, 0);
+        const lineOffset = mdSpacingTarget === "line"
+          ? lineIndex * mdLineSpacing
+          : mdSpacingTarget === "paragraph"
+            ? paragraphIndex * mdLineSpacing
+            : 0;
+        const lineTagFontSize = Math.max(1, Number(lineRows[0]?.visualFontSize) || 1);
+        return <React.Fragment key={line.id}>
+          {mdLineTagsVisible && <div
+            className={`pdf_markdown_visual_line_marker${mdOpenLineId === line.id ? " pdf_markdown_visual_line_marker--open" : ""}`}
+            style={{
+              left: `${(line.xMin / entityBuilderVisualRawPageWidth) * 100}%`,
+              top: `${((line.y + lineOffset) / entityBuilderVisualRawPageHeight) * 100}%`,
+              fontSize: `${lineTagFontSize * entityBuilderVisualRawTextScale / entityBuilderVisualRawPageWidth * 100}cqw`,
+            }}
+          >
+            <button
+              type="button"
+              className="pdf_markdown_visual_line_tag"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setMdOpenLineId((current) => current === line.id ? null : line.id);
+              }}
+              aria-label={`Line ${lineIndex + 1}, ${lineRows.length} strings${line.hasOrderDiscrepancy ? ", visual order differs from source order" : ""}`}
+              aria-expanded={mdOpenLineId === line.id}
+              title={line.hasOrderDiscrepancy ? "Visual order differs from PDF.js source order" : undefined}
+            >{`L${lineIndex + 1}${line.hasOrderDiscrepancy ? "*" : ""}`}</button>
+            {mdOpenLineId === line.id && (
+              <div className="pdf_markdown_visual_line_contents" role="list" aria-label={`Strings in line ${lineIndex + 1}`}>
+                <div className="pdf_markdown_visual_line_order" role="group" aria-label={`Order for line ${lineIndex + 1}`}>
+                  <strong>ORDER</strong>
+                  <div>
+                    {[["visual", "VISUAL"], ["source", "SOURCE"]].map(([order, label]) => (
+                      <button
+                        key={order}
+                        type="button"
+                        className={lineOrder === order ? "pdf_markdown_visual_line_order_btn--active" : undefined}
+                        aria-pressed={lineOrder === order}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setMdLineOrders((current) => ({ ...current, [line.id]: order }));
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
+                </div>
+                {lineRows.map((row) => (
+                  <div key={row.id} role="listitem">
+                    <strong>{Number.isFinite(row.instanceNumber) ? `str #${row.instanceNumber}` : "str"}</strong>
+                    <span className="pdf_markdown_visual_line_ty">TY {Number.isFinite(Number(row.ty)) ? Number(row.ty).toFixed(2) : "-"}</span>
+                    <span>{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>}
+          <span className="pdf_markdown_aside_visual_line" title={lineRows.map((row) => row.value).join(" ")} style={{
+            left: `${(line.xMin / entityBuilderVisualRawPageWidth) * 100}%`,
+            top: `${((line.y + lineOffset) / entityBuilderVisualRawPageHeight) * 100}%`,
+            width: `${Math.max(1, (line.xMax ?? line.xMin + 1) - line.xMin) / entityBuilderVisualRawPageWidth * 100}%`,
+            height: `${line.height / entityBuilderVisualRawPageHeight * 100}%`,
+          }}>
+            {lineRows.map((row, rowIndex) => {
+              const rowX = Number(row.visualX) || 0;
+              const rowFontSize = Math.max(1, row.visualFontSize || 1);
+              const rowOffset = mdSpacingTarget === "str" ? rowIndex * mdLineSpacing : 0;
+              const geometryOffsetY = (Number(row.visualY) || 0) - (Number(line.y) || 0);
+              const totalOffsetY = geometryOffsetY + rowOffset;
+              return <React.Fragment key={row.id}>
+                <span data-raw-row-id={row.id} title={row.value} className={`pdf_markdown_aside_visual_line_item${entityBuilderVisualFocusId === row.id ? " pdf_markdown_aside_visual_line_item--focused" : ""}`} style={{
+                  left: `${(rowX - line.xMin) / entityBuilderVisualRawPageWidth * 100}cqw`,
+                  top: 0,
+                  fontSize: `${rowFontSize * entityBuilderVisualRawTextScale / entityBuilderVisualRawPageWidth * 100}cqw`,
+                  fontFamily: IBM_PLEX_MONO_FONT,
+                  height: `${Math.max(1, row.visualHeight || 1) / entityBuilderVisualRawPageWidth * 100}cqw`,
+                  lineHeight: `${Math.max(1, row.visualHeight || 1) / entityBuilderVisualRawPageWidth * 100}cqw`,
+                  fontWeight: row.visualFontWeight || "normal",
+                  fontStyle: row.visualFontStyle || "normal",
+                  transform: `${totalOffsetY ? `translateY(${totalOffsetY / Math.max(1, entityBuilderVisualRawPageWidth) * 100}cqw) ` : ""}rotate(${Number.isFinite(row.rotation) ? -row.rotation : 0}deg)`,
+                  transformOrigin: "top left",
+                }}>{row.value}</span>
+              </React.Fragment>;
+            })}
+          </span>
+        </React.Fragment>;
+      })}
+    </div>
+  );
+
   return (
     <div
       id="pdf_page"
@@ -10685,6 +13832,27 @@ const PDFPage = forwardRef(({
                 toolbar reads as two areas: draw-on-the-page tools on the
                 left, open-a-panel tools on the right. */}
             <div className="annot_mode_strip" aria-label="Panel tools">
+              {markdownVisualActive && (
+                <button
+                  type="button"
+                  ref={(el) => { toolButtonRefs.current.mdController = el; }}
+                  className={`annot_trigger annot_tool_btn${annotTool === "mdController" ? " annot_tool_btn--active" : ""}`}
+                  onClick={() => toggleAnnotTool("mdController")}
+                  title="MD Controller"
+                  aria-label="MD Controller"
+                >
+                  <i className="bx bx-slider" aria-hidden="true" />
+                </button>
+              )}
+              <button
+                type="button"
+                className={`annot_trigger annot_tool_btn${entityBuilderOpen ? " annot_trigger--active" : ""}`}
+                onClick={toggleEntityBuilder}
+                title="AMCTOSHS Illumination"
+                aria-label="AMCTOSHS Illumination"
+              >
+                {isCurrentPageFullySegmented ? <SegmentBuilderOpenEyeIcon /> : <SegmentBuilderClosedEyeIcon />}
+              </button>
               <div id="pdf_search_group">
                 <button
                   type="button"
@@ -10736,22 +13904,6 @@ const PDFPage = forwardRef(({
                 )}
               </div>
               {MODE_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
-              {/* AMCTOSHS Clinical Vignette Generator — same convention as
-                  the (now removed) Segments Builder trigger used to be;
-                  the Segments Builder aside now opens from the
-                  Segmentation drawing tool itself instead (see the
-                  annotTool === "bbox" effect near entityBuilderOpen). */}
-              {pdfDoc && (
-                <button
-                  type="button"
-                  className={`annot_trigger annot_tool_btn${amctoshsVignetteOpen ? " annot_trigger--active" : ""}`}
-                  onClick={toggleAmctoshsVignette}
-                  title="AMCTOSHS Clinical Vignette Generator"
-                  aria-label="AMCTOSHS Clinical Vignette Generator"
-                >
-                  <i className="bx bx-user-plus" />
-                </button>
-              )}
             </div>
             </div>
 
@@ -10771,6 +13923,51 @@ const PDFPage = forwardRef(({
                   : { left: toolOptionsOffset }
               }
             >
+              {annotTool === "mdController" && markdownVisualActive && (
+                <div className="annot_control annot_md_controller" aria-label="Markdown line spacing controller">
+                  <AnnotControlHeaderInfo title="MD Controller" />
+                  <div className="annot_md_controller_row">
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${mdLineTagsVisible ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => {
+                        setMdLineTagsVisible((visible) => !visible);
+                        setMdOpenLineId(null);
+                      }}
+                      aria-pressed={mdLineTagsVisible}
+                    >
+                      <span>Show line tags: {mdLineTagsVisible ? "ON" : "OFF"}</span>
+                    </button>
+                    <select
+                      className="annot_md_controller_select"
+                      value={mdSpacingTarget}
+                      onChange={(event) => setMdSpacingTarget(event.target.value)}
+                      aria-label="Add space between"
+                    >
+                      <option value="str">str</option>
+                      <option value="line">line</option>
+                      <option value="paragraph">paragraph</option>
+                    </select>
+                    <button
+                      type="button"
+                      className="annot_mode_btn"
+                      onClick={() => setMdLineSpacing((value) => Math.max(-40, value - 1))}
+                      title="Decrease space between Markdown lines"
+                      aria-label="Decrease space between Markdown lines"
+                    >−</button>
+                    <output className="annot_md_controller_value" aria-live="polite">
+                      {mdLineSpacing > 0 ? `+${mdLineSpacing}` : mdLineSpacing}
+                    </output>
+                    <button
+                      type="button"
+                      className="annot_mode_btn"
+                      onClick={() => setMdLineSpacing((value) => Math.min(80, value + 1))}
+                      title="Increase space between Markdown lines"
+                      aria-label="Increase space between Markdown lines"
+                    >+</button>
+                  </div>
+                </div>
+              )}
               {annotTool === "bbox" && (
                 <div className="annot_bbox_creation_block annot_control">
                   <AnnotControlHeaderInfo title="Create" />
@@ -10789,13 +13986,13 @@ const PDFPage = forwardRef(({
                       type="button"
                       className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bbox" ? " annot_mode_btn--active" : ""}`}
                       onClick={() => toggleBBoxCreationType("bbox")}
-                      title={activeBBoxCreationType === "bbox" ? "Paragraph BBox creation armed" : "Create a Paragraph BBox"}
-                      aria-label="New bbox"
+                      title={activeBBoxCreationType === "bbox" ? "Block BBox creation armed" : "Create a semantic Block BBox"}
+                      aria-label="New Block BBox"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path d="M7 3h2v2h6v2H9v10H7V7H5V5h2zm10 4h2v14H7v-2h10z" />
                       </svg>
-                      <span>Paragraph BBox</span>
+                      <span>Block BBox</span>
                     </button>
                     <button
                       type="button"
@@ -10809,18 +14006,6 @@ const PDFPage = forwardRef(({
                     </button>
                     <button
                       type="button"
-                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "bboxTitle" ? " annot_mode_btn--active" : ""}`}
-                      onClick={() => toggleBBoxCreationType("bboxTitle")}
-                      title={activeBBoxCreationType === "bboxTitle" ? "Title selection armed" : "Arm title selection"}
-                      aria-label="Title BBox"
-                    >
-                      <svg className="annot_mode_btn_icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                        <path d="M4 5h16v2h-7v12h-2V7H4z" />
-                      </svg>
-                      <span>Title BBox</span>
-                    </button>
-                    <button
-                      type="button"
                       className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "imageBBox" ? " annot_mode_btn--active" : ""}`}
                       onClick={() => toggleBBoxCreationType("imageBBox")}
                       title={activeBBoxCreationType === "imageBBox" ? "Figure BBox armed" : "Arm figure bbox selection"}
@@ -10831,6 +14016,18 @@ const PDFPage = forwardRef(({
                         <path d="M7 15l3-4 2 2 3-4 2 6z" />
                       </svg>
                       <span>Figure BBox</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={`annot_mode_btn annot_mode_btn--toggle${activeBBoxCreationType === "omissionBBox" ? " annot_mode_btn--active" : ""}`}
+                      onClick={() => toggleBBoxCreationType("omissionBBox")}
+                      title={activeBBoxCreationType === "omissionBBox" ? "Omission BBox creation armed" : "Omit fully enclosed PDF.js text from reading"}
+                      aria-label="New Omission BBox"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M3 3l18 18M10.6 10.7a2 2 0 0 0 2.7 2.7M9.9 4.2A10.8 10.8 0 0 1 12 4c6 0 9 6 9 8a12.6 12.6 0 0 1-2.1 3.7M6.6 6.6C4.2 8.2 3 10.7 3 12c0 2 3 8 9 8 1.3 0 2.5-.3 3.5-.7" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <span>Omission BBox</span>
                     </button>
                     <button
                       type="button"
@@ -11293,7 +14490,7 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
-            {annotTool === "pen" && (
+            {isPenToolKey(annotTool) && (
               <div className="annot_pen_panel">
                 <div className="annot_pen_controls annot_pen_controls--column">
                   <div className="annot_pen_stroke_shaping">
@@ -11514,134 +14711,6 @@ const PDFPage = forwardRef(({
       {/* Split area */}
       <div id="pdf_content" ref={contentRef}>
 
-        {/* Far left — Markdown preview column for the current page, opened by the toolbar "MD" button */}
-        {pageMdOpen && (
-          <div id="pdf_md_panel" style={{ width: mdPanelWidth }}>
-            <div
-              id="pdf_md_panel_resize_handle"
-              onMouseDown={handleMdPanelResizeStart}
-              onTouchStart={handleMdPanelResizeStart}
-            />
-            <div id="pdf_md_panel_header">
-              <span>Markdown</span>
-              <button id="pdf_md_panel_close" onClick={() => setPageMdOpen(false)} title="Close">✕</button>
-            </div>
-            {pageMdText && (
-              <div id="pdf_md_pager">
-                <div id="pdf_md_page_nav">
-                  <button type="button" onClick={() => goToMarkdownPage(mdCurrentPage.page - 1)} disabled={mdCurrentPage.page <= 1} title="Previous page">‹</button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={pageCount}
-                    value={mdPageInputVal}
-                    onChange={(e) => setMdPageInputVal(e.target.value)}
-                    onBlur={commitMdPageInput}
-                    onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                    title="Type a page number to jump straight to its Markdown"
-                  />
-                  <span id="pdf_md_page_nav_total">/ {pageCount}</span>
-                  <button type="button" onClick={() => goToMarkdownPage(mdCurrentPage.page + 1)} disabled={mdCurrentPage.page >= pageCount} title="Next page">›</button>
-                </div>
-                <button
-                  type="button"
-                  id="pdf_md_all_pages_btn"
-                  className={`pdf_md_icon_btn${pageMdRange?.all ? " pdf_md_all_pages_btn--active" : ""}`}
-                  onClick={showAllMarkdownPages}
-                  disabled={pageMdBusy || pageMdDeleteBusy || Boolean(pageMdRange?.all)}
-                  title={pageMdRange?.all ? "Every page is already loaded" : "Load every page's Markdown so you can page through the whole document without re-fetching"}
-                >
-                  <i className="bx bx-layer" /> {pageMdRange?.all ? "Loaded" : "All Pages"}
-                </button>
-                <button
-                  type="button"
-                  className="pdf_md_icon_btn pdf_md_delete_btn"
-                  onClick={handleDeleteMarkdownPage}
-                  disabled={pageMdBusy || pageMdDeleteBusy || !pageMdText}
-                  title="Delete cached markdown for the currently displayed page"
-                >
-                  <i className={pageMdDeleteBusy ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-trash"} /> {pageMdDeleteBusy ? "Deleting…" : "Delete Page"}
-                </button>
-                <button
-                  type="button"
-                  className="pdf_md_icon_btn pdf_md_delete_btn pdf_md_delete_btn--all"
-                  onClick={handleDeleteAllMarkdownPages}
-                  disabled={pageMdBusy || pageMdDeleteBusy || !pageMdText}
-                  title="Delete every cached markdown page for this source"
-                >
-                  <i className={pageMdDeleteBusy ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-trash"} /> {pageMdDeleteBusy ? "Deleting…" : "Delete All"}
-                </button>
-              </div>
-            )}
-            {!pageMdBusy && !pageMdError && pageMdText && (
-              <div id="pdf_md_stats">
-                <button
-                  type="button"
-                  className={`pdf_md_stat_btn${pdfMdCountHighlight === "words" ? " pdf_md_stat_btn--active" : ""}`}
-                  onClick={() => showMarkdownPageInPdf("words")}
-                  title="Show this markdown page in the PDF viewer and highlight the counted words there"
-                >
-                  <i className="bx bx-text" /> {mdStats.words} words
-                </button>
-                <button
-                  type="button"
-                  className={`pdf_md_stat_btn${pdfMdCountHighlight === "chars" ? " pdf_md_stat_btn--active" : ""}`}
-                  onClick={() => showMarkdownPageInPdf("chars")}
-                  title="Show this markdown page in the PDF viewer and highlight the counted characters there"
-                >
-                  <i className="bx bx-keyboard" /> {mdStats.chars} characters
-                </button>
-                <button
-                  type="button"
-                  id="pdf_md_voice_btn"
-                  className={voiceListening ? "pdf_md_voice_btn--active" : ""}
-                  onClick={handleVoiceSelect}
-                  title="Select text by voice — say a word or phrase to find and highlight it"
-                >
-                  <i className="bx bx-microphone" /> Voice
-                </button>
-                <div id="pdf_md_font_controls">
-                  <button type="button" onClick={() => setMdFontScale((s) => Math.max(0.7, +(s - 0.1).toFixed(1)))} title="Smaller text" disabled={mdFontScale <= 0.7}>A−</button>
-                  <span id="pdf_md_font_label">{Math.round(mdFontScale * 100)}%</span>
-                  <button type="button" onClick={() => setMdFontScale((s) => Math.min(2, +(s + 0.1).toFixed(1)))} title="Larger text" disabled={mdFontScale >= 2}>A+</button>
-                </div>
-              </div>
-            )}
-            {(voiceListening || voiceQuery || voiceError) && (
-              <div id="pdf_md_voice_status">
-                {voiceListening ? "Listening…" : voiceError ? `⚠ ${voiceError}` : voiceQuery ? `Heard: "${voiceQuery}"${voiceMatch ? " — found" : ""}` : ""}
-              </div>
-            )}
-            <div id="pdf_md_panel_body">
-              {pageMdBusy ? (
-                <p id="pdf_md_panel_status">Converting…</p>
-              ) : pageMdError ? (
-                <p id="pdf_md_panel_status" className="pdf_md_panel_status--error">⚠ {pageMdError}</p>
-              ) : mdCurrentPage.text ? (
-                <div className="pdf_md_compare_layout">
-                  <section className="pdf_md_compare_col">
-                    <div className="pdf_md_compare_head">
-                      <span>Draft Text View</span>
-                      <span className="pdf_md_compare_meta">Page {mdCurrentPage.page}</span>
-                    </div>
-                    <div id="pdf_md_panel_text" ref={mdTextRef} style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
-                      <DraftTextViewer
-                        text={mdCurrentPage.text}
-                        highlightRange={voiceMatch}
-                        emptyText="(This page had no extractable text.)"
-                      />
-                    </div>
-                  </section>
-                </div>
-              ) : (
-                <div id="pdf_md_panel_text" style={{ fontSize: `${0.8 * mdFontScale}rem` }}>
-                  <DraftTextViewer text="" emptyText="(This page had no extractable text.)" />
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
         {/* Far left — Annotation History column, opened by the toolbar "History" button */}
         {annotHistoryOpen && (
           <div id="pdf_annot_history_panel" style={{ width: annotHistoryPanelWidth }}>
@@ -11651,20 +14720,38 @@ const PDFPage = forwardRef(({
               onTouchStart={handleAnnotHistoryPanelResizeStart}
             />
             <div id="pdf_annot_history_header">
-              <span>Annotation History</span>
+              <span className="pdf_annot_history_title">Annotation History</span>
+              <div className="pdf_annot_history_source_toggle" role="tablist" aria-label="Annotation history source">
+                <button type="button" role="tab" aria-selected={annotHistorySource === "pdf"} className={annotHistorySource === "pdf" ? "pdf_annot_history_source--active" : undefined} onClick={() => setAnnotHistorySource("pdf")}>PDF</button>
+                <button type="button" role="tab" aria-selected={annotHistorySource === "md"} className={annotHistorySource === "md" ? "pdf_annot_history_source--active" : undefined} onClick={() => setAnnotHistorySource("md")}>MD</button>
+              </div>
               <button
                 id="pdf_annot_history_clear"
-                onClick={handleClearAllAnnotations}
-                title="Clear All Annotations — permanently delete every annotation on every page and blank the entire history. Cannot be undone."
+                onClick={annotHistorySource === "md" ? clearMarkdownAnnotations : handleClearAllAnnotations}
+                title={annotHistorySource === "md" ? "Clear all Markdown annotations" : "Clear All Annotations — permanently delete every annotation on every page and blank the entire history. Cannot be undone."}
                 aria-label="Clear All Annotations"
-                disabled={totalAnnotationCount === 0}
+                disabled={annotHistorySource === "md" ? markdownHistoryEntries.length === 0 : totalAnnotationCount === 0}
               >
                 <i className="bxf bx-trash-alt" />
               </button>
               <button id="pdf_annot_history_close" onClick={() => setAnnotHistoryOpen(false)} title="Close">✕</button>
             </div>
             <div id="pdf_annot_history_body">
-              {(() => {
+              {annotHistorySource === "md" ? (
+                markdownHistoryEntries.length ? markdownHistoryEntries.map((entry) => {
+                  const toolLabel = ANNOT_TOOLS.find((tool) => tool.key === entry.type)?.label || entry.type || "Annotation";
+                  return (
+                    <div key={entry.id} className="anh_row anh_row--md">
+                      <i className="bx bx-file anh_icon" />
+                      <div className="anh_main">
+                        <span className="anh_label">Added {toolLabel}</span>
+                        <span className="anh_meta">p.{entry.page}{entry.time ? ` · ${entry.time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : " · current"}</span>
+                      </div>
+                      {entry.color && <span className="anh_swatch" style={{ background: entry.color }} />}
+                    </div>
+                  );
+                }) : <div className="anh_empty">No Markdown annotations on this source.</div>
+              ) : (() => {
                 // Newest-first, chunked into per-day groups with a date
                 // header between them — history now survives a reload
                 // (see the autosave/restore effects above), so a single
@@ -11801,39 +14888,18 @@ const PDFPage = forwardRef(({
           />
         )}
 
-        {/* Far left — AMCTOSHS Segments Builder. Same far-left-column
-            convention as the other panels above — unlike them, it has its
-            own close button since it isn't tied to re-pressing an annotTool.
-            Always follows the PDF Reader's own current page (pageNum) now —
-            no separate page navigator of its own. */}
-        {entityBuilderOpen && (
-          <EntityBuilderPanel
-            width={entityBuilderPanelWidth}
-            onResizeStart={handleEntityBuilderPanelResizeStart}
-            onClose={toggleEntityBuilder}
-            bboxCards={bboxCardsForBuilder}
-            pageNum={pageNum}
-            onUpdateBBoxName={updateBBoxName}
-            onDeleteBBox={deleteBBox}
-            onMoveBBoxUp={(bboxId) => moveBBoxInGroup(bboxId, -1, pageNum)}
-            onMoveBBoxDown={(bboxId) => moveBBoxInGroup(bboxId, 1, pageNum)}
-            onMergeParagraphs={mergeParagraphBBoxes}
-            onArmBBoxInsideContainer={armBBoxInsideContainer}
-            armedBBoxInsideContainer={bboxContainerBBoxTarget}
-          />
-        )}
-
-        {/* Far left — AMCTOSHS Clinical Vignette Generator. Same far-left-
-            column convention as the Entities Builder panel above. */}
-        {amctoshsVignetteOpen && (
-          <ClinicalVignetteBuilderPanel
-            width={amctoshsVignettePanelWidth}
-            onResizeStart={handleAmctoshsVignettePanelResizeStart}
-            onClose={toggleAmctoshsVignette}
-            provider={provider}
-            providerModels={aiProviderModels}
-          />
-        )}
+        {entityBuilderOpen && (() => {
+          const illuminationNode = (
+            <EntityBuilderPanel
+              width={entityBuilderPanelWidth}
+              onResizeStart={handleEntityBuilderPanelResizeStart}
+              onClose={toggleEntityBuilder}
+              pageNum={pageNum}
+              isPageFullySegmented={isCurrentPageFullySegmented}
+            />
+          );
+          return entityBuilderHost ? createPortal(illuminationNode, entityBuilderHost) : illuminationNode;
+        })()}
 
         {/* Left — PDF viewer or upload zone */}
         <div
@@ -11841,7 +14907,7 @@ const PDFPage = forwardRef(({
           style={{
             width: splitRatio === 0
               ? "0"
-              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(pageMdOpen ? mdPanelWidth : 0) + (annotHistoryOpen ? annotHistoryPanelWidth : 0) + (smartVideoOpen ? smartVideoPanelWidth : 0) + (entityBuilderOpen ? entityBuilderPanelWidth : 0) + (amctoshsVignetteOpen ? amctoshsVignettePanelWidth : 0)}px)`,
+              : `calc(${splitRatio >= 0.9 ? 100 : splitRatio * 100}% - ${(annotHistoryOpen ? annotHistoryPanelWidth : 0) + (smartVideoOpen ? smartVideoPanelWidth : 0) + (entityBuilderOpen && !entityBuilderHost ? entityBuilderPanelWidth : 0)}px)`,
           }}
           className={`${splitRatio === 0 ? "pdf_preview--closed" : ""}${navigationBlocked ? " pdf_preview--tool-active" : ""}${annotTool === "highlight" ? " pdf_preview--highlight-active" : ""}${zoom === 1 ? " pdf_preview--zoom-fit" : ""}`}
         >
@@ -11851,7 +14917,7 @@ const PDFPage = forwardRef(({
               <div
                 id="pdf_canvas_wrap"
                 ref={canvasWrapRef}
-                className={readingMode === "booklet" ? "pdf_canvas_wrap--booklet" : undefined}
+                className={`${readingMode === "booklet" || entityBuilderOcrBlankPageOpen ? "pdf_canvas_wrap--booklet" : ""}${markdownVisualActive ? " pdf_canvas_wrap--md-visual" : ""}${markdownVisualMode === "visual-only" && markdownVisualActive ? " pdf_canvas_wrap--md-only" : ""}`}
               >
                 {/* Single-page mode: only the current page is ever mounted —
                     no continuous scroll between pages, navigate with the
@@ -11862,23 +14928,425 @@ const PDFPage = forwardRef(({
                     every interactive layer below are still gated on
                     `pageNum === n`, so only the primary/left page is ever
                     editable. */}
-                {(pageNum
-                  ? readingMode === "booklet" && bookletRightPage && bookletRightPage !== pageNum
-                    ? [pageNum, bookletRightPage]
-                    : [pageNum]
-                  : []
-                ).map(n => (
+                {displayPageDescriptors.map((descriptor) => (
                   <div
-                    key={n}
-                    className="pdf_page_container"
-                    ref={el => { pageContainerRefs.current[n - 1] = el; }}
-                    data-page={n}
+                    key={`${descriptor.kind}-${descriptor.page}`}
+                    className={`pdf_page_container${descriptor.kind === "ocr-blank" ? " pdf_page_container--ocr_blank" : ""}`}
+                    ref={descriptor.kind === "pdf" ? (el => { pageContainerRefs.current[descriptor.page - 1] = el; }) : undefined}
+                    data-page={descriptor.page}
                   >
-                    <canvas
-                      className="pdf_page_canvas"
-                      ref={el => { pageCanvasRefs.current[n - 1] = el; }}
-                    />
-                    {readingMode === "single" && pageNum === n && pageCount > 1 && blankInsertedPages.has(n) && (
+                    {descriptor.kind === "pdf" ? (
+                      <canvas
+                        className="pdf_page_canvas"
+                        ref={el => { pageCanvasRefs.current[descriptor.page - 1] = el; }}
+                      />
+                    ) : (
+                      (() => {
+                        const scale = pageViewport?.scale || (fitScaleRef.current * zoomRef.current);
+                        const headerFontSize = Math.max(1, OCR_BLANK_HEADER_FONT_SIZE * scale);
+                        const footerFontSize = Math.max(1, OCR_BLANK_FOOTER_FONT_SIZE * scale);
+                        const footerHeight = Math.max(
+                          1,
+                          ((OCR_BLANK_FOOTER_FONT_SIZE * OCR_BLANK_FOOTER_LINE_HEIGHT) + OCR_BLANK_FOOTER_PAD_TOP + OCR_BLANK_FOOTER_PAD_BOTTOM) * scale,
+                        );
+                        const activeBlankPageServices = entityBuilderBlankPageMode === "ocr"
+                          ? OCR_COMPANION_SERVICES
+                          : ["tesseract", "tesseract-visual"].includes(entityBuilderBlankPageMode)
+                            ? TESSERACT_COMPANION_SERVICES
+                            : entityBuilderBlankPageMode === "visual-raw"
+                              ? VISUAL_RAW_COMPANION_SERVICES
+                              : RAW_COMPANION_SERVICES;
+                        const showOcrBusy = ["ocr", "tesseract", "tesseract-visual"].includes(entityBuilderBlankPageMode) && entityBuilderOcrBlankPageBusy;
+                        const showOcrError = ["ocr", "tesseract", "tesseract-visual"].includes(entityBuilderBlankPageMode) ? entityBuilderOcrBlankPageError : "";
+                        const activeOcrEngine = "tesseract";
+                        const activeOcrView = entityBuilderBlankPageMode === "tesseract-visual" ? "visual" : "table";
+                        return (
+                          <div
+                            className="pdf_ocr_blank_page"
+                            style={pageViewport ? { width: pageViewport.width, height: pageViewport.height } : undefined}
+                          >
+                            {showOcrError ? (
+                              <div className="pdf_ocr_blank_page_status pdf_ocr_blank_page_status--error">{showOcrError}</div>
+                            ) : showOcrBusy ? (
+                              <div className="pdf_ocr_blank_page_status">Building OCR page...</div>
+                            ) : (
+                              <>
+                                {entityBuilderBlankPageMode === "raw" || entityBuilderBlankPageMode === "visual-raw" ? (
+                                  <div
+                                    className={`pdf_ocr_blank_raw_text${entityBuilderBlankPageMode === "visual-raw" ? " pdf_ocr_blank_visual_raw_text" : ""}`}
+                                    style={{
+                                      inset: entityBuilderBlankPageMode === "visual-raw"
+                                        ? `0 0 ${footerHeight}px 0`
+                                        : `${Math.max(1, 72 * scale)}px ${Math.max(1, 18 * scale)}px ${footerHeight}px ${Math.max(1, 18 * scale)}px`,
+                                      fontSize: `${Math.max(1, 11 * scale)}px`,
+                                      lineHeight: 1.45,
+                                    }}
+                                  >
+                                    {entityBuilderBlankPageMode === "visual-raw" ? (
+                                      entityBuilderRawBlankPageRows.length ? (
+                                        <div className="pdf_ocr_blank_visual_raw_layer">
+                                          {entityBuilderRawBlankPageRows.filter((row) => !row.omitted && !entityBuilderOmittedRawCategories.has(getUnicodeOmissionLabel(row.value))).map((row) => (
+                                            <span
+                                              key={row.id}
+                                              className="pdf_ocr_blank_visual_raw_item"
+                                              title={row.value}
+                                              style={{
+                                                left: `${Math.max(0, row.x || 0) * scale}px`,
+                                                top: `${Math.max(0, row.y || 0) * scale}px`,
+                                                width: `${Math.max(1, row.width || 0) * scale}px`,
+                                                height: `${getRawVisibleHeight(row) * scale}px`,
+                                                lineHeight: `${getRawVisibleHeight(row) * scale}px`,
+                                                fontSize: `${Math.max(1, row.fontSize || 1) * entityBuilderVisualRawTextScale * scale}px`,
+                                                fontFamily: IBM_PLEX_MONO_FONT,
+                                                fontWeight: row.fontWeight || "normal",
+                                                fontStyle: row.fontStyle || "normal",
+                                                transform: `rotate(${Number(row.rotation) || 0}deg)`,
+                                              }}
+                                            >
+                                              {row.value}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      ) : "No PDF.js text items were extracted for this page."
+                                    ) : (
+                                      entityBuilderRawBlankPageRows.length ? (
+                                        <>
+                                          <div className="pdf_ocr_blank_raw_dims">
+                                            <div className="pdf_ocr_blank_raw_dims_row">
+                                              <span className="pdf_ocr_blank_raw_dims_label">Page dimensions</span>
+                                              <span className="pdf_ocr_blank_raw_dims_value">
+                                                {entityBuilderRawBlankPageMeta?.pageWidth ? entityBuilderRawBlankPageMeta.pageWidth.toFixed(2) : "-"}
+                                                {" × "}
+                                                {entityBuilderRawBlankPageMeta?.pageHeight ? entityBuilderRawBlankPageMeta.pageHeight.toFixed(2) : "-"}
+                                              </span>
+                                              <span className="pdf_ocr_blank_raw_dims_label">Viewport scale</span>
+                                              <span className="pdf_ocr_blank_raw_dims_value">
+                                                {pageViewport?.scale ? pageViewport.scale.toFixed(4) : "-"}
+                                              </span>
+                                            </div>
+                                            <div className="pdf_ocr_blank_raw_dims_row">
+                                              <span className="pdf_ocr_blank_raw_dims_label">Page rotation</span>
+                                              <span className="pdf_ocr_blank_raw_dims_value">
+                                                {Number.isFinite(entityBuilderRawBlankPageMeta?.pageRotation) ? `${entityBuilderRawBlankPageMeta.pageRotation}°` : "-"}
+                                              </span>
+                                              <span className="pdf_ocr_blank_raw_dims_label">Media box</span>
+                                              <span className="pdf_ocr_blank_raw_dims_value">
+                                                {entityBuilderRawBlankPageMeta?.mediaBox?.length === 4
+                                                  ? entityBuilderRawBlankPageMeta.mediaBox.map((value) => Number(value).toFixed(2)).join(" × ")
+                                                  : "-"}
+                                              </span>
+                                              <button
+                                                type="button"
+                                                className={`pdf_ocr_blank_raw_action${entityBuilderEmptyAreaHighlightsOpen ? " pdf_ocr_blank_raw_action--active" : ""}`}
+                                                onClick={() => setEntityBuilderEmptyAreaHighlightsOpen((open) => !open)}
+                                              >
+                                                {entityBuilderEmptyAreaHighlightsOpen ? "Hide Empty Areas" : "Show Empty Areas"}
+                                              </button>
+                                            </div>
+                                          </div>
+                                          <div className="pdf_ocr_blank_raw_column_tabs" role="tablist" aria-label="RAW metadata groups">
+                                            {[
+                                              ["text", "TEXT"],
+                                              ["position", "POSITION"],
+                                              ["font", "FONT"],
+                                              ["transform", "TRANSFORM"],
+                                              ["classification", "CLASSIFICATION"],
+                                            ].map(([group, label]) => (
+                                              <button
+                                                key={group}
+                                                type="button"
+                                                role="tab"
+                                                aria-selected={entityBuilderRawColumnGroup === group}
+                                                className={entityBuilderRawColumnGroup === group ? "pdf_ocr_blank_raw_column_tab pdf_ocr_blank_raw_column_tab--active" : "pdf_ocr_blank_raw_column_tab"}
+                                                onClick={() => setEntityBuilderRawColumnGroup(group)}
+                                              >
+                                                {label}
+                                              </button>
+                                            ))}
+                                          </div>
+                                          <div className="pdf_ocr_blank_raw_search">
+                                            <label htmlFor="pdf-raw-value-search">Search VALUE</label>
+                                            <input
+                                              id="pdf-raw-value-search"
+                                              type="search"
+                                              value={entityBuilderRawValueQuery}
+                                              onChange={(event) => setEntityBuilderRawValueQuery(event.target.value)}
+                                              placeholder="Search extracted string values..."
+                                              spellCheck="false"
+                                            />
+                                            {entityBuilderRawValueQuery && (
+                                              <button
+                                                type="button"
+                                                className="pdf_ocr_blank_raw_search_clear"
+                                                onClick={() => setEntityBuilderRawValueQuery("")}
+                                                aria-label="Clear VALUE search"
+                                                title="Clear search"
+                                              >
+                                                ×
+                                              </button>
+                                            )}
+                                            <span className="pdf_ocr_blank_raw_search_count">
+                                              {entityBuilderFilteredRawRows.length}/{entityBuilderRawBlankPageRows.length}
+                                            </span>
+                                          </div>
+                                          <div className="pdf_ocr_blank_raw_table_scroll">
+                                            <table
+                                              className="pdf_ocr_blank_raw_table"
+                                              data-raw-group={entityBuilderRawColumnGroup}
+                                              style={{ fontSize: `${Math.max(1, 12 * scale)}px`, lineHeight: 1.25 }}
+                                            >
+                                              <thead>
+                                                <tr>
+                                                  {[
+                                                    "INSTANCE #", "VALUE", "TX", "TY", "X", "Y", "FONT SIZE", "TOP", "ASCENT", "BASELINE", "DESCENT", "BOTTOM",
+                                                    "FONT FAMILY", "WEIGHT", "STYLE", "FONT NAME", "DIR", "EOL", "ROTATION", "SCALE X", "SCALE Y", "CHAR COUNT",
+                                                    "WHITESPACE", "ORIGINAL A", "ORIGINAL B", "ORIGINAL C", "ORIGINAL D", "ORIGINAL E", "ORIGINAL F",
+                                                    "FULL A", "FULL B", "FULL C", "FULL D", "FULL E", "FULL F", "RAW WIDTH", "RAW HEIGHT", "PAGE WIDTH", "PAGE HEIGHT", "CLASS",
+                                                  ].map((label) => (
+                                                    <th key={label}><RawColumnHeader label={label} /></th>
+                                                  ))}
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {entityBuilderFilteredRawRows.map((row) => (
+                                                  <tr key={row.id}>
+                                                    <td>{Number.isFinite(row.instanceNumber) ? row.instanceNumber : "-"}</td>
+                                                    <td className="pdf_ocr_wrap_cell"><button type="button" className="pdf_ocr_blank_raw_value_link" onClick={() => focusOriginalTextValue(row)}>{row.value}</button></td>
+                                                    <td>{Number.isFinite(row.tx) ? row.tx.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.ty) ? row.ty.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.x) ? row.x.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.y) ? row.y.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.fontSize) ? row.fontSize.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.top) ? row.top.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.ascent) ? row.ascent.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.baseline) ? row.baseline.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.descent) ? row.descent.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.bottom) ? row.bottom.toFixed(2) : "-"}</td>
+                                                    <td>{row.fontFamily || "-"}</td>
+                                                    <td>{row.fontWeight || "-"}</td>
+                                                    <td>{row.fontStyle || "-"}</td>
+                                                    <td>{row.fontName || "-"}</td>
+                                                    <td>{row.direction || "-"}</td>
+                                                    <td>{row.eol ? "true" : "false"}</td>
+                                                    <td>{formatSignedRotation(row.rotation)}</td>
+                                                    <td>{Number.isFinite(row.scaleX) ? row.scaleX.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.scaleY) ? row.scaleY.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.charCount) ? row.charCount : "-"}</td>
+                                                    <td>{row.whitespaceOnly ? "true" : "false"}</td>
+                                                    <td>{Number.isFinite(row.matrixA) ? row.matrixA.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.matrixB) ? row.matrixB.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.matrixC) ? row.matrixC.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.matrixD) ? row.matrixD.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.matrixE) ? row.matrixE.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.matrixF) ? row.matrixF.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.fullMatrixA) ? row.fullMatrixA.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.fullMatrixB) ? row.fullMatrixB.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.fullMatrixC) ? row.fullMatrixC.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.fullMatrixD) ? row.fullMatrixD.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.fullMatrixE) ? row.fullMatrixE.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.fullMatrixF) ? row.fullMatrixF.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.rawWidth) ? row.rawWidth.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.rawHeight) ? row.rawHeight.toFixed(4) : "-"}</td>
+                                                    <td>{Number.isFinite(row.width) ? row.width.toFixed(2) : "-"}</td>
+                                                    <td>{Number.isFinite(row.height) ? row.height.toFixed(2) : "-"}</td>
+                                                    <td>{row.classification}</td>
+                                                  </tr>
+                                                ))}
+                                                {!entityBuilderFilteredRawRows.length && (
+                                                  <tr>
+                                                    <td className="pdf_ocr_blank_raw_no_matches" colSpan={40}>No VALUE matches found.</td>
+                                                  </tr>
+                                                )}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        </>
+                                      ) : "No native PDF.js text was extracted for this page."
+                                    )}
+                                  </div>
+                                ) : entityBuilderBlankPageMode === "tesseract-visual" ? (
+                                  <div className="pdf_ocr_blank_visual_ocr_layer">
+                                    {activeTesseractTableRows.length && entityBuilderTesseractMeta.pageWidth && entityBuilderTesseractMeta.pageHeight ? activeTesseractTableRows.map((row) => (
+                                      <span
+                                        key={row.id}
+                                        className="pdf_ocr_blank_visual_ocr_item"
+                                        title={row.text}
+                                        style={{
+                                          left: `${(Math.max(0, row.x || 0) / entityBuilderTesseractMeta.pageWidth) * (pageViewport?.width || 0)}px`,
+                                          top: `${(Math.max(0, row.y || 0) / entityBuilderTesseractMeta.pageHeight) * (pageViewport?.height || 0)}px`,
+                                          width: `${Math.max(1, row.width || 0) / entityBuilderTesseractMeta.pageWidth * (pageViewport?.width || 0)}px`,
+                                          minHeight: `${Math.max(1, row.height || 1) / entityBuilderTesseractMeta.pageHeight * (pageViewport?.height || 0)}px`,
+                                          fontSize: `${Math.max(1, (row.height || 1) / entityBuilderTesseractMeta.pageHeight * (pageViewport?.height || 0) * 0.82)}px`,
+                                          whiteSpace: "nowrap",
+                                        }}
+                                      >
+                                        {row.text}
+                                      </span>
+                                    )) : "No Tesseract text with usable coordinates was returned for this page."}
+                                  </div>
+                                ) : entityBuilderBlankPageMode === "tesseract" ? (
+                                  <div className="pdf_ocr_blank_ocr_table_wrap" style={{ paddingTop: `${Math.max(1, 72 * scale)}px` }}>
+                                    <button
+                                      type="button"
+                                      className="pdf_ocr_tesseract_run_button"
+                                      onClick={runTesseractOcr}
+                                      disabled={entityBuilderTesseractBusy}
+                                    >
+                                      {entityBuilderTesseractBusy ? "Running Tesseract..." : "Run Tesseract"}
+                                    </button>
+                                    {entityBuilderTesseractError ? (
+                                      <div className="pdf_ocr_blank_page_status pdf_ocr_blank_page_status--error">{entityBuilderTesseractError}</div>
+                                    ) : entityBuilderTesseractBusy ? (
+                                      <div className="pdf_ocr_blank_page_status">Running Tesseract...</div>
+                                    ) : activeTesseractTableRows.length ? (
+                                      <table className="pdf_ocr_blank_ocr_table" style={{ fontSize: `${Math.max(1, 12 * scale)}px`, lineHeight: 1.25 }}>
+                                        <thead>
+                                          <tr>
+                                            {["VALUE", "INSTANCE #", "LEVEL", "X", "Y", "WIDTH", "HEIGHT", "CONFIDENCE", "BLOCK", "PARAGRAPH", "LINE", "WORD", "TESSERACT SOURCE"].map((label) => (
+                                              <th key={label}><RawColumnHeader label={label} notes={TESSERACT_COLUMN_NOTES[label]} /></th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {activeTesseractTableRows.map((row) => (
+                                            <tr key={row.id}>
+                                              <td>{row.text || "-"}</td>
+                                              <td>{Number.isFinite(row.instanceNumber) ? row.instanceNumber : "-"}</td>
+                                              <td>{Number.isFinite(row.level) ? row.level : "-"}</td>
+                                              <td>{Number.isFinite(row.x) ? row.x.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.y) ? row.y.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.width) ? row.width.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.height) ? row.height.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.confidence) ? row.confidence.toFixed(2) : "-"}</td>
+                                              <td>{row.block || "-"}</td>
+                                              <td>{row.paragraph || "-"}</td>
+                                              <td>{row.line || "-"}</td>
+                                              <td>{row.word || "-"}</td>
+                                              <td>{row.source || "-"}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    ) : "No Tesseract text was returned for this page."}
+                                  </div>
+                                ) : (
+                                  <div className="pdf_ocr_blank_ocr_table_wrap" style={{ paddingTop: `${Math.max(1, 72 * scale)}px` }}>
+                                    <button
+                                      type="button"
+                                      className="pdf_ocr_tesseract_run_button"
+                                      onClick={runTesseractOcr}
+                                      disabled={entityBuilderTesseractBusy}
+                                    >
+                                      {entityBuilderTesseractBusy ? "Running Tesseract..." : "Run Tesseract"}
+                                    </button>
+                                    {entityBuilderOcrTableRows.length ? (
+                                      <table
+                                        className="pdf_ocr_blank_ocr_table"
+                                        style={{ fontSize: `${Math.max(1, 12 * scale)}px`, lineHeight: 1.25 }}
+                                      >
+                                        <thead>
+                                          <tr>
+                                            {[
+                                              "STRING", "VALUE", "TYPE", "X", "Y", "WIDTH", "HEIGHT", "FONT SIZE", "FONT FAMILY",
+                                              "WEIGHT", "STYLE", "HEADING", "WRAP", "OCR SOURCE", "SOURCE PAGE", "ALIGN", "TEXT BASELINE", "PADDING",
+                                            ].map((label) => (
+                                              <th key={label}><RawColumnHeader label={label} /></th>
+                                            ))}
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {entityBuilderOcrTableRows.map((row) => (
+                                            <tr key={row.id}>
+                                              <td>{row.stringKey}</td>
+                                              <td>{row.value}</td>
+                                              <td>{row.type}</td>
+                                              <td>{Number.isFinite(row.x) ? row.x.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.y) ? row.y.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.width) ? row.width.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.height) ? row.height.toFixed(2) : "-"}</td>
+                                              <td>{Number.isFinite(row.fontSize) ? row.fontSize.toFixed(2) : "-"}</td>
+                                              <td>{row.fontFamily || "-"}</td>
+                                              <td>{row.fontWeight || "-"}</td>
+                                              <td>{row.fontStyle || "-"}</td>
+                                              <td>{row.isHeadingLike ? "true" : "false"}</td>
+                                              <td>{row.wrap ? "true" : "false"}</td>
+                                              <td>{row.ocrSource || "-"}</td>
+                                              <td>{Number.isFinite(row.sourcePage) ? row.sourcePage : "-"}</td>
+                                              <td>{row.align || "-"}</td>
+                                              <td>{row.baseline || "-"}</td>
+                                              <td>{Number.isFinite(row.padding) ? row.padding : "-"}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    ) : "No OCR text with usable coordinates was extracted for this page."}
+                                  </div>
+                                )}
+                                <div
+                                  className="pdf_ocr_blank_page_footer"
+                                  style={{
+                                    gap: `${Math.max(1, 12 * scale)}px`,
+                                    padding: `${Math.max(1, OCR_BLANK_FOOTER_PAD_TOP * scale)}px ${Math.max(1, OCR_BLANK_FOOTER_PAD_X * scale)}px ${Math.max(1, OCR_BLANK_FOOTER_PAD_BOTTOM * scale)}px`,
+                                    fontSize: `${footerFontSize}px`,
+                                    lineHeight: OCR_BLANK_FOOTER_LINE_HEIGHT,
+                                  }}
+                                >
+                                  <span className="pdf_ocr_blank_page_services">{activeBlankPageServices}</span>
+                                  <span className="pdf_ocr_blank_page_number">Page {descriptor.page}</span>
+                                </div>
+                              </>
+                            )}
+                            <div
+                              className="pdf_ocr_blank_page_tabs"
+                              style={{
+                                top: `${Math.max(1, OCR_BLANK_HEADER_TOP * scale)}px`,
+                                left: `${Math.max(1, OCR_BLANK_HEADER_RIGHT * scale)}px`,
+                                gap: `${Math.max(1, 6 * scale)}px`,
+                              }}
+                            >
+                              <div className="pdf_ocr_blank_page_primary_tabs">
+                                <button
+                                  type="button"
+                                  className={`pdf_ocr_blank_page_tab${["raw", "visual-raw"].includes(entityBuilderBlankPageMode) ? " pdf_ocr_blank_page_tab--active" : ""}`}
+                                  style={{ padding: `${Math.max(1, OCR_BLANK_HEADER_PAD_Y * scale)}px ${Math.max(1, OCR_BLANK_HEADER_PAD_X * scale)}px`, fontSize: `${headerFontSize}px` }}
+                                  onClick={() => setEntityBuilderBlankPageMode("raw")}
+                                >
+                                  ORIGINAL TEXT
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`pdf_ocr_blank_page_tab${["tesseract", "tesseract-visual"].includes(entityBuilderBlankPageMode) ? " pdf_ocr_blank_page_tab--active" : ""}`}
+                                  style={{ padding: `${Math.max(1, OCR_BLANK_HEADER_PAD_Y * scale)}px ${Math.max(1, OCR_BLANK_HEADER_PAD_X * scale)}px`, fontSize: `${headerFontSize}px` }}
+                                  onClick={() => setEntityBuilderBlankPageMode("tesseract")}
+                                >
+                                  OCR
+                                </button>
+                              </div>
+                              {["raw", "visual-raw"].includes(entityBuilderBlankPageMode) && (
+                                <div className="pdf_ocr_blank_page_subtabs">
+                                  {[['raw', 'TABLE'], ['visual-raw', 'VISUAL']].map(([mode, label]) => (
+                                    <button key={mode} type="button" className={`pdf_ocr_blank_page_tab${entityBuilderBlankPageMode === mode ? " pdf_ocr_blank_page_tab--active" : ""}`} style={{ padding: `${Math.max(1, OCR_BLANK_HEADER_PAD_Y * scale)}px ${Math.max(1, OCR_BLANK_HEADER_PAD_X * scale)}px`, fontSize: `${headerFontSize}px` }} onClick={() => setEntityBuilderBlankPageMode(mode)}>
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                                {["tesseract", "tesseract-visual"].includes(entityBuilderBlankPageMode) && (
+                                <div className="pdf_ocr_blank_page_subtabs">
+                                  <span className="pdf_ocr_blank_page_tab pdf_ocr_blank_page_tab--active">TESSERACT</span>
+                                  {[['table', 'TABLE'], ['visual', 'VISUAL']].map(([view, label]) => (
+                                    <button key={view} type="button" className={`pdf_ocr_blank_page_tab${activeOcrView === view ? " pdf_ocr_blank_page_tab--active" : ""}`} style={{ padding: `${Math.max(1, OCR_BLANK_HEADER_PAD_Y * scale)}px ${Math.max(1, OCR_BLANK_HEADER_PAD_X * scale)}px`, fontSize: `${headerFontSize}px` }} onClick={() => setEntityBuilderBlankPageMode(view === "visual" ? "tesseract-visual" : "tesseract")}>
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                                )}
+                            </div>
+                          </div>
+                        );
+                      })()
+                    )}
+                    {descriptor.kind === "pdf" && readingMode === "single" && pageNum === descriptor.page && pageCount > 1 && blankInsertedPages.has(descriptor.page) && (
                       <button
                         type="button"
                         id="pdf_delete_page_btn"
@@ -11889,7 +15357,7 @@ const PDFPage = forwardRef(({
                         {deletingPage ? <i className="bx bx-loader-alt bx-spin" /> : <DeletePageIcon />}
                       </button>
                     )}
-                    {pageNum === n && (
+                    {descriptor.kind === "pdf" && pageNum === descriptor.page && (
                       <>
                       <canvas
                         id="pdf_annot_canvas"
@@ -11969,9 +15437,12 @@ const PDFPage = forwardRef(({
                         >
                           {(() => {
                             return managedBboxes.map((bbox) => {
+                              const viewBBox = bboxResizePreview?.id === bbox.id
+                                ? { ...bbox, ...bboxResizePreview }
+                                : bbox;
                               const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
-                              const bboxTypeLabel = BBOX_TYPE_ABBREVIATIONS[bbox.type]
-                                || getBBoxTypeDefinition(bbox.type)?.label?.replace(/\s+BBox$/i, "");
+                              const bboxTypeLabel = BBOX_TYPE_ABBREVIATIONS[viewBBox.type]
+                                || getBBoxTypeDefinition(viewBBox.type)?.label?.replace(/\s+BBox$/i, "");
                               const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
                               const canvasScaleX = canvasRect?.width && pageViewport.width
                                 ? canvasRect.width / pageViewport.width
@@ -11981,8 +15452,8 @@ const PDFPage = forwardRef(({
                                 : canvasScaleX;
                               const pageLeft = canvasRect?.left || 0;
                               const pageTop = canvasRect?.top || 0;
-                              const boxLeft = pageLeft + bbox.x * scale * canvasScaleX;
-                              const boxTop = pageTop + bbox.y * scale * canvasScaleY;
+                              const boxLeft = pageLeft + viewBBox.x * scale * canvasScaleX;
+                              const boxTop = pageTop + viewBBox.y * scale * canvasScaleY;
                               const overlayScale = scale * canvasScaleX;
                               const basePageScale = Math.max(0.001, fitScaleRef.current || 1);
                               const uiScale = scale / basePageScale;
@@ -11993,17 +15464,11 @@ const PDFPage = forwardRef(({
                               const resolvedAction = bboxActionPositions[bbox.id];
                               const bboxLocalLeft = boxLeft - pageLeft;
                               const bboxLocalTop = boxTop - pageTop;
-                              const bboxLocalWidth = bbox.w * overlayScale;
+                              const bboxLocalWidth = viewBBox.w * overlayScale;
                               const localActionTop = resolvedAction?.offsetY ?? 0;
                               const isEditing = bboxResizeTargetId === bbox.id;
                               const isMinibarOpen = bboxMinibarOpenId === bbox.id;
-                              const generatedHandles = isEditing ? sampleClosedOutlineHandles(bbox, overlayScale) : [];
-                              const manualHandles = isEditing
-                                ? buildEditableBBoxOutline(bbox)
-                                  .map((point, pointIndex) => ({ ...point, pointIndex }))
-                                  .filter((point) => point.manualControl)
-                                : [];
-                              const borderHandles = [...generatedHandles, ...manualHandles];
+                              const borderHandles = isEditing ? sampleClosedOutlineHandles(viewBBox) : [];
                               // Handles are rendered inside the page layer,
                               // which is temporarily scaled during preview.
                               // Keep their settled size fixed and compensate
@@ -12063,7 +15528,7 @@ const PDFPage = forwardRef(({
                                         left: bboxLocalLeft,
                                         top: bboxLocalTop,
                                         width: bboxLocalWidth,
-                                        height: bbox.h * overlayScale,
+                                        height: viewBBox.h * overlayScale,
                                       }}
                                     >
                                       <div
@@ -12135,21 +15600,6 @@ const PDFPage = forwardRef(({
                                       </div>
                                     </div>
                                   )}
-                                  {isEditing && (
-                                    <svg
-                                      className="pdf_bbox_edit_hit_layer"
-                                      width={canvasRect?.width || pageViewport.width}
-                                      height={canvasRect?.height || pageViewport.height}
-                                      viewBox={`0 0 ${pageViewport.width * canvasScaleX} ${pageViewport.height * canvasScaleY}`}
-                        >
-                                      <path
-                                        d={buildBBoxOutlinePath(bbox, overlayScale)}
-                                        className="pdf_bbox_edit_hit_path"
-                                        onMouseDown={(event) => addBBoxResizePoint(bbox, event)}
-                                        onTouchStart={(event) => addBBoxResizePoint(bbox, event)}
-                                      />
-                                    </svg>
-                                  )}
                                   {borderHandles.map((handle, handleIndex) => (
                                     <button
                                       key={`${bbox.id}-border-${handleIndex}`}
@@ -12162,12 +15612,11 @@ const PDFPage = forwardRef(({
                                         height: handleSize,
                                         marginLeft: -(handleSize / 2),
                                         marginTop: -(handleSize / 2),
-                                        cursor: "grab",
+                                        cursor: handle.cursor || "grab",
                                       }}
-                                      onMouseDown={(e) => beginBBoxResize(bbox, handle, e)}
-                                      onTouchStart={(e) => beginBBoxResize(bbox, handle, e)}
-                                      title="Drag border dot to reshape"
-                                      aria-label="Drag border dot to reshape"
+                                      onPointerDown={(e) => beginBBoxResize(bbox, handle, e)}
+                                      title={`Drag ${handle.side || "side"} border to resize`}
+                                      aria-label={`Drag ${handle.side || "side"} border to resize`}
                                     />
                                   ))}
                                 </React.Fragment>
@@ -12215,6 +15664,39 @@ const PDFPage = forwardRef(({
                         </div>,
                         pageContainerRefs.current[pageNum - 1],
                         "pdf-semantic-preview-overlay",
+                      )}
+                      {entityBuilderEmptyAreaHighlightsOpen && entityBuilderEmptyAreaRects.length > 0 && pageViewport && pageContainerRefs.current[pageNum - 1] && createPortal(
+                        <div
+                          className="pdf_empty_area_overlay"
+                          style={{
+                            width: annotCanvasRef.current?.getBoundingClientRect?.().width || pageViewport.width,
+                            height: annotCanvasRef.current?.getBoundingClientRect?.().height || pageViewport.height,
+                          }}
+                        >
+                          {(() => {
+                            const canvasRect = annotCanvasRef.current?.getBoundingClientRect?.();
+                            const canvasScaleX = canvasRect?.width && pageViewport.width ? canvasRect.width / pageViewport.width : 1;
+                            const canvasScaleY = canvasRect?.height && pageViewport.height ? canvasRect.height / pageViewport.height : canvasScaleX;
+                            const baseWidth = Number(entityBuilderRawBlankPageMeta?.pageWidth) || pageViewport.width || 1;
+                            const baseHeight = Number(entityBuilderRawBlankPageMeta?.pageHeight) || pageViewport.height || 1;
+                            const xScale = (pageViewport.width * canvasScaleX) / baseWidth;
+                            const yScale = (pageViewport.height * canvasScaleY) / baseHeight;
+                            return entityBuilderEmptyAreaRects.map((rect, index) => (
+                              <div
+                                key={`empty-area-${index}`}
+                                className="pdf_empty_area_rect"
+                                style={{
+                                  left: rect.x * xScale,
+                                  top: rect.y * yScale,
+                                  width: rect.w * xScale,
+                                  height: rect.h * yScale,
+                                }}
+                              />
+                            ));
+                          })()}
+                        </div>,
+                        pageContainerRefs.current[pageNum - 1],
+                        "pdf-empty-area-overlay",
                       )}
                       {createPortal(
                         <div ref={eraserCursorRef} className="eraser_cursor_circle" />,
@@ -12275,8 +15757,7 @@ const PDFPage = forwardRef(({
                               key={dir}
                               className={`annot_text_input_resize_handle annot_text_input_resize_handle--${dir}`}
                               style={{ cursor }}
-                              onMouseDown={(e) => beginTextInputResize(dir, e)}
-                              onTouchStart={(e) => beginTextInputResize(dir, e)}
+                              onPointerDown={(e) => beginTextInputResize(dir, e)}
                               title="Drag to resize"
                             />
                           ))}
@@ -12355,14 +15836,54 @@ const PDFPage = forwardRef(({
                         </div>,
                         document.body,
                       )}
-                      {drawTextBusy && (
-                        <div id="pdf_draw_text_status">
-                          <span className="pdf_draw_text_status_label">Draw to Text</span>
-                          <span className="pdf_draw_text_status_body">
-                            {drawTextStatus || "Reading selection…"}
-                            {typeof drawTextProgress === "number" ? ` ${Math.round(drawTextProgress * 100)}%` : ""}
-                          </span>
-                        </div>
+                      {smartPenMarkerPopup && createPortal(
+                        <div
+                          className="pdf_schema_marker_popup"
+                          role="dialog"
+                          aria-label={smartPenMarkerPopup.kind === "trace" ? "Trace schemata" : "Schema marker"}
+                          style={{
+                            left: Math.min(
+                              Math.max(8, smartPenMarkerPopup.rect.left),
+                              Math.max(8, window.innerWidth - 296),
+                            ),
+                            top: Math.min(
+                              Math.max(8, smartPenMarkerPopup.rect.bottom + 8),
+                              Math.max(8, window.innerHeight - 276),
+                            ),
+                          }}
+                        >
+                          <div className="pdf_schema_marker_popup_header">
+                            <span>{smartPenMarkerPopup.kind === "trace" ? `Trace: ${smartPenMarkerPopup.word}` : `Schema: ${smartPenMarkerPopup.word}`}</span>
+                            <button type="button" onClick={() => setSmartPenMarkerPopup(null)} aria-label="Close">×</button>
+                          </div>
+                          {smartPenMarkerPopup.kind === "trace" ? (
+                            smartPenMarkerPopup.sources.length ? (
+                              <>
+                                <div>Trace for:</div>
+                                <ul className="pdf_schema_marker_popup_list">
+                                  {smartPenMarkerPopup.sources.map((source) => (
+                                    <li key={`${source.name}-${source.dimension}`}>
+                                      {source.name} <small>({source.dimension} Trace)</small>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </>
+                            ) : <div>No source Schema found.</div>
+                          ) : <div>This word is a saved Schema.</div>}
+                        </div>,
+                        document.body,
+                      )}
+                      {smartPenMorphePreview && pageViewport && pageContainerRefs.current[pageNum - 1] && createPortal(
+                        <div className="pdf_smart_pen_morphe_preview" role="status" aria-live="polite">
+                          <span className="pdf_smart_pen_morphe_preview__live"><i className="bx bx-pulse" /> LIVE MORPHE</span>
+                          {smartPenMorphePreview.kind === "schema" ? (
+                            <span>Schema: {smartPenMorphePreview.words.join(", ")}</span>
+                          ) : (
+                            <span>{smartPenMorphePreview.dimension} Trace: {smartPenMorphePreview.source} → {smartPenMorphePreview.targets.join(", ")}</span>
+                          )}
+                          <small>Lift pen to save</small>
+                        </div>,
+                        pageContainerRefs.current[pageNum - 1],
                       )}
                       {manualSelection && !manualPopup && onSelectionAction && (
                         <div ref={selBarRef} id="manual_select_bar" style={{ left: manualSelection.x, top: manualSelection.y }}>
@@ -12378,10 +15899,10 @@ const PDFPage = forwardRef(({
                           {selectionActionError && <span id="msb_error">{selectionActionError}</span>}
                         </div>
                       )}
-                      {textSelectable && (
+                      {schemaTextLayerActive && (
                         <div
                           ref={textLayerRef}
-                          className="pdf_text_layer"
+                          className={`pdf_text_layer${textSelectable ? "" : " pdf_text_layer--schema-only"}`}
                           style={pageViewport
                             ? { width: pageViewport.width, height: pageViewport.height }
                             : { inset: 0, position: "absolute" }}
@@ -12504,16 +16025,14 @@ const PDFPage = forwardRef(({
                 <div id="pdf_hyle_menu" role="menu" aria-label="Annotation layers">
                   <div className="pdf_hyle_menu_header">
                     <span>Annotation layers</span>
-                    <button
-                      type="button"
-                      className="pdf_hyle_menu_add"
-                      onClick={addAnnotationLayer}
-                      title="Create a new empty annotation layer"
-                    >
-                      <i className="bx bx-plus" />
-                    </button>
                   </div>
-                  <div className="pdf_hyle_menu_layers">
+                  <div className="pdf_annotation_layer_tabs" role="tablist" aria-label="Annotation surface">
+                    <button type="button" role="tab" aria-selected={annotationLayerTab === "pdf"} className={annotationLayerTab === "pdf" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => setAnnotationLayerTab("pdf")}>PDF</button>
+                    <button type="button" role="tab" aria-selected={annotationLayerTab === "md"} className={annotationLayerTab === "md" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => setAnnotationLayerTab("md")}>MD</button>
+                  </div>
+                  {annotationLayerTab === "pdf" ? (
+                    <>
+                    <div className="pdf_hyle_menu_layers">
                     {annotationLayersForView.map((layer) => (
                       <div
                         key={layer.id}
@@ -12575,7 +16094,22 @@ const PDFPage = forwardRef(({
                         {activeAnnotationLayer?.id === layer.id && <i className="bx bx-check pdf_hyle_menu_check" />}
                       </div>
                     ))}
-                  </div>
+                    </div>
+                    <button type="button" className="pdf_hyle_menu_add" onClick={addAnnotationLayer} title="Create a new empty PDF annotation layer">
+                      <i className="bx bx-plus" /> Add PDF layer
+                    </button>
+                    </>
+                  ) : (
+                    <div className="pdf_hyle_menu_layers">
+                      <div className="pdf_hyle_menu_item pdf_hyle_menu_item--active" aria-label="Markdown annotations">
+                        <span className="pdf_hyle_menu_item_main">
+                          <span className="pdf_hyle_menu_item_name">Markdown annotations</span>
+                          <span className="pdf_hyle_menu_item_meta">{Object.values(markdownAnnotations).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0)} annotations</span>
+                        </span>
+                        <i className="bx bx-check pdf_hyle_menu_check" />
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <button
@@ -12590,6 +16124,163 @@ const PDFPage = forwardRef(({
             </div>
           )}
         </div>
+
+        {markdownModeMenuOpen && markdownModeMenuPosition && createPortal(
+          <div
+            className="pdf_markdown_mode_menu"
+            role="menu"
+            aria-label="Markdown mode"
+            style={{
+              left: markdownModeMenuPosition.left,
+              top: markdownModeMenuPosition.top,
+              width: markdownModeMenuPosition.width,
+              "--md-button-height": `${markdownModeMenuPosition.height}px`,
+              "--md-button-radius": markdownModeMenuPosition.radius,
+            }}
+          >
+            <button type="button" role="menuitem" title="MD only" aria-label="MD only" onClick={() => { setReadingMode("single"); setMarkdownRetainedVisualMode(null); setMarkdownAsideMode("visual-only"); setMarkdownModeMenuOpen(false); setMarkdownAsideOpen(true); }}>
+              <i className="bx bx-file" aria-hidden="true" />
+              <span>MD only</span>
+            </button>
+            <button type="button" role="menuitem" title="MD with PDF page" aria-label="MD with PDF page" onClick={() => { setReadingMode("single"); setMarkdownRetainedVisualMode(null); setMarkdownAsideMode("visual-raw"); setMarkdownModeMenuOpen(false); setMarkdownAsideOpen(true); }}>
+              <i className="bx bx-book-open" aria-hidden="true" />
+              <span>MD with PDF page</span>
+            </button>
+            <button type="button" role="menuitem" title="MD Analyser" aria-label="MD Analyser" onClick={() => { setReadingMode("single"); setMarkdownRetainedVisualMode((current) => markdownAsideMode.includes("visual") ? markdownAsideMode : current); setMarkdownAsideMode("raw"); setMarkdownModeMenuOpen(false); setMarkdownAsideOpen(true); }}>
+              <i className="bx bx-table" aria-hidden="true" />
+              <span>MD Analyser</span>
+            </button>
+          </div>,
+          document.body,
+        )}
+        {markdownAsideOpen && (markdownAsideMode.includes("visual") ? canvasWrapRef.current : markdownHost) && createPortal(
+          <>
+            <div
+              className="pdf_markdown_resize_handle"
+              onMouseDown={handleMarkdownAsideResizeStart}
+              onTouchStart={handleMarkdownAsideResizeStart}
+            />
+            <div
+              id="pdf_markdown_aside"
+              className={markdownAsideMode.includes("visual") ? "pdf_markdown_aside--visual-page pdf_markdown_viewer_page" : undefined}
+              style={markdownAsideMode.includes("visual")
+                ? { display: "contents", width: markdownVisualPageWidth, minWidth: 0 }
+                : { width: mdPanelWidth }}
+            >
+            <div className="pdf_markdown_aside_header">
+              <span>MARKDOWN</span>
+              <span className="pdf_markdown_aside_page">Page {pageNum}</span>
+            </div>
+            <div className="pdf_markdown_aside_tabs">
+              <div className="pdf_markdown_aside_primary_tabs">
+                <button type="button" className={`pdf_markdown_aside_tab${["raw", "visual-raw"].includes(markdownAsideMode) ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideMode("raw")}>ORIGINAL TEXT</button>
+                <button type="button" className={`pdf_markdown_aside_tab${markdownAsideMode === "tree-lines" ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideMode("tree-lines")}>Tree of Lines</button>
+              </div>
+              {["raw", "visual-raw"].includes(markdownAsideMode) && (
+                <div className="pdf_markdown_aside_secondary_tabs">
+                  {[['raw', 'TABLE']].map(([mode, label]) => <button key={mode} type="button" className={`pdf_markdown_aside_tab${markdownAsideMode === mode ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideMode(mode)}>{label}</button>)}
+                </div>
+              )}
+            </div>
+            <div
+              className="pdf_markdown_aside_table_scroll"
+              style={markdownAsideMode.includes("visual") ? { display: "contents", width: "auto", minWidth: 0 } : undefined}
+            >
+              {markdownAsideMode === "tree-lines" ? (
+                <div className="pdf_markdown_aside_tree_view">
+                  <EntityBuilderPanel
+                    embedded
+                    bboxCards={bboxCardsForBuilder}
+                    bboxResizePreview={bboxResizePreview}
+                    pageNum={pageNum}
+                    isPageFullySegmented={isCurrentPageFullySegmented}
+                    onUpdateBBoxName={updateBBoxName}
+                    onSetBBoxTitle={setBBoxTitleFromLine}
+                    onDeleteBBox={deleteBBox}
+                    onMoveBBoxUp={(bboxId) => moveBBoxInGroup(bboxId, -1, pageNum)}
+                    onMoveBBoxDown={(bboxId) => moveBBoxInGroup(bboxId, 1, pageNum)}
+                    onMergeParagraphs={mergeParagraphBBoxes}
+                    onArmBBoxInsideContainer={armBBoxInsideContainer}
+                    armedBBoxInsideContainer={bboxContainerBBoxTarget}
+                  />
+                </div>
+              ) : markdownAsideMode === "raw" ? (
+                <div className="pdf_markdown_aside_table_view">
+                  <div className="pdf_markdown_aside_page_meta" aria-label="Original text page metadata">
+                    <span><strong>Page</strong> {pageNum}</span>
+                    <span><strong>Dimensions</strong> {entityBuilderRawBlankPageMeta.pageWidth ? entityBuilderRawBlankPageMeta.pageWidth.toFixed(2) : "-"} × {entityBuilderRawBlankPageMeta.pageHeight ? entityBuilderRawBlankPageMeta.pageHeight.toFixed(2) : "-"}</span>
+                    <span><strong>Viewport scale</strong> {pageViewport?.scale ? pageViewport.scale.toFixed(4) : (entityBuilderRawBlankPageMeta.viewportScale ? entityBuilderRawBlankPageMeta.viewportScale.toFixed(4) : "-")}</span>
+                    <span><strong>Rotation</strong> {Number.isFinite(entityBuilderRawBlankPageMeta.pageRotation) ? `${entityBuilderRawBlankPageMeta.pageRotation}°` : "-"}</span>
+                    <span><strong>Media box</strong> {entityBuilderRawBlankPageMeta.mediaBox?.length === 4 ? entityBuilderRawBlankPageMeta.mediaBox.map((value) => Number(value).toFixed(2)).join(" × ") : "-"}</span>
+                    <span><strong>PyMuPDF</strong> {pymupdfExtractionBusy ? "loading" : pymupdfPageExtraction?.native ? "ready" : "unavailable"}</span>
+                  </div>
+                  <div className="pdf_markdown_aside_column_tabs" role="tablist" aria-label="Original text table columns">
+                    {markdownAsideColumnGroups.map(([group, label]) => (
+                      <button key={group} type="button" role="tab" aria-selected={markdownAsideColumnGroup === group} className={`pdf_markdown_aside_tab${markdownAsideColumnGroup === group ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideColumnGroup(group)}>{label}</button>
+                    ))}
+                  </div>
+                  <div className="pdf_markdown_aside_table_data_scroll">
+                    <table className={`pdf_markdown_aside_table${markdownAsideColumnGroup === "blocks" ? " pdf_markdown_aside_table--blocks" : " pdf_markdown_aside_table--raw"}`}>
+                      {markdownAsideColumnGroup === "blocks" ? (
+                        <thead>
+                          <tr>
+                            {markdownAsideRawColumns.blocks.map(([label]) => <th key={label}><RawColumnHeader label={label} /></th>)}
+                          </tr>
+                        </thead>
+                      ) : (
+                        <thead>
+                          <tr>
+                            <th colSpan="2"><RawColumnHeader label="INSTANCE" /></th>
+                            {markdownAsideRawColumns[markdownAsideColumnGroup].slice(2).map(([label]) => <th key={label} rowSpan="2"><RawColumnHeader label={label} /></th>)}
+                          </tr>
+                          <tr>
+                            <th><RawColumnHeader label="#" /></th>
+                            <th><RawColumnHeader label="VALUE" /></th>
+                          </tr>
+                        </thead>
+                      )}
+                      <tbody>{(markdownAsideColumnGroup === "blocks" ? entityBuilderRawBlockTableRows : entityBuilderFilteredRawRows).map((row) => <tr key={row.id} className={row.omitted ? "pdf_markdown_aside_table_row--omitted" : undefined}>{markdownAsideRawColumns[markdownAsideColumnGroup].map(([label, value]) => {
+                        const yColor = markdownAsideColumnGroup === "position" && label === "VALUE" && Number.isFinite(row.ty)
+                          ? entityBuilderRawYColors.get(Number(row.ty).toFixed(2))
+                          : undefined;
+                        const lineCellStyle = markdownAsideColumnGroup === "blocks" && ["LINE REFERENCES", "STRING REFERENCES"].includes(label)
+                          ? { whiteSpace: "normal", overflowWrap: "anywhere", wordBreak: "break-word", minWidth: label === "LINE REFERENCES" ? "12rem" : "18rem" }
+                          : undefined;
+                        return <td key={label} className={["VALUE", "CODEPOINTS"].includes(label) ? "pdf_ocr_wrap_cell" : undefined} style={{ ...(lineCellStyle || {}), ...(yColor ? { backgroundColor: yColor } : {}) }}>
+                          {label === "VALUE" ? <button type="button" className="pdf_ocr_blank_raw_value_link" style={yColor ? { color: "#1f2937" } : undefined} onClick={() => focusOriginalTextValue(row)}>{value(row)}</button>
+                            : label === "OMISSION" ? (
+                              <label className="pdf_ocr_raw_omission_control">
+                                <input type="checkbox" checked={entityBuilderOmittedRawCategories.has(getUnicodeOmissionLabel(row.value))} onChange={() => toggleRawCategoryOmission(getUnicodeOmissionLabel(row.value))} />
+                                <span>{value(row)}</span>
+                              </label>
+                            ) : value(row)}
+                        </td>;
+                      })}</tr>)}</tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : markdownAsideMode.includes("visual") ? renderOriginalMarkdownVisualPage() : null}
+            </div>
+            </div>
+          </>,
+          markdownAsideMode.includes("visual") ? canvasWrapRef.current : markdownHost,
+        )}
+        {markdownAsideOpen
+          && markdownRetainedVisualMode
+          && !markdownAsideMode.includes("visual")
+          && canvasWrapRef.current
+          && createPortal(
+            <div
+              id="pdf_markdown_retained_viewer"
+              className="pdf_markdown_aside--visual-page pdf_markdown_viewer_page"
+              style={{ width: markdownVisualPageWidth }}
+            >
+              <div className="pdf_markdown_aside_table_scroll">
+                {renderOriginalMarkdownVisualPage()}
+              </div>
+            </div>,
+            canvasWrapRef.current,
+          )}
 
         {/* Resize handle */}
         {splitRatio < 0.9 && splitRatio > 0 && (

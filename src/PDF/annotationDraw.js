@@ -455,7 +455,6 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     case "line":
       ctx.beginPath(); ctx.moveTo(p(ann.x1), p(ann.y1)); ctx.lineTo(p(ann.x2), p(ann.y2)); ctx.stroke();
       break;
-    case "drawTextSelection":
     case "smartVideoCapture":
       ctx.save();
       ctx.setLineDash([8, 6]);

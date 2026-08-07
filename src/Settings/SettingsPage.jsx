@@ -46,11 +46,9 @@ const DEFAULT_SEMANTIC_DETECTION_SETTINGS = {
   usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0, costUsd: 0, runs: 0, lastRunAt: null },
 };
 
-const DEFAULT_MISTRAL_OCR_SETTINGS = {
+const DEFAULT_OCR_SETTINGS = {
   enabled: true,
   automaticallyProcessOnUpload: true,
-  model: "mistral-ocr-4-0",
-  includeImages: true,
   persistRawResponse: true,
   retryFailedJobs: true,
 };
@@ -175,8 +173,8 @@ const SettingsPage = () => {
   const [semanticDetectionSettings, setSemanticDetectionSettings] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS);
   const [semanticDetectionUsage, setSemanticDetectionUsage] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS.usage);
   const [semanticDetectionSaving, setSemanticDetectionSaving] = useState(false);
-  const [mistralOcrSettings, setMistralOcrSettings] = useState(DEFAULT_MISTRAL_OCR_SETTINGS);
-  const [mistralOcrSaving, setMistralOcrSaving] = useState(false);
+  const [ocrSettings, setOcrSettings] = useState(DEFAULT_OCR_SETTINGS);
+  const [ocrSaving, setOcrSaving] = useState(false);
   const [aiLoading, setAiLoading] = useState(true);
   const [aiRefreshing, setAiRefreshing] = useState(false);
   const [anamUsage, setAnamUsage] = useState(null);
@@ -542,9 +540,9 @@ const SettingsPage = () => {
   }, []);
 
   useEffect(() => {
-    fetch(apiUrl("/api/settings/mistral-ocr"), { headers: authHeader() })
+    fetch(apiUrl("/api/settings/ocr"), { headers: authHeader() })
       .then((response) => response.json())
-      .then((data) => setMistralOcrSettings({ ...DEFAULT_MISTRAL_OCR_SETTINGS, ...(data.settings || {}), model: "mistral-ocr-4-0" }))
+      .then((data) => setOcrSettings({ ...DEFAULT_OCR_SETTINGS, ...(data.settings || {}) }))
       .catch(() => {});
   }, []);
 
@@ -658,23 +656,23 @@ const SettingsPage = () => {
     }
   };
 
-  const updateMistralOcrSettings = async (patch) => {
-    const next = { ...mistralOcrSettings, ...patch, model: "mistral-ocr-4-0" };
-    setMistralOcrSettings(next);
-    setMistralOcrSaving(true);
+  const updateOcrSettings = async (patch) => {
+    const next = { ...ocrSettings, ...patch };
+    setOcrSettings(next);
+    setOcrSaving(true);
     try {
-      const response = await fetch(apiUrl("/api/settings/mistral-ocr"), {
+      const response = await fetch(apiUrl("/api/settings/ocr"), {
         method: "PATCH",
         headers: authHeader(),
         body: JSON.stringify(next),
       });
       if (!response.ok) throw new Error("Failed to save OCR settings.");
       const data = await response.json();
-      setMistralOcrSettings({ ...DEFAULT_MISTRAL_OCR_SETTINGS, ...(data.settings || {}), model: "mistral-ocr-4-0" });
+      setOcrSettings({ ...DEFAULT_OCR_SETTINGS, ...(data.settings || {}) });
     } catch {
       // A refresh restores the persisted value if this optimistic save failed.
     } finally {
-      setMistralOcrSaving(false);
+      setOcrSaving(false);
     }
   };
 
@@ -1155,25 +1153,24 @@ const SettingsPage = () => {
               <div className="sett_usage_card">
                 <div className="sett_usage_card_header">
                   <span className="sett_usage_card_title">Document OCR Cache</span>
-                  {mistralOcrSaving && <span className="sett_usage_card_period">Saving…</span>}
+                  {ocrSaving && <span className="sett_usage_card_period">Saving…</span>}
                 </div>
                 <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
                   Process each unique PDF version once after upload, store its page structure, and reuse it for BBoxes, search, semantic detection, and the PDF assistant.
                 </p>
                 <div className="sett_stt_model_row">
                   <span><strong>Provider / exact model</strong><small>The model version is part of the persistent cache key.</small></span>
-                  <span>Mistral · <code>{mistralOcrSettings.model}</code></span>
+                  <span> Tesseract · <code>tesseract-5</code></span>
                 </div>
                 {[
                   ["enabled", "Enable document OCR"],
                   ["automaticallyProcessOnUpload", "Process PDFs after upload"],
-                  ["includeImages", "Include figures and images"],
                   ["persistRawResponse", "Persist raw provider pages"],
                   ["retryFailedJobs", "Retry failed jobs"],
                 ].map(([key, label]) => (
                   <label className="sett_toggle_row" key={key}>
                     <span className="sett_toggle_copy"><span className="sett_toggle_title">{label}</span></span>
-                    <input type="checkbox" checked={mistralOcrSettings[key]} onChange={(event) => updateMistralOcrSettings({ [key]: event.target.checked })} />
+                    <input type="checkbox" checked={ocrSettings[key]} onChange={(event) => updateOcrSettings({ [key]: event.target.checked })} />
                   </label>
                 ))}
               </div>

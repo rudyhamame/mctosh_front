@@ -117,6 +117,24 @@ const SourcesPage = () => {
     }
   };
 
+  const deleteOcr = async (sourceId) => {
+    if (!window.confirm("Delete the stored OCR for this PDF? The PDF itself will not be deleted.")) return;
+    try {
+      const response = await fetch(apiUrl(`/api/sources/${sourceId}/ocr`), {
+        method: "DELETE",
+        headers: authHeader(),
+      });
+      if (!response.ok) throw new Error("Failed to delete stored OCR.");
+      setSources((current) => current.map((source) => (
+        source._id === sourceId
+          ? { ...source, ocrStatus: "not_started", ocrProgress: 0, ocrJobId: null, ocrModel: "" }
+          : source
+      )));
+    } catch {
+      setError("Could not delete the stored OCR. Please try again.");
+    }
+  };
+
   /* ── Close dropdown on outside click ── */
   useEffect(() => {
     if (!dropOpen) return;
@@ -654,15 +672,25 @@ const SourcesPage = () => {
                   )}
                   {String(s.format || "").toLowerCase() === "pdf" && (
                     <span className={`sources_ocr_status sources_ocr_status--${s.ocrStatus || "not_started"}`}>
-                      <i className="fi fi-rr-scanner-image" aria-hidden="true" />
-                      OCR {String(s.ocrStatus || "not_started").replace(/_/g, " ")}
-                      {["uploading", "processing"].includes(s.ocrStatus) && Number(s.ocrProgress) > 0 ? ` ${Math.round(s.ocrProgress * 100)}%` : ""}
+                      <span className="sources_ocr_status_label">
+                        <i className="fi fi-rr-scanner-image" aria-hidden="true" />
+                        OCR {String(s.ocrStatus || "not_started").replace(/_/g, " ")}
+                      </span>
+                      {["queued", "uploading", "processing", "completed", "partial"].includes(s.ocrStatus) && (
+                        <span className="sources_ocr_progress" role="progressbar" aria-label={`OCR progress ${Math.round((Number(s.ocrProgress) || 0) * 100)}%`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round((Number(s.ocrProgress) || 0) * 100)}>
+                          <span className={`sources_ocr_progress_fill${s.ocrStatus === "processing" && !(Number(s.ocrProgress) > 0) ? " sources_ocr_progress_fill--indeterminate" : ""}`} style={{ width: `${Math.max(0, Math.min(100, (Number(s.ocrProgress) || 0) * 100))}%` }} />
+                        </span>
+                      )}
+                      {["queued", "uploading", "processing", "completed", "partial"].includes(s.ocrStatus) && <span className="sources_ocr_progress_value">{Math.round((Number(s.ocrProgress) || 0) * 100)}%</span>}
                     </span>
                   )}
                 </td>
                 <td className="sources_td_actions">
-                  {String(s.format || "").toLowerCase() === "pdf" && ["failed", "not_started"].includes(s.ocrStatus || "not_started") && (
-                    <button className="sources_ocr_retry_btn" onClick={() => retryOcr(s._id)} title="Process this PDF with Mistral OCR">OCR</button>
+                  {String(s.format || "").toLowerCase() === "pdf" && !["queued", "uploading", "processing"].includes(s.ocrStatus) && (
+                    <button className="sources_ocr_retry_btn" onClick={() => retryOcr(s._id)} title="Replace cached OCR with a new Tesseract OCR run">OCR</button>
+                  )}
+                  {String(s.format || "").toLowerCase() === "pdf" && (s.ocrJobId || ["completed", "partial", "failed"].includes(s.ocrStatus)) && (
+                    <button className="sources_ocr_delete_btn" onClick={() => deleteOcr(s._id)} title="Delete stored OCR, not the PDF">Delete OCR</button>
                   )}
                   <button className="sources_del_btn" onClick={() => deleteSource(s._id)}>✕</button>
                 </td>

@@ -1,7 +1,7 @@
 export const BBOX_TYPE_DEFINITIONS = Object.freeze({
   bbox: Object.freeze({
     role: "content",
-    label: "Paragraph BBox",
+    label: "Block BBox",
     editable: true,
     showsCard: true,
     extractsText: true,
@@ -50,15 +50,23 @@ export const BBOX_TYPE_DEFINITIONS = Object.freeze({
     capturesImage: true,
     canBeNested: true,
   }),
+  omissionBBox: Object.freeze({
+    role: "exclusion",
+    label: "Omission BBox",
+    editable: true,
+    showsCard: false,
+    omitsText: true,
+  }),
 });
 
 export const BBOX_TYPES = new Set(Object.keys(BBOX_TYPE_DEFINITIONS));
 export const BBOX_TYPE_ABBREVIATIONS = Object.freeze({
   pageBBox: "Pg",
   columnBBox: "Part",
-  bbox: "Para",
+  bbox: "B",
   subLineBBox: "SubL",
   imageBBox: "Fig",
+  omissionBBox: "Omit",
   bboxTitle: "Tit",
 });
 
@@ -95,6 +103,7 @@ const semanticBBoxKind = (type) => ({
   columnBBox: "partition",
   bboxTitle: "title",
   imageBBox: "figure",
+  omissionBBox: "omission",
   pageBBox: "page",
 }[type] || "bbox");
 

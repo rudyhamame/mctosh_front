@@ -11,6 +11,13 @@
   overscroll-behavior: contain;
 }
 
+#cvb_panel.cvb_panel--standalone {
+  width: 100%;
+  height: 100%;
+  border-right: none;
+  border-left: none;
+}
+
 #cvb_header {
   display: flex;
   align-items: center;

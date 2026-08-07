@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./infoPopupButton.css";
 
@@ -53,6 +53,25 @@ export const InfoPopupButton = ({ info, label }) => {
       window.removeEventListener("scroll", onScrollOrResize, true);
       window.removeEventListener("resize", onScrollOrResize);
     };
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open || !pos || !popupRef.current) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const popupRect = popupRef.current?.getBoundingClientRect();
+      const triggerRect = btnRef.current?.getBoundingClientRect();
+      if (!popupRect || !triggerRect) return;
+      const margin = 8;
+      const maxLeft = Math.max(margin, window.innerWidth - popupRect.width - margin);
+      const maxTop = Math.max(margin, window.innerHeight - popupRect.height - margin);
+      const opensBelow = triggerRect.bottom + 6 + popupRect.height <= window.innerHeight - margin;
+      const nextLeft = Math.min(Math.max(margin, pos.left), maxLeft);
+      const nextTop = opensBelow
+        ? Math.min(Math.max(margin, triggerRect.bottom + 6), maxTop)
+        : Math.max(margin, triggerRect.top - popupRect.height - 6);
+      if (nextLeft !== pos.left || nextTop !== pos.top) setPos({ top: nextTop, left: nextLeft });
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [open]);
 
   if (!info) return null;

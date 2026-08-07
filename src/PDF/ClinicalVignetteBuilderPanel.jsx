@@ -33,7 +33,14 @@ const PROVIDER_LABEL = {
   gemini: "Gemini",
 };
 
-const ClinicalVignetteBuilderPanel = ({ onClose, provider, providerModels, width = null, onResizeStart = null }) => {
+const ClinicalVignetteBuilderPanel = ({
+  onClose,
+  provider,
+  providerModels,
+  width = null,
+  onResizeStart = null,
+  standalone = false,
+}) => {
   const [goalDomain, setGoalDomain] = useState("Any");
   const [interventionType, setInterventionType] = useState("diagnosis");
   const [mode, setMode] = useState("study");
@@ -188,15 +195,24 @@ const ClinicalVignetteBuilderPanel = ({ onClose, provider, providerModels, width
   const isExamHidden = activeVignette?.mode === "exam" && !activeVignette?.revealed;
 
   return (
-    <div id="cvb_panel" style={width ? { width } : undefined} onMouseDown={(event) => event.stopPropagation()}>
-      <div
-        className="pdf_aside_resize_handle"
-        onMouseDown={onResizeStart || undefined}
-        onTouchStart={onResizeStart || undefined}
-      />
+    <div
+      id="cvb_panel"
+      className={standalone ? "cvb_panel--standalone" : ""}
+      style={width ? { width } : undefined}
+      onMouseDown={(event) => event.stopPropagation()}
+    >
+      {onResizeStart && (
+        <div
+          className="pdf_aside_resize_handle"
+          onMouseDown={onResizeStart}
+          onTouchStart={onResizeStart}
+        />
+      )}
       <div id="cvb_header">
         <span id="cvb_header_title"><i className="bx bx-user-plus" /> Clinical Vignette Generator</span>
-        <button type="button" id="cvb_close" onClick={onClose} title="Close">✕</button>
+        {onClose && (
+          <button type="button" id="cvb_close" onClick={onClose} title="Close">✕</button>
+        )}
       </div>
 
       <div id="cvb_body">
