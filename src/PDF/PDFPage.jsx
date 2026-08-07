@@ -6,6 +6,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
 import { useLongPressSelect } from "../utils/longPressSelect";
 import DraftTextViewer, { cleanMarkdownToPlainText } from "../components/DraftTextViewer";
 import HyleCards from "./HyleCards";
@@ -99,6 +100,17 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.j
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+const SpeechRecognition = typeof window !== "undefined"
+  ? (window.SpeechRecognition || window.webkitSpeechRecognition)
+  : null;
+const NOTEBOOK_VOICE_COMMANDS = [
+  "Delete <line number> from <word number>",
+  "Edit <line number> from <word number>",
+];
+const NUMBER_WORDS = Object.freeze({
+  ZERO: 0, ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5,
+  SIX: 6, SEVEN: 7, EIGHT: 8, NINE: 9,
+});
 const isPenToolKey = (key) => key === "pen" || key === "smartPen";
 const cleanSchemaWord = (value) => String(value || "")
   .normalize("NFKC")
@@ -519,6 +531,7 @@ const VALID_MARKDOWN_ASIDE_MODES = new Set(["raw", "visual-only", "visual-raw", 
 const VALID_MARKDOWN_VISUAL_MODES = new Set(["visual-only", "visual-raw"]);
 const VALID_MARKDOWN_COLUMN_GROUPS = new Set(["text", "position", "font", "transform", "blocks"]);
 const VALID_MARKDOWN_SPACING_TARGETS = new Set(["str", "line", "paragraph"]);
+const VALID_NOTEBOOK_MODES = new Set(["notebook-only", "notebook-pdf", "notebook-md", "notebook-pdf-md"]);
 
 const UNICODE_CHARACTER_NAMES = {
   "\u003C": "LESS-THAN SIGN",
@@ -2475,6 +2488,244 @@ const PDFPage = forwardRef(({
   const [markdownModeMenuPosition, setMarkdownModeMenuPosition] = useState(null);
   const [markdownAsideMode, setMarkdownAsideMode] = useState("raw");
   const [markdownRetainedVisualMode, setMarkdownRetainedVisualMode] = useState(null);
+  const [notebookMode, setNotebookMode] = useState(null);
+  const [notebookText, setNotebookText] = useState("");
+  const [notebookSttStatus, setNotebookSttStatus] = useState("idle");
+  const [notebookSttError, setNotebookSttError] = useState("");
+  const [notebookControlMode, setNotebookControlMode] = useState(false);
+  const [notebookSettingsOpen, setNotebookSettingsOpen] = useState(false);
+  const [notebookVoiceCommands, setNotebookVoiceCommands] = useState(NOTEBOOK_VOICE_COMMANDS);
+  const notebookControlModeRef = useRef(false);
+  const notebookEditorRef = useRef(null);
+  const notebookSttRef = useRef(null);
+  const notebookSttStartIdRef = useRef(0);
+  useEffect(() => { notebookControlModeRef.current = notebookControlMode; }, [notebookControlMode]);
+  const notebookControlLines = useMemo(() => {
+    let offset = 0;
+    return notebookText.split("\n").map((line, lineIndex) => {
+      const words = [];
+      const wordPattern = /\S+/g;
+      let match;
+      while ((match = wordPattern.exec(line))) {
+        words.push({
+          number: words.length + 1,
+          text: match[0],
+          start: offset + match.index,
+          end: offset + match.index + match[0].length,
+        });
+      }
+      offset += line.length + 1;
+      return { number: lineIndex + 1, text: line, words };
+    });
+  }, [notebookText]);
+  const spokenNumber = useCallback((value) => {
+    const tokens = String(value || "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9\s-]/g, " ")
+      .split(/[\s-]+/)
+      .filter(Boolean);
+    if (!tokens.length) return null;
+    const digits = tokens.map((token) => NUMBER_WORDS[token] ?? (/^\d+$/.test(token) ? token : null));
+    if (digits.some((digit) => digit == null)) return null;
+    return Number(digits.join(""));
+  }, []);
+  const handleNotebookVoiceCommand = useCallback((spokenCommand) => {
+    const normalized = String(spokenCommand || "").trim();
+    const match = normalized.match(/^(delete|edit)\s+(.+?)\s+(?:from|at|on)\s+(.+)$/i);
+    if (!match) {
+      setNotebookSttError("Say: Delete or Edit, line number, from, word number.");
+      return false;
+    }
+    const action = match[1].toLowerCase();
+    const lineNumber = spokenNumber(match[2]);
+    const wordNumber = spokenNumber(match[3]);
+    const line = notebookControlLines[lineNumber - 1];
+    const word = line?.words[wordNumber - 1];
+    if (!line || !word) {
+      setNotebookSttError(`No word W${wordNumber} exists on line L${lineNumber}.`);
+      return false;
+    }
+    const editor = notebookEditorRef.current;
+    if (action === "delete") {
+      setNotebookText((current) => `${current.slice(0, word.start)}${current.slice(word.end)}`);
+      editor?.focus({ preventScroll: true });
+      editor?.setSelectionRange(word.start, word.start);
+    } else {
+      editor?.focus({ preventScroll: true });
+      editor?.setSelectionRange(word.start, word.end);
+      window.setTimeout(() => {
+        const currentEditor = notebookEditorRef.current;
+        const end = currentEditor?.value?.length ?? notebookText.length;
+        currentEditor?.setSelectionRange(end, end);
+      }, 700);
+    }
+    setNotebookSttError("");
+    return true;
+  }, [notebookControlLines, notebookText, spokenNumber]);
+  const appendNotebookSpeech = useCallback((spokenText) => {
+    const text = String(spokenText || "").trim();
+    if (!text) return;
+    setNotebookText((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}${text}`);
+  }, []);
+  const stopNotebookStt = useCallback(() => {
+    notebookSttStartIdRef.current += 1;
+    const session = notebookSttRef.current;
+    if (!session) {
+      setNotebookSttStatus("idle");
+      return;
+    }
+    if (session.kind === "browser") {
+      session.recognition.onend = null;
+      session.recognition.onerror = null;
+      try { session.recognition.stop(); } catch { session.recognition.abort?.(); }
+    } else {
+      session.dataChannel?.close?.();
+      session.peerConnection?.close?.();
+      if (session.recorder?.state !== "inactive") session.recorder.stop();
+    }
+    session.stream?.getTracks().forEach((track) => track.stop());
+    notebookSttRef.current = null;
+    setNotebookSttStatus("idle");
+  }, []);
+  const toggleNotebookStt = useCallback(async (requestedProvider = null) => {
+    if (notebookSttRef.current) {
+      stopNotebookStt();
+      return;
+    }
+    setNotebookSttError("");
+    const startId = notebookSttStartIdRef.current + 1;
+    notebookSttStartIdRef.current = startId;
+    const settings = readSttSettings();
+    const provider = requestedProvider || settings.provider;
+    if (provider === STT_PROVIDERS.BROWSER) {
+      if (!SpeechRecognition) {
+        setNotebookSttError("Browser speech recognition is unavailable.");
+        return;
+      }
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+      recognition.onresult = (event) => {
+        for (let index = event.resultIndex; index < event.results.length; index += 1) {
+          if (event.results[index].isFinal) {
+            const transcript = event.results[index][0].transcript;
+            if (notebookControlModeRef.current) handleNotebookVoiceCommand(transcript);
+            else appendNotebookSpeech(transcript);
+          }
+        }
+      };
+      recognition.onerror = (event) => {
+        setNotebookSttError(event.error === "not-allowed" ? "Microphone access was denied." : "Speech recognition failed.");
+        notebookSttRef.current = null;
+        setNotebookSttStatus("idle");
+      };
+      recognition.onend = () => {
+        if (notebookSttRef.current?.recognition === recognition) {
+          notebookSttRef.current = null;
+          setNotebookSttStatus("idle");
+        }
+      };
+      notebookSttRef.current = { kind: "browser", recognition };
+      setNotebookSttStatus("listening");
+      try { recognition.start(); } catch (error) {
+        notebookSttRef.current = null;
+        setNotebookSttStatus("idle");
+        setNotebookSttError(error.message || "Could not start speech recognition.");
+      }
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
+      setNotebookSttError("OpenAI speech input is unavailable on this device.");
+      return;
+    }
+    try {
+      notebookSttRef.current = { kind: "starting", startId };
+      setNotebookSttStatus("listening");
+      const tokenResponse = await authFetch(apiUrl("/api/ai/realtime-token"), { method: "POST" });
+      const tokenData = await tokenResponse.json().catch(() => ({}));
+      if (!tokenResponse.ok || !tokenData.value) {
+        throw new Error(tokenData?.error?.message || tokenData?.error || "Could not start realtime speech input.");
+      }
+      if (notebookSttStartIdRef.current !== startId) return;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (notebookSttStartIdRef.current !== startId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const peerConnection = new RTCPeerConnection();
+      stream.getTracks().forEach((track) => peerConnection.addTrack(track, stream));
+      const dataChannel = peerConnection.createDataChannel("oai-events");
+      const session = { kind: "openai-realtime", startId, peerConnection, dataChannel, stream, insertedText: false };
+      notebookSttRef.current = session;
+      dataChannel.addEventListener("open", () => {
+        dataChannel.send(JSON.stringify({
+          type: "session.update",
+          session: {
+            type: "transcription",
+            audio: {
+              input: {
+                format: { type: "audio/pcm", rate: 24000 },
+                transcription: { model: settings.model || "gpt-4o-mini-transcribe" },
+                turn_detection: { type: "server_vad" },
+              },
+            },
+          },
+        }));
+      });
+      dataChannel.addEventListener("message", (event) => {
+        let message;
+        try { message = JSON.parse(event.data); } catch { return; }
+        if (message.type === "conversation.item.input_audio_transcription.delta") {
+          const delta = String(message.delta || "");
+          if (!delta) return;
+          setNotebookText((current) => {
+            const separator = !session.insertedText && current && !/\s$/.test(current) ? " " : "";
+            session.insertedText = true;
+            return `${current}${separator}${delta}`;
+          });
+        } else if (message.type === "conversation.item.input_audio_transcription.completed" && !session.insertedText) {
+          appendNotebookSpeech(message.transcript);
+        } else if (message.type === "error") {
+          setNotebookSttError(message.error?.message || "Realtime speech recognition failed.");
+        }
+      });
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      if (notebookSttStartIdRef.current !== startId) {
+        dataChannel.close();
+        peerConnection.close();
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
+        method: "POST",
+        body: offer.sdp,
+        headers: { Authorization: `Bearer ${tokenData.value}`, "Content-Type": "application/sdp" },
+      });
+      if (!sdpResponse.ok) throw new Error("Could not connect to realtime speech input.");
+      await peerConnection.setRemoteDescription({ type: "answer", sdp: await sdpResponse.text() });
+      if (notebookSttStartIdRef.current !== startId || notebookSttRef.current !== session) {
+        dataChannel.close();
+        peerConnection.close();
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      setNotebookSttStatus("listening");
+    } catch (error) {
+      const session = notebookSttRef.current;
+      session?.dataChannel?.close?.();
+      session?.peerConnection?.close?.();
+      session?.stream?.getTracks().forEach((track) => track.stop());
+      notebookSttRef.current = null;
+      setNotebookSttStatus("idle");
+      if (notebookSttStartIdRef.current === startId) {
+        setNotebookSttError(error.name === "NotAllowedError" ? "Microphone access was denied." : error.message || "Could not start speech input.");
+      }
+    }
+  }, [appendNotebookSpeech, handleNotebookVoiceCommand, stopNotebookStt]);
+  useEffect(() => () => stopNotebookStt(), [stopNotebookStt]);
   const [mdLineSpacing, setMdLineSpacing] = useState(0);
   const [mdSpacingTarget, setMdSpacingTarget] = useState("str");
   const [mdOpenLineId, setMdOpenLineId] = useState(null);
@@ -3050,6 +3301,22 @@ const PDFPage = forwardRef(({
     }
     setMarkdownModeMenuOpen(true);
   }, [markdownAsideOpen, markdownModeMenuOpen]);
+  const setNotebookView = useCallback((mode) => {
+    setReadingMode("single");
+    setNotebookMode(mode);
+    if (mode === "notebook-md") {
+      setMarkdownAsideMode("visual-only");
+      setMarkdownAsideOpen(true);
+    } else if (mode === "notebook-pdf-md") {
+      setMarkdownAsideMode("visual-raw");
+      setMarkdownAsideOpen(true);
+    } else {
+      setMarkdownAsideOpen(false);
+      setMarkdownModeMenuOpen(false);
+      setMarkdownRetainedVisualMode(null);
+    }
+  }, []);
+  const closeNotebook = useCallback(() => setNotebookMode(null), []);
   const setReaderReadingMode = useCallback((mode) => {
     setReadingMode(mode);
     setMarkdownAsideOpen(false);
@@ -3356,6 +3623,9 @@ const PDFPage = forwardRef(({
       mdLineSpacing,
       mdSpacingTarget,
       mdLineTagsVisible,
+      notebookMode,
+      notebookText,
+      notebookVoiceCommands,
       searchOpen,
       searchQuery,
       pageRatioX: previewEl && currentPageEl
@@ -3374,6 +3644,9 @@ const PDFPage = forwardRef(({
     mdLineSpacing,
     mdLineTagsVisible,
     mdSpacingTarget,
+    notebookMode,
+    notebookText,
+    notebookVoiceCommands,
     pageNum,
     readingMode,
     searchOpen,
@@ -3856,6 +4129,7 @@ const PDFPage = forwardRef(({
   const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
     ? (annotToolColors[annotTool] || DEFAULT_ANNOT_TOOL_COLORS[annotTool])
     : "#ffff00";
+  const textToolColor = annotToolColors.text || DEFAULT_ANNOT_TOOL_COLORS.text;
   const activeToolColorPresets = annotTool && annotToolColorPresets[annotTool]
     ? annotToolColorPresets[annotTool]
     : [];
@@ -6990,7 +7264,7 @@ const PDFPage = forwardRef(({
       }).catch(() => {});
     }, 900);
     return () => clearTimeout(timer);
-  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, readerStateSaveTick, buildReaderStatePayload]);
+  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, notebookMode, notebookText, notebookVoiceCommands, readerStateSaveTick, buildReaderStatePayload]);
 
   // buildAnnotationSavePayload is read through a ref, and this effect's own
   // deps are deliberately [] (mount/unmount only) — NOT [buildAnnotationSavePayload].
@@ -9693,6 +9967,8 @@ const PDFPage = forwardRef(({
     ocrBlankPageOpen: entityBuilderOcrBlankPageOpen,
     markdownOpen: markdownAsideOpen,
     markdownMenuOpen: markdownModeMenuOpen,
+    notebookOpen: Boolean(notebookMode),
+    notebookMode,
     insertingBlankPage,
     canInsertBlankPage: hasSourceId,
     searchOpen,
@@ -9703,7 +9979,7 @@ const PDFPage = forwardRef(({
     searchActiveMatchType: searchActiveMatch?.matchType ?? null,
     searchActiveConfidence: searchActiveMatch?.confidence ?? null,
     searchActiveMatchedText: searchActiveMatch?.originalMatchedText ?? null,
-  }), [pageNum, pageCount, pinchActive, readingMode, bookletRightPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, markdownModeMenuOpen, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
+  }), [pageNum, pageCount, pinchActive, readingMode, bookletRightPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, markdownModeMenuOpen, notebookMode, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
 
   useEffect(() => {
     onPageNavStateChange?.(pageNavState);
@@ -9949,6 +10225,8 @@ const PDFPage = forwardRef(({
     setBookletRightPage,
     toggleOcrBlankPage,
     toggleMarkdownAside,
+    setNotebookView,
+    closeNotebook,
     insertBlankPageAfterCurrent: () => insertBlankPageRef.current?.(),
     setSearchOpen,
     setSearchQuery,
@@ -9960,7 +10238,7 @@ const PDFPage = forwardRef(({
     setZoomLevel: (value) => zoomFromToolbar(value),
     ...zoomState,
     ...pageNavState,
-  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch, toggleOcrBlankPage, toggleMarkdownAside, setReaderReadingMode, zoomFromToolbar, zoomState]);
+  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch, toggleOcrBlankPage, toggleMarkdownAside, setNotebookView, closeNotebook, setReaderReadingMode, zoomFromToolbar, zoomState]);
 
   const stopZoomHold = useCallback(() => {
     if (zoomHoldTimerRef.current) {
@@ -11900,7 +12178,12 @@ const PDFPage = forwardRef(({
     // delete-page's own reload of the SAME document (same sourceId) —
     // starts blankInsertedPages fresh, since the set only makes sense
     // relative to the currently-open PDF's own page numbers.
-    if (sourceId !== currentSourceIdRef.current) setBlankInsertedPages(new Set());
+    if (sourceId !== currentSourceIdRef.current) {
+      setBlankInsertedPages(new Set());
+      setNotebookMode(null);
+      setNotebookText("");
+      setNotebookVoiceCommands(NOTEBOOK_VOICE_COMMANDS);
+    }
     setLoading(true);
     setLoadError("");
     try {
@@ -11974,6 +12257,9 @@ const PDFPage = forwardRef(({
           const persistedSpacingTarget = VALID_MARKDOWN_SPACING_TARGETS.has(persistedReaderState?.mdSpacingTarget)
             ? persistedReaderState.mdSpacingTarget
             : "str";
+          const persistedNotebookMode = VALID_NOTEBOOK_MODES.has(persistedReaderState?.notebookMode)
+            ? persistedReaderState.notebookMode
+            : null;
           const persistedLineSpacing = Number.isFinite(Number(persistedReaderState?.mdLineSpacing))
             ? clamp(Number(persistedReaderState.mdLineSpacing), -40, 80)
             : 0;
@@ -12013,6 +12299,13 @@ const PDFPage = forwardRef(({
           setMdLineSpacing(persistedLineSpacing);
           setMdSpacingTarget(persistedSpacingTarget);
           setMdLineTagsVisible(persistedReaderState?.mdLineTagsVisible !== false);
+          setNotebookMode(persistedNotebookMode);
+          setNotebookText(typeof persistedReaderState?.notebookText === "string" ? persistedReaderState.notebookText : "");
+          setNotebookVoiceCommands(
+            Array.isArray(persistedReaderState?.notebookVoiceCommands) && persistedReaderState.notebookVoiceCommands.length
+              ? persistedReaderState.notebookVoiceCommands.map((command) => String(command || "")).filter(Boolean)
+              : NOTEBOOK_VOICE_COMMANDS,
+          );
           setZoom(Number.isFinite(persistedReaderState?.zoom) ? normalizeZoom(persistedReaderState.zoom) : 1);
           setSearchOpen(Boolean(persistedReaderState?.searchOpen));
           setSearchQuery(typeof persistedReaderState?.searchQuery === "string" ? persistedReaderState.searchQuery : "");
@@ -14709,7 +15002,147 @@ const PDFPage = forwardRef(({
       )}
 
       {/* Split area */}
-      <div id="pdf_content" ref={contentRef}>
+      <div
+        id="pdf_content"
+        ref={contentRef}
+        className={notebookMode ? (notebookMode === "notebook-only" ? "pdf_content--notebook-only" : "pdf_content--notebook-split") : undefined}
+      >
+
+        {notebookMode && (
+          <aside
+            id="pdf_freeform_notebook_panel"
+            aria-label="Freeform Notebook"
+            style={{ "--pdf-notebook-line-height": `${Math.max(textFontSize * 1.8, 24)}px` }}
+          >
+            <div className="pdf_freeform_notebook_header">
+              <strong>Freeform Notebook</strong>
+              <div className="pdf_freeform_notebook_actions">
+                <div className="pdf_freeform_notebook_stt_pill">
+                  <button
+                    type="button"
+                    className={`pdf_freeform_notebook_stt${notebookSttStatus === "listening" ? " pdf_freeform_notebook_stt--active" : ""}`}
+                    title={notebookSttError || (notebookSttStatus === "listening" ? "Stop speech input" : "Enter text with speech")}
+                    aria-label={notebookSttStatus === "listening" ? "Stop speech input" : "Enter text with speech"}
+                    aria-pressed={notebookSttStatus === "listening"}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={toggleNotebookStt}
+                  >
+                    <i className={`fi ${notebookSttStatus === "listening" ? "fi-rr-square" : "fi-rr-microphone"}`} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className={`pdf_freeform_notebook_control${notebookControlMode ? " pdf_freeform_notebook_control--active" : ""}`}
+                    title="Voice control mode: Delete or Edit a numbered word"
+                    aria-label="Toggle Freeform voice control mode"
+                    aria-pressed={notebookControlMode}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={() => {
+                      const next = !notebookControlMode;
+                      setNotebookControlMode(next);
+                      if (next) {
+                        if (notebookSttStatus === "listening") stopNotebookStt();
+                        window.setTimeout(() => toggleNotebookStt(STT_PROVIDERS.BROWSER), 0);
+                      }
+                    }}
+                  >
+                    <i className="fi fi-rr-command" aria-hidden="true" />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className={`pdf_freeform_notebook_settings${notebookSettingsOpen ? " pdf_freeform_notebook_settings--active" : ""}`}
+                  title="Freeform settings"
+                  aria-label="Open Freeform settings"
+                  aria-pressed={notebookSettingsOpen}
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={() => setNotebookSettingsOpen((open) => !open)}
+                >
+                  <i className="fi fi-rr-settings-sliders" aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="pdf_freeform_notebook_keyboard"
+                  title="Open AMCTOSHS keyboard"
+                  aria-label="Open AMCTOSHS keyboard"
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    document.querySelector(".pdf_freeform_notebook_editor")?.focus({ preventScroll: true });
+                    window.dispatchEvent(new CustomEvent("virtual-keyboard:toggle"));
+                  }}
+                >
+                  <i className="fi fi-rr-keyboard" aria-hidden="true" />
+                </button>
+                <button type="button" onClick={closeNotebook} title="Close Freeform Notebook" aria-label="Close Freeform Notebook">
+                  <i className="bx bx-x" />
+                </button>
+              </div>
+            </div>
+            <div className="pdf_freeform_notebook_tabs" role="tablist" aria-label="Freeform Notebook views">
+              <button type="button" role="tab" aria-selected={!notebookSettingsOpen} className={!notebookSettingsOpen ? "pdf_freeform_notebook_tab--active" : ""} onClick={() => setNotebookSettingsOpen(false)}>Notebook</button>
+              <button type="button" role="tab" aria-selected={notebookSettingsOpen} className={notebookSettingsOpen ? "pdf_freeform_notebook_tab--active" : ""} onClick={() => setNotebookSettingsOpen(true)}>Settings</button>
+            </div>
+            {notebookSettingsOpen ? (
+              <div className="pdf_freeform_notebook_settings_panel">
+                <strong>Voice commands</strong>
+                <p>Control mode uses browser STT. Say the line number, then the word number.</p>
+                {notebookVoiceCommands.map((command, index) => (
+                  <input
+                    key={index}
+                    value={command}
+                    aria-label={`Voice command ${index + 1}`}
+                    onChange={(event) => setNotebookVoiceCommands((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
+                  />
+                ))}
+              </div>
+            ) : notebookControlMode ? (
+              <div className="pdf_freeform_notebook_control_shell">
+                <div className="pdf_freeform_notebook_control_view" aria-label="Freeform Notebook voice control tags">
+                  {notebookControlLines.map((line) => (
+                    <div className="pdf_freeform_notebook_control_line" key={line.number}>
+                      <span className="pdf_freeform_notebook_line_tag">&lt;L{line.number}&gt;</span>
+                      {line.words.length ? line.words.map((word) => (
+                        <span className="pdf_freeform_notebook_word" key={word.number}>
+                          <span className="pdf_freeform_notebook_word_tag">&lt;W{word.number}&gt;</span>{word.text}
+                        </span>
+                      )) : <span>&nbsp;</span>}
+                    </div>
+                  ))}
+                </div>
+                <textarea
+                  ref={notebookEditorRef}
+                  className="pdf_freeform_notebook_editor pdf_freeform_notebook_editor--control-hidden"
+                  value={notebookText}
+                  onChange={(event) => setNotebookText(event.target.value)}
+                  aria-hidden="true"
+                  tabIndex={-1}
+                  inputMode="none"
+                />
+              </div>
+            ) : (
+              <textarea
+                ref={notebookEditorRef}
+                className="pdf_freeform_notebook_editor"
+                value={notebookText}
+                onChange={(event) => setNotebookText(event.target.value)}
+                placeholder="Write freely..."
+                aria-label="Freeform Notebook text"
+                inputMode="none"
+                style={{
+                  fontFamily: textFontFamily,
+                  fontSize: `${textFontSize}px`,
+                  lineHeight: `${Math.max(textFontSize * 1.8, 24)}px`,
+                  fontWeight: textBold ? 700 : 400,
+                  fontStyle: textItalic ? "italic" : "normal",
+                  textDecoration: textUnderline ? "underline" : "none",
+                  textAlign,
+                  color: textToolColor,
+                  backgroundColor: textBackground ? textBackgroundColor : "transparent",
+                }}
+              />
+            )}
+            {notebookSttError && <div className="pdf_freeform_notebook_stt_error" role="status">{notebookSttError}</div>}
+          </aside>
+        )}
 
         {/* Far left — Annotation History column, opened by the toolbar "History" button */}
         {annotHistoryOpen && (
@@ -15718,6 +16151,7 @@ const PDFPage = forwardRef(({
                             spellCheck
                             autoCorrect="on"
                             autoCapitalize="sentences"
+                            inputMode="none"
                             onChange={(e) => setAnnotTextVal(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
                             // Clicking elsewhere (toolbar controls, the
@@ -16170,6 +16604,15 @@ const PDFPage = forwardRef(({
             <div className="pdf_markdown_aside_header">
               <span>MARKDOWN</span>
               <span className="pdf_markdown_aside_page">Page {pageNum}</span>
+              <button
+                type="button"
+                className="pdf_markdown_aside_close"
+                onClick={() => { setMarkdownAsideOpen(false); setMarkdownModeMenuOpen(false); }}
+                title="Close Markdown analyser"
+                aria-label="Close Markdown analyser"
+              >
+                <i className="bx bx-x" aria-hidden="true" />
+              </button>
             </div>
             <div className="pdf_markdown_aside_tabs">
               <div className="pdf_markdown_aside_primary_tabs">

@@ -1,0 +1,38 @@
+.vk_toggle {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1200;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.7rem;
+  height: 2.7rem;
+  border: 1px solid color-mix(in srgb, #4ea7c7 42%, var(--color-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-surface) 94%, #e8f5f8 6%);
+  color: #315d73;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.18);
+  cursor: pointer;
+}
+.vk_toggle i { font-size: 1.1rem; }
+.vk_panel {
+  position: fixed;
+  right: 1rem;
+  bottom: 4.25rem;
+  z-index: 1200;
+  width: min(30rem, calc(100vw - 2rem));
+  padding: 0.55rem;
+  border: 1px solid color-mix(in srgb, #4ea7c7 34%, var(--color-border));
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--color-surface) 97%, #e8f5f8 3%);
+  box-shadow: 0 16px 36px rgba(15, 23, 42, 0.24);
+}
+.vk_panel_header { display: flex; align-items: center; justify-content: space-between; padding: 0.15rem 0.2rem 0.45rem; color: var(--color-text-muted); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
+.vk_panel_header button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 1rem; }
+.vk_row { display: flex; gap: 0.3rem; margin-top: 0.3rem; }
+.vk_row button { flex: 1 1 0; min-width: 0; min-height: 2.35rem; padding: 0.25rem; border: 1px solid color-mix(in srgb, var(--color-border) 88%, transparent); border-radius: 0.5rem; background: var(--color-surface); color: var(--color-text); font: 600 0.86rem/1 inherit; cursor: pointer; }
+.vk_row button:hover, .vk_row button.vk_key--active { background: color-mix(in srgb, #4ea7c7 15%, var(--color-surface)); color: #315d73; }
+.vk_row--actions button { flex: 0 1 auto; padding-inline: 0.65rem; font-size: 0.7rem; }
+.vk_row--actions .vk_space { flex: 1 1 9rem; }
+@media (max-width: 520px) { .vk_toggle { right: 0.65rem; bottom: 0.65rem; } .vk_panel { right: 0.5rem; bottom: 3.7rem; width: calc(100vw - 1rem); } .vk_row { gap: 0.18rem; } .vk_row button { min-height: 2.05rem; } }

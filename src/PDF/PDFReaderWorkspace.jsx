@@ -131,6 +131,8 @@ const PDFReaderWorkspace = () => {
     setBookletRightPage: (v) => activePageRef.current?.setBookletRightPage(v),
     toggleOcrBlankPage: () => activePageRef.current?.toggleOcrBlankPage(),
     toggleMarkdownAside: () => activePageRef.current?.toggleMarkdownAside(),
+    setNotebookView: (mode) => activePageRef.current?.setNotebookView(mode),
+    closeNotebook: () => activePageRef.current?.closeNotebook(),
     insertBlankPageAfterCurrent: () => activePageRef.current?.insertBlankPageAfterCurrent(),
   } : null;
   const zoomControls = activeId ? {

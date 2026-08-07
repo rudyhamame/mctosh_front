@@ -655,7 +655,8 @@
   }
 
   #pdfw_header_main #pdf_reading_mode_toggle,
-  #pdfw_header_main #pdf_ocr_companion_toggle {
+  #pdfw_header_main #pdf_ocr_companion_toggle,
+  #pdfw_header_main #pdf_notebook_toggle {
     width: 1.85rem;
     height: 1.85rem;
     padding-inline: 0.35rem;
@@ -691,7 +692,8 @@
   }
 
   #pdfw_header_main #pdf_reading_mode_toggle,
-  #pdfw_header_main #pdf_ocr_companion_toggle {
+  #pdfw_header_main #pdf_ocr_companion_toggle,
+  #pdfw_header_main #pdf_notebook_toggle {
     width: 1.65rem;
     height: 1.65rem;
     padding-inline: 0.2rem;

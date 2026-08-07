@@ -11,6 +11,7 @@ import { AvatarProviderContextProvider } from "./Avatar/AvatarProviderContext";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 import { clearStoredPatientSession, readStoredPatientSession } from "./utils/patientSessionCleanup";
 import { applyStoredTheme } from "./utils/theme";
+import VirtualKeyboard from "./Shared/VirtualKeyboard";
 
 const App = lazy(() => import("./App/App"));
 const Login = lazy(() => import("./Login/Login"));
@@ -212,6 +213,7 @@ const AppRouter = () => {
           <Navigate to={canAccessAuthenticatedRoutes ? "/home" : "/login"} replace />
         } />
       </Routes>
+      <VirtualKeyboard />
       </SplitViewFrame>
 
       {canAccessAuthenticatedRoutes && withSuspense(<PredictionOverlay />)}

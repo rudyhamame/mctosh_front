@@ -148,6 +148,8 @@ const ReaderTabs = ({ tabs, activeId, splitModeOn, checkedIds, tabTypes, annotat
 const ReaderPageNavigation = ({ pageNav }) => {
   const [readingModeMenuOpen, setReadingModeMenuOpen] = useState(false);
   const readingModeMenuRef = useRef(null);
+  const [notebookMenuOpen, setNotebookMenuOpen] = useState(false);
+  const notebookMenuRef = useRef(null);
   useEffect(() => {
     if (!readingModeMenuOpen) return undefined;
     const close = (event) => {
@@ -156,6 +158,14 @@ const ReaderPageNavigation = ({ pageNav }) => {
     document.addEventListener("pointerdown", close, true);
     return () => document.removeEventListener("pointerdown", close, true);
   }, [readingModeMenuOpen]);
+  useEffect(() => {
+    if (!notebookMenuOpen) return undefined;
+    const close = (event) => {
+      if (!notebookMenuRef.current?.contains(event.target)) setNotebookMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", close, true);
+    return () => document.removeEventListener("pointerdown", close, true);
+  }, [notebookMenuOpen]);
   if (!pageNav || pageNav.pageCount <= 0) return null;
   return (
     <div id="pdf_page_nav_row" className="pdfw_page_nav_group">
@@ -205,6 +215,34 @@ const ReaderPageNavigation = ({ pageNav }) => {
           >
             MD
           </button>
+          <div ref={notebookMenuRef} className={`pdf_notebook_menu_wrap${notebookMenuOpen ? " pdf_notebook_menu_wrap--open" : ""}`}>
+            <button
+              type="button"
+              id="pdf_notebook_toggle"
+              className={pageNav.notebookOpen ? "pdf_notebook_toggle--active" : undefined}
+              onClick={() => setNotebookMenuOpen((open) => !open)}
+              title="Freeform Notebook options"
+              disabled={pageNav.disabled}
+            >
+              NB
+            </button>
+            {notebookMenuOpen && (
+              <div className="pdf_notebook_menu" role="menu" aria-label="Freeform Notebook modes">
+                {[
+                  ["notebook-only", "Notebook only"],
+                  ["notebook-pdf", "Notebook with PDF"],
+                  ["notebook-md", "Notebook with MD"],
+                  ["notebook-pdf-md", "Notebook with PDF and MD"],
+                ].map(([mode, label]) => (
+                  <button key={mode} type="button" role="menuitem" className={pageNav.notebookMode === mode ? "pdf_notebook_menu_item--active" : undefined} onClick={() => { pageNav.setNotebookView(mode); setNotebookMenuOpen(false); }}>
+                    <i className={mode === "notebook-only" ? "bx bx-notepad" : mode === "notebook-md" ? "bx bx-file" : mode === "notebook-pdf-md" ? "bx bx-columns" : "bx bx-book"} />
+                    <span>{label}</span>
+                  </button>
+                ))}
+                {pageNav.notebookOpen && <button type="button" role="menuitem" className="pdf_notebook_menu_item--close" onClick={() => { pageNav.closeNotebook(); setNotebookMenuOpen(false); }}><i className="bx bx-x" /><span>Close Notebook</span></button>}
+              </div>
+            )}
+          </div>
         </>
       )}
       {pageNav.readingMode === "booklet" && (

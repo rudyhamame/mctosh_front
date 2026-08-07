@@ -54,7 +54,7 @@
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   gap: 0.75rem;
   padding: 2rem 2rem;
@@ -364,17 +364,38 @@
      only by max-height/overflow above. */
   min-height: 2.5rem;
   flex-direction: row;
-  align-items: center;
+  align-items: stretch;
   justify-content: center;
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;
   align-self: stretch;
   box-sizing: border-box;
-  scrollbar-width: thin;
+  scrollbar-width: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
+}
+
+.annot_tool_options::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.annot_tool_options > * {
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+
+.annot_tool_options .annot_control {
+  align-self: stretch;
+  box-sizing: border-box;
+  justify-content: center;
+}
+
+.annot_tool_options .annot_text_panel {
+  align-items: stretch;
 }
 
 .annot_tool_options * {
@@ -1245,6 +1266,230 @@
   overflow: hidden;
 }
 
+#pdf_content.pdf_content--notebook-split,
+#pdf_content.pdf_content--notebook-only {
+  align-items: stretch;
+}
+
+#pdf_content.pdf_content--notebook-split #pdf_freeform_notebook_panel,
+#pdf_content.pdf_content--notebook-split #pdf_preview {
+  flex: 1 1 50%;
+  width: auto !important;
+  min-width: 0;
+}
+
+#pdf_content.pdf_content--notebook-only #pdf_freeform_notebook_panel {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+#pdf_content.pdf_content--notebook-only #pdf_preview {
+  display: none;
+}
+
+#pdf_freeform_notebook_panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border);
+  background: #fffdf7;
+  color: #243746;
+}
+
+.pdf_freeform_notebook_header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  min-height: 2.75rem;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid rgba(88, 141, 170, 0.26);
+  background: rgba(255, 253, 247, 0.94);
+  color: #315d73;
+  font-size: 0.74rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pdf_freeform_notebook_header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 1px solid rgba(88, 141, 170, 0.3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: #557b8d;
+  cursor: pointer;
+}
+.pdf_freeform_notebook_actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.pdf_freeform_notebook_stt_pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.12rem;
+  padding: 0.12rem;
+  border: 1px solid rgba(192, 92, 54, 0.3);
+  border-radius: 999px;
+  background: rgba(192, 92, 54, 0.06);
+}
+.pdf_freeform_notebook_stt_pill button {
+  border: 0;
+  background: transparent;
+}
+.pdf_freeform_notebook_keyboard {
+  color: var(--color-accent, #315d73) !important;
+}
+.pdf_freeform_notebook_stt {
+  color: #8c4e2d !important;
+}
+.pdf_freeform_notebook_stt--active {
+  background: rgba(192, 92, 54, 0.14) !important;
+  border-color: rgba(192, 92, 54, 0.55) !important;
+  color: #b54f2c !important;
+}
+.pdf_freeform_notebook_stt:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+.pdf_freeform_notebook_control {
+  color: #6b5aa5 !important;
+}
+.pdf_freeform_notebook_control--active {
+  background: rgba(107, 90, 165, 0.14) !important;
+  border-color: rgba(107, 90, 165, 0.55) !important;
+  color: #594897 !important;
+}
+.pdf_freeform_notebook_settings--active {
+  background: rgba(88, 141, 170, 0.14) !important;
+}
+.pdf_freeform_notebook_tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  padding: 0.35rem 0.8rem 0;
+  border-bottom: 1px solid rgba(88, 141, 170, 0.2);
+}
+.pdf_freeform_notebook_tabs button {
+  padding: 0.28rem 0.55rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #557b8d;
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pdf_freeform_notebook_tabs .pdf_freeform_notebook_tab--active {
+  border-bottom-color: #315d73;
+  color: #315d73;
+}
+.pdf_freeform_notebook_settings_panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.9rem 1.1rem;
+  overflow: auto;
+  color: #315d73;
+  font-size: 0.78rem;
+}
+.pdf_freeform_notebook_settings_panel p {
+  margin: 0;
+  color: #557b8d;
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+.pdf_freeform_notebook_settings_panel input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid rgba(88, 141, 170, 0.3);
+  border-radius: 0.45rem;
+  background: rgba(255, 255, 255, 0.72);
+  color: #243746;
+  font: 0.76rem/1.3 "IBM Plex Mono", ui-monospace, monospace;
+}
+.pdf_freeform_notebook_control_view {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 1.25rem 1.1rem;
+  color: #243746;
+  font: 1rem/1.8 "IBM Plex Mono", ui-monospace, monospace;
+}
+.pdf_freeform_notebook_control_shell {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.pdf_freeform_notebook_editor--control-hidden {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  min-height: 1px;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.pdf_freeform_notebook_control_line {
+  min-height: 1.8em;
+  white-space: pre-wrap;
+}
+.pdf_freeform_notebook_line_tag,
+.pdf_freeform_notebook_word_tag {
+  display: inline-block;
+  margin-right: 0.28rem;
+  color: #6b5aa5;
+  font-size: 0.68em;
+  font-weight: 700;
+  vertical-align: baseline;
+}
+.pdf_freeform_notebook_word {
+  display: inline-block;
+  margin-right: 0.55em;
+}
+.pdf_freeform_notebook_stt_error {
+  flex: 0 0 auto;
+  padding: 0.35rem 0.8rem;
+  border-top: 1px solid rgba(192, 92, 54, 0.2);
+  color: #a34e2d;
+  font-size: 0.68rem;
+}
+
+.pdf_freeform_notebook_editor {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  padding: 1.25rem 1.1rem;
+  background-color: transparent;
+  background-image: linear-gradient(
+    to bottom,
+    transparent calc(100% - 1px),
+    rgba(88, 141, 170, 0.2) calc(100% - 1px),
+    rgba(88, 141, 170, 0.2) 100%
+  );
+  background-repeat: repeat-y;
+  background-size: 100% var(--pdf-notebook-line-height, 2rem);
+  background-position: 0 1.25rem;
+  color: #243746;
+  font: 1rem/var(--pdf-notebook-line-height, 2rem) "IBM Plex Mono", ui-monospace, monospace;
+}
+
 /* ── Far left: Markdown preview column ── */
 #pdf_md_panel {
   position: relative;
@@ -1308,6 +1553,29 @@
   font-weight: 700;
   letter-spacing: 0.04em;
 }
+
+.pdf_markdown_aside_close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-border) 86%, transparent);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.pdf_markdown_aside_close:hover {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+.pdf_markdown_aside_close i { font-size: 1rem; }
 
 .pdf_markdown_aside_page {
   font-size: 0.68rem;
@@ -5071,6 +5339,88 @@ html.theme-light #pdf_preview_scroll {
   border-bottom-right-radius: 0;
   transform: none;
 }
+
+/* Freeform Notebook control: the same attached-pill treatment as PDF/MD. */
+#pdf_notebook_toggle {
+  height: 2.25rem;
+  min-width: 0;
+  padding: 0 0.78rem;
+  border: 1px solid color-mix(in srgb, #cfe0e8 78%, var(--color-border));
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255,255,255,0.28);
+  transition: color 0.14s, background 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s;
+}
+#pdf_notebook_toggle:disabled { opacity: 0.3; cursor: default; }
+#pdf_notebook_toggle:hover:not(:disabled) {
+  color: #315d73;
+  border-color: color-mix(in srgb, #4ea7c7 48%, var(--color-border));
+  background: color-mix(in srgb, #e8f5f8 76%, var(--color-surface));
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(31, 111, 143, 0.15), inset 0 1px 0 rgba(255,255,255,0.28);
+}
+#pdf_notebook_toggle.pdf_notebook_toggle--active {
+  color: #315d73;
+  border-color: color-mix(in srgb, #4ea7c7 48%, var(--color-border));
+  background: color-mix(in srgb, #e8f5f8 84%, var(--color-surface));
+  transform: none;
+}
+.pdf_notebook_menu_wrap--open #pdf_notebook_toggle {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  transform: none;
+}
+.pdf_notebook_menu_wrap {
+  position: relative;
+  display: inline-flex;
+}
+.pdf_notebook_menu {
+  position: absolute;
+  top: calc(100% - 1px);
+  left: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  min-width: 12rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, #4ea7c7 34%, var(--color-border));
+  border-top: 0;
+  border-radius: 0 0 0.7rem 0.7rem;
+  background: color-mix(in srgb, var(--color-surface) 96%, #e8f5f8 4%);
+  box-shadow: 0 12px 24px rgba(31, 111, 143, 0.18);
+}
+.pdf_notebook_menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.58rem 0.72rem;
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, #4ea7c7 18%, var(--color-border));
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.68rem;
+  white-space: nowrap;
+  text-align: left;
+  cursor: pointer;
+}
+.pdf_notebook_menu button:hover,
+.pdf_notebook_menu_item--active {
+  background: color-mix(in srgb, #4ea7c7 13%, var(--color-surface));
+  color: #315d73;
+}
+.pdf_notebook_menu button i { width: 1rem; font-size: 0.95rem; text-align: center; }
+.pdf_notebook_menu_item--close { color: #9d4b4b !important; }
 
 #pdf_insert_blank_page_btn {
   width: 2.25rem;
