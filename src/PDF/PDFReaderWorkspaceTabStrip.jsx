@@ -290,7 +290,7 @@ const ReaderAnnotationActions = ({ undoRedo, pageNav }) => {
   );
 };
 
-const ReaderZoomControls = ({ zoomControls }) => {
+const ReaderZoomControls = ({ zoomControls, label }) => {
   const holdRef = useRef({ timer: null, interval: null, suppressClick: false });
 
   const stopZoomHold = useCallback(() => {
@@ -353,7 +353,8 @@ const ReaderZoomControls = ({ zoomControls }) => {
 
   if (!zoomControls) return null;
   return (
-    <div className="pdfw_zoom_group" aria-label="Zoom controls">
+    <div className="pdfw_zoom_group" aria-label={`${label || "Page"} zoom controls`}>
+      {label && <span className="pdfw_zoom_surface_label">{label}</span>}
       <button
         type="button"
         className="pdfw_zoom_btn"
@@ -486,7 +487,7 @@ const PDFReaderWorkspaceTabStrip = ({
       </div>
 
       <div className="pdfw_tabbar_right">
-        <ReaderZoomControls zoomControls={zoomControls} />
+        <ReaderZoomControls zoomControls={zoomControls} label="PDF/MD" />
         <ReaderAnnotationActions undoRedo={undoRedo} pageNav={pageNav} />
       </div>
     </div>

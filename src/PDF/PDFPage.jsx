@@ -6,7 +6,7 @@ import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
-import { readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
+import { normalizeOpenAiSttModel, readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
 import { useLongPressSelect } from "../utils/longPressSelect";
 import DraftTextViewer, { cleanMarkdownToPlainText } from "../components/DraftTextViewer";
 import HyleCards from "./HyleCards";
@@ -95,22 +95,52 @@ import {
   SmartVideoIcon,
   TEXT_FONT_FAMILIES,
 } from "./pdfPageToolbarConfig.jsx";
+import { readTranslatorProvider } from "../utils/translatorSettings";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+const NOTEBOOK_DRAWING_WIDTH = 1000;
 const SpeechRecognition = typeof window !== "undefined"
   ? (window.SpeechRecognition || window.webkitSpeechRecognition)
   : null;
 const NOTEBOOK_VOICE_COMMANDS = [
   "Delete <line number> from <word number>",
-  "Edit <line number> from <word number>",
+  "Edit <word number> from <line number> to <new value>",
 ];
+const LEGACY_NOTEBOOK_EDIT_COMMAND = "Edit <line number> from <word number>";
+const NOTEBOOK_VOICE_COMMAND_ACTIONS = ["delete", "edit"];
+const NOTEBOOK_VOICE_COMMAND_LABELS = ["Delete word", "Edit word"];
 const NUMBER_WORDS = Object.freeze({
   ZERO: 0, ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5,
   SIX: 6, SEVEN: 7, EIGHT: 8, NINE: 9,
 });
+const voiceCommandLiteralPattern = (literal) => {
+  const words = String(literal || "").match(/[\p{L}\p{N}]+/gu) || [];
+  return words.length
+    ? `\\s*${words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+")}\\s*`
+    : "\\s*";
+};
+const compileNotebookVoiceCommand = (template, action) => {
+  const placeholderPattern = /<\s*(line(?:\s+number)?|word(?:\s+number)?|new\s+value)\s*>/gi;
+  const captures = [];
+  let cursor = 0;
+  let source = "^";
+  let match;
+  while ((match = placeholderPattern.exec(String(template || "")))) {
+    source += voiceCommandLiteralPattern(String(template).slice(cursor, match.index));
+    source += "(.+?)";
+    const placeholder = match[1].toLowerCase().replace(/\s+/g, " ");
+    captures.push(placeholder.startsWith("line") ? "line" : placeholder.startsWith("word") ? "word" : "value");
+    cursor = match.index + match[0].length;
+  }
+  source += voiceCommandLiteralPattern(String(template || "").slice(cursor));
+  source += "$";
+  if (!captures.includes("line") || !captures.includes("word")) return null;
+  if (action === "edit" && !captures.includes("value")) return null;
+  return { action, captures, pattern: new RegExp(source, "iu") };
+};
 const isPenToolKey = (key) => key === "pen" || key === "smartPen";
 const cleanSchemaWord = (value) => String(value || "")
   .normalize("NFKC")
@@ -807,6 +837,7 @@ const dynamicZoomGain = (baseGain, currentZoom) => baseGain / (1 + ZOOM_RESISTAN
 const ZOOM_HOLD_TICK_MS = 48;
 const ZOOM_HOLD_RAMP_MS = 1800;
 const ZOOM_HOLD_MAX_MULTIPLIER = 8;
+const LIVE_ZOOM_COMMIT_MS = 140;
 
 // ── Momentum ("billiard ball") panning ──────────────────────────────────────
 // After a drag/pan is released fast enough, the scroll container keeps
@@ -857,16 +888,6 @@ const stopLivePan = (stateRef) => {
   }
 };
 
-const PAN_SMOOTHING = 0.30;
-const PAN_EPSILON = 0.1;
-const PAN_EDGE_RESISTANCE = 0.18;
-
-const applyPanEdgeResistance = (value, min, max) => {
-  if (value < min) return min + (value - min) * PAN_EDGE_RESISTANCE;
-  if (value > max) return max + (value - max) * PAN_EDGE_RESISTANCE;
-  return value;
-};
-
 const syncLivePan = (el, stateRef) => {
   const state = stateRef.current;
   const maxL = Math.max(0, el.scrollWidth - el.clientWidth);
@@ -878,36 +899,17 @@ const syncLivePan = (el, stateRef) => {
 };
 
 const runLivePan = (el, stateRef) => {
-  stopLivePan(stateRef);
-  const state = stateRef.current;
-  state.lastT = performance.now();
-  const step = (t) => {
-    const dt = Math.min(34, Math.max(8, t - state.lastT || 16));
-    state.lastT = t;
+  if (stateRef.current.frame) return;
+  stateRef.current.frame = requestAnimationFrame(() => {
+    stateRef.current.frame = 0;
+    const state = stateRef.current;
     const maxL = Math.max(0, el.scrollWidth - el.clientWidth);
     const maxT = Math.max(0, el.scrollHeight - el.clientHeight);
-    state.targetL = applyPanEdgeResistance(state.targetL, 0, maxL);
-    state.targetT = applyPanEdgeResistance(state.targetT, 0, maxT);
-
-    // Keep pan tighter than pinch: responsive enough to stay attached to the
-    // fingers, but with a small amount of weighted interpolation.
-    const ease = 1 - Math.pow(1 - PAN_SMOOTHING, dt / 16);
-    state.currentL += (state.targetL - state.currentL) * ease;
-    state.currentT += (state.targetT - state.currentT) * ease;
-
-    if (Math.abs(state.targetL - state.currentL) < PAN_EPSILON) state.currentL = state.targetL;
-    if (Math.abs(state.targetT - state.currentT) < PAN_EPSILON) state.currentT = state.targetT;
-
+    state.currentL = clamp(state.targetL, 0, maxL);
+    state.currentT = clamp(state.targetT, 0, maxT);
     el.scrollLeft = state.currentL;
     el.scrollTop = state.currentT;
-
-    if (state.active || Math.abs(state.targetL - state.currentL) > PAN_EPSILON || Math.abs(state.targetT - state.currentT) > PAN_EPSILON) {
-      stateRef.current.frame = requestAnimationFrame(step);
-    } else {
-      stateRef.current.frame = 0;
-    }
-  };
-  stateRef.current.frame = requestAnimationFrame(step);
+  });
 };
 
 const runMomentumScroll = (el, vx, vy, frameRef) => {
@@ -982,6 +984,26 @@ const getSafeCanvasOutputScale = (width, height, deviceScale = window.devicePixe
     Math.sqrt(MAX_RENDER_CANVAS_PIXELS / Math.max(1, width * height)),
   );
   return Math.max(0.1, Math.min(deviceScale, dimLimitedScale, areaLimitedScale));
+};
+
+const prepareOverlayCanvas = (canvas, width, height, backingScale = window.devicePixelRatio || 1) => {
+  const pixelWidth = Math.max(1, Math.round(width * backingScale));
+  const pixelHeight = Math.max(1, Math.round(height * backingScale));
+  // Assigning canvas.width/height clears the bitmap and reallocates its backing
+  // store. Doing that for every pointermove was the largest MD/NB drawing stall.
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const cssWidth = `${width}px`;
+  const cssHeight = `${height}px`;
+  if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
+  if (canvas.style.height !== cssHeight) canvas.style.height = cssHeight;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+  context.clearRect(0, 0, width, height);
+  return context;
 };
 const DEFAULT_PEN_SETTINGS = {
   dynamic: true, // always on now — no toggle, no per-session setting
@@ -1896,6 +1918,99 @@ const deflateNounData = (hyleData) => {
   return nouns;
 };
 
+const NotebookZoomControls = ({ zoom, disabled, onZoomOut, onZoomIn, onReset }) => {
+  const holdRef = useRef({ timer: null, interval: null, suppressClick: false });
+
+  const stopHold = useCallback(() => {
+    const state = holdRef.current;
+    if (state.timer) window.clearTimeout(state.timer);
+    if (state.interval) window.clearInterval(state.interval);
+    state.timer = null;
+    state.interval = null;
+  }, []);
+
+  useEffect(() => () => stopHold(), [stopHold]);
+
+  const startHold = useCallback((direction) => {
+    if (disabled) return;
+    stopHold();
+    const state = holdRef.current;
+    const zoomStep = direction < 0 ? onZoomOut : onZoomIn;
+    state.suppressClick = false;
+    state.timer = window.setTimeout(() => {
+      state.timer = null;
+      state.suppressClick = true;
+      const startedAt = performance.now();
+      state.interval = window.setInterval(() => {
+        const elapsed = performance.now() - startedAt;
+        const progress = Math.min(1, elapsed / ZOOM_HOLD_RAMP_MS);
+        const multiplier = 1 + (ZOOM_HOLD_MAX_MULTIPLIER - 1) * progress * progress;
+        for (let step = 0; step < multiplier; step += 1) zoomStep();
+      }, ZOOM_HOLD_TICK_MS);
+    }, 220);
+  }, [disabled, onZoomIn, onZoomOut, stopHold]);
+
+  const finishHold = useCallback((event) => {
+    const suppressClick = holdRef.current.suppressClick;
+    stopHold();
+    if (suppressClick) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (!suppressClick || event.type !== "pointerup") holdRef.current.suppressClick = false;
+  }, [stopHold]);
+
+  const consumeClick = useCallback((action) => (event) => {
+    if (holdRef.current.suppressClick) {
+      event.preventDefault();
+      holdRef.current.suppressClick = false;
+      return;
+    }
+    action();
+  }, []);
+
+  const percent = Math.round(zoom * 100);
+  return (
+    <div className="pdf_freeform_notebook_zoom" aria-label="Notebook drawing zoom controls">
+      <button
+        type="button"
+        className="pdf_freeform_notebook_zoom_button"
+        onPointerDown={() => startHold(-1)}
+        onPointerUp={finishHold}
+        onPointerCancel={finishHold}
+        onPointerLeave={finishHold}
+        onClick={consumeClick(onZoomOut)}
+        disabled={disabled || zoom <= MIN_ZOOM}
+        title="Zoom Notebook out"
+      >
+        <i className="bx bx-minus" />
+      </button>
+      <button
+        type="button"
+        className="pdf_freeform_notebook_zoom_value"
+        onClick={onReset}
+        disabled={disabled}
+        title="Reset Notebook zoom"
+      >
+        {percent}%
+      </button>
+      <button
+        type="button"
+        className="pdf_freeform_notebook_zoom_button"
+        onPointerDown={() => startHold(1)}
+        onPointerUp={finishHold}
+        onPointerCancel={finishHold}
+        onPointerLeave={finishHold}
+        onClick={consumeClick(onZoomIn)}
+        disabled={disabled || zoom >= MAX_ZOOM}
+        title="Zoom Notebook in"
+      >
+        <i className="bx bx-plus" />
+      </button>
+    </div>
+  );
+};
+
 const PDFPage = forwardRef(({
   embeddedSourceId = "",
   embeddedPdfName = "",
@@ -2271,6 +2386,7 @@ const PDFPage = forwardRef(({
   const [annotHistory,     setAnnotHistory]     = useState([]);
   const [annotHistoryOpen, setAnnotHistoryOpen] = useState(false);
   const [annotHistorySource, setAnnotHistorySource] = useState("pdf");
+  const [activeAnnotationSurface, setActiveAnnotationSurface] = useState("pdf");
   const appendAnnotHistoryEntry = useCallback((history, entry) => (
     [...history, { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, time: new Date(), ...entry }].slice(-300)
   ), []);
@@ -2493,12 +2609,58 @@ const PDFPage = forwardRef(({
   const [notebookSttStatus, setNotebookSttStatus] = useState("idle");
   const [notebookSttError, setNotebookSttError] = useState("");
   const [notebookControlMode, setNotebookControlMode] = useState(false);
-  const [notebookSettingsOpen, setNotebookSettingsOpen] = useState(false);
+  const [notebookActiveTab, setNotebookActiveTab] = useState("typing");
   const [notebookVoiceCommands, setNotebookVoiceCommands] = useState(NOTEBOOK_VOICE_COMMANDS);
+  const [notebookAnnotations, setNotebookAnnotations] = useState([]);
+  const [notebookUndoStack, setNotebookUndoStack] = useState([]);
+  const [notebookRedoStack, setNotebookRedoStack] = useState([]);
+  const [notebookDrawingTextInput, setNotebookDrawingTextInput] = useState(null);
+  const [notebookDrawingZoom, setNotebookDrawingZoom] = useState(1);
   const notebookControlModeRef = useRef(false);
+  const handleNotebookVoiceCommandRef = useRef(null);
   const notebookEditorRef = useRef(null);
+  const notebookDrawingSurfaceRef = useRef(null);
+  const notebookDrawingCanvasRef = useRef(null);
+  const notebookDrawingPaintRef = useRef(() => {});
+  const notebookDrawingViewRef = useRef({ scale: 1, x: 0, y: 0 });
+  const notebookDrawingZoomTimerRef = useRef(null);
   const notebookSttRef = useRef(null);
   const notebookSttStartIdRef = useRef(0);
+  const publishNotebookDrawingZoom = useCallback((scale) => {
+    if (notebookDrawingZoomTimerRef.current) clearTimeout(notebookDrawingZoomTimerRef.current);
+    notebookDrawingZoomTimerRef.current = setTimeout(() => {
+      notebookDrawingZoomTimerRef.current = null;
+      setNotebookDrawingZoom(scale);
+    }, 100);
+  }, []);
+  const zoomNotebookDrawingAt = useCallback((nextZoom, clientX, clientY) => {
+    const surface = notebookDrawingSurfaceRef.current;
+    if (!surface) return;
+    const rect = surface.getBoundingClientRect();
+    const view = notebookDrawingViewRef.current;
+    const target = normalizeZoom(typeof nextZoom === "function" ? nextZoom(view.scale) : nextZoom);
+    if (target === view.scale) return;
+    const pointX = Number.isFinite(clientX) ? clientX - rect.left : rect.width / 2;
+    const pointY = Number.isFinite(clientY) ? clientY - rect.top : rect.height / 2;
+    const ratio = target / view.scale;
+    view.x = pointX - (pointX - view.x) * ratio;
+    view.y = pointY - (pointY - view.y) * ratio;
+    view.scale = target;
+    publishNotebookDrawingZoom(target);
+    notebookDrawingPaintRef.current();
+  }, [publishNotebookDrawingZoom]);
+  useEffect(() => () => {
+    if (notebookDrawingZoomTimerRef.current) clearTimeout(notebookDrawingZoomTimerRef.current);
+  }, []);
+  const saveNotebookAnnotations = useCallback((nextAnnotations) => {
+    const sourceId = currentSourceIdRef.current || embeddedSourceId || null;
+    if (!sourceId) return;
+    void authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notebookAnnotations: nextAnnotations }),
+    }).catch((error) => console.error("[PDF] Failed to save Notebook annotations", error));
+  }, [embeddedSourceId]);
   useEffect(() => { notebookControlModeRef.current = notebookControlMode; }, [notebookControlMode]);
   const notebookControlLines = useMemo(() => {
     let offset = 0;
@@ -2530,15 +2692,29 @@ const PDFPage = forwardRef(({
     return Number(digits.join(""));
   }, []);
   const handleNotebookVoiceCommand = useCallback((spokenCommand) => {
-    const normalized = String(spokenCommand || "").trim();
-    const match = normalized.match(/^(delete|edit)\s+(.+?)\s+(?:from|at|on)\s+(.+)$/i);
-    if (!match) {
-      setNotebookSttError("Say: Delete or Edit, line number, from, word number.");
+    const normalized = String(spokenCommand || "")
+      .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const configuredCommands = notebookVoiceCommands.map((template, index) => (
+      compileNotebookVoiceCommand(template, NOTEBOOK_VOICE_COMMAND_ACTIONS[index])
+    )).filter(Boolean);
+    let resolved = null;
+    for (const command of configuredCommands) {
+      const match = normalized.match(command.pattern);
+      if (!match) continue;
+      const values = {};
+      command.captures.forEach((name, index) => { values[name] = match[index + 1]; });
+      resolved = { action: command.action, ...values };
+      break;
+    }
+    if (!resolved) {
+      setNotebookSttError(`Command not recognized. Configured commands: ${notebookVoiceCommands.filter(Boolean).join(" | ")}`);
       return false;
     }
-    const action = match[1].toLowerCase();
-    const lineNumber = spokenNumber(match[2]);
-    const wordNumber = spokenNumber(match[3]);
+    const { action } = resolved;
+    const lineNumber = spokenNumber(resolved.line);
+    const wordNumber = spokenNumber(resolved.word);
     const line = notebookControlLines[lineNumber - 1];
     const word = line?.words[wordNumber - 1];
     if (!line || !word) {
@@ -2551,17 +2727,23 @@ const PDFPage = forwardRef(({
       editor?.focus({ preventScroll: true });
       editor?.setSelectionRange(word.start, word.start);
     } else {
-      editor?.focus({ preventScroll: true });
-      editor?.setSelectionRange(word.start, word.end);
-      window.setTimeout(() => {
+      const newValue = String(resolved.value || "").trim();
+      if (!newValue) {
+        setNotebookSttError("The Edit command needs a new value.");
+        return false;
+      }
+      setNotebookText((current) => `${current.slice(0, word.start)}${newValue}${current.slice(word.end)}`);
+      window.requestAnimationFrame(() => {
         const currentEditor = notebookEditorRef.current;
-        const end = currentEditor?.value?.length ?? notebookText.length;
+        currentEditor?.focus({ preventScroll: true });
+        const end = currentEditor?.value?.length ?? notebookText.length - word.text.length + newValue.length;
         currentEditor?.setSelectionRange(end, end);
-      }, 700);
+      });
     }
     setNotebookSttError("");
     return true;
-  }, [notebookControlLines, notebookText, spokenNumber]);
+  }, [notebookControlLines, notebookText, notebookVoiceCommands, spokenNumber]);
+  handleNotebookVoiceCommandRef.current = handleNotebookVoiceCommand;
   const appendNotebookSpeech = useCallback((spokenText) => {
     const text = String(spokenText || "").trim();
     if (!text) return;
@@ -2574,16 +2756,31 @@ const PDFPage = forwardRef(({
       setNotebookSttStatus("idle");
       return;
     }
+    session.stopped = true;
+    session.abortController?.abort();
     if (session.kind === "browser") {
+      session.recognition.onresult = null;
       session.recognition.onend = null;
       session.recognition.onerror = null;
-      try { session.recognition.stop(); } catch { session.recognition.abort?.(); }
+      try { session.recognition.abort?.(); } catch {}
+      try { session.recognition.stop?.(); } catch {}
+    } else if (session.kind === "local-whisper") {
+      window.clearTimeout(session.chunkTimer);
+      if (session.recorder) {
+        session.recorder.ondataavailable = null;
+        session.recorder.onstop = null;
+        session.recorder.onerror = null;
+        try { if (session.recorder.state !== "inactive") session.recorder.stop(); } catch {}
+      }
     } else {
       session.dataChannel?.close?.();
       session.peerConnection?.close?.();
       if (session.recorder?.state !== "inactive") session.recorder.stop();
     }
-    session.stream?.getTracks().forEach((track) => track.stop());
+    session.stream?.getTracks().forEach((track) => {
+      track.enabled = false;
+      track.stop();
+    });
     notebookSttRef.current = null;
     setNotebookSttStatus("idle");
   }, []);
@@ -2596,7 +2793,91 @@ const PDFPage = forwardRef(({
     const startId = notebookSttStartIdRef.current + 1;
     notebookSttStartIdRef.current = startId;
     const settings = readSttSettings();
-    const provider = requestedProvider || settings.provider;
+    const provider = Object.values(STT_PROVIDERS).includes(requestedProvider)
+      ? requestedProvider
+      : settings.provider;
+    if (provider === STT_PROVIDERS.LOCAL_WHISPER) {
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        setNotebookSttError("Local Whisper needs microphone and MediaRecorder support.");
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (notebookSttStartIdRef.current !== startId) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
+          .find((candidate) => MediaRecorder.isTypeSupported?.(candidate)) || "";
+        const session = {
+          kind: "local-whisper",
+          recorder: null,
+          chunkTimer: 0,
+          stream,
+          uploadChain: Promise.resolve(),
+          abortController: new AbortController(),
+          stopped: false,
+        };
+        notebookSttRef.current = session;
+        setNotebookSttStatus("listening");
+
+        const queueChunkUpload = (audioBlob, extension) => {
+          session.uploadChain = session.uploadChain.then(async () => {
+            if (session.stopped || notebookSttRef.current !== session) return;
+            const body = new FormData();
+            body.append("audio", audioBlob, `notebook-${Date.now()}.${extension}`);
+            const response = await authFetch(apiUrl("/api/ai/transcribe-local"), {
+              method: "POST",
+              body,
+              signal: session.abortController.signal,
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error?.message || "Local Whisper transcription failed.");
+            const transcript = String(data.text || "").trim();
+            if (!transcript || session.stopped || notebookSttRef.current !== session) return;
+            if (notebookControlModeRef.current) handleNotebookVoiceCommandRef.current?.(transcript);
+            else appendNotebookSpeech(transcript);
+          }).catch((error) => {
+            if (notebookSttRef.current === session && !session.stopped && error.name !== "AbortError") {
+              stopNotebookStt();
+              setNotebookSttError(error.message || "Local Whisper transcription failed.");
+            }
+          });
+        };
+
+        const startCompleteChunk = () => {
+          if (session.stopped || notebookSttRef.current !== session) return;
+          const chunks = [];
+          const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+          session.recorder = recorder;
+          recorder.ondataavailable = (event) => {
+            if (event.data?.size) chunks.push(event.data);
+          };
+          recorder.onerror = () => {
+            if (notebookSttRef.current !== session || session.stopped) return;
+            stopNotebookStt();
+            setNotebookSttError("Local microphone recording failed.");
+          };
+          recorder.onstop = () => {
+            window.clearTimeout(session.chunkTimer);
+            if (session.stopped || notebookSttRef.current !== session) return;
+            const audioBlob = new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
+            const extension = audioBlob.type.includes("mp4") ? "m4a" : audioBlob.type.includes("ogg") ? "ogg" : "webm";
+            if (audioBlob.size) queueChunkUpload(audioBlob, extension);
+            startCompleteChunk();
+          };
+          recorder.start();
+          session.chunkTimer = window.setTimeout(() => {
+            if (!session.stopped && recorder.state === "recording") recorder.stop();
+          }, 3500);
+        };
+        startCompleteChunk();
+      } catch (error) {
+        setNotebookSttStatus("idle");
+        setNotebookSttError(error.name === "NotAllowedError" ? "Microphone access was denied." : error.message || "Could not start local Whisper.");
+      }
+      return;
+    }
     if (provider === STT_PROVIDERS.BROWSER) {
       if (!SpeechRecognition) {
         setNotebookSttError("Browser speech recognition is unavailable.");
@@ -2610,7 +2891,7 @@ const PDFPage = forwardRef(({
         for (let index = event.resultIndex; index < event.results.length; index += 1) {
           if (event.results[index].isFinal) {
             const transcript = event.results[index][0].transcript;
-            if (notebookControlModeRef.current) handleNotebookVoiceCommand(transcript);
+            if (notebookControlModeRef.current) handleNotebookVoiceCommandRef.current?.(transcript);
             else appendNotebookSpeech(transcript);
           }
         }
@@ -2667,7 +2948,7 @@ const PDFPage = forwardRef(({
             audio: {
               input: {
                 format: { type: "audio/pcm", rate: 24000 },
-                transcription: { model: settings.model || "gpt-4o-mini-transcribe" },
+                transcription: { model: normalizeOpenAiSttModel(settings.model) },
                 turn_detection: { type: "server_vad" },
               },
             },
@@ -2724,7 +3005,7 @@ const PDFPage = forwardRef(({
         setNotebookSttError(error.name === "NotAllowedError" ? "Microphone access was denied." : error.message || "Could not start speech input.");
       }
     }
-  }, [appendNotebookSpeech, handleNotebookVoiceCommand, stopNotebookStt]);
+  }, [appendNotebookSpeech, stopNotebookStt]);
   useEffect(() => () => stopNotebookStt(), [stopNotebookStt]);
   const [mdLineSpacing, setMdLineSpacing] = useState(0);
   const [mdSpacingTarget, setMdSpacingTarget] = useState("str");
@@ -3394,6 +3675,14 @@ const PDFPage = forwardRef(({
   //                 imposed on the page).
   const [hyleFabOpen, setHyleFabOpen] = useState(false);
   const [annotationLayerTab, setAnnotationLayerTab] = useState("pdf");
+  const activateAnnotationSurface = useCallback((surface) => {
+    if (!surface) return;
+    setActiveAnnotationSurface(surface);
+    if (surface === "pdf" || surface === "md") {
+      setAnnotationLayerTab(surface);
+      setAnnotHistorySource(surface);
+    }
+  }, []);
   const [hyleMode, setHyleMode] = useState("raw"); // "raw" | "segmented" (never null — Raw is always the default/active layer)
   // Named distinctly from the existing hyleData/setHyleData state above
   // (the Hyles noun-extraction feature) — same "Hyle" vocabulary, but a
@@ -3512,6 +3801,10 @@ const PDFPage = forwardRef(({
     });
   }, [annotations, entityBuilderOmittedRawCategories, entityBuilderRawBlankPageRows, entityBuilderVisualRawLines, pageNum]);
   const [markdownAnnotations, setMarkdownAnnotations] = useState({}); // MD-only layer, never merged into PDF annotations
+  const markdownAnnotationsRef = useRef(markdownAnnotations);
+  markdownAnnotationsRef.current = markdownAnnotations;
+  const [markdownUndoStack, setMarkdownUndoStack] = useState([]);
+  const [markdownRedoStack, setMarkdownRedoStack] = useState([]);
   const saveMarkdownAnnotations = useCallback((nextLayers) => {
     const sourceId = currentSourceIdRef.current || embeddedSourceId || null;
     if (!sourceId) return;
@@ -3521,6 +3814,15 @@ const PDFPage = forwardRef(({
       body: JSON.stringify({ markdownLayers: nextLayers }),
     }).catch((error) => console.error("[PDF] Failed to save Markdown annotations", error));
   }, [embeddedSourceId]);
+  const commitMarkdownAnnotations = useCallback((nextLayers) => {
+    const previousLayers = markdownAnnotationsRef.current;
+    if (nextLayers === previousLayers) return;
+    setMarkdownUndoStack((stack) => [...stack.slice(-99), previousLayers]);
+    setMarkdownRedoStack([]);
+    markdownAnnotationsRef.current = nextLayers;
+    setMarkdownAnnotations(nextLayers);
+    saveMarkdownAnnotations(nextLayers);
+  }, [saveMarkdownAnnotations]);
   const markdownHistoryEntries = useMemo(() => Object.entries(markdownAnnotations || {})
     .flatMap(([page, pageAnnotations]) => (Array.isArray(pageAnnotations) ? pageAnnotations : []).map((annotation, index) => {
       const timestamp = Number(String(annotation?.id || "").split("_")[0]);
@@ -3534,9 +3836,8 @@ const PDFPage = forwardRef(({
     .sort((a, b) => (b.time?.getTime?.() || 0) - (a.time?.getTime?.() || 0)), [markdownAnnotations]);
   const clearMarkdownAnnotations = useCallback(() => {
     if (!markdownHistoryEntries.length) return;
-    setMarkdownAnnotations({});
-    saveMarkdownAnnotations({});
-  }, [markdownHistoryEntries.length, saveMarkdownAnnotations]);
+    commitMarkdownAnnotations({});
+  }, [commitMarkdownAnnotations, markdownHistoryEntries.length]);
   const [annotationSaveStatus, setAnnotationSaveStatus] = useState("idle"); // idle | saving | saved | error
   const annotationSaveRequestRef = useRef(0);
   const annotationsRef = useRef(annotations);
@@ -3624,6 +3925,7 @@ const PDFPage = forwardRef(({
       mdSpacingTarget,
       mdLineTagsVisible,
       notebookMode,
+      notebookActiveTab,
       notebookText,
       notebookVoiceCommands,
       searchOpen,
@@ -3645,6 +3947,7 @@ const PDFPage = forwardRef(({
     mdLineTagsVisible,
     mdSpacingTarget,
     notebookMode,
+    notebookActiveTab,
     notebookText,
     notebookVoiceCommands,
     pageNum,
@@ -5969,14 +6272,8 @@ const PDFPage = forwardRef(({
     if (!page || !canvas || !markdownVisualActive || !pageViewport) return undefined;
     const rect = page.getBoundingClientRect();
     const backingScale = window.devicePixelRatio || 1;
-    canvas.width = Math.max(1, Math.round(rect.width * backingScale));
-    canvas.height = Math.max(1, Math.round(rect.height * backingScale));
-    canvas.style.width = `${rect.width}px`;
-    canvas.style.height = `${rect.height}px`;
-    const context = canvas.getContext("2d");
+    const context = prepareOverlayCanvas(canvas, rect.width, rect.height, backingScale);
     if (!context) return undefined;
-    context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
-    context.clearRect(0, 0, rect.width, rect.height);
     const scaleX = rect.width / Math.max(1, pageViewport.width);
     const scaleY = rect.height / Math.max(1, pageViewport.height);
     const scale = pageViewport.scale * Math.min(scaleX, scaleY);
@@ -5992,25 +6289,29 @@ const PDFPage = forwardRef(({
     const canvas = markdownAnnotationCanvasRef.current;
     if (!page || !canvas || !markdownVisualActive || !pageViewport || !isPenToolKey(annotTool)) return undefined;
     let active = null;
+    let drawFrame = 0;
+    let pendingExtra = null;
     const getSurface = () => {
       const rect = page.getBoundingClientRect();
       const scale = pageViewport.scale * (rect.width / Math.max(1, pageViewport.width));
       return { rect, scale };
     };
-    const drawSurface = (extra = null) => {
+    const paintSurface = (extra = null) => {
       const { rect, scale } = getSurface();
       const backingScale = window.devicePixelRatio || 1;
-      canvas.width = Math.max(1, Math.round(rect.width * backingScale));
-      canvas.height = Math.max(1, Math.round(rect.height * backingScale));
-      canvas.style.width = `${rect.width}px`;
-      canvas.style.height = `${rect.height}px`;
-      const context = canvas.getContext("2d");
+      const context = prepareOverlayCanvas(canvas, rect.width, rect.height, backingScale);
       if (!context) return;
-      context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
-      context.clearRect(0, 0, rect.width, rect.height);
       const ownAnnotations = markdownAnnotations[pageNum] || [];
       ownAnnotations.forEach((annotation) => drawAnnotationWithOwnerClip(context, annotation, scale, ownAnnotations));
       if (extra) drawAnnotationWithOwnerClip(context, extra, scale, ownAnnotations);
+    };
+    const drawSurface = (extra = null) => {
+      pendingExtra = extra;
+      if (drawFrame) return;
+      drawFrame = requestAnimationFrame(() => {
+        drawFrame = 0;
+        paintSurface(pendingExtra);
+      });
     };
     const pointFromEvent = (event) => {
       const { rect, scale } = getSurface();
@@ -6061,8 +6362,7 @@ const PDFPage = forwardRef(({
         ...markdownAnnotations,
         [pageNum]: [...(markdownAnnotations[pageNum] || []), finished],
       };
-      setMarkdownAnnotations(nextLayers);
-      saveMarkdownAnnotations(nextLayers);
+      commitMarkdownAnnotations(nextLayers);
       drawSurface();
     };
     page.addEventListener("pointerdown", onDown, { passive: false });
@@ -6070,12 +6370,13 @@ const PDFPage = forwardRef(({
     page.addEventListener("pointerup", onUp, { passive: false });
     page.addEventListener("pointercancel", onUp, { passive: false });
     return () => {
+      if (drawFrame) cancelAnimationFrame(drawFrame);
       page.removeEventListener("pointerdown", onDown);
       page.removeEventListener("pointermove", onMove);
       page.removeEventListener("pointerup", onUp);
       page.removeEventListener("pointercancel", onUp);
     };
-  }, [annotColor, annotTool, drawAnnotationWithOwnerClip, markdownAnnotations, markdownVisualActive, pageNum, pageViewport, penSize, penStabilization, penType, saveMarkdownAnnotations]);
+  }, [annotColor, annotTool, commitMarkdownAnnotations, drawAnnotationWithOwnerClip, markdownAnnotations, markdownVisualActive, pageNum, pageViewport, penSize, penStabilization, penType]);
 
   useEffect(() => {
     const mdTools = new Set(["highlight", "underline", "strikethrough", "rect", "circle", "line", "arrow", "freeshape", "bbox", "pageBBox", "columnBBox", "subLineBBox", "imageBBox", "eraser"]);
@@ -6083,23 +6384,27 @@ const PDFPage = forwardRef(({
     const canvas = markdownAnnotationCanvasRef.current;
     if (!page || !canvas || !markdownVisualActive || !pageViewport || !mdTools.has(annotTool)) return undefined;
     let active = null;
+    let drawFrame = 0;
+    let pendingDraw = { extra: null, layers: markdownAnnotations };
     const getSurface = () => {
       const rect = page.getBoundingClientRect();
       return { rect, scale: pageViewport.scale * (rect.width / Math.max(1, pageViewport.width)) };
     };
-    const drawSurface = (extra = null, layers = markdownAnnotations) => {
+    const paintSurface = (extra = null, layers = markdownAnnotations) => {
       const { rect, scale } = getSurface();
       const backingScale = window.devicePixelRatio || 1;
-      canvas.width = Math.max(1, Math.round(rect.width * backingScale));
-      canvas.height = Math.max(1, Math.round(rect.height * backingScale));
-      canvas.style.width = `${rect.width}px`;
-      canvas.style.height = `${rect.height}px`;
-      const context = canvas.getContext("2d");
+      const context = prepareOverlayCanvas(canvas, rect.width, rect.height, backingScale);
       if (!context) return;
-      context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
-      context.clearRect(0, 0, rect.width, rect.height);
       (layers[pageNum] || []).forEach((annotation) => drawAnnotationWithOwnerClip(context, annotation, scale, layers[pageNum] || []));
       if (extra) drawAnnotationWithOwnerClip(context, extra, scale, layers[pageNum] || []);
+    };
+    const drawSurface = (extra = null, layers = markdownAnnotations) => {
+      pendingDraw = { extra, layers };
+      if (drawFrame) return;
+      drawFrame = requestAnimationFrame(() => {
+        drawFrame = 0;
+        paintSurface(pendingDraw.extra, pendingDraw.layers);
+      });
     };
     const pointFromEvent = (event) => {
       const { rect, scale } = getSurface();
@@ -6158,15 +6463,13 @@ const PDFPage = forwardRef(({
       if (finished.type === "eraser") {
         if (finished.changed) {
           const nextLayers = { ...markdownAnnotations, [pageNum]: finished.lastKept };
-          setMarkdownAnnotations(nextLayers);
-          saveMarkdownAnnotations(nextLayers);
+          commitMarkdownAnnotations(nextLayers);
         }
         drawSurface();
         return;
       }
       const nextLayers = { ...markdownAnnotations, [pageNum]: [...(markdownAnnotations[pageNum] || []), { ...finished, id: `${Date.now()}_md` }] };
-      setMarkdownAnnotations(nextLayers);
-      saveMarkdownAnnotations(nextLayers);
+      commitMarkdownAnnotations(nextLayers);
       drawSurface(null, nextLayers);
     };
     page.addEventListener("pointerdown", onDown, { passive: false });
@@ -6174,12 +6477,360 @@ const PDFPage = forwardRef(({
     page.addEventListener("pointerup", onUp, { passive: false });
     page.addEventListener("pointercancel", onUp, { passive: false });
     return () => {
+      if (drawFrame) cancelAnimationFrame(drawFrame);
       page.removeEventListener("pointerdown", onDown);
       page.removeEventListener("pointermove", onMove);
       page.removeEventListener("pointerup", onUp);
       page.removeEventListener("pointercancel", onUp);
     };
-  }, [annotColor, annotOpacity, annotSize, annotTool, drawAnnotationWithOwnerClip, eraserMode, eraserSize, markdownAnnotations, markdownVisualActive, pageNum, pageViewport, penStabilization, saveMarkdownAnnotations, shapeStrokeWidth]);
+  }, [annotColor, annotOpacity, annotSize, annotTool, commitMarkdownAnnotations, drawAnnotationWithOwnerClip, eraserMode, eraserSize, markdownAnnotations, markdownVisualActive, pageNum, pageViewport, penStabilization, shapeStrokeWidth]);
+
+  useEffect(() => {
+    const surface = notebookDrawingSurfaceRef.current;
+    const canvas = notebookDrawingCanvasRef.current;
+    if (!surface || !canvas || !notebookMode || notebookActiveTab !== "drawing") return undefined;
+    const supportedTools = new Set([
+      "pen", "smartPen", "highlight", "underline", "strikethrough", "line", "arrow",
+      "rect", "circle", "freeshape", "bbox", "eraser", "text",
+    ]);
+    let active = null;
+    let drawFrame = 0;
+    let pendingDraw = { extra: null, annotations: notebookAnnotations };
+
+    const getSurface = () => {
+      const rect = surface.getBoundingClientRect();
+      const view = notebookDrawingViewRef.current;
+      return {
+        rect,
+        view,
+        baseScale: rect.width / NOTEBOOK_DRAWING_WIDTH,
+        scale: (rect.width / NOTEBOOK_DRAWING_WIDTH) * view.scale,
+      };
+    };
+    const paintSurface = (extra = null, annotationsToDraw = notebookAnnotations) => {
+      const { rect, scale, view } = getSurface();
+      const backingScale = window.devicePixelRatio || 1;
+      const context = prepareOverlayCanvas(canvas, rect.width, rect.height, backingScale);
+      if (!context) return;
+      const gridSize = 24 * view.scale;
+      surface.style.backgroundSize = `${gridSize}px ${gridSize}px`;
+      surface.style.backgroundPosition = `${view.x}px ${view.y}px`;
+      context.translate(view.x, view.y);
+      annotationsToDraw.forEach((annotation) => drawAnnotationWithOwnerClip(context, annotation, scale, annotationsToDraw));
+      if (extra) drawAnnotationWithOwnerClip(context, extra, scale, annotationsToDraw);
+    };
+    const drawSurface = (extra = null, annotationsToDraw = notebookAnnotations) => {
+      pendingDraw = { extra, annotations: annotationsToDraw };
+      if (drawFrame) return;
+      drawFrame = requestAnimationFrame(() => {
+        drawFrame = 0;
+        paintSurface(pendingDraw.extra, pendingDraw.annotations);
+      });
+    };
+    const pointFromEvent = (event) => {
+      const { rect, scale, view } = getSurface();
+      return {
+        x: (event.clientX - rect.left - view.x) / scale,
+        y: (event.clientY - rect.top - view.y) / scale,
+        t: performance.now(),
+        pressure: Number.isFinite(event.pressure) && event.pressure > 0 ? event.pressure : 0.5,
+      };
+    };
+    const finishWithError = () => {
+      active = null;
+      drawSurface();
+    };
+    const onDown = (event) => {
+      if (event.pointerType !== "pen" || !supportedTools.has(annotTool)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      canvas.setPointerCapture?.(event.pointerId);
+      const point = pointFromEvent(event);
+      const { scale } = getSurface();
+      if (annotTool === "text") {
+        const { rect } = getSurface();
+        setNotebookDrawingTextInput({
+          x: point.x,
+          y: point.y,
+          viewX: event.clientX - rect.left,
+          viewY: event.clientY - rect.top,
+          value: "",
+        });
+        return;
+      }
+      if (annotTool === "eraser") {
+        const result = eraseAnnotationsAtPoint(notebookAnnotations, point.x, point.y, eraserSize / scale, eraserMode);
+        active = { type: "eraser", changed: result.changed, lastKept: result.kept };
+        drawSurface(null, result.kept);
+        return;
+      }
+      if (isPenToolKey(annotTool)) {
+        active = {
+          type: "pen",
+          smartPen: annotTool === "smartPen",
+          color: annotColor,
+          lineWidth: penSize / scale,
+          penType,
+          penSettings: {
+            dynamic: true,
+            stabilization: penStabilization,
+            pressureAssist: penPressureAssist,
+            taper: penTaper,
+            flow: penFlow,
+            border: true,
+            nibAngle: penNibAngle,
+            nibSpread: penNibSpread,
+          },
+          points: [point],
+        };
+      } else if (annotTool === "line" || annotTool === "arrow") {
+        active = { type: annotTool, color: annotColor, lineWidth: shapeStrokeWidth / scale, x1: point.x, y1: point.y, x2: point.x, y2: point.y };
+      } else if (["rect", "circle", "bbox"].includes(annotTool)) {
+        active = { type: annotTool, color: annotColor, lineWidth: shapeStrokeWidth / scale, x: point.x, y: point.y, w: 0, h: 0, shapeBackground: false };
+      } else if (["highlight", "underline", "strikethrough"].includes(annotTool)) {
+        active = { type: annotTool, color: annotColor, lineWidth: annotSize / scale, points: [point, point], opacity: annotOpacity / 100 };
+      } else {
+        active = { type: "freeshape", color: annotColor, lineWidth: shapeStrokeWidth / scale, points: [point], shapeBackground: false };
+      }
+      drawSurface(active);
+    };
+    const onMove = (event) => {
+      if (event.pointerType !== "pen" || !active) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const point = pointFromEvent(event);
+      const { scale } = getSurface();
+      if (active.type === "eraser") {
+        const result = eraseAnnotationsAtPoint(active.lastKept, point.x, point.y, eraserSize / scale, eraserMode);
+        active.lastKept = result.kept;
+        active.changed = active.changed || result.changed;
+        drawSurface(null, active.lastKept);
+      } else if (active.type === "line" || active.type === "arrow") {
+        active.x2 = point.x;
+        active.y2 = point.y;
+        drawSurface(active);
+      } else if (["rect", "circle", "bbox"].includes(active.type)) {
+        active.w = point.x - active.x;
+        active.h = point.y - active.y;
+        drawSurface(active);
+      } else if (["highlight", "underline", "strikethrough"].includes(active.type)) {
+        active.points[1] = point;
+        drawSurface(active);
+      } else {
+        const nextPoint = smoothStrokePoint(active.points, point, penStabilization, scale);
+        if (nextPoint) active.points.push(nextPoint);
+        drawSurface(active);
+      }
+    };
+    const onUp = (event) => {
+      if (event.pointerType !== "pen" || !active) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const finished = active;
+      active = null;
+      if (finished.type === "eraser") {
+        if (!finished.changed) return drawSurface();
+        setNotebookUndoStack((previous) => [...previous, notebookAnnotations]);
+        setNotebookAnnotations(finished.lastKept);
+        setNotebookRedoStack([]);
+        saveNotebookAnnotations(finished.lastKept);
+        return drawSurface(null, finished.lastKept);
+      }
+      if (finished.type === "pen") {
+        finished.points = finalizePenStroke(
+          finished.points,
+          finished.penSettings ?? DEFAULT_PEN_SETTINGS,
+          finished.penType ?? penType,
+          getSurface().scale
+        );
+      }
+      if (finished.points?.length === 1) return finishWithError();
+      const nextAnnotations = [...notebookAnnotations, { ...finished, id: `${Date.now()}_nb` }];
+      setNotebookUndoStack((previous) => [...previous, notebookAnnotations]);
+      setNotebookAnnotations(nextAnnotations);
+      setNotebookRedoStack([]);
+      saveNotebookAnnotations(nextAnnotations);
+      drawSurface(null, nextAnnotations);
+    };
+
+    notebookDrawingPaintRef.current = () => drawSurface(active, active?.type === "eraser" ? active.lastKept : notebookAnnotations);
+    drawSurface();
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => drawSurface()) : null;
+    resizeObserver?.observe(surface);
+    canvas.addEventListener("pointerdown", onDown, { passive: false });
+    canvas.addEventListener("pointermove", onMove, { passive: false });
+    canvas.addEventListener("pointerup", onUp, { passive: false });
+    canvas.addEventListener("pointercancel", onUp, { passive: false });
+    return () => {
+      notebookDrawingPaintRef.current = () => {};
+      if (drawFrame) cancelAnimationFrame(drawFrame);
+      resizeObserver?.disconnect();
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onUp);
+    };
+  }, [annotColor, annotOpacity, annotSize, annotTool, drawAnnotationWithOwnerClip, eraserMode, eraserSize, notebookActiveTab, notebookAnnotations, notebookMode, penFlow, penNibAngle, penNibSpread, penPressureAssist, penSize, penStabilization, penTaper, penType, saveNotebookAnnotations, shapeStrokeWidth]);
+
+  // Freeform Drawing owns its viewport. Finger/mouse input navigates it while
+  // pen input remains exclusively reserved for annotation tools.
+  useEffect(() => {
+    const surface = notebookDrawingSurfaceRef.current;
+    if (!surface || !notebookMode || notebookActiveTab !== "drawing") return undefined;
+    const pointers = new Map();
+    let gesture = null;
+    let paintFrame = 0;
+    let zoomPublishFrame = 0;
+    let wheelCommitTimer = null;
+
+    const schedulePaint = () => {
+      if (paintFrame) return;
+      paintFrame = requestAnimationFrame(() => {
+        paintFrame = 0;
+        notebookDrawingPaintRef.current();
+      });
+    };
+    const publishZoomOnFrame = () => {
+      if (zoomPublishFrame) return;
+      zoomPublishFrame = requestAnimationFrame(() => {
+        zoomPublishFrame = 0;
+        publishNotebookDrawingZoom(notebookDrawingViewRef.current.scale);
+      });
+    };
+    const point = (event) => {
+      const rect = surface.getBoundingClientRect();
+      return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    };
+    const beginGesture = () => {
+      const values = [...pointers.values()];
+      const view = notebookDrawingViewRef.current;
+      if (values.length >= 2) {
+        const a = values[0];
+        const b = values[1];
+        const midX = (a.x + b.x) / 2;
+        const midY = (a.y + b.y) / 2;
+        const rect = surface.getBoundingClientRect();
+        const baseScale = rect.width / NOTEBOOK_DRAWING_WIDTH;
+        gesture = {
+          type: "pinch",
+          distance: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+          scale: view.scale,
+          worldX: (midX - view.x) / (baseScale * view.scale),
+          worldY: (midY - view.y) / (baseScale * view.scale),
+        };
+      } else if (values.length === 1) {
+        gesture = { type: "pan", start: values[0], x: view.x, y: view.y };
+      }
+    };
+    const onPointerDown = (event) => {
+      if (event.pointerType === "pen") return;
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      event.preventDefault();
+      pointers.set(event.pointerId, point(event));
+      surface.setPointerCapture?.(event.pointerId);
+      beginGesture();
+    };
+    const onPointerMove = (event) => {
+      if (!pointers.has(event.pointerId)) return;
+      event.preventDefault();
+      pointers.set(event.pointerId, point(event));
+      const values = [...pointers.values()];
+      const view = notebookDrawingViewRef.current;
+      if (values.length >= 2 && gesture?.type === "pinch") {
+        const a = values[0];
+        const b = values[1];
+        const midX = (a.x + b.x) / 2;
+        const midY = (a.y + b.y) / 2;
+        const distance = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+        const nextScale = normalizeZoom(gesture.scale * (distance / gesture.distance));
+        const baseScale = surface.getBoundingClientRect().width / NOTEBOOK_DRAWING_WIDTH;
+        view.scale = nextScale;
+        view.x = midX - gesture.worldX * baseScale * nextScale;
+        view.y = midY - gesture.worldY * baseScale * nextScale;
+        publishZoomOnFrame();
+      } else if (values.length === 1 && gesture?.type === "pan") {
+        view.x = gesture.x + values[0].x - gesture.start.x;
+        view.y = gesture.y + values[0].y - gesture.start.y;
+      } else {
+        beginGesture();
+      }
+      schedulePaint();
+    };
+    const onPointerEnd = (event) => {
+      if (!pointers.has(event.pointerId)) return;
+      pointers.delete(event.pointerId);
+      surface.releasePointerCapture?.(event.pointerId);
+      beginGesture();
+    };
+    const onWheel = (event) => {
+      event.preventDefault();
+      if (event.ctrlKey || event.metaKey) {
+        const view = notebookDrawingViewRef.current;
+        const factor = Math.exp(-event.deltaY * 0.0025);
+        zoomNotebookDrawingAt(view.scale * factor, event.clientX, event.clientY);
+        if (wheelCommitTimer) clearTimeout(wheelCommitTimer);
+        wheelCommitTimer = setTimeout(() => {
+          wheelCommitTimer = null;
+          publishNotebookDrawingZoom(notebookDrawingViewRef.current.scale);
+        }, 120);
+        return;
+      }
+      const view = notebookDrawingViewRef.current;
+      view.x -= event.deltaX;
+      view.y -= event.deltaY;
+      schedulePaint();
+    };
+
+    surface.addEventListener("pointerdown", onPointerDown, { passive: false });
+    surface.addEventListener("pointermove", onPointerMove, { passive: false });
+    surface.addEventListener("pointerup", onPointerEnd, { passive: false });
+    surface.addEventListener("pointercancel", onPointerEnd, { passive: false });
+    surface.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      if (paintFrame) cancelAnimationFrame(paintFrame);
+      if (zoomPublishFrame) cancelAnimationFrame(zoomPublishFrame);
+      if (wheelCommitTimer) clearTimeout(wheelCommitTimer);
+      surface.removeEventListener("pointerdown", onPointerDown);
+      surface.removeEventListener("pointermove", onPointerMove);
+      surface.removeEventListener("pointerup", onPointerEnd);
+      surface.removeEventListener("pointercancel", onPointerEnd);
+      surface.removeEventListener("wheel", onWheel);
+    };
+  }, [notebookActiveTab, notebookMode, publishNotebookDrawingZoom, zoomNotebookDrawingAt]);
+
+  const commitNotebookDrawingText = useCallback(() => {
+    const input = notebookDrawingTextInput;
+    const value = String(input?.value || "").trim();
+    if (!input || !value) {
+      setNotebookDrawingTextInput(null);
+      return;
+    }
+    const surfaceWidth = notebookDrawingSurfaceRef.current?.getBoundingClientRect?.().width || NOTEBOOK_DRAWING_WIDTH;
+    const scale = surfaceWidth / NOTEBOOK_DRAWING_WIDTH;
+    const nextAnnotations = [...notebookAnnotations, {
+      id: `${Date.now()}_nb`,
+      type: "text",
+      color: textToolColor,
+      x: input.x,
+      y: input.y,
+      text: value,
+      fontSize: textFontSize / scale,
+      fontFamily: textFontFamily,
+      textAlign,
+      fontBold: textBold,
+      fontItalic: textItalic,
+      fontUnderline: textUnderline,
+      textBackground,
+      textBackgroundColor,
+      textBaseline: "top",
+      padding: textPadding / scale,
+    }];
+    setNotebookUndoStack((previous) => [...previous, notebookAnnotations]);
+    setNotebookAnnotations(nextAnnotations);
+    setNotebookRedoStack([]);
+    saveNotebookAnnotations(nextAnnotations);
+    setNotebookDrawingTextInput(null);
+  }, [notebookAnnotations, notebookDrawingTextInput, saveNotebookAnnotations, textAlign, textBackground, textBackgroundColor, textBold, textFontFamily, textFontSize, textItalic, textPadding, textToolColor, textUnderline]);
   const previewRef    = useRef(null);
   const canvasWrapRef = useRef(null);
 
@@ -6483,6 +7134,7 @@ const PDFPage = forwardRef(({
   const spansRef           = useRef([]); // [{text, el}] built when text layer renders
   const pendingSmartPenStrokesRef = useRef([]);
   const pageImageRectsRef  = useRef([]);
+  const pageOperatorListCacheRef = useRef(new Map());
   const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
   const [schemaWordKeys, setSchemaWordKeys] = useState(() => new Set());
   const schemaWordKeysRef = useRef(schemaWordKeys);
@@ -6828,7 +7480,13 @@ const PDFPage = forwardRef(({
     pageImageRectsRef.current = [];
     if (!pdfDoc || !pageViewport) return undefined;
     pdfDoc.getPage(pageNum)
-      .then((page) => page.getOperatorList())
+      .then(async (page) => {
+        const cached = pageOperatorListCacheRef.current.get(pageNum);
+        if (cached) return cached;
+        const operatorList = await page.getOperatorList();
+        pageOperatorListCacheRef.current.set(pageNum, operatorList);
+        return operatorList;
+      })
       .then((operatorList) => {
         if (cancelled) return;
         pageImageRectsRef.current = extractPlacedImageRects(operatorList, pageViewport, pdfjsLib.OPS);
@@ -6842,6 +7500,10 @@ const PDFPage = forwardRef(({
   const selectionHandleDragRef = useRef(null); // { edge, startX, startY, active } — taps on handles must not alter selection, only real drags
   const selectionHandleLivePosRef = useRef(null); // { edge, x, y } live visual handle position while dragging
   const scrollAfterZoomRef = useRef(null); // {left, top} to apply after zoom re-render
+  // Normalized position within the whole shared PDF/MD canvas. Keep this
+  // even while zoomed far enough out that an axis no longer scrolls, so a
+  // later zoom-in restores the previous pan instead of forgetting it at 0.
+  const zoomPanMemoryRef = useRef({ page: null, layout: "", ratioX: 0.5, ratioY: 0.5 });
   const lastLoadedSourceKeyRef = useRef("");
   const insertBlankPageRef = useRef(null); // latest insertBlankPageAfterCurrent closure — see its own effect further down for why this indirection is needed
   const lastLoadedFileRef = useRef(null);
@@ -6853,29 +7515,42 @@ const PDFPage = forwardRef(({
     originY: 0,
     midX: 0,
     midY: 0,
+    anchorMidX: 0,
+    anchorMidY: 0,
     startSL: 0,
     startST: 0,
     timer: null,
+    frame: 0,
   });
 
   const captureZoomAnchor = useCallback((clientX, clientY) => {
     const previewEl = previewRef.current;
-    const pageEl = pageContainerRefs.current[pageNumRef.current - 1];
-    if (!previewEl || !pageEl) return null;
+    const wrap = canvasWrapRef.current;
+    if (!previewEl || !wrap) return null;
     const previewRect = previewEl.getBoundingClientRect();
-    const pageLeft = pageEl.offsetLeft;
-    const pageTop = pageEl.offsetTop;
-    const pageWidth = Math.max(1, pageEl.offsetWidth);
-    const pageHeight = Math.max(1, pageEl.offsetHeight);
     const viewportX = clientX - previewRect.left;
     const viewportY = clientY - previewRect.top;
+    const width = Math.max(1, wrap.offsetWidth);
+    const height = Math.max(1, wrap.offsetHeight);
+    const page = pageNumRef.current;
+    const layout = wrap.className;
+    const previous = zoomPanMemoryRef.current;
+    const sameLayout = previous.page === page && previous.layout === layout;
+    const rawRatioX = clamp((previewEl.scrollLeft + viewportX - wrap.offsetLeft) / width, 0, 1);
+    const rawRatioY = clamp((previewEl.scrollTop + viewportY - wrap.offsetTop) / height, 0, 1);
+    const ratioX = sameLayout && previewEl.scrollWidth <= previewEl.clientWidth + 1
+      ? previous.ratioX
+      : rawRatioX;
+    const ratioY = sameLayout && previewEl.scrollHeight <= previewEl.clientHeight + 1
+      ? previous.ratioY
+      : rawRatioY;
+    zoomPanMemoryRef.current = { page, layout, ratioX, ratioY };
     return {
-      kind: "page-anchor",
-      page: pageNumRef.current,
+      kind: "canvas-anchor",
       viewportX,
       viewportY,
-      ratioX: clamp((previewEl.scrollLeft + viewportX - pageLeft) / pageWidth, 0, 1),
-      ratioY: clamp((previewEl.scrollTop + viewportY - pageTop) / pageHeight, 0, 1),
+      ratioX,
+      ratioY,
     };
   }, []);
 
@@ -6981,6 +7656,7 @@ const PDFPage = forwardRef(({
   useEffect(() => {
     if (!pdfDoc || pageCount === 0) return;
     let cancelled = false;
+    pageOperatorListCacheRef.current.clear();
     renderTasksRef.current.forEach(t => t?.cancel());
     renderTasksRef.current   = new Array(pageCount).fill(null);
     renderedScaleRef.current = new Array(pageCount).fill(null);
@@ -7093,6 +7769,7 @@ const PDFPage = forwardRef(({
   useEffect(() => () => {
     const state = wheelZoomStateRef.current;
     if (state.timer) clearTimeout(state.timer);
+    if (state.frame) cancelAnimationFrame(state.frame);
   }, []);
 
   // Apply zoom-to-point scroll correction after canvas re-renders at new zoom.
@@ -7127,11 +7804,11 @@ const PDFPage = forwardRef(({
         wrap.style.willChange      = "";
         wrap.style.removeProperty("--pdf-live-zoom-inverse");
       }
-      if (pending.kind === "page-anchor") {
-        const pageEl = pageContainerRefs.current[pending.page - 1];
-        if (pageEl) {
-          const targetLeft = pageEl.offsetLeft + pageEl.offsetWidth * pending.ratioX - pending.viewportX;
-          const targetTop = pageEl.offsetTop + pageEl.offsetHeight * pending.ratioY - pending.viewportY;
+      if (pending.kind === "canvas-anchor") {
+        const canvas = canvasWrapRef.current;
+        if (canvas) {
+          const targetLeft = canvas.offsetLeft + canvas.offsetWidth * pending.ratioX - pending.viewportX;
+          const targetTop = canvas.offsetTop + canvas.offsetHeight * pending.ratioY - pending.viewportY;
           const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
           const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
           el.scrollLeft = clamp(targetLeft, 0, maxLeft);
@@ -7241,14 +7918,18 @@ const PDFPage = forwardRef(({
     let timer = 0;
     const onScroll = () => {
       if (timer) clearTimeout(timer);
-      timer = window.setTimeout(() => setReaderStateSaveTick((n) => n + 1), 220);
+      timer = window.setTimeout(() => {
+        const rect = el.getBoundingClientRect();
+        captureZoomAnchor(rect.left + el.clientWidth / 2, rect.top + el.clientHeight / 2);
+        setReaderStateSaveTick((n) => n + 1);
+      }, 220);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => {
       if (timer) clearTimeout(timer);
       el.removeEventListener("scroll", onScroll);
     };
-  }, [pageViewport, pageNum, readingMode]);
+  }, [captureZoomAnchor, pageViewport, pageNum, readingMode]);
 
   useEffect(() => {
     const sourceId = currentSourceIdRef.current;
@@ -7264,7 +7945,7 @@ const PDFPage = forwardRef(({
       }).catch(() => {});
     }, 900);
     return () => clearTimeout(timer);
-  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, notebookMode, notebookText, notebookVoiceCommands, readerStateSaveTick, buildReaderStatePayload]);
+  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, notebookMode, notebookActiveTab, notebookText, notebookVoiceCommands, readerStateSaveTick, buildReaderStatePayload]);
 
   // buildAnnotationSavePayload is read through a ref, and this effect's own
   // deps are deliberately [] (mount/unmount only) — NOT [buildAnnotationSavePayload].
@@ -9710,6 +10391,32 @@ const PDFPage = forwardRef(({
   }, [logAnnotHistory]);
 
   const handleAnnotUndo = useCallback(() => {
+    if (activeAnnotationSurface === "nb" && notebookMode && notebookActiveTab === "drawing") {
+      if (!notebookUndoStack.length) return;
+      const restored = notebookUndoStack[notebookUndoStack.length - 1];
+      setNotebookUndoStack((previous) => previous.slice(0, -1));
+      setNotebookRedoStack((previous) => [...previous, notebookAnnotations]);
+      setNotebookAnnotations(restored);
+      saveNotebookAnnotations(restored);
+      return;
+    }
+    if (activeAnnotationSurface === "md") {
+      const currentLayers = markdownAnnotationsRef.current;
+      let restored;
+      if (markdownUndoStack.length) {
+        restored = markdownUndoStack[markdownUndoStack.length - 1];
+        setMarkdownUndoStack((stack) => stack.slice(0, -1));
+      } else {
+        const currentPageAnnotations = currentLayers[pageNum] || [];
+        if (!currentPageAnnotations.length) return;
+        restored = { ...currentLayers, [pageNum]: currentPageAnnotations.slice(0, -1) };
+      }
+      setMarkdownRedoStack((stack) => [...stack.slice(-99), currentLayers]);
+      markdownAnnotationsRef.current = restored;
+      setMarkdownAnnotations(restored);
+      saveMarkdownAnnotations(restored);
+      return;
+    }
     const latestHistory = annotHistory[annotHistory.length - 1];
     const latestMorphe = morpheUndoRef.current[morpheUndoRef.current.length - 1];
     if (
@@ -9744,9 +10451,29 @@ const PDFPage = forwardRef(({
     setAnnotations((prev) => ({ ...prev, [pageNum]: (prev[pageNum] || []).slice(0, -1) }));
     setRedoStacks((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), popped] }));
     logAnnotHistory({ action: "undo", type: popped.type, page: pageNum });
-  }, [annotHistory, pageNum, annotations, logAnnotHistory, undoMorpheCreation]);
+  }, [activeAnnotationSurface, annotHistory, annotations, logAnnotHistory, markdownUndoStack, notebookActiveTab, notebookAnnotations, notebookMode, notebookUndoStack, pageNum, saveMarkdownAnnotations, saveNotebookAnnotations, undoMorpheCreation]);
 
   const handleAnnotRedo = useCallback(() => {
+    if (activeAnnotationSurface === "nb" && notebookMode && notebookActiveTab === "drawing") {
+      if (!notebookRedoStack.length) return;
+      const restored = notebookRedoStack[notebookRedoStack.length - 1];
+      setNotebookRedoStack((previous) => previous.slice(0, -1));
+      setNotebookUndoStack((previous) => [...previous, notebookAnnotations]);
+      setNotebookAnnotations(restored);
+      saveNotebookAnnotations(restored);
+      return;
+    }
+    if (activeAnnotationSurface === "md") {
+      if (!markdownRedoStack.length) return;
+      const currentLayers = markdownAnnotationsRef.current;
+      const restored = markdownRedoStack[markdownRedoStack.length - 1];
+      setMarkdownRedoStack((stack) => stack.slice(0, -1));
+      setMarkdownUndoStack((stack) => [...stack.slice(-99), currentLayers]);
+      markdownAnnotationsRef.current = restored;
+      setMarkdownAnnotations(restored);
+      saveMarkdownAnnotations(restored);
+      return;
+    }
     const latestHistory = annotHistory[annotHistory.length - 1];
     const latestMorphe = morpheRedoRef.current[morpheRedoRef.current.length - 1];
     if (
@@ -9764,7 +10491,7 @@ const PDFPage = forwardRef(({
     setRedoStacks((prev) => ({ ...prev, [pageNum]: prev[pageNum].slice(0, -1) }));
     setAnnotations((prev) => ({ ...prev, [pageNum]: [...(prev[pageNum] || []), restored] }));
     logAnnotHistory({ action: "redo", type: restored.type, page: pageNum });
-  }, [annotHistory, pageNum, redoStacks, logAnnotHistory, redoMorpheCreation]);
+  }, [activeAnnotationSurface, annotHistory, logAnnotHistory, markdownRedoStack, notebookActiveTab, notebookAnnotations, notebookMode, notebookRedoStack, pageNum, redoMorpheCreation, redoStacks, saveMarkdownAnnotations, saveNotebookAnnotations]);
 
   // Whole-document wipe — every page's annotations AND the entire history
   // log, gone with nothing left to retrieve. Deliberately not routed
@@ -9933,12 +10660,29 @@ const PDFPage = forwardRef(({
   // undoRedoState is reported via onUndoRedoStateChange (an effect, not
   // just exposed on the ref) because a parent can't otherwise know WHEN to
   // re-render its own buttons — refs don't trigger renders on their own.
+  const notebookDrawingActive = notebookMode && notebookActiveTab === "drawing";
+  useEffect(() => {
+    if (activeAnnotationSurface === "md" && !markdownVisualActive) {
+      activateAnnotationSurface("pdf");
+    } else if (activeAnnotationSurface === "nb" && !notebookDrawingActive) {
+      activateAnnotationSurface(markdownVisualActive ? "md" : "pdf");
+    }
+  }, [activateAnnotationSurface, activeAnnotationSurface, markdownVisualActive, notebookDrawingActive]);
   const undoRedoState = useMemo(() => ({
-    canUndo: (annotations[pageNum]?.length || 0) > 0 || morpheUndoRef.current.some((action) => action.page === pageNum),
-    canRedo: (redoStacks[pageNum]?.length || 0) > 0 || morpheRedoRef.current.some((action) => action.page === pageNum),
-    hasHistory: annotHistory.length > 0,
+    canUndo: activeAnnotationSurface === "nb" && notebookDrawingActive
+      ? notebookUndoStack.length > 0
+      : activeAnnotationSurface === "md"
+        ? markdownUndoStack.length > 0 || (markdownAnnotations[pageNum]?.length || 0) > 0
+        : (annotations[pageNum]?.length || 0) > 0 || morpheUndoRef.current.some((action) => action.page === pageNum),
+    canRedo: activeAnnotationSurface === "nb" && notebookDrawingActive
+      ? notebookRedoStack.length > 0
+      : activeAnnotationSurface === "md"
+        ? markdownRedoStack.length > 0
+        : (redoStacks[pageNum]?.length || 0) > 0 || morpheRedoRef.current.some((action) => action.page === pageNum),
+    hasHistory: annotHistory.length > 0 || markdownHistoryEntries.length > 0,
     historyOpen: annotHistoryOpen,
-  }), [annotations, pageNum, redoStacks, annotHistory.length, annotHistoryOpen]);
+    activeSurface: activeAnnotationSurface,
+  }), [activeAnnotationSurface, annotations, pageNum, redoStacks, annotHistory.length, annotHistoryOpen, markdownAnnotations, markdownHistoryEntries.length, markdownRedoStack.length, markdownUndoStack.length, notebookDrawingActive, notebookRedoStack.length, notebookUndoStack.length]);
 
   useEffect(() => {
     onUndoRedoStateChange?.(undoRedoState);
@@ -10027,20 +10771,49 @@ const PDFPage = forwardRef(({
       return;
     }
     scrollAfterZoomRef.current = captureZoomAnchor(
-      el.getBoundingClientRect().left + state.midX,
-      el.getBoundingClientRect().top + state.midY
+      el.getBoundingClientRect().left + (el.clientWidth / 2),
+      el.getBoundingClientRect().top + (el.clientHeight / 2)
     ) || {
       left: (state.startSL + state.midX) * (finalZoom / state.baseZoom) - state.midX,
       top: (state.startST + state.midY) * (finalZoom / state.baseZoom) - state.midY,
     };
+    zoomRef.current = finalZoom;
     setZoom(finalZoom);
   }, [captureZoomAnchor, zoomingDisabled]);
+
+  const previewLiveZoom = useCallback(() => {
+    const state = wheelZoomStateRef.current;
+    if (state.frame) return;
+    state.frame = requestAnimationFrame(() => {
+      state.frame = 0;
+      const wrap = canvasWrapRef.current;
+      if (!wrap) return;
+      const ratio = state.pendingZoom / Math.max(PINCH_ZOOM_FLOOR, state.baseZoom);
+      const anchorX = state.startSL + state.anchorMidX - wrap.offsetLeft;
+      const anchorY = state.startST + state.anchorMidY - wrap.offsetTop;
+      const currentX = state.startSL + state.midX - wrap.offsetLeft;
+      const currentY = state.startST + state.midY - wrap.offsetTop;
+      wrap.style.transformOrigin = "0 0";
+      wrap.style.transform = `translate3d(${currentX - anchorX * ratio}px, ${currentY - anchorY * ratio}px, 0) scale(${ratio})`;
+      wrap.style.willChange = "transform";
+    });
+  }, []);
+
+  const scheduleLiveZoomCommit = useCallback(() => {
+    const state = wheelZoomStateRef.current;
+    if (state.timer) clearTimeout(state.timer);
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      commitLiveZoom();
+    }, LIVE_ZOOM_COMMIT_MS);
+  }, [commitLiveZoom]);
 
   // ── Ctrl+Scroll to zoom ────────────────────────────────────────────────────
   useEffect(() => {
     if (zoomingDisabled) return undefined;
     const el = previewRef.current;
-    if (!el || !pdfDoc) return;
+    const wrap = canvasWrapRef.current;
+    if (!el || !wrap || !pdfDoc) return;
     const onWheel = (e) => {
       stopMomentumScroll(momentumFrameRef); // any wheel input (zoom or a plain scroll) catches a coasting pan
       if (zoomingDisabled) {
@@ -10049,16 +10822,19 @@ const PDFPage = forwardRef(({
       }
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const wrap = canvasWrapRef.current;
-      if (!wrap) return;
       const state = wheelZoomStateRef.current;
 
+      // Zoom changes scale only. Keep the saved viewport center fixed rather
+      // than letting the mouse location introduce an accidental pan.
+      state.midX = el.clientWidth / 2;
+      state.midY = el.clientHeight / 2;
       if (!state.timer) {
         state.baseZoom = zoomRef.current;
         state.pendingZoom = zoomRef.current;
         state.startSL = el.scrollLeft;
         state.startST = el.scrollTop;
+        state.anchorMidX = state.midX;
+        state.anchorMidY = state.midY;
       }
 
       // 1.08 per tick at gain 1 — dynamicZoomGain shrinks the exponent (not
@@ -10067,8 +10843,6 @@ const PDFPage = forwardRef(({
       const tickGain = dynamicZoomGain(1, state.pendingZoom);
       const delta = e.deltaY < 0 ? Math.pow(1.08, tickGain) : Math.pow(1.08, -tickGain);
 
-      state.midX = e.clientX - rect.left; // el (scroll container) is never itself transformed, safe to re-read every tick
-      state.midY = e.clientY - rect.top;
       state.pendingZoom = normalizePinchZoom(state.pendingZoom * delta);
 
       // Content-space origin (scroll position + viewport-relative point),
@@ -10090,7 +10864,8 @@ const PDFPage = forwardRef(({
       // the viewer), so that offset must be subtracted out here or the live
       // preview zooms around a point down-and-right of the real cursor —
       // which visibly drifts the shown page up-and-left as the scale grows.
-      commitLiveZoom();
+      previewLiveZoom();
+      scheduleLiveZoomCommit();
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
@@ -10099,9 +10874,18 @@ const PDFPage = forwardRef(({
         clearTimeout(state.timer);
         state.timer = null;
       }
+      if (state.frame) {
+        cancelAnimationFrame(state.frame);
+        state.frame = 0;
+      }
+      if (wrap.style.transform) {
+        wrap.style.transform = "";
+        wrap.style.transformOrigin = "";
+        wrap.style.willChange = "";
+      }
       el.removeEventListener("wheel", onWheel);
     };
-  }, [pdfDoc, handleAnnotUndo, captureZoomAnchor, commitLiveZoom, zoomingDisabled]);
+  }, [pdfDoc, previewLiveZoom, scheduleLiveZoomCommit, zoomingDisabled]);
 
   // Keep browser-level page zoom from resizing the reader chrome and Markdown
   // aside. The preview's own Ctrl/Cmd-wheel handler still receives the event
@@ -10132,15 +10916,21 @@ const PDFPage = forwardRef(({
     if (!el || !wrap) {
       const baseZoom  = zoomRef.current;
       const rawTarget = typeof nextZoom === "function" ? nextZoom(baseZoom) : nextZoom;
-      setZoom(normalizeZoom(rawTarget));
+      const targetZoom = normalizeZoom(rawTarget);
+      zoomRef.current = targetZoom;
+      setZoom(targetZoom);
       return;
     }
     const state = wheelZoomStateRef.current;
+    state.midX = el.clientWidth / 2;
+    state.midY = el.clientHeight / 2;
     if (!state.timer) {
       state.baseZoom    = zoomRef.current;
       state.pendingZoom = zoomRef.current;
       state.startSL     = el.scrollLeft;
       state.startST     = el.scrollTop;
+      state.anchorMidX  = state.midX;
+      state.anchorMidY  = state.midY;
     }
     // normalizeZoom (not normalizePinchZoom) so held/repeated clicks stay
     // clamped to [MIN_ZOOM, MAX_ZOOM] — the looser pinch bound is only for
@@ -10161,9 +10951,6 @@ const PDFPage = forwardRef(({
     // Viewport center, in viewport-relative coordinates — el (the scroll
     // container) is never itself transformed, so this is safe to re-read
     // every tick.
-    state.midX = el.clientWidth / 2;
-    state.midY = el.clientHeight / 2;
-
     // Content-space origin (scroll position + viewport-relative point), not
     // wrap.getBoundingClientRect() — that reflects the transform applied on
     // the PREVIOUS tick once the gesture is underway, which compounds a
@@ -10178,8 +10965,9 @@ const PDFPage = forwardRef(({
     // transform-origin is relative to wrap's own border box, so wrap's own
     // offset within el (padding + auto-centering margin) must be subtracted
     // from the el-frame origin computed above.
-    commitLiveZoom();
-  }, [commitLiveZoom, zoomingDisabled]);
+    previewLiveZoom();
+    scheduleLiveZoomCommit();
+  }, [previewLiveZoom, scheduleLiveZoomCommit, zoomingDisabled]);
 
   // Toolbar zoom is a discrete command, not a live gesture. Keep it out of
   // the wheel/pinch transaction state so a stale gesture or a temporarily
@@ -10202,7 +10990,9 @@ const PDFPage = forwardRef(({
     }
     const gesture = wheelZoomStateRef.current;
     if (gesture.timer) clearTimeout(gesture.timer);
+    if (gesture.frame) cancelAnimationFrame(gesture.frame);
     gesture.timer = null;
+    gesture.frame = 0;
     gesture.baseZoom = targetZoom;
     gesture.pendingZoom = targetZoom;
     if (wrap) {
@@ -10211,6 +11001,7 @@ const PDFPage = forwardRef(({
       wrap.style.willChange = "";
       wrap.style.removeProperty("--pdf-live-zoom-inverse");
     }
+    zoomRef.current = targetZoom;
     setZoom(targetZoom);
   }, [captureZoomAnchor, zoomingDisabled]);
 
@@ -10236,9 +11027,13 @@ const PDFPage = forwardRef(({
     zoomOut: () => zoomFromToolbar((z) => z - 0.01),
     resetZoom: () => zoomFromToolbar(1),
     setZoomLevel: (value) => zoomFromToolbar(value),
+    notebookZoomIn: () => zoomNotebookDrawingAt((z) => z + 0.01),
+    notebookZoomOut: () => zoomNotebookDrawingAt((z) => z - 0.01),
+    resetNotebookZoom: () => zoomNotebookDrawingAt(1),
+    setNotebookZoomLevel: (value) => zoomNotebookDrawingAt(value),
     ...zoomState,
     ...pageNavState,
-  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch, toggleOcrBlankPage, toggleMarkdownAside, setNotebookView, closeNotebook, setReaderReadingMode, zoomFromToolbar, zoomState]);
+  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch, toggleOcrBlankPage, toggleMarkdownAside, setNotebookView, closeNotebook, setReaderReadingMode, zoomFromToolbar, zoomNotebookDrawingAt, zoomState]);
 
   const stopZoomHold = useCallback(() => {
     if (zoomHoldTimerRef.current) {
@@ -10284,6 +11079,9 @@ const PDFPage = forwardRef(({
     };
   }, [stopZoomHold, zoomingDisabled]);
 
+  const handleAnnotUndoRef = useRef(handleAnnotUndo);
+  handleAnnotUndoRef.current = handleAnnotUndo;
+
   // ── Two-finger pinch zoom + single-finger pan + tap word selection ─────────
   useEffect(() => {
     const el = previewRef.current;
@@ -10311,38 +11109,18 @@ const PDFPage = forwardRef(({
     let pinchCooldownUntil = 0;
     let pinchTransformApplied = false;
     let pinchRaf = 0;
-    let gestureActive = false;
     let targetScale = 1;
-    let displayedScale = 1;
     let targetX = 0;
     let targetY = 0;
-    let displayedX = 0;
-    let displayedY = 0;
-    const PINCH_SMOOTHING = 0.22;
-    const RELEASE_SMOOTHING = 0.18;
-    const SNAP_EPSILON = 0.001;
 
     const animatePinch = () => {
+      pinchRaf = 0;
       const wrap = canvasWrapRef.current;
       if (!wrap) return;
-      const smoothing = gestureActive ? PINCH_SMOOTHING : RELEASE_SMOOTHING;
-      displayedScale += (targetScale - displayedScale) * smoothing;
-      displayedX += (targetX - displayedX) * smoothing;
-      displayedY += (targetY - displayedY) * smoothing;
       wrap.style.transformOrigin = "0 0";
-      wrap.style.transform = `translate3d(${displayedX}px, ${displayedY}px, 0) scale(${displayedScale})`;
+      wrap.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) scale(${targetScale})`;
       wrap.style.willChange = "transform";
       pinchTransformApplied = true;
-      if (
-        gestureActive
-        || Math.abs(targetScale - displayedScale) > SNAP_EPSILON
-        || Math.abs(targetX - displayedX) > SNAP_EPSILON
-        || Math.abs(targetY - displayedY) > SNAP_EPSILON
-      ) {
-        pinchRaf = requestAnimationFrame(animatePinch);
-      } else {
-        pinchRaf = 0;
-      }
     };
 
     const startPinchAnimation = () => {
@@ -10352,7 +11130,7 @@ const PDFPage = forwardRef(({
     const fireTwoFingerUndo = () => {
       if (twoFingerUndoCandidate?.timer) clearTimeout(twoFingerUndoCandidate.timer);
       twoFingerUndoCandidate = null;
-      handleAnnotUndo();
+      handleAnnotUndoRef.current?.();
       navigator.vibrate?.(20);
     };
 
@@ -10405,11 +11183,11 @@ const PDFPage = forwardRef(({
     // follows the fingers at animation-frame cadence.
     const commitPinchZoom = () => {
       if (!pinchPrimed || lastPinchZoom === startZoom) {
-        gestureActive = false;
+        if (pinchRaf) cancelAnimationFrame(pinchRaf);
+        pinchRaf = 0;
         targetScale = 1;
         targetX = 0;
         targetY = 0;
-        startPinchAnimation();
         const wrap = canvasWrapRef.current;
         if (wrap) {
           wrap.style.transform = "";
@@ -10419,26 +11197,20 @@ const PDFPage = forwardRef(({
         pinchTransformApplied = false;
         return;
       }
+      const centerX = el.clientWidth / 2;
+      const centerY = el.clientHeight / 2;
       scrollAfterZoomRef.current = captureZoomAnchor(
-        el.getBoundingClientRect().left + lastMidX,
-        el.getBoundingClientRect().top + lastMidY
+        el.getBoundingClientRect().left + centerX,
+        el.getBoundingClientRect().top + centerY
       ) || {
-        // Must use lastMidX/lastMidY on BOTH sides here, not startMidX/
-        // startMidY — the live preview above anchors its transform-origin
-        // at `startSL + lastMidX` (the CURRENT midpoint), not the gesture's
-        // starting one. Mixing start-space content position with a
-        // last-space viewport subtraction only matched when a pinch's
-        // midpoint never drifted from where it started; a real pinch's
-        // fingers almost always drift some as they spread, so this
-        // fallback (only hit when captureZoomAnchor itself returns null)
-        // was landing short of the actual target — up and to the left of
-        // wherever the gesture actually ended.
-        left: (startSL + lastMidX) * (lastPinchZoom / startZoom) - lastMidX,
-        top: (startST + lastMidY) * (lastPinchZoom / startZoom) - lastMidY,
+        // The canvas normally supplies a normalized anchor. This fallback
+        // preserves the same viewport center if it is briefly unavailable.
+        left: (startSL + centerX) * (lastPinchZoom / startZoom) - centerX,
+        top: (startST + centerY) * (lastPinchZoom / startZoom) - centerY,
       };
-      gestureActive = false;
       targetScale = lastPinchZoom / startZoom;
       startPinchAnimation();
+      zoomRef.current = lastPinchZoom;
       setZoom(lastPinchZoom);
     };
 
@@ -10448,6 +11220,8 @@ const PDFPage = forwardRef(({
     // whatever zoom ratio the pinch happened to be at the instant the third
     // finger touched down must never be applied, not even the ratio itself.
     const cancelPinchZoom = () => {
+      if (pinchRaf) cancelAnimationFrame(pinchRaf);
+      pinchRaf = 0;
       const wrap = canvasWrapRef.current;
       if (wrap) {
         wrap.style.transform       = "";
@@ -10745,8 +11519,8 @@ const PDFPage = forwardRef(({
         lastPinchZoom = startZoom;
         lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
         lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
-        startMidX = lastMidX;
-        startMidY = lastMidY;
+        startMidX = el.clientWidth / 2;
+        startMidY = el.clientHeight / 2;
         startSL = el.scrollLeft;
         startST = el.scrollTop;
         twoFingerUndoCandidate = {
@@ -10848,8 +11622,8 @@ const PDFPage = forwardRef(({
           if (nextDist < MIN_PINCH_START_DIST) return;
           startDist = nextDist;
           startZoom = zoomRef.current;
-          startMidX = lastMidX;
-          startMidY = lastMidY;
+          startMidX = el.clientWidth / 2;
+          startMidY = el.clientHeight / 2;
           startSL = el.scrollLeft;
           startST = el.scrollTop;
           lastPinchZoom = startZoom;
@@ -10878,12 +11652,11 @@ const PDFPage = forwardRef(({
           const ratio = newZoom / startZoom;
           const anchorX = startSL + startMidX - wrap.offsetLeft;
           const anchorY = startST + startMidY - wrap.offsetTop;
-          const currentX = startSL + lastMidX - wrap.offsetLeft;
-          const currentY = startST + lastMidY - wrap.offsetTop;
+          const currentX = startSL + startMidX - wrap.offsetLeft;
+          const currentY = startST + startMidY - wrap.offsetTop;
           targetScale = ratio;
           targetX = currentX - anchorX * ratio;
           targetY = currentY - anchorY * ratio;
-          gestureActive = true;
           startPinchAnimation();
         }
         return;
@@ -11057,7 +11830,7 @@ const PDFPage = forwardRef(({
       el.removeEventListener("selectstart", onSelectStart);
       el.removeEventListener("dblclick",    onDblClick);
     };
-  }, [pdfDoc, captureZoomAnchor, zoomingDisabled, pageViewport]);
+  }, [pdfDoc, captureZoomAnchor, zoomingDisabled]);
 
   // ── Mouse drag to pan ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -12180,9 +12953,20 @@ const PDFPage = forwardRef(({
     // relative to the currently-open PDF's own page numbers.
     if (sourceId !== currentSourceIdRef.current) {
       setBlankInsertedPages(new Set());
+      setActiveAnnotationSurface("pdf");
+      setAnnotHistorySource("pdf");
+      setAnnotationLayerTab("pdf");
+      markdownAnnotationsRef.current = {};
+      setMarkdownAnnotations({});
+      setMarkdownUndoStack([]);
+      setMarkdownRedoStack([]);
       setNotebookMode(null);
+      setNotebookActiveTab("typing");
       setNotebookText("");
       setNotebookVoiceCommands(NOTEBOOK_VOICE_COMMANDS);
+      setNotebookAnnotations([]);
+      setNotebookUndoStack([]);
+      setNotebookRedoStack([]);
     }
     setLoading(true);
     setLoadError("");
@@ -12265,7 +13049,14 @@ const PDFPage = forwardRef(({
             : 0;
           setAnnotationLayers(normalizedAnnotationState.layers);
           setActiveAnnotationLayerId(restoredActiveLayerId);
-          setMarkdownAnnotations(annData.markdownLayers || {});
+          const restoredMarkdownLayers = annData.markdownLayers || {};
+          markdownAnnotationsRef.current = restoredMarkdownLayers;
+          setMarkdownAnnotations(restoredMarkdownLayers);
+          setMarkdownUndoStack([]);
+          setMarkdownRedoStack([]);
+          setNotebookAnnotations(Array.isArray(annData.notebookAnnotations) ? annData.notebookAnnotations : []);
+          setNotebookUndoStack([]);
+          setNotebookRedoStack([]);
           setAnnotations(
             normalizedAnnotationState.layers.find((layer) => layer.id === restoredActiveLayerId)?.annotations
             || normalizedAnnotationState.layers[0]?.annotations
@@ -12300,10 +13091,20 @@ const PDFPage = forwardRef(({
           setMdSpacingTarget(persistedSpacingTarget);
           setMdLineTagsVisible(persistedReaderState?.mdLineTagsVisible !== false);
           setNotebookMode(persistedNotebookMode);
+          setNotebookActiveTab(["typing", "drawing", "settings"].includes(persistedReaderState?.notebookActiveTab)
+            ? persistedReaderState.notebookActiveTab
+            : "typing");
           setNotebookText(typeof persistedReaderState?.notebookText === "string" ? persistedReaderState.notebookText : "");
           setNotebookVoiceCommands(
             Array.isArray(persistedReaderState?.notebookVoiceCommands) && persistedReaderState.notebookVoiceCommands.length
-              ? persistedReaderState.notebookVoiceCommands.map((command) => String(command || "")).filter(Boolean)
+              ? NOTEBOOK_VOICE_COMMANDS.map((fallback, index) => (
+                  index < persistedReaderState.notebookVoiceCommands.length
+                    ? (() => {
+                        const savedCommand = String(persistedReaderState.notebookVoiceCommands[index] ?? "");
+                        return index === 1 && savedCommand === LEGACY_NOTEBOOK_EDIT_COMMAND ? fallback : savedCommand;
+                      })()
+                    : fallback
+                ))
               : NOTEBOOK_VOICE_COMMANDS,
           );
           setZoom(Number.isFinite(persistedReaderState?.zoom) ? normalizeZoom(persistedReaderState.zoom) : 1);
@@ -13452,7 +14253,13 @@ const PDFPage = forwardRef(({
       const res = await authFetch(apiUrl("/api/ai/text-tool"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: word, action, provider, targetLang }),
+        body: JSON.stringify({
+          text: word,
+          action,
+          provider,
+          targetLang,
+          translator: action === "translate" ? readTranslatorProvider() : undefined,
+        }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error.message || "Request failed.");
@@ -13920,7 +14727,7 @@ const PDFPage = forwardRef(({
     annotTool === "highlight" ? "Highlighter size" :
     SHAPE_TOOL_KEYS.includes(annotTool) ? "Stroke width" :
     "Size";
-  const markdownVisualPageScale = Math.max(0.0001, fitScaleRef.current * zoomRef.current);
+  const markdownVisualPageScale = Math.max(0.0001, fitScaleRef.current * zoom);
   const liveRenderedPageSize = renderedCssSizeRef.current[pageNum - 1];
   const liveRenderedPageScale = renderedScaleRef.current[pageNum - 1];
   const liveRenderedPageRatio = liveRenderedPageScale
@@ -13940,6 +14747,8 @@ const PDFPage = forwardRef(({
     <div
       ref={markdownVisualLayerRef}
       className="pdf_markdown_aside_visual_page"
+      onPointerDownCapture={() => activateAnnotationSurface("md")}
+      onTouchStartCapture={() => activateAnnotationSurface("md")}
       style={{
         aspectRatio: `${entityBuilderVisualRawPageWidth} / ${entityBuilderVisualRawPageHeight}`,
         width: `${markdownVisualPageWidth}px`,
@@ -15017,6 +15826,15 @@ const PDFPage = forwardRef(({
             <div className="pdf_freeform_notebook_header">
               <strong>Freeform Notebook</strong>
               <div className="pdf_freeform_notebook_actions">
+                {notebookActiveTab === "drawing" && (
+                  <NotebookZoomControls
+                    zoom={notebookDrawingZoom}
+                    disabled={zoomingDisabled}
+                    onZoomOut={() => zoomNotebookDrawingAt((value) => value - 0.01)}
+                    onZoomIn={() => zoomNotebookDrawingAt((value) => value + 0.01)}
+                    onReset={() => zoomNotebookDrawingAt(1)}
+                  />
+                )}
                 <div className="pdf_freeform_notebook_stt_pill">
                   <button
                     type="button"
@@ -15025,7 +15843,13 @@ const PDFPage = forwardRef(({
                     aria-label={notebookSttStatus === "listening" ? "Stop speech input" : "Enter text with speech"}
                     aria-pressed={notebookSttStatus === "listening"}
                     onPointerDown={(event) => event.preventDefault()}
-                    onClick={toggleNotebookStt}
+                    onClick={() => {
+                      if (notebookSttStatus === "listening") {
+                        stopNotebookStt();
+                        return;
+                      }
+                      void toggleNotebookStt();
+                    }}
                   >
                     <i className={`fi ${notebookSttStatus === "listening" ? "fi-rr-square" : "fi-rr-microphone"}`} aria-hidden="true" />
                   </button>
@@ -15050,12 +15874,12 @@ const PDFPage = forwardRef(({
                 </div>
                 <button
                   type="button"
-                  className={`pdf_freeform_notebook_settings${notebookSettingsOpen ? " pdf_freeform_notebook_settings--active" : ""}`}
+                  className={`pdf_freeform_notebook_settings${notebookActiveTab === "settings" ? " pdf_freeform_notebook_settings--active" : ""}`}
                   title="Freeform settings"
                   aria-label="Open Freeform settings"
-                  aria-pressed={notebookSettingsOpen}
+                  aria-pressed={notebookActiveTab === "settings"}
                   onPointerDown={(event) => event.preventDefault()}
-                  onClick={() => setNotebookSettingsOpen((open) => !open)}
+                  onClick={() => setNotebookActiveTab((tab) => tab === "settings" ? "typing" : "settings")}
                 >
                   <i className="fi fi-rr-settings-sliders" aria-hidden="true" />
                 </button>
@@ -15078,21 +15902,58 @@ const PDFPage = forwardRef(({
               </div>
             </div>
             <div className="pdf_freeform_notebook_tabs" role="tablist" aria-label="Freeform Notebook views">
-              <button type="button" role="tab" aria-selected={!notebookSettingsOpen} className={!notebookSettingsOpen ? "pdf_freeform_notebook_tab--active" : ""} onClick={() => setNotebookSettingsOpen(false)}>Notebook</button>
-              <button type="button" role="tab" aria-selected={notebookSettingsOpen} className={notebookSettingsOpen ? "pdf_freeform_notebook_tab--active" : ""} onClick={() => setNotebookSettingsOpen(true)}>Settings</button>
+              <button type="button" role="tab" aria-selected={notebookActiveTab === "typing"} className={notebookActiveTab === "typing" ? "pdf_freeform_notebook_tab--active" : ""} onClick={() => setNotebookActiveTab("typing")}>Typing</button>
+              <button type="button" role="tab" aria-selected={notebookActiveTab === "drawing"} className={notebookActiveTab === "drawing" ? "pdf_freeform_notebook_tab--active" : ""} onClick={() => setNotebookActiveTab("drawing")}>Drawing</button>
+              <button type="button" role="tab" aria-selected={notebookActiveTab === "settings"} className={notebookActiveTab === "settings" ? "pdf_freeform_notebook_tab--active" : ""} onClick={() => setNotebookActiveTab("settings")}>Settings</button>
             </div>
-            {notebookSettingsOpen ? (
+            {notebookActiveTab === "settings" ? (
               <div className="pdf_freeform_notebook_settings_panel">
                 <strong>Voice commands</strong>
-                <p>Control mode uses browser STT. Say the line number, then the word number.</p>
+                <p>
+                  Control mode uses browser STT. Change the wording or placeholder order freely;
+                  keep <code>&lt;line number&gt;</code> and <code>&lt;word number&gt;</code> in each enabled command,
+                  plus <code>&lt;new value&gt;</code> in Edit.
+                </p>
                 {notebookVoiceCommands.map((command, index) => (
-                  <input
-                    key={index}
-                    value={command}
-                    aria-label={`Voice command ${index + 1}`}
-                    onChange={(event) => setNotebookVoiceCommands((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
-                  />
+                  <label className="pdf_freeform_notebook_command_setting" key={NOTEBOOK_VOICE_COMMAND_ACTIONS[index] || index}>
+                    <span>{NOTEBOOK_VOICE_COMMAND_LABELS[index] || `Command ${index + 1}`}</span>
+                    <input
+                      value={command}
+                      aria-label={`${NOTEBOOK_VOICE_COMMAND_LABELS[index] || `Voice command ${index + 1}`} template`}
+                      onChange={(event) => setNotebookVoiceCommands((current) => current.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
+                    />
+                  </label>
                 ))}
+              </div>
+            ) : notebookActiveTab === "drawing" ? (
+              <div
+                ref={notebookDrawingSurfaceRef}
+                className="pdf_freeform_notebook_drawing_surface"
+                onPointerDownCapture={() => activateAnnotationSurface("nb")}
+                onTouchStartCapture={() => activateAnnotationSurface("nb")}
+              >
+                <canvas ref={notebookDrawingCanvasRef} className="pdf_freeform_notebook_drawing_canvas" aria-label="Freeform drawing canvas" />
+                {notebookDrawingTextInput && (
+                  <textarea
+                    autoFocus
+                    inputMode="none"
+                    className="pdf_freeform_notebook_drawing_text_input"
+                    value={notebookDrawingTextInput.value}
+                    style={{ left: notebookDrawingTextInput.viewX, top: notebookDrawingTextInput.viewY }}
+                    aria-label="Drawing text"
+                    onChange={(event) => setNotebookDrawingTextInput((current) => current ? { ...current, value: event.target.value } : current)}
+                    onBlur={commitNotebookDrawingText}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setNotebookDrawingTextInput(null);
+                      } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault();
+                        commitNotebookDrawingText();
+                      }
+                    }}
+                  />
+                )}
               </div>
             ) : notebookControlMode ? (
               <div className="pdf_freeform_notebook_control_shell">
@@ -15155,8 +16016,8 @@ const PDFPage = forwardRef(({
             <div id="pdf_annot_history_header">
               <span className="pdf_annot_history_title">Annotation History</span>
               <div className="pdf_annot_history_source_toggle" role="tablist" aria-label="Annotation history source">
-                <button type="button" role="tab" aria-selected={annotHistorySource === "pdf"} className={annotHistorySource === "pdf" ? "pdf_annot_history_source--active" : undefined} onClick={() => setAnnotHistorySource("pdf")}>PDF</button>
-                <button type="button" role="tab" aria-selected={annotHistorySource === "md"} className={annotHistorySource === "md" ? "pdf_annot_history_source--active" : undefined} onClick={() => setAnnotHistorySource("md")}>MD</button>
+                <button type="button" role="tab" aria-selected={annotHistorySource === "pdf"} className={annotHistorySource === "pdf" ? "pdf_annot_history_source--active" : undefined} onClick={() => activateAnnotationSurface("pdf")}>PDF</button>
+                <button type="button" role="tab" aria-selected={annotHistorySource === "md"} className={annotHistorySource === "md" ? "pdf_annot_history_source--active" : undefined} onClick={() => activateAnnotationSurface("md")}>MD</button>
               </div>
               <button
                 id="pdf_annot_history_clear"
@@ -15367,6 +16228,8 @@ const PDFPage = forwardRef(({
                     className={`pdf_page_container${descriptor.kind === "ocr-blank" ? " pdf_page_container--ocr_blank" : ""}`}
                     ref={descriptor.kind === "pdf" ? (el => { pageContainerRefs.current[descriptor.page - 1] = el; }) : undefined}
                     data-page={descriptor.page}
+                    onPointerDownCapture={descriptor.kind === "pdf" ? () => activateAnnotationSurface("pdf") : undefined}
+                    onTouchStartCapture={descriptor.kind === "pdf" ? () => activateAnnotationSurface("pdf") : undefined}
                   >
                     {descriptor.kind === "pdf" ? (
                       <canvas
@@ -16461,8 +17324,8 @@ const PDFPage = forwardRef(({
                     <span>Annotation layers</span>
                   </div>
                   <div className="pdf_annotation_layer_tabs" role="tablist" aria-label="Annotation surface">
-                    <button type="button" role="tab" aria-selected={annotationLayerTab === "pdf"} className={annotationLayerTab === "pdf" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => setAnnotationLayerTab("pdf")}>PDF</button>
-                    <button type="button" role="tab" aria-selected={annotationLayerTab === "md"} className={annotationLayerTab === "md" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => setAnnotationLayerTab("md")}>MD</button>
+                    <button type="button" role="tab" aria-selected={annotationLayerTab === "pdf"} className={annotationLayerTab === "pdf" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => activateAnnotationSurface("pdf")}>PDF</button>
+                    <button type="button" role="tab" aria-selected={annotationLayerTab === "md"} className={annotationLayerTab === "md" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => activateAnnotationSurface("md")}>MD</button>
                   </div>
                   {annotationLayerTab === "pdf" ? (
                     <>

@@ -119,7 +119,9 @@ const PDFReaderWorkspace = () => {
   const [pageNavState, setPageNavState] = useState(DEFAULT_PAGE_NAV_STATE);
   useEffect(() => { setPageNavState(DEFAULT_PAGE_NAV_STATE); }, [activeId]);
   const [zoomState, setZoomState] = useState(DEFAULT_ZOOM_STATE);
-  useEffect(() => { setZoomState(DEFAULT_ZOOM_STATE); }, [activeId]);
+  useEffect(() => {
+    setZoomState(DEFAULT_ZOOM_STATE);
+  }, [activeId]);
   const [annotationSaveStatus, setAnnotationSaveStatus] = useState("idle");
   useEffect(() => { setAnnotationSaveStatus("idle"); }, [activeId]);
 
@@ -141,7 +143,6 @@ const PDFReaderWorkspace = () => {
     zoomIn: () => activePageRef.current?.zoomIn?.(),
     resetZoom: () => activePageRef.current?.resetZoom?.(),
   } : null;
-
   useEffect(() => {
     const activeTab = tabs.find((t) => t.id === activeId) || null;
     if (!activeTab) {

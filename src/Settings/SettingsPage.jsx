@@ -22,6 +22,7 @@ import {
 } from "../Avatar/local3d/sttProviderSettings";
 import { AVATAR_POSE_CONTROLS, emitAvatarPoseUpdate, readSavedPose, writeSavedPose } from "../Avatar/local3d/avatarPoseSettings";
 import { applyTheme, readStoredTheme } from "../utils/theme";
+import { readTranslatorProvider, TRANSLATOR_PROVIDERS, writeTranslatorProvider } from "../utils/translatorSettings";
 import "./settingsPage.css";
 
 const TTS_PROVIDER_OPTIONS = [
@@ -169,6 +170,8 @@ const SettingsPage = () => {
   const visibleSections = canSeeCameraTab ? [...SECTIONS, CAMERA_SECTION] : SECTIONS;
   const [theme,     setTheme]     = useState(() => readStoredTheme());
   const [pdfTranslateLang, setPdfTranslateLang] = useState(() => localStorage.getItem("mctosh_pdf_translate_lang") || "English");
+  const [translatorProvider, setTranslatorProvider] = useState(() => readTranslatorProvider());
+  const [translators, setTranslators] = useState([]);
   const [providers, setProviders] = useState([]);
   const [semanticDetectionSettings, setSemanticDetectionSettings] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS);
   const [semanticDetectionUsage, setSemanticDetectionUsage] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS.usage);
@@ -400,6 +403,13 @@ const SettingsPage = () => {
       .finally(() => setAiLoading(false));
   }, []);
 
+  useEffect(() => {
+    fetch(apiUrl("/api/settings/translator-status?live=1"))
+      .then((response) => response.json())
+      .then((data) => setTranslators(data.translators || []))
+      .catch(() => {});
+  }, []);
+
   // Dev AI Avatar (Anam) usage — org-wide minutes used this calendar month,
   // computed backend-side from Anam's own session records (see
   // GET /api/anam/usage in back/routes/AnamAPI.js — Anam has no dedicated
@@ -508,9 +518,16 @@ const SettingsPage = () => {
   const handleRefreshProviders = async () => {
     setAiRefreshing(true);
     try {
-      const r = await fetch(apiUrl("/api/settings/ai-status?live=1"));
-      const d = await r.json().catch(() => ({}));
-      setProviders(d.providers || []);
+      const [providerResponse, translatorResponse] = await Promise.all([
+        fetch(apiUrl("/api/settings/ai-status?live=1")),
+        fetch(apiUrl("/api/settings/translator-status?live=1")),
+      ]);
+      const [providerData, translatorData] = await Promise.all([
+        providerResponse.json().catch(() => ({})),
+        translatorResponse.json().catch(() => ({})),
+      ]);
+      setProviders(providerData.providers || []);
+      setTranslators(translatorData.translators || []);
     } catch {
       // leave the existing list in place on failure
     } finally {
@@ -636,6 +653,10 @@ const SettingsPage = () => {
   const handleProvider = (id) => {
     setDefProvider(id);
     localStorage.setItem("mctosh_ai_provider", id);
+  };
+
+  const handleTranslatorProvider = (id) => {
+    setTranslatorProvider(writeTranslatorProvider(id));
   };
 
   const updateSemanticDetectionSettings = async (patch) => {
@@ -1324,7 +1345,11 @@ const SettingsPage = () => {
                 <label className="sett_stt_model_row">
                   <span>
                     <strong>Transcription model</strong>
-                    <small>{sttSettings.provider === "openai" ? "Audio is securely sent through your backend OpenAI connection." : "Managed by your browser and operating system."}</small>
+                    <small>{sttSettings.provider === "openai"
+                      ? "Audio is securely sent through your backend OpenAI connection."
+                      : sttSettings.provider === "local-whisper"
+                        ? "Audio is sent only to the local Whisper service on this device."
+                        : "Managed by your browser and operating system."}</small>
                   </span>
                   <select value={sttSettings.model} onChange={(event) => handleSttModel(event.target.value)}>
                     {STT_PROVIDER_OPTIONS.find((option) => option.id === sttSettings.provider)?.models.map((item) => (
@@ -1461,6 +1486,51 @@ const SettingsPage = () => {
                     </button>
                   </div>
                 )}
+              </div>
+
+              <div className="sett_usage_card sett_translators_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Translators</span>
+                  <span className="sett_usage_card_period">PDF selection tool</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
+                  Choose the service used by Translate when a word or phrase is selected in the PDF Reader.
+                </p>
+                <label className="sett_stt_model_row sett_translator_language_row">
+                  <span><strong>Translate to</strong><small>Applied to the PDF selection translator.</small></span>
+                  <select
+                    value={pdfTranslateLang}
+                    onChange={(event) => {
+                      setPdfTranslateLang(event.target.value);
+                      localStorage.setItem("mctosh_pdf_translate_lang", event.target.value);
+                    }}
+                  >
+                    {TRANSLATE_LANGUAGES.map((language) => <option key={language} value={language}>{language}</option>)}
+                  </select>
+                </label>
+                <div className="sett_translator_grid">
+                  {(translators.length ? translators : [
+                    { id: TRANSLATOR_PROVIDERS.LIBRETRANSLATE, label: "LibreTranslate", status: "unknown", statusMessage: "Checking local service…" },
+                    { id: TRANSLATOR_PROVIDERS.AI, label: "AI Provider", status: "online", statusMessage: "Uses the default AI provider and model below." },
+                  ]).map((translator) => (
+                    <button
+                      type="button"
+                      key={translator.id}
+                      className={`sett_provider_card sett_translator_card${translatorProvider === translator.id ? " sett_provider_card--active" : ""}`}
+                      onClick={() => handleTranslatorProvider(translator.id)}
+                    >
+                      <div className="sett_provider_top">
+                        <span className="sett_provider_name">{translator.label}</span>
+                        <span className={`sett_provider_badge sett_provider_badge--${translator.status === "online" ? "ok" : translator.status === "error" ? "error" : "off"}`}>
+                          {translator.status === "online" ? "Online" : translator.status === "error" ? "Offline" : "Checking"}
+                        </span>
+                      </div>
+                      <span className="sett_provider_base">{translator.baseUrl || (translator.id === TRANSLATOR_PROVIDERS.AI ? "Default AI provider" : "Local service")}</span>
+                      <span className={`sett_provider_status_msg${translator.status === "error" ? " sett_provider_status_msg--error" : ""}`}>{translator.statusMessage}</span>
+                      {translatorProvider === translator.id && <span className="sett_provider_active_tag">Active</span>}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div id="sett_provider_default_row">

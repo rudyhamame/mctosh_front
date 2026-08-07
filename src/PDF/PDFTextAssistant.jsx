@@ -3,7 +3,7 @@ import AvatarContainer from "../Avatar/AvatarContainer";
 import { apiUrl } from "../config/api";
 import { AI_PROVIDERS } from "../hooks/useAIProvider";
 import { readStoredSession } from "../utils/sessionCleanup";
-import { readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
+import { normalizeOpenAiSttModel, readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
 import "./pdfTextAssistant.css";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -544,7 +544,7 @@ const PDFTextAssistant = ({
               const body = new FormData();
               body.append("audio", audio, recorder.mimeType.includes("ogg") ? "voice.ogg" : "voice.webm");
               body.append("provider", "openai");
-              body.append("model", sttSettings.model);
+              body.append("model", normalizeOpenAiSttModel(sttSettings.model));
               const response = await authFetch(apiUrl("/api/ai/transcribe"), { method: "POST", body });
               const data = await response.json().catch(() => ({}));
               if (!response.ok) throw new Error(data?.error?.message || "Voice transcription failed.");

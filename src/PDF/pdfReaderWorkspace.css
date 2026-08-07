@@ -255,6 +255,22 @@
   flex-shrink: 0;
 }
 
+.pdfw_zoom_surface_label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 2.9rem;
+  padding: 0 0.46rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-highlight) 12%, transparent);
+  color: var(--color-text);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  white-space: nowrap;
+}
+
 .pdfw_zoom_btn,
 .pdfw_zoom_label {
   border: none;
@@ -594,6 +610,12 @@
   #pdfw_header_main .pdfw_zoom_btn,
   #pdfw_header_main .pdfw_zoom_label {
     height: 1.85rem;
+  }
+
+  #pdfw_header_main .pdfw_zoom_surface_label {
+    min-width: 2.6rem;
+    padding-inline: 0.34rem;
+    font-size: 0.62rem;
   }
 
   #pdfw_header_main .pdfw_zoom_btn {
