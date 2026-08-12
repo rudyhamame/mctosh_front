@@ -13,6 +13,7 @@ export const normalizePagePartitionHierarchy = (annotations) => {
   const items = Array.isArray(annotations) ? annotations : [];
   const pages = items.filter((item) => item?.type === "pageBBox");
   const partitions = items.filter((item) => item?.type === "columnBBox");
+  const blocks = items.filter((item) => item?.type === "bbox");
   const partitionPage = new Map(partitions.map((partition) => [
     partition.id,
     smallestContaining(pages, partition),
@@ -26,6 +27,22 @@ export const normalizePagePartitionHierarchy = (annotations) => {
       return withoutParent;
     }
     if (!["bbox", "imageBBox"].includes(item?.type)) return item;
+    if (item.type === "bbox") {
+      const explicitBlockParent = blocks.find((candidate) => (
+        candidate.id === item.parentId
+        && candidate.id !== item.id
+        && containsBBox(candidate, item)
+      ));
+      const containingBlock = explicitBlockParent || smallestContaining(
+        blocks.filter((candidate) => (
+          candidate.id !== item.id
+          // Equal boxes must never parent one another and form a cycle.
+          && candidate.w * candidate.h > item.w * item.h
+        )),
+        item,
+      );
+      if (containingBlock) return { ...item, parentId: containingBlock.id };
+    }
     const page = smallestContaining(pages, item);
     if (!page) {
       const { parentId: _invalidParentId, ...withoutParent } = item;

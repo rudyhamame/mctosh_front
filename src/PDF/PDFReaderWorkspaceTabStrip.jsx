@@ -10,13 +10,6 @@ const BackArrowIcon = () => (
   </svg>
 );
 
-const InsertPageIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-    <path d="M13 10h-2v3H8v2h3v3h2v-3h3v-2h-3z" />
-    <path d="m19.94 7.68-.03-.09a.8.8 0 0 0-.2-.29l-5-5c-.09-.09-.19-.15-.29-.2l-.09-.03a.8.8 0 0 0-.26-.05c-.02 0-.04-.01-.06-.01H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-12s-.01-.04-.01-.06c0-.09-.02-.17-.05-.26ZM6 20V4h7v4c0 .55.45 1 1 1h4v11z" />
-  </svg>
-);
-
 const UndoActionIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 20 20" aria-hidden="true">
     <path d="M7.1 5.2 3.8 8.5l3.3 3.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -104,6 +97,7 @@ const ReaderTabs = ({ tabs, activeId, splitModeOn, checkedIds, tabTypes, annotat
         const showingStatus = tab.id === activeId && showSaveStatus;
         return (
           <button
+            type="button"
             key={tab.id}
             className={`pdfw_tab${tab.id === activeId ? " pdfw_tab--active" : ""}`}
             onClick={() => setActiveId(tab.id)}
@@ -145,101 +139,167 @@ const ReaderTabs = ({ tabs, activeId, splitModeOn, checkedIds, tabTypes, annotat
   );
 };
 
-const ReaderPageNavigation = ({ pageNav }) => {
-  const [readingModeMenuOpen, setReadingModeMenuOpen] = useState(false);
-  const readingModeMenuRef = useRef(null);
-  const [notebookMenuOpen, setNotebookMenuOpen] = useState(false);
-  const notebookMenuRef = useRef(null);
+const ReaderSearchBar = ({ pageNav }) => {
+  if (!pageNav) return null;
+  return (
+    <div className={`pdfw_search_group${pageNav.searchOpen ? " pdfw_search_group--open" : ""}`}>
+      {!pageNav.searchOpen ? (
+        <button
+          type="button"
+          className="pdfw_search_toggle"
+          onClick={() => pageNav.setSearchOpen(true)}
+          disabled={pageNav.disabled}
+          title="Search in document"
+          aria-label="Search in document"
+        >
+          <i className="bx bx-search" />
+        </button>
+      ) : (
+        <>
+          <i className="bx bx-search pdfw_search_icon" aria-hidden="true" />
+          <input
+            className="pdfw_search_input"
+            value={pageNav.searchQuery || ""}
+            onChange={(event) => pageNav.setSearchQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                pageNav.goToSearchMatch(event.shiftKey ? -1 : 1);
+              } else if (event.key === "Escape") {
+                pageNav.closeSearch();
+              }
+            }}
+            placeholder="Search document"
+            aria-label="Search document"
+            autoFocus
+          />
+          <span className="pdfw_search_count">
+            {pageNav.searchScanning ? "…" : pageNav.searchMatchCount ? `${pageNav.searchActiveIndex + 1} / ${pageNav.searchMatchCount}` : "—"}
+          </span>
+          <button type="button" className="pdfw_search_action" onClick={() => pageNav.goToSearchMatch(-1)} disabled={!pageNav.searchMatchCount} title="Previous match" aria-label="Previous match"><i className="bx bx-chevron-up" /></button>
+          <button type="button" className="pdfw_search_action" onClick={() => pageNav.goToSearchMatch(1)} disabled={!pageNav.searchMatchCount} title="Next match" aria-label="Next match"><i className="bx bx-chevron-down" /></button>
+          <button type="button" className="pdfw_search_action" onClick={pageNav.closeSearch} title="Close search" aria-label="Close search"><i className="bx bx-x" /></button>
+        </>
+      )}
+    </div>
+  );
+};
+
+const ReaderModeMenuItem = ({ icon, label, active = false, disabled = false, danger = false, role = "menuitemradio", onSelect }) => {
+  const checkedProps = role === "menuitemradio" || role === "menuitemcheckbox"
+    ? { "aria-checked": active }
+    : {};
+  return (
+    <button
+      type="button"
+      role={role}
+      className={`pdfw_mode_menu_item${active ? " pdfw_mode_menu_item--active" : ""}${danger ? " pdfw_mode_menu_item--danger" : ""}`}
+      disabled={disabled}
+      onClick={onSelect}
+      {...checkedProps}
+    >
+      <i className={icon} aria-hidden="true" />
+      <span>{label}</span>
+      {active && <i className="bx bx-check pdfw_mode_menu_check" aria-hidden="true" />}
+    </button>
+  );
+};
+
+const ReaderModeMenuSection = ({ title, items }) => (
+  <section className="pdfw_mode_menu_section" aria-label={title}>
+    <span className="pdfw_mode_menu_heading">{title}</span>
+    <div className="pdfw_mode_menu_items">
+      {items.map((item) => <ReaderModeMenuItem key={item.id} {...item} />)}
+    </div>
+  </section>
+);
+
+const ReaderPageNavigation = ({ pageNav, splitModeOn, onToggleSplit }) => {
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const modeMenuRef = useRef(null);
   useEffect(() => {
-    if (!readingModeMenuOpen) return undefined;
+    if (!modeMenuOpen) return undefined;
     const close = (event) => {
-      if (!readingModeMenuRef.current?.contains(event.target)) setReadingModeMenuOpen(false);
+      if (!modeMenuRef.current?.contains(event.target)) setModeMenuOpen(false);
     };
     document.addEventListener("pointerdown", close, true);
     return () => document.removeEventListener("pointerdown", close, true);
-  }, [readingModeMenuOpen]);
-  useEffect(() => {
-    if (!notebookMenuOpen) return undefined;
-    const close = (event) => {
-      if (!notebookMenuRef.current?.contains(event.target)) setNotebookMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", close, true);
-    return () => document.removeEventListener("pointerdown", close, true);
-  }, [notebookMenuOpen]);
+  }, [modeMenuOpen]);
   if (!pageNav || pageNav.pageCount <= 0) return null;
+
+  const selectMode = (action) => () => {
+    action?.();
+    setModeMenuOpen(false);
+  };
+  const modeSections = [
+    {
+      id: "pdf",
+      title: "PDF",
+      items: [
+        { id: "pdf-single", icon: "bx bx-file", label: "One-page PDF", active: pageNav.readingMode === "single" && !pageNav.markdownOpen, onSelect: selectMode(() => pageNav.setReadingMode("single")) },
+        { id: "pdf-booklet", icon: "bx bx-book-open", label: "Two-pages PDF", active: pageNav.readingMode === "booklet", onSelect: selectMode(() => pageNav.setReadingMode("booklet")) },
+        { id: "pdf-split", icon: "bx bx-columns", label: splitModeOn ? "Close split view" : "Split-view documents", role: "menuitemcheckbox", active: splitModeOn, disabled: pageNav.disabled, onSelect: selectMode(onToggleSplit) },
+      ],
+    },
+    {
+      id: "plain-text",
+      title: "Plain-Text Document",
+      items: [
+        { id: "plain-text-only", icon: "bx bx-file", label: "Document only", active: pageNav.markdownOpen && pageNav.markdownMode === "visual-only", onSelect: selectMode(() => pageNav.setMarkdownMode("md-only")) },
+        { id: "plain-text-pdf", icon: "bx bx-book-open", label: "Document with PDF page", active: pageNav.markdownOpen && pageNav.markdownMode === "visual-raw", onSelect: selectMode(() => pageNav.setMarkdownMode("md-pdf")) },
+        { id: "plain-text-analyser", icon: "bx bx-table", label: "Document analyser", active: pageNav.markdownOpen && pageNav.markdownMode === "raw", onSelect: selectMode(() => pageNav.setMarkdownMode("md-analyser")) },
+      ],
+    },
+    {
+      id: "notebook",
+      title: "Notebook",
+      items: [
+        { id: "notebook-only", icon: "bx bx-notepad", label: "Notebook only", active: pageNav.notebookMode === "notebook-only", onSelect: selectMode(() => pageNav.setNotebookView("notebook-only")) },
+        { id: "notebook-pdf", icon: "bx bx-book", label: "Notebook with PDF", active: pageNav.notebookMode === "notebook-pdf", onSelect: selectMode(() => pageNav.setNotebookView("notebook-pdf")) },
+        { id: "notebook-md", icon: "bx bx-file", label: "Notebook with Plain-Text Document", active: pageNav.notebookMode === "notebook-md", onSelect: selectMode(() => pageNav.setNotebookView("notebook-md")) },
+        { id: "notebook-pdf-md", icon: "bx bx-columns", label: "Notebook with PDF and Plain-Text Document", active: pageNav.notebookMode === "notebook-pdf-md", onSelect: selectMode(() => pageNav.setNotebookView("notebook-pdf-md")) },
+        ...(pageNav.notebookOpen ? [{ id: "notebook-close", icon: "bx bx-x", label: "Close Notebook", role: "menuitem", danger: true, onSelect: selectMode(pageNav.closeNotebook) }] : []),
+      ],
+    },
+  ];
+
   return (
     <div id="pdf_page_nav_row" className="pdfw_page_nav_group">
-      <div id="pdf_page_nav">
-        <button onClick={pageNav.goToPrevPage} disabled={pageNav.pageNum <= 1 || pageNav.disabled} title="Previous page">‹</button>
-        <span id="pdf_page_nav_label">{pageNav.pageNum} / {pageNav.pageCount}</span>
-        <button onClick={pageNav.goToNextPage} disabled={pageNav.pageNum >= pageNav.pageCount || pageNav.disabled} title="Next page">›</button>
-      </div>
+      <button
+          type="button"
+        className={`pdf_reader_nav_action${pageNav.outlineOpen ? " pdf_reader_nav_action--active" : ""}`}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          pageNav.toggleOutline();
+        }}
+        disabled={pageNav.disabled}
+        title="Open outline and bookmarks"
+        aria-label="Open outline and bookmarks"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M20 16.18V13c0-1.1-.9-2-2-2h-5V7.82c1.16-.41 2-1.51 2-2.82 0-1.65-1.35-3-3-3S9 3.35 9 5c0 1.3.84 2.4 2 2.82V11H6c-1.1 0-2 .9-2 2v3.18c-1.16.41-2 1.51-2 2.82 0 1.65 1.35 3 3 3s3-1.35 3-3c0-1.3-.84-2.4-2-2.82V13h5v3.18c-1.16.41-2 1.51-2 2.82 0 1.65 1.35 3 3 3s3-1.35 3-3c0-1.3-.84-2.4-2-2.82V13h5v3.18c-1.16.41-2 1.51-2 2.82 0 1.65 1.35 3 3 3s3-1.35 3-3c0-1.3-.84-2.4-2-2.82M12 4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1M5 20c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1m7 0c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1m7 0c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1" />
+        </svg>
+      </button>
+      <span className="pdfw_nav_separator pdfw_nav_separator--before-modes" aria-hidden="true" />
       {pageNav.pageCount > 1 && (
         <>
-          <div ref={readingModeMenuRef} className={`pdf_reading_mode_menu_wrap${readingModeMenuOpen ? " pdf_reading_mode_menu_wrap--open" : ""}`}>
+          <div ref={modeMenuRef} className={`pdfw_mode_menu_wrap${modeMenuOpen ? " pdfw_mode_menu_wrap--open" : ""}`}>
             <button
               type="button"
-              id="pdf_reading_mode_toggle"
-              className={!pageNav.markdownOpen ? "pdf_reading_mode_toggle--active" : undefined}
+              id="pdfw_mode_toggle"
+              className={modeMenuOpen ? "pdfw_mode_toggle--active" : undefined}
+              aria-expanded={modeMenuOpen}
               onClick={() => {
-                if (pageNav.markdownOpen) pageNav.setReadingMode("single");
-                setReadingModeMenuOpen((open) => !open);
+                setModeMenuOpen((open) => !open);
               }}
-              title="Reading mode"
+              title="Choose reading mode"
             >
-              PDF
+              MODE <i className="bx bx-chevron-down" aria-hidden="true" />
             </button>
-            {readingModeMenuOpen && (
-              <div className="pdf_reading_mode_menu" role="menu" aria-label="Reading mode">
-                <button type="button" className={pageNav.readingMode === "single" ? "pdf_reading_mode_menu_item--active" : undefined} onClick={() => { pageNav.setReadingMode("single"); setReadingModeMenuOpen(false); }}>
-                  <i className="bx bx-file" />
-                  <span>One-page PDF</span>
-                </button>
-                <button type="button" className={pageNav.readingMode === "booklet" ? "pdf_reading_mode_menu_item--active" : undefined} onClick={() => { pageNav.setReadingMode("booklet"); setReadingModeMenuOpen(false); }}>
-                  <i className="bx bx-book-open" />
-                  <span>Two-pages PDF</span>
-                </button>
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            id="pdf_ocr_companion_toggle"
-            className={[
-              pageNav.markdownOpen ? "pdf_ocr_companion_toggle--active" : "",
-              pageNav.markdownMenuOpen ? "pdf_ocr_companion_toggle--menu-open" : "",
-            ].filter(Boolean).join(" ") || undefined}
-            onClick={pageNav.toggleMarkdownAside}
-            title={pageNav.markdownOpen ? "Markdown options" : "Choose Markdown mode"}
-            disabled={pageNav.disabled}
-          >
-            MD
-          </button>
-          <div ref={notebookMenuRef} className={`pdf_notebook_menu_wrap${notebookMenuOpen ? " pdf_notebook_menu_wrap--open" : ""}`}>
-            <button
-              type="button"
-              id="pdf_notebook_toggle"
-              className={pageNav.notebookOpen ? "pdf_notebook_toggle--active" : undefined}
-              onClick={() => setNotebookMenuOpen((open) => !open)}
-              title="Freeform Notebook options"
-              disabled={pageNav.disabled}
-            >
-              NB
-            </button>
-            {notebookMenuOpen && (
-              <div className="pdf_notebook_menu" role="menu" aria-label="Freeform Notebook modes">
-                {[
-                  ["notebook-only", "Notebook only"],
-                  ["notebook-pdf", "Notebook with PDF"],
-                  ["notebook-md", "Notebook with MD"],
-                  ["notebook-pdf-md", "Notebook with PDF and MD"],
-                ].map(([mode, label]) => (
-                  <button key={mode} type="button" role="menuitem" className={pageNav.notebookMode === mode ? "pdf_notebook_menu_item--active" : undefined} onClick={() => { pageNav.setNotebookView(mode); setNotebookMenuOpen(false); }}>
-                    <i className={mode === "notebook-only" ? "bx bx-notepad" : mode === "notebook-md" ? "bx bx-file" : mode === "notebook-pdf-md" ? "bx bx-columns" : "bx bx-book"} />
-                    <span>{label}</span>
-                  </button>
-                ))}
-                {pageNav.notebookOpen && <button type="button" role="menuitem" className="pdf_notebook_menu_item--close" onClick={() => { pageNav.closeNotebook(); setNotebookMenuOpen(false); }}><i className="bx bx-x" /><span>Close Notebook</span></button>}
+            {modeMenuOpen && (
+              <div className="pdfw_mode_menu" role="menu" aria-label="Reader modes">
+                {modeSections.map((section) => <ReaderModeMenuSection key={section.id} {...section} />)}
               </div>
             )}
           </div>
@@ -256,41 +316,71 @@ const ReaderPageNavigation = ({ pageNav }) => {
   );
 };
 
-const ReaderAnnotationActions = ({ undoRedo, pageNav }) => {
+export const ReaderAnnotationActions = ({ undoRedo, pageNav }) => {
   if (!undoRedo) return null;
+  const activeSurface = String(undoRedo.activeSurface || "pdf").toLowerCase();
   return (
-    <div id="pdf_annot_right_group" className="pdfw_undo_redo_group">
-      <div id="pdf_annot_actions">
-        {pageNav && pageNav.pageCount > 0 && pageNav.readingMode === "single" && (
-          <button
-            type="button"
-            id="pdf_insert_blank_page_btn"
-            onClick={pageNav.insertBlankPageAfterCurrent}
-            disabled={pageNav.insertingBlankPage || !pageNav.canInsertBlankPage}
-            title="Insert a blank page after this one"
-          >
-            {pageNav.insertingBlankPage ? <i className="bx bx-loader-alt bx-spin" /> : <InsertPageIcon />}
-          </button>
-        )}
-        <div id="pdf_annot_action_btn_group">
-          <button className="annot_action_btn" onClick={undoRedo.undo} title="Undo last annotation step" disabled={!undoRedo.canUndo}><UndoActionIcon /></button>
-          {undoRedo.hasHistory && (
-            <button
-              className={`annot_action_btn${undoRedo.historyOpen ? " annot_action_btn--active" : ""}`}
-              onClick={undoRedo.toggleHistory}
-              title="Annotation timeline"
-            >
-              <HistoryActionIcon />
-            </button>
-          )}
-          <button className="annot_action_btn" onClick={undoRedo.redo} title="Redo last undone step" disabled={!undoRedo.canRedo}><RedoActionIcon /></button>
-        </div>
-      </div>
+    <div className="pdfw_toolbar_annotation_actions" aria-label="Annotation history actions">
+      <span
+        className={`pdf_annot_active_surface pdf_annot_active_surface--${activeSurface}`}
+        aria-label={`Active annotation surface: ${activeSurface.toUpperCase()}`}
+        aria-live="polite"
+      >
+        {activeSurface.toUpperCase()}
+      </span>
+      <button className="annot_action_btn" onClick={undoRedo.undo} title="Undo last annotation step" disabled={!undoRedo.canUndo}><UndoActionIcon /></button>
+      {undoRedo.hasHistory && (
+        <button
+          className={`annot_action_btn${undoRedo.historyOpen ? " annot_action_btn--active" : ""}`}
+          onClick={undoRedo.toggleHistory}
+          title="Annotation timeline"
+        >
+          <HistoryActionIcon />
+        </button>
+      )}
+      <button className="annot_action_btn" onClick={undoRedo.redo} title="Redo last undone step" disabled={!undoRedo.canRedo}><RedoActionIcon /></button>
     </div>
   );
 };
 
-const ReaderZoomControls = ({ zoomControls, label }) => {
+const ReaderOverflowMenu = ({ undoRedo, pageNav, splitModeOn, onToggleSplit }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (!ref.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close, true);
+    return () => document.removeEventListener("pointerdown", close, true);
+  }, [open]);
+
+  const run = (action) => {
+    action?.();
+    setOpen(false);
+  };
+
+  return (
+    <div className="pdfw_overflow_wrap" ref={ref}>
+      <button type="button" className="pdfw_overflow_button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-label="More reader actions" title="More reader actions">
+        <i className="bx bx-dots-horizontal-rounded" />
+      </button>
+      {open && (
+        <div className="pdfw_overflow_menu" role="menu" aria-label="More reader actions">
+          <button type="button" role="menuitem" onClick={() => run(pageNav?.toggleOutline)} disabled={!pageNav}><i className="bx bx-list-ul" /> Contents and bookmarks</button>
+          <button type="button" role="menuitem" onClick={() => run(pageNav?.toggleBookmark)} disabled={!pageNav}><i className="bx bx-bookmark" /> Toggle bookmark</button>
+          <button type="button" role="menuitem" onClick={() => run(undoRedo?.undo)} disabled={!undoRedo?.canUndo}><i className="bx bx-undo" /> Undo</button>
+          <button type="button" role="menuitem" onClick={() => run(undoRedo?.redo)} disabled={!undoRedo?.canRedo}><i className="bx bx-redo" /> Redo</button>
+          <button type="button" role="menuitem" onClick={() => run(undoRedo?.toggleHistory)} disabled={!undoRedo?.hasHistory}><i className="bx bx-history" /> Annotation history</button>
+          <button type="button" role="menuitem" onClick={() => run(onToggleSplit)} disabled={!pageNav || pageNav.pageCount < 2}><i className="bx bx-columns" /> {splitModeOn ? "Close split view" : "Split view"}</button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ReaderZoomControls = ({ zoomControls }) => {
   const holdRef = useRef({ timer: null, interval: null, suppressClick: false });
 
   const stopZoomHold = useCallback(() => {
@@ -353,8 +443,7 @@ const ReaderZoomControls = ({ zoomControls, label }) => {
 
   if (!zoomControls) return null;
   return (
-    <div className="pdfw_zoom_group" aria-label={`${label || "Page"} zoom controls`}>
-      {label && <span className="pdfw_zoom_surface_label">{label}</span>}
+    <>
       <button
         type="button"
         className="pdfw_zoom_btn"
@@ -370,15 +459,6 @@ const ReaderZoomControls = ({ zoomControls, label }) => {
       </button>
       <button
         type="button"
-        className="pdfw_zoom_label"
-        onClick={zoomControls.resetZoom}
-        disabled={zoomControls.disabled}
-        title="Reset zoom"
-      >
-        {zoomControls.percent || 100}%
-      </button>
-      <button
-        type="button"
         className="pdfw_zoom_btn"
         onPointerDown={() => startZoomHold(1)}
         onPointerUp={finishZoomPress}
@@ -390,7 +470,7 @@ const ReaderZoomControls = ({ zoomControls, label }) => {
       >
         <i className="bx bx-plus" />
       </button>
-    </div>
+    </>
   );
 };
 
@@ -403,11 +483,9 @@ const PDFReaderWorkspaceTabStrip = ({
   splitModeOn,
   checkedIds,
   onToggleCheck,
-  undoRedo,
   pageNav,
-  zoomControls,
+  onToggleSplit,
   annotationSaveStatus,
-  onAnnotationSaveStateChange,
   onBack,
 }) => {
   const {
@@ -483,12 +561,8 @@ const PDFReaderWorkspaceTabStrip = ({
       </div>
 
       <div className="pdfw_tabbar_center">
-        <ReaderPageNavigation pageNav={pageNav} />
-      </div>
-
-      <div className="pdfw_tabbar_right">
-        <ReaderZoomControls zoomControls={zoomControls} label="PDF/MD" />
-        <ReaderAnnotationActions undoRedo={undoRedo} pageNav={pageNav} />
+        <ReaderSearchBar pageNav={pageNav} />
+        <ReaderPageNavigation pageNav={pageNav} splitModeOn={splitModeOn} onToggleSplit={onToggleSplit} />
       </div>
     </div>
   );

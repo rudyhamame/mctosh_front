@@ -24,6 +24,17 @@ export const DOMAIN_LABELS = {
   societies: "Societies",
 };
 
+export const MORPHE_OBJECT_MODES = [
+  { key: "ATOM", domain: "atoms", label: "Atom" },
+  { key: "MOLECULE", domain: "molecules", label: "Molecule" },
+  { key: "CELL", domain: "cells", label: "Cell" },
+  { key: "TISSUE", domain: "tissues", label: "Tissue" },
+  { key: "ORGAN", domain: "organs", label: "Organ" },
+  { key: "SYSTEM", domain: "organ_systems", label: "System" },
+  { key: "HUMAN", domain: "humans", label: "Human" },
+  { key: "SOCIETY", domain: "societies", label: "Society" },
+];
+
 export const EXTRACTION_BASES = ["explicit", "linguistically_presupposed", "externally_inferred", "manually_added"];
 
 export const EXTRACTION_BASIS_LABELS = {

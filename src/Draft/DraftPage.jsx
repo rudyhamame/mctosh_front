@@ -3,6 +3,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import jsPDF from "jspdf";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
+import { startConfiguredStt } from "../Shared/configuredStt";
 import "./draftPage.css";
 
 const authHeader = () => {
@@ -424,6 +426,7 @@ const DraftEditor = ({ id }) => {
   const dictationPcRef     = useRef(null); // RTCPeerConnection to OpenAI's Realtime API
   const dictationDcRef     = useRef(null); // its data channel, carrying transcription events
   const dictationStreamRef = useRef(null); // the raw mic MediaStream, so its tracks can be stopped
+  const configuredDictationRef = useRef(null);
   const liveDictationSpanRef = useRef(null); // the <span> currently accumulating one in-progress utterance's streamed text
   const lastDictationTextNodeRef = useRef(null); // last finalized dictated text node, for "I said that again" replacement
   const lastDictationTranscriptRef = useRef(""); // raw finalized transcript, before any cleanup pass
@@ -908,6 +911,8 @@ const DraftEditor = ({ id }) => {
   // by our backend) so words appear as they're spoken, not after a whole
   // recording is uploaded and transcribed as one batch.
   const teardownDictationConnection = useCallback(() => {
+    configuredDictationRef.current?.abort?.();
+    configuredDictationRef.current = null;
     dictationDcRef.current?.close();
     dictationPcRef.current?.close();
     dictationStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -1153,6 +1158,43 @@ const DraftEditor = ({ id }) => {
     const range = ensureRangeLivesInIndentedBlock(initialRange);
 
     try {
+      const sttSettings = readSttSettings();
+      if (sttSettings.provider !== STT_PROVIDERS.OPENAI) {
+        range.deleteContents();
+        const anchor = document.createComment("");
+        range.insertNode(anchor);
+        startNewLiveSpan(anchor);
+        anchor.remove();
+        const language = dictationLangEn && !dictationLangAr ? "en-US"
+          : dictationLangAr && !dictationLangEn ? "ar"
+          : undefined;
+        const controller = await startConfiguredStt({
+          continuous: true,
+          language,
+          onStart: () => setIsDictating(true),
+          onText: (spokenText, { final }) => {
+            const span = liveDictationSpanRef.current;
+            if (!span) return;
+            if (!final) {
+              span.textContent = spokenText;
+              commitFromDom();
+              return;
+            }
+            const transcript = String(spokenText || "").trim();
+            if (!transcript) return;
+            const textNode = settleLiveSpan(`${transcript} `);
+            lastDictationTextNodeRef.current = textNode;
+            lastDictationTranscriptRef.current = transcript;
+            startNewLiveSpan(textNode);
+            commitFromDom();
+            if (textNode) void maybeCorrectDictationText(textNode, transcript);
+          },
+          onError: (error) => setDictationError(error.message || "Dictation failed."),
+          onEnd: () => setIsDictating(false),
+        });
+        configuredDictationRef.current = controller;
+        return;
+      }
       const tokenRes = await fetch(apiUrl("/api/ai/realtime-token"), { method: "POST", headers: authHeader() });
       const tokenData = await tokenRes.json();
       if (!tokenRes.ok) throw new Error(tokenData.error?.message || "Couldn't start real-time dictation.");

@@ -671,12 +671,6 @@
   cursor: pointer;
 }
 
-#pdf_ai_assistant_fab.pdf_ai_assistant_fab--active {
-  color: #287061;
-  border-color: color-mix(in srgb, #287061 48%, var(--color-border));
-  background: color-mix(in srgb, var(--color-surface) 84%, #287061 16%);
-}
-
 @media (max-width: 700px) {
   #pdf_text_agent_panel {
     right: 0.65rem;

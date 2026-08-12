@@ -4,9 +4,11 @@ import { apiUrl } from "../config/api";
 import { AI_PROVIDERS } from "../hooks/useAIProvider";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { normalizeOpenAiSttModel, readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
+import { startConfiguredStt } from "../Shared/configuredStt";
 import "./pdfTextAssistant.css";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const PDF_CHAT_CLIENT_TIMEOUT_MS = 120000;
 
 const authFetch = (url, options = {}) => {
   const token = readStoredSession()?.token || "";
@@ -25,7 +27,9 @@ const replaceLastMessage = (messages, content) => {
 };
 
 const PDFTextAssistant = ({
+  appContext,
   filename,
+  hasDocument = true,
   currentPage,
   loadDocumentPages,
   model,
@@ -52,7 +56,9 @@ const PDFTextAssistant = ({
   const [callState, setCallState] = useState("idle");
   const [callTranscript, setCallTranscript] = useState("");
   const [tokenUsage, setTokenUsage] = useState(null);
-  const [sttSettings] = useState(() => readSttSettings());
+  const [sttSettings, setSttSettings] = useState(() => readSttSettings());
+  const sttSettingsRef = useRef(sttSettings);
+  sttSettingsRef.current = sttSettings;
   const [minimized, setMinimized] = useState(false);
   // Conversation persistence (GET/POST/PATCH /api/pdf-assistant-conversations)
   // — activeConversationId is state (drives the History list's "active" row
@@ -84,6 +90,14 @@ const PDFTextAssistant = ({
 
   useEffect(() => {
     let cancelled = false;
+    if (typeof loadDocumentPages !== "function") {
+      setPages([]);
+      setTextStored(false);
+      setTextGenerated(false);
+      setLoadError("");
+      setLoadingText(false);
+      return undefined;
+    }
     setLoadingText(true);
     setLoadError("");
     loadDocumentPages()
@@ -98,7 +112,7 @@ const PDFTextAssistant = ({
         setPages(usablePages);
         setTextStored(Boolean(!Array.isArray(result) && result?.stored));
         setTextGenerated(Boolean(!Array.isArray(result) && result?.generated));
-        if (!usablePages.length) setLoadError("This PDF has no extractable text for the assistant.");
+        if (!usablePages.length && hasDocument) setLoadError("This PDF has no extractable text; app context is still available.");
       })
       .catch(() => {
         if (!cancelled) setLoadError("The PDF text could not be prepared.");
@@ -115,7 +129,7 @@ const PDFTextAssistant = ({
       callRecognitionRef.current?.abort?.();
       avatarRef.current?.stop?.();
     };
-  }, [loadDocumentPages]);
+  }, [hasDocument, loadDocumentPages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
@@ -280,7 +294,7 @@ const PDFTextAssistant = ({
 
   const sendQuestion = useCallback(async (rawQuestion, options = {}) => {
     const text = String(rawQuestion || "").trim();
-    if (!text || streaming || loadingText || loadError || !pages.length) return "";
+    if (!text || streaming || loadingText) return "";
     speechSyncedTurnRef.current = false;
     speechStartedCallbackRef.current = null;
     avatarRef.current?.stop?.();
@@ -295,9 +309,14 @@ const PDFTextAssistant = ({
     abortRef.current = controller;
     let fullAnswer = "";
     let failed = false;
+    let timedOut = false;
     spokenCaptionRef.current = "";
     speechSyncedTurnRef.current = true;
     speechStartedCallbackRef.current = options.onSpeaking || null;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, PDF_CHAT_CLIENT_TIMEOUT_MS);
 
     try {
       const response = await authFetch(apiUrl("/api/ai/pdf-chat"), {
@@ -309,6 +328,7 @@ const PDFTextAssistant = ({
           pages: sourceId ? undefined : pages,
           filename,
           currentPage,
+          appContext,
           provider: provider === "manual" ? "groq" : provider,
           model,
         }),
@@ -316,7 +336,7 @@ const PDFTextAssistant = ({
       });
       if (!response.ok || !response.body) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data?.error?.message || "The PDF assistant could not answer.");
+        throw new Error(data?.error?.message || "The AMCTOSHS Assistant could not answer.");
       }
 
       const reader = response.body.getReader();
@@ -355,15 +375,21 @@ const PDFTextAssistant = ({
       speechSyncedTurnRef.current = false;
       speechStartedCallbackRef.current = null;
       avatarRef.current?.stop?.();
-      if (error.name === "AbortError") {
+      if (error.name === "AbortError" && !timedOut) {
         setMessages((previous) => {
           const lastMessage = previous[previous.length - 1];
           return lastMessage?.role === "assistant" && !lastMessage.content ? previous.slice(0, -1) : previous;
         });
       } else {
-        setMessages((previous) => replaceLastMessage(previous, error.message || "The PDF assistant could not answer."));
+        setMessages((previous) => replaceLastMessage(
+          previous,
+          timedOut
+            ? "The assistant timed out while waiting for the AI provider. Please try again."
+            : error.message || "The AMCTOSHS Assistant could not answer.",
+        ));
       }
     } finally {
+      window.clearTimeout(timeoutId);
       abortRef.current = null;
       await Promise.resolve(avatarRef.current?.endMessage?.());
       if (fullAnswer && !failed) {
@@ -374,38 +400,42 @@ const PDFTextAssistant = ({
       setStreaming(false);
     }
     return failed ? "" : fullAnswer;
-  }, [currentPage, filename, loadError, loadingText, messages, model, pages, provider, sourceId, streaming]);
+  }, [appContext, currentPage, filename, loadingText, messages, model, pages, provider, sourceId, streaming]);
 
   sendQuestionRef.current = sendQuestion;
 
-  const toggleListening = useCallback(() => {
-    if (!SpeechRecognition || streaming || callActive) return;
+  const toggleListening = useCallback(async () => {
+    if (streaming || callActive) return;
     if (listening) {
       recognitionRef.current?.stop?.();
       return;
     }
-    const recognition = new SpeechRecognition();
-    recognition.continuous = false;
-    recognition.interimResults = true;
-    recognition.lang = "en-US";
-    recognition.onstart = () => setListening(true);
-    recognition.onresult = (event) => {
-      const transcript = Array.from(event.results).map((result) => result[0].transcript).join("");
-      setQuestion(transcript);
-    };
-    recognition.onend = () => {
+    const settings = readSttSettings();
+    setSttSettings(settings);
+    sttSettingsRef.current = settings;
+    const pending = { stop: () => {}, abort: () => {} };
+    recognitionRef.current = pending;
+    try {
+      const recognition = await startConfiguredStt({
+        continuous: false,
+        language: "en-US",
+        onStart: () => setListening(true),
+        onText: (transcript) => setQuestion(transcript),
+        onError: () => setListening(false),
+        onEnd: () => {
+          setListening(false);
+          recognitionRef.current = null;
+        },
+      });
+      if (recognitionRef.current !== pending) recognition.abort?.();
+      else recognitionRef.current = recognition;
+    } catch {
       setListening(false);
       recognitionRef.current = null;
-    };
-    recognition.onerror = () => {
-      setListening(false);
-      recognitionRef.current = null;
-    };
-    recognitionRef.current = recognition;
-    recognition.start();
+    }
   }, [callActive, listening, streaming]);
 
-  const ready = !loadingText && !loadError && pages.length > 0;
+  const ready = !loadingText;
   const answeredMessages = messages.filter((message) => message.role === "assistant" && message.content);
   const effectiveProvider = provider === "manual" ? "groq" : provider;
   const providerDetails = AI_PROVIDERS.find((item) => item.id === effectiveProvider);
@@ -475,8 +505,9 @@ const PDFTextAssistant = ({
 
   const startCallListening = useCallback(() => {
     if (!callActiveRef.current || !ready || callRecognitionRef.current) return;
+    const activeSttSettings = sttSettingsRef.current;
 
-    if (sttSettings.provider === STT_PROVIDERS.OPENAI) {
+    if (activeSttSettings.provider !== STT_PROVIDERS.BROWSER) {
       const session = {
         aborted: false,
         abort: () => { session.aborted = true; },
@@ -543,9 +574,12 @@ const PDFTextAssistant = ({
             try {
               const body = new FormData();
               body.append("audio", audio, recorder.mimeType.includes("ogg") ? "voice.ogg" : "voice.webm");
-              body.append("provider", "openai");
-              body.append("model", normalizeOpenAiSttModel(sttSettings.model));
-              const response = await authFetch(apiUrl("/api/ai/transcribe"), { method: "POST", body });
+              const isLocalWhisper = activeSttSettings.provider === STT_PROVIDERS.LOCAL_WHISPER;
+              if (!isLocalWhisper) {
+                body.append("provider", "openai");
+                body.append("model", normalizeOpenAiSttModel(activeSttSettings.model));
+              }
+              const response = await authFetch(apiUrl(isLocalWhisper ? "/api/ai/transcribe-local" : "/api/ai/transcribe"), { method: "POST", body });
               const data = await response.json().catch(() => ({}));
               if (!response.ok) throw new Error(data?.error?.message || "Voice transcription failed.");
               const transcript = String(data.text || "").trim();
@@ -645,9 +679,12 @@ const PDFTextAssistant = ({
       stopVoiceCall();
       return;
     }
-    const canUseOpenAI = sttSettings.provider === STT_PROVIDERS.OPENAI
+    const settings = readSttSettings();
+    setSttSettings(settings);
+    sttSettingsRef.current = settings;
+    const canUseRecordedStt = settings.provider !== STT_PROVIDERS.BROWSER
       && Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder && window.AudioContext);
-    if ((!canUseOpenAI && !SpeechRecognition) || !ready) return;
+    if ((!canUseRecordedStt && !SpeechRecognition) || !ready) return;
     recognitionRef.current?.abort?.();
     avatarRef.current?.unlockAudio?.();
     callActiveRef.current = true;
@@ -656,37 +693,40 @@ const PDFTextAssistant = ({
     queueCallListening(0);
   }, [queueCallListening, ready, stopVoiceCall, sttSettings.provider]);
 
-  const voiceCallAvailable = sttSettings.provider === STT_PROVIDERS.OPENAI
+  const voiceCallAvailable = sttSettings.provider !== STT_PROVIDERS.BROWSER
     ? Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder && window.AudioContext)
     : Boolean(SpeechRecognition);
+  const dictationAvailable = sttSettings.provider === STT_PROVIDERS.BROWSER
+    ? Boolean(SpeechRecognition)
+    : Boolean(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
 
   return (
     <section
       id="pdf_text_agent_panel"
       className={minimized ? "pdf_text_agent_panel--minimized" : undefined}
-      aria-label="Current PDF study assistant"
+      aria-label="AMCTOSHS app assistant"
     >
       <button
         type="button"
         id="pdf_text_agent_restore"
         onClick={() => setMinimized(false)}
-        aria-label="Restore PDF Study Avatar"
-        title="Restore PDF Study Avatar"
+        aria-label="Restore AMCTOSHS Assistant"
+        title="Restore AMCTOSHS Assistant"
       >
         <span className={`pdf_text_agent_restore_icon${callActive ? ` pdf_text_agent_restore_icon--${callState}` : ""}`}>
           <i className="bx bx-bot" aria-hidden="true" />
         </span>
         <span className="pdf_text_agent_restore_copy">
-          <strong>PDF Agent</strong>
+          <strong>AMCTOSHS</strong>
           <small>{callActive ? (callState === "thinking" ? "Thinking" : callState === "speaking" ? "Speaking" : "Listening") : streaming ? "Answering" : "Ready"}</small>
         </span>
         <i className="bx bx-window-open" aria-hidden="true" />
       </button>
       <header id="pdf_text_agent_header">
         <div>
-          <span id="pdf_text_agent_eyebrow"><i className="bx bx-lock-alt" /> Current PDF only</span>
-          <strong>PDF Study Avatar</strong>
-          <small title={filename}>{filename || "Current PDF"}</small>
+          <span id="pdf_text_agent_eyebrow"><i className="bx bx-radar" /> App-wide awareness</span>
+          <strong>AMCTOSHS Assistant</strong>
+          <small title={filename}>{hasDocument ? `${filename || "Current PDF"} · page ${currentPage || 1}` : appContext?.route || "Current app"}</small>
           <div id="pdf_text_agent_model" title={`AI provider: ${providerLabel}; model: ${modelLabel}`}>
             <i className="bx bx-chip" aria-hidden="true" />
             <span>{providerLabel}</span>
@@ -725,7 +765,7 @@ const PDFTextAssistant = ({
             type="button"
             id="pdf_text_agent_minimize"
             onClick={() => setMinimized(true)}
-            aria-label="Minimize PDF Study Avatar"
+            aria-label="Minimize AMCTOSHS Assistant"
             title="Minimize and keep working in the background"
           >
             <i className="bx bx-minus" />
@@ -734,7 +774,7 @@ const PDFTextAssistant = ({
             type="button"
             id="pdf_text_agent_close"
             onClick={closeAgent}
-            aria-label="Close PDF assistant and end conversation"
+            aria-label="Close AMCTOSHS Assistant and end conversation"
             title="Close and end conversation"
           >
             <i className="bx bx-x" />
@@ -748,10 +788,10 @@ const PDFTextAssistant = ({
           <span className={`pdf_text_agent_status_dot${ready ? " pdf_text_agent_status--ready" : ""}`} />
           <span className="pdf_text_agent_scope_label">
             {loadingText
-              ? "Reading PDF text..."
-              : loadError || `${pages.length} text page${pages.length === 1 ? "" : "s"} ready${
+              ? "Preparing assistant context..."
+              : loadError || (hasDocument ? `${pages.length} text page${pages.length === 1 ? "" : "s"} ready${
                   textStored ? (textGenerated ? " · extracted & saved to DB" : " · loaded from DB") : ""
-                }`}
+                }` : `Aware of ${appContext?.route || "the current app page"}`)}
           </span>
           {ready && textStored && (
             <button
@@ -825,10 +865,13 @@ const PDFTextAssistant = ({
           <>
             {!messages.length && (
               <div id="pdf_text_agent_welcome">
-                <strong>Ask about what you are reading.</strong>
-                <p>Answers are restricted to this PDF and include page references.</p>
+                <strong>Ask about what is happening.</strong>
+                <p>{hasDocument ? "The assistant knows the current app context and grounds document answers in this PDF." : "The assistant knows your current app location and recent interface actions."}</p>
                 <div id="pdf_text_agent_suggestions">
-                  {["Summarize the main points", `Explain page ${currentPage}`, "Create three study questions"].map((suggestion) => (
+                  {(hasDocument
+                    ? ["Summarize the main points", `Explain page ${currentPage}`, "What am I currently working on?"]
+                    : ["What page am I on?", "What did I just do?", "What can I do here?"]
+                  ).map((suggestion) => (
                     <button type="button" key={suggestion} onClick={() => sendQuestion(suggestion)} disabled={!ready}>
                       {suggestion}
                     </button>
@@ -838,7 +881,7 @@ const PDFTextAssistant = ({
             )}
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`pdf_text_agent_message pdf_text_agent_message--${message.role}`}>
-                <span>{message.role === "user" ? "You" : "PDF Avatar"}</span>
+                <span>{message.role === "user" ? "You" : "AMCTOSHS"}</span>
                 <p>{message.content || (streaming && index === messages.length - 1 ? "Thinking..." : "")}</p>
               </div>
             ))}
@@ -868,7 +911,7 @@ const PDFTextAssistant = ({
           rows={1}
           aria-label="Question about the current PDF"
         />
-        {SpeechRecognition && (
+        {dictationAvailable && (
           <button
             type="button"
             className={listening ? "pdf_text_agent_mic--active" : undefined}

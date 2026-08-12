@@ -10,7 +10,7 @@ import {
 
 describe("BBox type model", () => {
   it("registers every current bbox subtype", () => {
-    expect([...BBOX_TYPES]).toEqual(["bbox", "subLineBBox", "columnBBox", "pageBBox", "bboxTitle", "imageBBox"]);
+    expect([...BBOX_TYPES]).toEqual(["bbox", "subLineBBox", "columnBBox", "pageBBox", "bboxTitle", "imageBBox", "omissionBBox"]);
     expect([...BBOX_CARD_TYPES]).toEqual(["bbox", "imageBBox"]);
   });
 
@@ -34,6 +34,7 @@ describe("BBox type model", () => {
     expect(canBBoxContain("columnBBox", "bulletBBox")).toBe(false);
     expect(canBBoxContain("bbox", "columnBBox")).toBe(false);
     expect(canBBoxContain("bbox", "subLineBBox")).toBe(true);
+    expect(canBBoxContain("bbox", "bbox")).toBe(true);
     expect(canBBoxContain("columnBBox", "subLineBBox")).toBe(false);
     expect(canBBoxContain("columnBBox", "columnBBox")).toBe(false);
   });

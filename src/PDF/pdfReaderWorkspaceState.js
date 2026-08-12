@@ -7,6 +7,7 @@ export const DEFAULT_UNDO_REDO_STATE = {
   canRedo: false,
   hasHistory: false,
   historyOpen: false,
+  activeSurface: "pdf",
 };
 
 export const DEFAULT_PAGE_NAV_STATE = {

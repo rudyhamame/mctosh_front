@@ -1,0 +1,51 @@
+.pdf_assistant_footer_tool {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+#app_footer #pdf_text_agent_panel {
+  position: fixed;
+  right: 1rem;
+  bottom: calc(var(--app-footer-height, 44px) + .75rem);
+  z-index: 1002;
+  max-height: calc(100vh - var(--app-footer-height, 44px) - 2rem);
+}
+
+#app_footer #pdf_ai_assistant_fab {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  box-shadow: none;
+  backdrop-filter: none;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+
+#app_footer #pdf_ai_assistant_fab:hover,
+#app_footer #pdf_ai_assistant_fab.pdf_ai_assistant_fab--active {
+  border-color: #287061;
+  background: color-mix(in srgb, #287061 12%, transparent);
+  color: #287061;
+}
+
+#app_footer #pdf_ai_assistant_fab:disabled {
+  cursor: not-allowed;
+  opacity: .42;
+}
+
+#app_footer #pdf_ai_assistant_fab i {
+  font-size: .95rem;
+  line-height: 1;
+}

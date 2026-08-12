@@ -36,4 +36,18 @@ describe("Page and Partition hierarchy", () => {
       expect.objectContaining({ id: "part-2", parentId: "page" }),
     ]);
   });
+
+  it("keeps a contained Block as a nested Block instead of a sibling line source", () => {
+    const normalized = normalizePagePartitionHierarchy([
+      { id: "page", type: "pageBBox", x: 0, y: 0, w: 500, h: 700 },
+      { id: "part", type: "columnBBox", x: 20, y: 20, w: 460, h: 650 },
+      { id: "outer", type: "bbox", x: 40, y: 40, w: 400, h: 300 },
+      { id: "inner", type: "bbox", x: 80, y: 100, w: 220, h: 100 },
+      { id: "subline", type: "subLineBBox", parentId: "inner", x: 90, y: 120, w: 180, h: 20 },
+    ]);
+
+    expect(normalized.find((item) => item.id === "outer").parentId).toBe("part");
+    expect(normalized.find((item) => item.id === "inner").parentId).toBe("outer");
+    expect(normalized.find((item) => item.id === "subline").parentId).toBe("inner");
+  });
 });

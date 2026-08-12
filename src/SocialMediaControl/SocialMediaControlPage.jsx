@@ -570,13 +570,13 @@ const SocialMediaControlPage = () => {
   };
 
   const handleOpenPreviewTab = () => {
-    const previewUrl = new URL(`${window.location.origin}/cvs/instagram-home-preview`);
+    const previewUrl = new URL("/instagram-home-preview", window.location.origin);
     if (selectedPostId) previewUrl.searchParams.set("post", selectedPostId);
     window.open(previewUrl.toString(), "_blank", "noopener,noreferrer");
   };
 
   const handleOpenDesignerTab = () => {
-    const designerUrl = new URL(`${window.location.origin}/cvs/social-media-designer`);
+    const designerUrl = new URL("/social-media-designer", window.location.origin);
     if (selectedPostId) designerUrl.searchParams.set("post", selectedPostId);
     window.open(designerUrl.toString(), "_blank", "noopener,noreferrer");
   };

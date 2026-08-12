@@ -155,7 +155,9 @@ const EntityBuilderPanel = ({
     const subLineChildren = new Map();
     const columnChildren = new Map();
     const columnContentChildren = new Map();
+    const blockChildren = new Map();
     const nestedSubLineIds = new Set();
+    const nestedBlockIds = new Set();
     const isInside = (child, parent) => {
       const inset = 2;
       return child.x >= parent.x - inset
@@ -174,7 +176,27 @@ const EntityBuilderPanel = ({
       if (!parent) return;
       columnChildren.set(parent.id, [...(columnChildren.get(parent.id) || []), column]);
     });
+    paragraphBboxes.forEach((block) => {
+      const explicitParent = paragraphBboxes.find((candidate) => (
+        candidate.id === block.parentId
+        && candidate.id !== block.id
+        && canBBoxContain(candidate.type, block.type)
+      ));
+      const geometricParent = paragraphBboxes
+        .filter((candidate) => (
+          candidate.id !== block.id
+          && canBBoxContain(candidate.type, block.type)
+          && candidate.w * candidate.h > block.w * block.h
+          && isInside(block, candidate)
+        ))
+        .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0];
+      const parent = explicitParent || geometricParent;
+      if (!parent) return;
+      blockChildren.set(parent.id, [...(blockChildren.get(parent.id) || []), block]);
+      nestedBlockIds.add(block.id);
+    });
     normalizedBboxes.filter((bbox) => ["bbox", "imageBBox"].includes(bbox.type)).forEach((content) => {
+      if (nestedBlockIds.has(content.id)) return;
       const explicitColumn = layoutColumns.find((column) => (
         column.id === content.parentId && canBBoxContain(column.type, content.type)
       ));
@@ -201,7 +223,7 @@ const EntityBuilderPanel = ({
     const assigned = new Set();
     const buildGroup = (container, containerIndex) => {
       const contained = normalizedBboxes.filter((bbox) => {
-        if (bbox.id === container.id || nestedSubLineIds.has(bbox.id) || assigned.has(bbox.id)) return false;
+        if (bbox.id === container.id || nestedSubLineIds.has(bbox.id) || nestedBlockIds.has(bbox.id) || assigned.has(bbox.id)) return false;
         const nestedInPartition = (columnChildren.get(container.id) || []).some((column) => (
           canBBoxContain(column.type, bbox.type)
           && (bbox.parentId === column.id || isInside(bbox, column))
@@ -222,15 +244,15 @@ const EntityBuilderPanel = ({
     const groups = pageContainers.length
       ? pageContainers.map((page, pageIndex) => buildGroup(page, pageIndex))
       : bboxContainers.map((container, containerIndex) => buildGroup(container, containerIndex));
-    const standalone = normalizedBboxes.filter((bbox) => !assigned.has(bbox.id) && !nestedSubLineIds.has(bbox.id));
-    return { groups, standalone, subLineChildren, columnChildren, columnContentChildren };
+    const standalone = normalizedBboxes.filter((bbox) => !assigned.has(bbox.id) && !nestedSubLineIds.has(bbox.id) && !nestedBlockIds.has(bbox.id));
+    return { groups, standalone, subLineChildren, blockChildren, columnChildren, columnContentChildren };
   }, [bboxContainers, layoutColumns, normalizedBboxes]);
 
   // Illumination intentionally shows only the text extracted from the PDF
   // bbox. Corrections and OCR belong to their separate reader workflows.
   const textFor = (bbox) => String(bbox?.rawPdfText || bbox?.text || "");
   const textLinesForView = (bbox) => (
-    Array.isArray(bbox?.textLines) && bbox.textLines.length
+    Array.isArray(bbox?.textLines)
       ? bbox.textLines.join("\n")
       : textFor(bbox)
   );
@@ -590,6 +612,7 @@ const EntityBuilderPanel = ({
                       {paragraphDisplayText(content) || "No text extracted yet."}
                     </div>
                   )}
+                  {renderNestedBlocks(content)}
                 </article>
               )) : (
                 <>
@@ -618,6 +641,50 @@ const EntityBuilderPanel = ({
     (item) => textLinesForView(item),
     onSetBBoxTitle,
   );
+  const renderNestedBlocks = (parent) => {
+    const children = groupedBboxes.blockChildren.get(parent.id) || [];
+    if (!children.length) return null;
+    return (
+      <div className="entity_builder_bbox_nested_children entity_builder_bbox_block_children">
+        {children.map((child) => (
+          <article key={child.id} className="entity_builder_bbox_card entity_builder_bbox_nested_block entity_builder_bbox_tree_node entity_builder_bbox_tree_node--paragraph" data-bbox-type={child.type}>
+            <div className="entity_builder_bbox_top">
+              {editingNameId === child.id ? (
+                <input
+                  className="entity_builder_bbox_name_input"
+                  value={editingNameValue}
+                  onChange={(event) => setEditingNameValue(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commitEditName(child);
+                    if (event.key === "Escape") cancelEditName();
+                  }}
+                  onBlur={() => commitEditName(child)}
+                  autoFocus
+                />
+              ) : (
+                <div className="entity_builder_bbox_name_row">
+                  <div className="entity_builder_bbox_title">
+                    {renderParagraphMergeCheckbox(child)}
+                    <span className="entity_builder_bbox_type_block">
+                      <strong>{child._displayTitle}</strong>
+                      {renderBBoxId(child)}
+                    </span>
+                    {renderMinibarToggle(child)}
+                  </div>
+                  {renderBBoxActionMinibar(child, { allowArm: true })}
+                </div>
+              )}
+            </div>
+            <div className="entity_builder_bbox_text" style={{ fontSize: `${child.fontSize || DEFAULT_ENTITY_BUILDER_TEXT_FONT_SIZE}px` }}>
+              {paragraphDisplayText(child) || "No text extracted yet."}
+            </div>
+            {renderNestedColumns(child)}
+            {renderNestedBlocks(child)}
+          </article>
+        ))}
+      </div>
+    );
+  };
   const renderSegments = () => (
     <>
       {normalizedBboxes.length === 0 && bboxContainers.length === 0 ? (
@@ -697,6 +764,7 @@ const EntityBuilderPanel = ({
                       </>
                     ) : null}
                     {renderNestedColumns(bbox)}
+                    {renderNestedBlocks(bbox)}
                   </article>
                 ))}
               </div>
@@ -759,6 +827,7 @@ const EntityBuilderPanel = ({
                   </>
                 ) : null}
                 {renderNestedColumns(bbox)}
+                {renderNestedBlocks(bbox)}
               </article>
           ))}
         </div>

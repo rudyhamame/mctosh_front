@@ -1,0 +1,59 @@
+#abbreviation_panel {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 280px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.abbreviation_panel_header {
+  flex: 0 0 auto;
+  min-height: 2.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.65rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.abbreviation_panel_header > span { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.025em; }
+.abbreviation_panel_header > span strong { display: grid; place-items: center; width: 1.65rem; height: 1.65rem; border-radius: 0.45rem; background: #087f8c; color: #fff; font-size: 0.67rem; }
+.abbreviation_panel_header small { margin-left: auto; color: var(--color-text-muted); font-size: 0.65rem; }
+.abbreviation_panel_header button { border: 0; padding: 0.2rem; background: transparent; color: var(--color-text-muted); cursor: pointer; }
+
+.abbreviation_panel_search { flex: 0 0 auto; display: flex; align-items: center; gap: 0.4rem; margin: 0.65rem; padding: 0.42rem 0.55rem; border: 1px solid var(--color-border); border-radius: 0.65rem; background: var(--color-bg); }
+.abbreviation_panel_search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--color-text); font: inherit; font-size: 0.72rem; }
+.abbreviation_panel_search button { border: 0; padding: 0; background: transparent; color: var(--color-text-muted); }
+
+.abbreviation_panel_summary { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.35rem; padding: 0 0.65rem 0.65rem; }
+.abbreviation_panel_summary button { display: grid; gap: 0.12rem; padding: 0.42rem; border: 1px solid var(--color-border); border-radius: 0.55rem; background: var(--color-bg); color: var(--color-text-muted); font: inherit; font-size: 0.58rem; text-align: center; cursor: pointer; transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease; }
+.abbreviation_panel_summary button:hover { border-color: color-mix(in srgb, #087f8c 50%, var(--color-border)); }
+.abbreviation_panel_summary button.abbreviation_panel_summary--active { border-color: #087f8c; background: color-mix(in srgb, #087f8c 12%, var(--color-surface)); box-shadow: 0 0 0 1px color-mix(in srgb, #087f8c 18%, transparent); }
+.abbreviation_panel_summary strong { color: var(--color-text); font-size: 0.82rem; }
+
+.abbreviation_panel_body { flex: 1 1 auto; min-height: 0; overflow: auto; border-top: 1px solid var(--color-border); }
+.abbreviation_table_wrap { min-width: 100%; overflow: auto; }
+.abbreviation_table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 0.67rem; }
+.abbreviation_table th { position: sticky; top: 0; z-index: 1; padding: 0.52rem; background: var(--color-surface); color: var(--color-text-muted); text-align: left; white-space: nowrap; }
+.abbreviation_table td { padding: 0.48rem 0.52rem; border-top: 1px solid var(--color-border); vertical-align: top; }
+.abbreviation_table tbody tr { cursor: pointer; }
+.abbreviation_table tbody tr:hover, .abbreviation_table_row--selected { background: color-mix(in srgb, #087f8c 8%, transparent); }
+.abbreviation_table td button { border: 0; padding: 0; background: transparent; color: #087f8c; font: inherit; font-weight: 800; cursor: pointer; }
+.abbreviation_status { display: inline-flex; padding: 0.16rem 0.35rem; border-radius: 999px; font-size: 0.56rem; font-weight: 800; }
+.abbreviation_status--confirmed { background: color-mix(in srgb, #16a34a 14%, transparent); color: #15803d; }
+.abbreviation_status--candidate { background: color-mix(in srgb, #d97706 14%, transparent); color: #b45309; }
+.abbreviation_status--unresolved { background: color-mix(in srgb, #dc2626 12%, transparent); color: #b91c1c; }
+.abbreviation_panel_state { display: grid; place-items: center; min-height: 9rem; padding: 1rem; color: var(--color-text-muted); font-size: 0.72rem; text-align: center; }
+.abbreviation_panel_state--error { color: #b91c1c; }
+
+.abbreviation_detail { flex: 0 0 auto; max-height: 42%; overflow: auto; display: grid; gap: 0.42rem; padding: 0.7rem; border-top: 1px solid var(--color-border); background: color-mix(in srgb, #087f8c 4%, var(--color-surface)); }
+.abbreviation_detail div { display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: 0.5rem; font-size: 0.65rem; }
+.abbreviation_detail span { color: var(--color-text-muted); }
+.abbreviation_detail strong { overflow-wrap: anywhere; }
+.abbreviation_detail blockquote { margin: 0.2rem 0 0; padding: 0.5rem; border-left: 2px solid #087f8c; color: var(--color-text-muted); font-size: 0.64rem; }
+
+.annot_abbreviation_mark { font-size: 0.58rem; font-weight: 900; letter-spacing: -0.02em; }

@@ -105,6 +105,21 @@
 
 #yt_no_embed span { font-size: 2rem; opacity: 0.3; }
 
+/* ── Manual YouTube search ── */
+#yt_manual_search { margin: 0.65rem 0; padding: 0 0.8rem; }
+.yt_manual_search_row { display: flex; gap: 0.4rem; }
+.yt_manual_search_row input { flex: 1; min-width: 0; padding: 0.55rem 0.65rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); color: var(--color-text); font: inherit; }
+.yt_manual_search_row button { padding: 0.55rem 0.75rem; border: 0; border-radius: 6px; background: #e53935; color: #fff; cursor: pointer; font: 700 0.7rem/1 inherit; }
+.yt_manual_search_row button:disabled { cursor: not-allowed; opacity: 0.5; }
+.yt_search_error { margin: 0.4rem 0; color: #e05353; font-size: 0.7rem; }
+.yt_search_results { display: flex; flex-direction: column; gap: 0.35rem; max-height: 15rem; margin-top: 0.45rem; overflow-y: auto; }
+.yt_search_result { display: flex; align-items: center; gap: 0.55rem; width: 100%; padding: 0.35rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); color: var(--color-text); cursor: pointer; text-align: left; }
+.yt_search_result:hover { border-color: #e53935; background: color-mix(in srgb, #e53935 7%, var(--color-surface)); }
+.yt_search_result img { width: 6rem; height: 3.4rem; flex-shrink: 0; object-fit: cover; border-radius: 4px; }
+.yt_search_result span { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.yt_search_result strong { overflow: hidden; font-size: 0.72rem; text-overflow: ellipsis; white-space: nowrap; }
+.yt_search_result small { color: var(--color-text-muted); font-size: 0.62rem; }
+
 /* ── Transcription form ── */
 #yt_transcribe_form {
   display: flex;

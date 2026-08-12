@@ -58,6 +58,10 @@ const YouTubePage = () => {
   const [saved,      setSaved]      = useState(true);
   const [saving,     setSaving]     = useState(false);
   const [wordCount,  setWordCount]  = useState(0);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchBusy, setSearchBusy] = useState(false);
+  const [searchError, setSearchError] = useState("");
 
   // ── Live sync state ─────────────────────────────────────────────────────────
   const [syncMode,    setSyncMode]    = useState(false);
@@ -76,6 +80,31 @@ const YouTubePage = () => {
   const isBusy = status === "submitting" || status === "queued";
 
   const videoId = extractVideoId(ytUrl);
+
+  const handleSearch = async (event) => {
+    event.preventDefault();
+    const query = searchQuery.trim();
+    if (!query || searchBusy) return;
+    setSearchBusy(true);
+    setSearchError("");
+    try {
+      const response = await fetch(apiUrl(`/api/youtube/search?q=${encodeURIComponent(query)}`), { headers: authHeader() });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "YouTube search failed.");
+      setSearchResults(Array.isArray(data.videos) ? data.videos : []);
+    } catch (err) {
+      setSearchResults([]);
+      setSearchError(err.message || "YouTube search failed.");
+    } finally {
+      setSearchBusy(false);
+    }
+  };
+
+  const selectSearchResult = (video) => {
+    setYtUrl(`https://www.youtube.com/watch?v=${video.videoId}`);
+    setSearchResults([]);
+    setSearchError("");
+  };
 
   // ── Load IFrame API + build player ─────────────────────────────────────────
   useEffect(() => {
@@ -311,6 +340,24 @@ const YouTubePage = () => {
               : <div id="yt_no_embed"><span>▶</span><p>No valid YouTube URL</p></div>
             }
           </div>
+
+          <form id="yt_manual_search" onSubmit={handleSearch}>
+            <div className="yt_manual_search_row">
+              <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search YouTube videos…" aria-label="Search YouTube videos" />
+              <button type="submit" disabled={searchBusy || !searchQuery.trim()}>{searchBusy ? "Searching…" : "Search"}</button>
+            </div>
+            {searchError && <p className="yt_search_error">{searchError}</p>}
+            {searchResults.length > 0 && (
+              <div className="yt_search_results" aria-label="YouTube search results">
+                {searchResults.map((video) => (
+                  <button type="button" className="yt_search_result" key={video.videoId} onClick={() => selectSearchResult(video)}>
+                    <img src={video.thumbnailUrl} alt="" />
+                    <span><strong>{video.title}</strong><small>{video.channelTitle}</small></span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </form>
 
           {/* Transcription form */}
           <form id="yt_transcribe_form" onSubmit={handleTranscribe}>

@@ -12,6 +12,11 @@ import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 import { clearStoredPatientSession, readStoredPatientSession } from "./utils/patientSessionCleanup";
 import { applyStoredTheme } from "./utils/theme";
 import VirtualKeyboard from "./Shared/VirtualKeyboard";
+import SourceBackgroundTaskIndicator from "./Sources/SourceBackgroundTaskIndicator";
+import AppFooter from "./App/AppFooter";
+import VocabsFooter from "./App/VocabsFooter";
+import { PodcastPlayerFooter, PodcastPlayerProvider } from "./Podcast/PodcastPlayerContext";
+import { PDFTextAssistantFooter, PDFTextAssistantProvider } from "./PDF/PDFTextAssistantContext";
 
 const App = lazy(() => import("./App/App"));
 const Login = lazy(() => import("./Login/Login"));
@@ -46,6 +51,8 @@ const ClinicalVignetteGeneratorPage = lazy(() => import("./ClinicalVignetteGener
 const MedicalExamsPage = lazy(() => import("./MedicalExams/MedicalExamsPage"));
 const SegmentationsPage = lazy(() => import("./Segmentations/SegmentationsPage"));
 const ReasoningPage = lazy(() => import("./Reasoning/ReasoningPage"));
+const VocabsPage = lazy(() => import("./Vocabs/VocabsPage"));
+const TerminologyPage = lazy(() => import("./Terminology/TerminologyPage"));
 const PatientLoginPage = lazy(() => import("./PatientApp/PatientLoginPage"));
 const PatientSignupPage = lazy(() => import("./PatientApp/PatientSignupPage"));
 const PatientCallPage = lazy(() => import("./PatientApp/PatientCallPage"));
@@ -139,12 +146,14 @@ const AppRouter = () => {
   );
 
   return (
-    // AMCTOSHS | CVS is a sub-app of the future MCTOSH product — mounted at
-    // /cvs/ instead of the domain root, so mctoshs.ca/cvs/login is the main page.
-    <Router basename="/cvs" future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <AvatarProviderContextProvider>
+      <PDFTextAssistantProvider>
       <SplitViewProvider>
+      <PodcastPlayerProvider>
       <SplitViewFrame>
+      <div id="App_viewportScale">
+      <div id="app_route_view">
       <Routes>
         <Route path="/" element={
           <Navigate to={canAccessAuthenticatedRoutes ? "/home" : "/login"} replace />
@@ -188,6 +197,8 @@ const AppRouter = () => {
         <Route path="/medical-exams"          element={auth(withSuspense(<MedicalExamsPage />))} />
         <Route path="/segmentations"          element={auth(withSuspense(<SegmentationsPage />))} />
         <Route path="/amctoshs-reasoning"     element={auth(withSuspense(<ReasoningPage />))} />
+        <Route path="/vocabs"                 element={auth(withSuspense(<VocabsPage />))} />
+        <Route path="/terminology"            element={auth(withSuspense(<TerminologyPage />))} />
         <Route path="/freeform/:id"           element={auth(withSuspense(<FreeformPage />))} />
 
         {/* Patient-facing app — separate account system, separate auth
@@ -213,11 +224,25 @@ const AppRouter = () => {
           <Navigate to={canAccessAuthenticatedRoutes ? "/home" : "/login"} replace />
         } />
       </Routes>
-      <VirtualKeyboard />
+      </div>
+      {canAccessAuthenticatedRoutes && <div id="app_keyboard_slot" />}
+      {canAccessAuthenticatedRoutes && (
+        <AppFooter>
+          <PDFTextAssistantFooter />
+          <PodcastPlayerFooter />
+          <VocabsFooter />
+          <VirtualKeyboard inline autoOpenOnFocus panelPortalId="app_keyboard_slot" />
+        </AppFooter>
+      )}
+      </div>
       </SplitViewFrame>
+      </PodcastPlayerProvider>
+
+      {canAccessAuthenticatedRoutes && <SourceBackgroundTaskIndicator />}
 
       {canAccessAuthenticatedRoutes && withSuspense(<PredictionOverlay />)}
       </SplitViewProvider>
+      </PDFTextAssistantProvider>
       </AvatarProviderContextProvider>
     </Router>
   );

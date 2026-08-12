@@ -1,16 +1,15 @@
-import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import ThreadPyramidLogo from "./ThreadPyramidLogo";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { InfoPopupButton } from "../PDF/InfoPopupButton";
+import { listMorphe, listMorpheSources } from "../ClinicalSchemata/amctoshsMorpheClient";
+import { deleteStudySession, listStudySessions, startStudySession, stopStudySession } from "../utils/studySessions";
+import SpokenTracesCard from "./SpokenTracesCard";
+import UnspokenTracesCard from "./UnspokenTracesCard";
+import HomeVocabsCard from "./HomeVocabsCard";
 import "./App.css";
 
 const AMCTOSHS_INTRO_INFO = "A composite representational entity of a patient, constituted by a collection of AMCTOSHS sub-entities, each representing a distinct aspect of that patient.";
-
-// Loaded the same lazy way AppRouter.js loads it for every other page — the
-// app-wide footer is hidden on Home (see AppRouter.js's FooterGate), so Dev
-// AI needs its own instance docked inside the canvas here instead.
-const HomeChat = lazy(() => import("./HomeChat"));
 
 // The 14 navigable tools, regrouped by which of the eight AMCTOSHS
 // biological/social scales they sit closest to — Atoms (the essential
@@ -73,11 +72,18 @@ const LEVELS = [
         color: "#26c6da",
       },
       {
-        path: "/amctoshs-reasoning",
-        icon: "fi-rr-brain",
-        label: "AMCTOSHS Reasoning",
-        description: "Reason over AMCTOSHS Morphe's saved Traces and Sub-Entity Schemata to derive and organize Reasoning-dependent entities and their dependency relations",
-        color: "#ab47bc",
+        path: "/vocabs",
+        icon: "fi-rr-book-alt",
+        label: "AMCTOSHS Vocabs",
+        description: "Look up AMCTOSHS vocabulary terms with dictionary definitions and usage information",
+        color: "#26a69a",
+      },
+      {
+        path: "/terminology",
+        icon: "fi-rr-database",
+        label: "AMCTOSHS Terminology",
+        description: "Import and search a normalized local UMLS reference of concepts, terms, definitions, semantic types, relations, and sources",
+        color: "#607d8b",
       },
       {
         path: "/mcc/mccqe/objectives",
@@ -93,27 +99,6 @@ const LEVELS = [
     color: "#42a5f5",
     letter: "T",
     cards: [
-      {
-        path: "/pdf-reader",
-        icon: "fi-rr-file-pdf",
-        label: "PDF Reader",
-        description: "Open and annotate any PDF source — highlight, draw, and extract markdown page by page",
-        color: "#ef5350",
-      },
-      {
-        path: "/draft",
-        icon: "fi-rr-notebook",
-        label: "AMCTOSHS Draft",
-        description: "A running scratchpad for notes you find while reading — autosaves as you write",
-        color: "#ffca28",
-      },
-      {
-        path: "/freeform",
-        icon: "fi-rr-note-sticky",
-        label: "Freeform",
-        description: "Infinite canvas boards for freeform notes, sketches, and sticky notes — pan, zoom, draw, and write anywhere",
-        color: "#ffca28",
-      },
     ],
   },
   {
@@ -150,13 +135,6 @@ const LEVELS = [
         color: "#26a69a",
       },
       {
-        path: "/human-atlas",
-        icon: "fi-rr-heart",
-        label: "Human Reference Atlas",
-        description: "Browse 3D organ models, cell type and ontology trees, FTU illustrations, and tissue blocks from the Human Reference Atlas API",
-        color: "#e57373",
-      },
-      {
         path: "/social-media-control",
         icon: "fi-rr-megaphone",
         label: "AMCTOSHS Social Media Control",
@@ -177,13 +155,6 @@ const LEVELS = [
         description: "Control prompts, AI providers, and app theme",
         color: "#78909c",
       },
-      {
-        path: "/voice-profile",
-        icon: "fi-rr-microphone",
-        label: "Voice Profiles",
-        description: "Record or upload your own voice for the local 3D avatar's cloned-voice speech",
-        color: "#ab47bc",
-      },
     ],
   },
   {
@@ -193,26 +164,15 @@ const LEVELS = [
     cards: [],
   },
 ];
+// Shared by the camera-preset settings panel, which still previews the
+// biological scale labels independently of the Home dashboard.
 export const LEVEL_LABELS = LEVELS.map((level) => level.label);
 
 // The one named chunk inside the AMCTOSHS Tools dropdown (see app_study_tools_*
 // below) — AMCTOSHS Hyle and AMCTOSHS Morphe are the two tools that actually
 // BUILD an AMCTOSHS entity's raw material/structure, so they're grouped
 // under their own heading; every other tool stays a flat, ungrouped list.
-const BUILDING_TOOL_PATHS = ["/sources", "/segmentations", "/clinical-schemata", "/amctoshs-reasoning"];
-
-// How many screens of scrolling each level's own step takes — 1 = today's
-// uniform 100vh-per-level default. Hardcoded here, NOT persisted anywhere
-// at runtime (no localStorage, no backend) — same "tune live, copy the
-// result into source, commit it" pattern as ThreadPyramidLogo.jsx's own
-// DEFAULT_CAMERA_PRESETS, so every visitor gets the same pacing rather than
-// whoever's browser happened to save one. weights[0] (Hyle) is scrolled
-// through BEFORE any climbing starts; weights[1..8] each pace exactly one
-// sewing span (Hyle->Atoms sews Atoms, Atoms->Molecules sews Molecules, and
-// so on — see ThreadPyramidLogo.jsx's own floorSewFractionFor). The
-// control panel's "Copy scroll weights as code" button produces a
-// paste-ready replacement for this array.
-const DEFAULT_LEVEL_SCROLL_WEIGHTS = LEVELS.map(() => 1);
+const BUILDING_TOOL_PATHS = ["/sources", "/segmentations", "/clinical-schemata"];
 
 const readProfilePhoto = (session) => (
   session?.photoUrl
@@ -252,79 +212,125 @@ const getInitials = (label) => {
   return words.slice(0, 2).map((word) => word[0]?.toUpperCase() || "").join("") || "P";
 };
 
+const formatStudyTimer = (totalSeconds) => {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return [hours, minutes, seconds].map((part) => String(part).padStart(2, "0")).join(":");
+};
+
+const isPdfSource = (source) => (
+  String(source?.format || "").toLowerCase() === "pdf"
+  || /\.pdf$/i.test(String(source?.name || source?.filename || ""))
+);
+
 const App = ({ onLogout }) => {
   const navigate = useNavigate();
-  const [progress, setProgress] = useState(0);
-  const scrollRef = useRef(null);
   const profileMenuRef = useRef(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const studyToolsRef = useRef(null);
   const [studyToolsOpen, setStudyToolsOpen] = useState(false);
+  const [sourceData, setSourceData] = useState(null);
+  const [schemataData, setSchemataData] = useState(null);
+  const [studySessions, setStudySessions] = useState([]);
+  const [activeStudySession, setActiveStudySession] = useState(null);
+  const [studyElapsedSeconds, setStudyElapsedSeconds] = useState(0);
+  const [currentTime, setCurrentTime] = useState(() => new Date());
   const session = readStoredSession();
   const profilePhoto = readProfilePhoto(session);
   const displayName = readDisplayName(session);
   const username = readHandle(session);
   const profileInitials = getInitials(displayName);
 
-  const handleScroll = (event) => {
-    const el = event.currentTarget;
-    const scrollable = el.scrollHeight - el.clientHeight;
-    const p = scrollable > 0 ? el.scrollTop / scrollable : 0;
-    setProgress(Math.min(1, Math.max(0, p)));
+  const currentDateLabel = new Intl.DateTimeFormat(undefined, {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  }).format(currentTime);
+  const currentTimeLabel = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(currentTime);
+  const currentHour = currentTime.getHours();
+  const greeting = currentHour < 12 ? "Good morning" : currentHour < 18 ? "Good afternoon" : "Good evening";
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!activeStudySession?.startedAt) return undefined;
+
+    const updateElapsedTime = () => {
+      setStudyElapsedSeconds(Math.max(0, Math.floor((Date.now() - new Date(activeStudySession.startedAt).getTime()) / 1000)));
+    };
+
+    updateElapsedTime();
+    const timer = window.setInterval(updateElapsedTime, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeStudySession]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    listStudySessions(controller.signal)
+      .then(({ sessions = [] }) => {
+        setStudySessions(sessions.filter((item) => item.status === "completed"));
+        setActiveStudySession(sessions.find((item) => item.status === "active") || null);
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") console.error("Failed to load study sessions", error);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listMorpheSources()
+      .then((sources) => { if (!cancelled) setSourceData(Array.isArray(sources) ? sources.filter(isPdfSource) : []); })
+      .catch(() => { if (!cancelled) setSourceData(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    listMorphe()
+      .then((data) => { if (!cancelled) setSchemataData(Array.isArray(data?.schemas) ? data.schemas : []); })
+      .catch(() => { if (!cancelled) setSchemataData(null); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleStartStudySession = async () => {
+    try {
+      const { session: nextSession } = await startStudySession();
+      setActiveStudySession(nextSession);
+      setStudyElapsedSeconds(0);
+    } catch (error) {
+      console.error("Failed to start study session", error);
+    }
   };
 
-  const [scrollWeights, setScrollWeights] = useState(DEFAULT_LEVEL_SCROLL_WEIGHTS);
-  const setScrollWeight = (levelIndex, weight) => {
-    setScrollWeights((prev) => prev.map((w, i) => (i === levelIndex ? Math.max(0.1, weight) : w)));
+  const handleStopStudySession = async () => {
+    if (!activeStudySession?.id) return;
+    try {
+      const { session: completedSession } = await stopStudySession(activeStudySession.id);
+      setStudySessions((previous) => [completedSession, ...previous]);
+      setActiveStudySession(null);
+      setStudyElapsedSeconds(completedSession.durationSeconds || 0);
+    } catch (error) {
+      console.error("Failed to stop study session", error);
+    }
   };
 
-  // Cumulative raw-progress boundary at the START of each level's own
-  // scroll step, derived from the REAL (possibly hand-tuned, non-uniform)
-  // per-level weights instead of assuming every step is the same height —
-  // length LEVELS.length + 1: boundaries[0] = 0, boundaries[LEVELS.length] = 1.
-  const levelBoundaries = useMemo(() => {
-    const total = scrollWeights.reduce((sum, w) => sum + Math.max(0.1, w), 0) || 1;
-    let cursor = 0;
-    const boundaries = [0];
-    for (const w of scrollWeights) {
-      cursor += Math.max(0.1, w) / total;
-      boundaries.push(cursor);
+  const handleDeleteStudySession = async (sessionId) => {
+    if (!window.confirm("Delete this study session?")) return;
+    try {
+      await deleteStudySession(sessionId);
+      setStudySessions((previous) => previous.filter((item) => item.id !== sessionId));
+    } catch (error) {
+      console.error("Failed to delete study session", error);
     }
-    return boundaries;
-  }, [scrollWeights]);
-
-  const activeLevel = useMemo(() => {
-    for (let i = LEVELS.length - 1; i >= 0; i--) {
-      if (progress >= levelBoundaries[i] - 0.0001) return i;
-    }
-    return 0;
-  }, [progress, levelBoundaries]);
-
-  // The scrollable track has nine snap positions but only eight intervals
-  // between them. Those eight intervals are exactly the eight sewing spans:
-  // Hyle -> Atoms sews Atoms, Atoms -> Molecules sews Molecules, and so on.
-  // "Hyle -> Atoms sews Atoms" means literally that: Atoms builds up WHILE
-  // scrolling through Hyle's own zone, finishing exactly when you cross
-  // into Atoms' zone — not while scrolling through Atoms' own zone after
-  // you've already arrived. That distinction matters a lot in practice:
-  // scroll-snap-type:mandatory means the page only ever comes to rest at
-  // the START of a level's zone, never partway through it — so if a
-  // level's own geometry only sewed itself while dwelling in its own zone,
-  // it would always be sitting at 0% built the instant you actually landed
-  // on it (this was a real bug: restoring a saved scroll position, or just
-  // scrolling normally, would land you on e.g. Atoms with its geometry
-  // still fully unsewn, indistinguishable from bare Hyle). Sewing level k
-  // during level (k-1)'s own zone instead means it's already fully built
-  // by the time you arrive.
-  const climbProgress = useMemo(() => {
-    const sewSpanCount = LEVELS.length - 1; // 8 — matches FLOOR_COUNT-1 in ThreadPyramidLogo.jsx
-    if (activeLevel >= sewSpanCount) return 1; // resting on/past the last level — everything already built
-    const zoneStart = levelBoundaries[activeLevel];
-    const zoneEnd = levelBoundaries[activeLevel + 1] ?? 1;
-    const zoneSpan = Math.max(0.0001, zoneEnd - zoneStart);
-    const withinZone = Math.min(1, Math.max(0, (progress - zoneStart) / zoneSpan));
-    return (activeLevel + withinZone) / sewSpanCount;
-  }, [progress, activeLevel, levelBoundaries]);
+  };
 
   useEffect(() => {
     const handlePointerDown = (event) => {
@@ -352,18 +358,121 @@ const App = ({ onLogout }) => {
   }, []);
 
   return (
-    <div id="App_viewportScale">
-      <div id="app_home_grid" ref={scrollRef} onScroll={handleScroll}>
+    <div id="app_home_view">
+      <div id="app_home_grid">
         <div id="app_scroll_track">
           <div id="app_scroll_stage">
-            <ThreadPyramidLogo
-              progress={climbProgress}
-              activeLevel={activeLevel}
-              levelLabels={LEVEL_LABELS}
-              scrollWeights={scrollWeights}
-              onScrollWeightChange={setScrollWeight}
-            />
+            <section id="app_home_dashboard" aria-label="AMCTOSHS study dashboard">
+              <div className="app_dashboard_header">
+                <div>
+                  <p className="app_dashboard_eyebrow">Study workspace / {currentDateLabel} · <time dateTime={currentTime.toISOString()}>{currentTimeLabel}</time></p>
+                  <h1>{greeting}, {displayName.split(" ")[0]}.</h1>
+                  <p>Keep the patient object in view as you move from source material to Morphe.</p>
+                </div>
+              </div>
 
+              <div className="app_dashboard_grid">
+                <HomeVocabsCard onOpen={() => navigate("/vocabs")} />
+
+                <article className="app_dashboard_card app_about_card">
+                  <div className="app_card_heading">
+                    <div><span className="app_card_kicker">00 / THE AMCTOSHS MODEL</span><h2>What is AMCTOSHS?</h2></div>
+                    <button
+                      type="button"
+                      className="app_about_icon"
+                      onClick={() => navigate("/about/amctoshs")}
+                      aria-label="Open AMCTOSHS Model Info"
+                      title="Open AMCTOSHS Model Info"
+                    >
+                      <i className="fi fi-rr-lightbulb-on" />
+                    </button>
+                  </div>
+                  <p className="app_card_description">AMCTOSHS is a model that builds a representation, or schema, of the intangible PATIENT object through tangible instances and the traces that illuminate it.</p>
+                  <div className="app_about_sections">
+                    <div><strong>Accessible modes</strong><span>Atoms · molecules · cells · tissues · organs · organ systems · humans · societies</span></div>
+                    <div><strong>Traces and access</strong><span>Direct sensory access produces 3D traces. Indirect access uses proxies to reveal objects that doctors rely on during their processes, before the object is fully illuminated to them.</span></div>
+                    <div><strong>Time and reasoning</strong><span>Traces that come from memory rather than the senses are 4D traces. Reasoning orders 4D traces to build the logical representation of the PATIENT object.</span></div>
+                  </div>
+                </article>
+
+                <SpokenTracesCard />
+                <UnspokenTracesCard />
+
+                <article className="app_dashboard_card app_sessions_card">
+                  <div className="app_card_heading">
+                    <div><span className="app_card_kicker">02 / Your rhythm</span><h2>Study sessions</h2></div>
+                    <button className="app_card_link" type="button" onClick={() => navigate("/pdf-reader")}>View log <i className="fi fi-rr-arrow-up-right" /></button>
+                  </div>
+                  <div className="app_session_list">
+                    {studySessions.map((sessionItem) => (
+                      <div key={sessionItem.id} className="app_session_row">
+                        <span className="app_session_date"><strong>Study session</strong><small>{new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "short", year: "numeric" }).format(new Date(sessionItem.startedAt))}</small></span>
+                        <span className="app_session_track"><span className="app_session_track_fill" style={{ width: `${Math.min(94, Math.max(12, (sessionItem.durationSeconds / 3600) * 100))}%` }} /></span>
+                        <span className="app_session_meta"><strong>{formatStudyTimer(sessionItem.durationSeconds || 0)}</strong><small>completed</small></span>
+                        <button className="app_session_delete" type="button" title="Delete study session" aria-label="Delete study session" onClick={() => handleDeleteStudySession(sessionItem.id)}><i className="fi fi-rr-trash" /></button>
+                      </div>
+                    ))}
+                    {!studySessions.length && !activeStudySession && <p className="app_dashboard_empty">No study sessions recorded yet.</p>}
+                    {activeStudySession && (
+                      <div className="app_active_session" role="status" aria-live="polite">
+                        <span className="app_active_session_badge"><i /> In progress</span>
+                        <strong>{formatStudyTimer(studyElapsedSeconds)}</strong>
+                        <small>Study session started now</small>
+                      </div>
+                    )}
+                  </div>
+                  <div className="app_session_empty_actions">
+                    {!activeStudySession && <p className="app_dashboard_data_note">Completed sessions are saved to your study history.</p>}
+                    {activeStudySession ? (
+                      <button className="app_session_start app_session_stop" type="button" onClick={handleStopStudySession}>
+                        <i className="fi fi-rr-stop" /> Stop study session
+                      </button>
+                    ) : (
+                      <button className="app_session_start" type="button" onClick={handleStartStudySession}>
+                        <i className="fi fi-rr-play" /> Start study session
+                      </button>
+                    )}
+                  </div>
+                </article>
+
+                <article className="app_dashboard_card app_morphe_card">
+                  <div className="app_card_heading">
+                    <div><span className="app_card_kicker">01 / AMCTOSHS HYLE</span><h2>PDF Sources</h2></div>
+                    <span className="app_morphe_status"><i /> {sourceData ? "Live" : "Unavailable"}</span>
+                  </div>
+                  <p className="app_card_description">Your PDF source library for reading, annotation, and AMCTOSHS extraction.</p>
+                  <div className="app_sources_summary" aria-label="PDF source summary">
+                    <div className="app_sources_count"><strong>{sourceData ? sourceData.length : "—"}</strong><small>PDF sources</small></div>
+                    <div className="app_sources_list">{sourceData?.slice(0, 3).map((source) => <span key={source._id}>{source.name || source.title || "Untitled source"}</span>)}{sourceData?.length === 0 && <span>No PDF sources yet.</span>}{!sourceData && <span>Loading sources…</span>}</div>
+                  </div>
+                  <button className="app_morphe_action" type="button" onClick={() => navigate("/sources")}>Open PDF Sources <i className="fi fi-rr-arrow-up-right" /></button>
+                </article>
+
+                <article className="app_dashboard_card app_schemata_card">
+                  <div className="app_card_heading">
+                    <div><span className="app_card_kicker">02 / AMCTOSHS MORPHE</span><h2>Schemata</h2></div>
+                    <span className="app_trace_card_icon"><i className="fi fi-rr-network" /></span>
+                  </div>
+                  <p className="app_card_description">Saved AMCTOSHS schemata, with their object identifiers and domains ready for inspection.</p>
+                  <div className="app_schemata_summary" aria-label="Saved schemata">
+                    <div className="app_schemata_count"><strong>{schemataData ? schemataData.length : "—"}</strong><small>saved schemata</small></div>
+                    <div className="app_schemata_list">
+                      {schemataData?.slice(0, 4).map((schema) => (
+                        <span key={schema._id}>
+                          <strong>{schema.name || schema.objectId || "Unnamed schema"}</strong>
+                          <small>{schema.domain || "Unclassified"}</small>
+                        </span>
+                      ))}
+                      {schemataData?.length === 0 && <span className="app_schemata_empty">No saved schemata yet.</span>}
+                      {!schemataData && <span className="app_schemata_empty">Loading schemata…</span>}
+                    </div>
+                  </div>
+                  <button className="app_morphe_action" type="button" onClick={() => navigate("/clinical-schemata")}>Open Schemata <i className="fi fi-rr-arrow-up-right" /></button>
+                </article>
+              </div>
+            </section>
+
+            <div id="app_scroll_hint">
             {/* Every level's own tool buttons, consolidated into one dropdown
                 on the intro banner's left side (the profile menu already
                 owns the right) — the per-level cards used to sit inline in
@@ -476,52 +585,12 @@ const App = ({ onLogout }) => {
               )}
             </div>
 
-            <Suspense fallback={null}>
-              <HomeChat />
-            </Suspense>
-
-            <div id="app_scroll_hint">
+            <div id="app_scroll_hint_content">
               <span id="app_scroll_hint_title">AMCTOSHS</span>
-              <div id="app_scroll_hint_head">
-                <span id="app_domain_flow">Atoms → Molecules → Tissues → Organs → Organ Systems → Humans → Societies</span>
-                <InfoPopupButton info={AMCTOSHS_INTRO_INFO} label="About AMCTOSHS" />
-                <button
-                  type="button"
-                  id="app_amctoshs_model_link"
-                  onClick={() => navigate("/about/amctoshs")}
-                  title="Read the full AMCTOSHS model — ontic patient, traces, modes of access, 3D/4D representation, reasoning"
-                >
-                  The AMCTOSHS Model →
-                </button>
-              </div>
-              <span id="app_scroll_hint_sub">Scroll to study the hyle and climb the eight biological scales ↓</span>
+              <span id="app_scroll_hint_sub">A focused view of your object, sessions, and Morphe work</span>
             </div>
-
-            <div id="app_level_overlay">
-              {LEVELS.map(({ label, color, letter, blurb }, i) => (
-                <div
-                  key={label}
-                  className={`app_level_group${i === activeLevel ? " app_level_group--active" : ""}`}
-                  style={{ "--nav-color": color }}
-                >
-                  <div className="app_level_group_head">
-                    {letter && <span className="app_level_group_letter">{letter}</span>}
-                    <span className="app_level_group_label">{label}</span>
-                  </div>
-                  {blurb && <p className="app_level_group_blurb">{blurb}</p>}
-                </div>
-              ))}
             </div>
           </div>
-
-          {LEVELS.map(({ label }, i) => (
-            <div
-              key={`scroll-step-${label}`}
-              className="app_floor_scroll_step"
-              style={{ height: `calc(var(--vh, 1vh) * 100 * ${scrollWeights[i]})` }}
-              aria-hidden="true"
-            />
-          ))}
         </div>
       </div>
     </div>

@@ -57,13 +57,32 @@ export const getPageStructure = async (documentId, pageNumber) => {
   return parseJsonResponse(res);
 };
 
+export const getPdfNavigation = async (documentId) => {
+  const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/navigation`), { headers: authHeaders() });
+  return parseJsonResponse(res);
+};
+
+export const savePdfNavigation = async (documentId, navigation) => {
+  const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/navigation`), {
+    method: "PATCH",
+    headers: jsonHeaders(),
+    body: JSON.stringify(navigation),
+  });
+  return parseJsonResponse(res);
+};
+
 /** Read-only extraction evidence for one page: native geometry + Docling layout, with no draft/save side effects. */
 export const getPageExtractionEvidence = async (documentId, pageNumber, { nativeOnly = false } = {}) => {
   if (!isObjectId(documentId)) {
     throw new Error("PDF extraction is unavailable until the document identity is resolved.");
   }
-  const query = nativeOnly ? "?nativeOnly=1" : "";
-  const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/extraction${query}`), { headers: authHeaders() });
+  // raw-glyphs-v2 distinguishes the character-aware native payload from
+  // older cached span-only responses that cannot repair synthetic spaces.
+  const query = nativeOnly ? "?nativeOnly=1&format=raw-glyphs-v2" : "?format=raw-glyphs-v2";
+  const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/extraction${query}`), {
+    headers: authHeaders(),
+    cache: "no-store",
+  });
   return parseJsonResponse(res);
 };
 

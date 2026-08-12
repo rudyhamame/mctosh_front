@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import PDFPage from "./PDFPage";
-import PDFReaderWorkspaceTabStrip from "./PDFReaderWorkspaceTabStrip";
+import PDFReaderWorkspaceTabStrip, { ReaderAnnotationActions } from "./PDFReaderWorkspaceTabStrip";
 import {
   DEFAULT_PAGE_NAV_STATE,
   DEFAULT_ZOOM_STATE,
@@ -30,7 +30,9 @@ const PaneBody = ({
   onPageNavStateChange,
   onZoomStateChange,
   onAnnotationSaveStateChange,
+  toolbarLeading,
   toolbarHost,
+  toolbarOptionsHost,
   entityBuilderHost,
   markdownHost,
   markdownHostRef,
@@ -52,7 +54,9 @@ const PaneBody = ({
         onPageNavStateChange={isActive ? onPageNavStateChange : undefined}
         onZoomStateChange={isActive ? onZoomStateChange : undefined}
         onAnnotationSaveStateChange={isActive ? onAnnotationSaveStateChange : undefined}
+        toolbarLeading={isActive ? toolbarLeading : null}
         toolbarHost={isActive ? toolbarHost : null}
+        toolbarOptionsHost={isActive ? toolbarOptionsHost : null}
         entityBuilderHost={isActive ? entityBuilderHost : null}
         markdownHost={isActive ? markdownHost : null}
         initialPage={tab.page}
@@ -85,6 +89,7 @@ const PDFReaderWorkspace = () => {
     locationState: location.state,
   });
   const [toolbarHostEl, setToolbarHostEl] = useState(null);
+  const [toolbarOptionsHostEl, setToolbarOptionsHostEl] = useState(null);
   const [entityBuilderHostEl, setEntityBuilderHostEl] = useState(null);
   const [markdownHostEl, setMarkdownHostEl] = useState(null);
 
@@ -133,9 +138,16 @@ const PDFReaderWorkspace = () => {
     setBookletRightPage: (v) => activePageRef.current?.setBookletRightPage(v),
     toggleOcrBlankPage: () => activePageRef.current?.toggleOcrBlankPage(),
     toggleMarkdownAside: () => activePageRef.current?.toggleMarkdownAside(),
+    setMarkdownMode: (mode) => activePageRef.current?.setMarkdownMode(mode),
     setNotebookView: (mode) => activePageRef.current?.setNotebookView(mode),
     closeNotebook: () => activePageRef.current?.closeNotebook(),
+    setSearchOpen: (value) => activePageRef.current?.setSearchOpen(value),
+    setSearchQuery: (value) => activePageRef.current?.setSearchQuery(value),
+    goToSearchMatch: (direction) => activePageRef.current?.goToSearchMatch(direction),
+    closeSearch: () => activePageRef.current?.closeSearch(),
     insertBlankPageAfterCurrent: () => activePageRef.current?.insertBlankPageAfterCurrent(),
+    toggleOutline: () => activePageRef.current?.toggleOutline(),
+    toggleBookmark: () => activePageRef.current?.toggleBookmark(),
   } : null;
   const zoomControls = activeId ? {
     ...zoomState,
@@ -171,27 +183,16 @@ const PDFReaderWorkspace = () => {
               splitModeOn={splitModeOn}
               checkedIds={checkedIds}
               onToggleCheck={onToggleCheck}
-              undoRedo={undoRedo}
               pageNav={pageNav}
-              zoomControls={zoomControls}
+              onToggleSplit={toggleSplitMode}
               annotationSaveStatus={annotationSaveStatus}
-              onAnnotationSaveStateChange={setAnnotationSaveStatus}
               onBack={() => navigate("/home")}
             />
-            <div id="pdfw_toolbar_host" ref={setToolbarHostEl} />
           </div>
-          {tabs.length > 1 && (
-            <button
-              id="pdfw_split_toggle"
-              className={splitModeOn ? "pdfw_split_toggle--active" : ""}
-              onClick={toggleSplitMode}
-              title={splitModeOn ? "Stop selecting tabs to split" : "Check two or more tabs to view their pages side by side"}
-            >
-              <i className={splitModeOn ? "bx bx-checkbox" : "bx bx-columns"} />
-              {splitModeOn ? "Done" : "Split view"}
-            </button>
-          )}
         </div>
+
+        <div id="pdfw_toolbar_host" ref={setToolbarHostEl} aria-label="Annotation tools" />
+        <div id="pdfw_subtoolbar_host" ref={setToolbarOptionsHostEl} aria-label="Annotation tool options" />
 
         <div id="pdfw_panes" className={panesToShow.length > 1 ? "pdfw_panes--split" : ""}>
           {panesToShow.map((tab, i) => (
@@ -204,8 +205,10 @@ const PDFReaderWorkspace = () => {
                 onUndoRedoStateChange={setUndoRedoState}
                 onPageNavStateChange={setPageNavState}
                 onZoomStateChange={setZoomState}
-                onAnnotationSaveStateChange={setAnnotationSaveStatus}
-                toolbarHost={toolbarHostEl}
+              onAnnotationSaveStateChange={setAnnotationSaveStatus}
+              toolbarLeading={<ReaderAnnotationActions undoRedo={undoRedo} pageNav={pageNav} />}
+              toolbarHost={toolbarHostEl}
+              toolbarOptionsHost={toolbarOptionsHostEl}
                 entityBuilderHost={entityBuilderHostEl}
                 markdownHost={markdownHostEl}
                 markdownHostRef={setMarkdownHostEl}

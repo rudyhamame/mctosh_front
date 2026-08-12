@@ -3,6 +3,8 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { readTtsProviderId, readVoiceSettings, TTS_PROVIDERS } from "../Avatar/local3d/ttsProviderSettings";
+import { readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
+import { usePodcastPlayer } from "./PodcastPlayerContext";
 import { useAIProvider } from "../hooks/useAIProvider";
 import "./podcastPage.css";
 
@@ -114,7 +116,8 @@ const PodcastPage = () => {
   const location = useLocation();
   const params = useParams();
   const { provider: selectedAiProvider } = useAIProvider();
-  const { sourceId: stateSourceId, sourceName, sourceUrl } = location.state || {};
+  const { sendToFooter } = usePodcastPlayer();
+  const { sourceId: stateSourceId, sourceName, sourceUrl, episodeUrl: stateEpisodeUrl } = location.state || {};
   const sourceId = stateSourceId || params.sourceId || "";
 
   const [source, setSource] = useState(sourceId ? { _id: sourceId, name: sourceName || "", url: sourceUrl || "" } : null);
@@ -131,7 +134,7 @@ const PodcastPage = () => {
   const [archiveSyncStatus, setArchiveSyncStatus] = useState("");
   const [archiveSyncError, setArchiveSyncError] = useState("");
   const [asideOpen, setAsideOpen] = useState(true);
-  const [selectedEpisodeUrl, setSelectedEpisodeUrl] = useState("");
+  const [selectedEpisodeUrl, setSelectedEpisodeUrl] = useState(stateEpisodeUrl || "");
   const [selectedEpisode, setSelectedEpisode] = useState(null);
   const [episodeLoading, setEpisodeLoading] = useState(false);
   const [episodeError, setEpisodeError] = useState("");
@@ -242,7 +245,7 @@ const PodcastPage = () => {
       return;
     }
     if (archiveData.kind === "collection" || archivePages.length > 0) {
-      const currentEpisodes = (archivePages.slice(0, visibleArchivePageCount).flatMap((page) => page?.episodes || []))
+      const currentEpisodes = (archivePages.slice(0, visibleArchivePageCount).flatMap((page) => page?.episodes || [])).slice().reverse()
         || archiveData.episodes
         || [];
       const urls = currentEpisodes.map((entry) => entry?.url).filter(Boolean);
@@ -353,7 +356,7 @@ const PodcastPage = () => {
   const displaySourceTitle = archiveData?.title || source?.name || "Podcast Source";
   const visibleArchivePages = archivePages.slice(0, visibleArchivePageCount);
   const archiveEpisodes = archiveData?.kind === "collection"
-    ? (visibleArchivePages.flatMap((page) => page?.episodes || []) || archiveData.episodes || [])
+    ? (visibleArchivePages.flatMap((page) => page?.episodes || []) || archiveData.episodes || []).slice().reverse()
     : [];
   const totalArchiveEpisodes = archivePages.reduce((sum, page) => sum + (page?.episodes?.length || 0), 0);
   const activeEpisode = selectedEpisode?.kind === "collection" ? null : selectedEpisode;
@@ -497,7 +500,12 @@ const PodcastPage = () => {
     setTranscriptLoading(true);
     setTranscriptError("");
     try {
-      const query = `?pageUrl=${encodeURIComponent(transcriptTargetUrl)}`;
+      const sttSettings = readSttSettings();
+      if (sttSettings.provider === STT_PROVIDERS.BROWSER) {
+        throw new Error("Browser recognition cannot transcribe prerecorded podcast audio. Select Local Whisper or OpenAI in STT Settings.");
+      }
+      const provider = sttSettings.provider;
+      const query = `?pageUrl=${encodeURIComponent(transcriptTargetUrl)}&provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(sttSettings.model || "")}`;
       const res = await fetch(apiUrl(`/api/sources/${sourceId}/podcast-transcript${query}`), { headers: authHeader() });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || "Failed to transcribe this episode.");
@@ -1081,6 +1089,28 @@ const PodcastPage = () => {
                   <option value="2">2x</option>
                 </select>
               </label>
+              <button
+                type="button"
+                className="podcast_player_action podcast_player_send_footer"
+                onClick={() => {
+                  sendToFooter({
+                    url: activeEpisode.audioUrl,
+                    title: activeEpisodeTitle,
+                    sourceId,
+                    episodeUrl: selectedEpisodeUrl,
+                    currentTime: playerCurrentTime,
+                    duration: playerDuration,
+                    speed: playerSpeed,
+                    playing: playerPlaying,
+                  });
+                  audioRef.current?.pause();
+                  setPlayerPlaying(false);
+                }}
+                aria-label="Send podcast to app footer"
+                title="Send to app footer"
+              >
+                <i className="fi fi-rr-arrow-small-down" />
+              </button>
             </div>
           </>
         ) : (

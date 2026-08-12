@@ -204,7 +204,7 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     const flowLevel = clamp((settings?.flow ?? 38) / 100, 0, 1);
     ctx.save();
     traceRibbonPath(ribbon.left, ribbon.right);
-    ctx.globalAlpha = penType === "fountain" ? 0.92 : 0.97;
+    ctx.globalAlpha = (penType === "fountain" ? 0.82 : 0.88) + flowLevel * 0.15;
     ctx.fill();
     ctx.restore();
   };
@@ -241,7 +241,7 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     if (!points || points.length < 2) return;
     const flowLevel = clamp((settings?.flow ?? 38) / 100, 0, 1);
     const taperLevel = clamp((settings?.taper ?? 72) / 100, 0, 1);
-    const size = visibleWidth(baseWidth * s, 1.15);
+    const size = visibleWidth(baseWidth * s * lerp(0.72, 1.18, flowLevel), 1.15);
     const strokePoints = points.map((point) => ({
       x: p(point.x),
       y: p(point.y),
@@ -254,13 +254,16 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
       streamline: 0.22,
       simulatePressure: false,
       last: true,
-      start: { taper: size * (0.6 + taperLevel * 6), cap: true },
-      end: { taper: size * (0.6 + taperLevel * 6), cap: true },
+      // Keep the taper inside the exact first/last pen points. A rounded
+      // taper cap extends beyond those points, making the mark begin/end
+      // before or after where the pen actually touched the page.
+      start: { taper: size * (0.6 + taperLevel * 6), cap: false },
+      end: { taper: size * (0.6 + taperLevel * 6), cap: false },
     });
     if (!outline.length) return;
     ctx.save();
     traceStrokeOutline(outline);
-    ctx.globalAlpha = 0.97;
+    ctx.globalAlpha = 0.82 + flowLevel * 0.17;
     ctx.fill();
     ctx.restore();
   };
@@ -316,9 +319,9 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     // This function only ever runs when there's no maskedText (see the
     // "highlight" case in drawAnnotation below — it's skipped entirely
     // when masked text exists, since drawMaskedHighlightText draws its
-    // own band + text instead) — i.e. only when Auto Contrast was off for
-    // this annotation. Use the color exactly as picked, no clamping.
-    ctx.strokeStyle = ann.color;
+    // own band + text instead). On reconstructed surfaces such as MD there
+    // is no PDF text mask, so clamp the selected color when Auto Contrast is on.
+    ctx.strokeStyle = ann.autoContrast ? highlightSafeColor(ann.color) : ann.color;
 
     // Single main highlight body only.
     if (drawHighlightPath(ann.points, ann.mode)) {
@@ -552,7 +555,8 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     case "text":
       ctx.save();
       {
-        const text = ann.text || "";
+        const listPrefix = ann.listStyle === "bullet" ? "• " : ann.listStyle === "numbered" ? "1. " : "";
+        const text = `${listPrefix}${ann.text || ""}`;
         const fontSize = visibleSize((ann.fontSize || 16) * s, 11);
         const fontFamily = ann.fontFamily || "sans-serif";
         const fontWeight = ann.fontBold ? "700" : "400";

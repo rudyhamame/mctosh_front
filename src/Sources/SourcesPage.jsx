@@ -2,6 +2,13 @@ import React, { useRef, useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
 import { apiUrl } from "../config/api";
+import {
+  dismissSourceTask,
+  startSourceSplit,
+  startSourceUpload,
+  useSourceBackgroundTasks,
+} from "./sourceBackgroundTasks";
+import { clearPendingSplit, loadPendingSplit, savePendingSplit } from "./sourcePendingSplit";
 import "./sourcesPage.css";
 
 const TYPE_LABELS = {
@@ -21,19 +28,16 @@ const authHeader = () => {
 };
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
+const MAX_SPLIT_PDF_BYTES = 512 * 1024 * 1024;
 const CLOUDINARY_RAW_LIMIT_BYTES = 10 * 1024 * 1024;
 
 const formatMb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const formatDuration = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 const isPdfFile = (file) =>
   file?.type === "application/pdf" || /\.pdf$/i.test(String(file?.name || ""));
 const withQueuedOcr = (source) => String(source?.format || "").toLowerCase() === "pdf"
   ? { ...source, ocrStatus: ["completed", "processing", "uploading"].includes(source.ocrStatus) ? source.ocrStatus : "queued" }
   : source;
-
-const isCloudinarySizeError = (message = "", status = 0) => {
-  if (status === 413) return true;
-  return /cloudinary|file size|too large|payload too large|maximum|max size|limit exceeded/i.test(message);
-};
 
 const readResponsePayload = async (res) => {
   const text = await res.text();
@@ -45,10 +49,25 @@ const readResponsePayload = async (res) => {
   }
 };
 
-const COMPRESSION_LABELS = {
-  low: "Low compression",
-  recommended: "Recommended",
-  extreme: "Extreme",
+const readableError = (value, fallback = "An unexpected error occurred.") => {
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (Array.isArray(value)) {
+    const messages = value.map((item) => readableError(item, "")).filter(Boolean);
+    if (messages.length) return messages.join("; ");
+  }
+  if (value && typeof value === "object") {
+    for (const key of ["message", "error", "detail", "reason"]) {
+      if (value[key] != null && value[key] !== value) {
+        const message = readableError(value[key], "");
+        if (message) return message;
+      }
+    }
+    try {
+      const serialized = JSON.stringify(value);
+      if (serialized && serialized !== "{}") return serialized;
+    } catch {}
+  }
+  return fallback;
 };
 
 const SourcesPage = () => {
@@ -59,6 +78,7 @@ const SourcesPage = () => {
   const pendingImgType  = useRef("xray");
   const dropdownRef     = useRef(null);
   const addBtnRef       = useRef(null);
+  const splitPreviewXhrRef = useRef(null);
 
   const [sources,  setSources]  = useState([]);
   const [loading,  setLoading]  = useState(true);
@@ -68,7 +88,14 @@ const SourcesPage = () => {
   const [linkInputMode, setLinkInputMode] = useState("");
   const [linkUrl, setLinkUrl] = useState("");
   const [compressionPrompt, setCompressionPrompt] = useState(null);
-  const [compressionBusy, setCompressionBusy] = useState(false);
+  const [splitCheckElapsed, setSplitCheckElapsed] = useState(0);
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [selectedSourceIds, setSelectedSourceIds] = useState([]);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const backgroundTasks = useSourceBackgroundTasks();
+  const compressionBusy = backgroundTasks.some((task) => task.kind === "split" && task.status === "running");
+  const handledBackgroundTasks = useRef(new Set());
+  const autoQueuedOcrRef = useRef(new Set());
 
   /* ── Load sources ── */
   useEffect(() => {
@@ -102,38 +129,38 @@ const SourcesPage = () => {
     return () => window.clearInterval(timer);
   }, [sources]);
 
-  const retryOcr = async (sourceId) => {
-    try {
-      const response = await fetch(apiUrl(`/api/sources/${sourceId}/ocr/reprocess`), {
-        method: "POST",
-        headers: authHeader(),
-      });
-      if (!response.ok) throw new Error("Failed to queue OCR.");
-      setSources((current) => current.map((source) => (
-        source._id === sourceId ? { ...source, ocrStatus: "queued" } : source
-      )));
-    } catch {
-      setError("Could not queue document OCR. Please try again.");
-    }
-  };
+  // Older PDFs may predate automatic OCR and still be marked not_started.
+  // Queue each of those once when the Sources page discovers it; subsequent
+  // polling renders the persisted job status normally.
+  useEffect(() => {
+    const targets = sources.filter((source) => (
+      String(source.format || "").toLowerCase() === "pdf"
+      && (!source.ocrStatus || source.ocrStatus === "not_started")
+      && !autoQueuedOcrRef.current.has(source._id)
+    ));
+    if (!targets.length) return;
 
-  const deleteOcr = async (sourceId) => {
-    if (!window.confirm("Delete the stored OCR for this PDF? The PDF itself will not be deleted.")) return;
-    try {
-      const response = await fetch(apiUrl(`/api/sources/${sourceId}/ocr`), {
-        method: "DELETE",
-        headers: authHeader(),
-      });
-      if (!response.ok) throw new Error("Failed to delete stored OCR.");
-      setSources((current) => current.map((source) => (
-        source._id === sourceId
-          ? { ...source, ocrStatus: "not_started", ocrProgress: 0, ocrJobId: null, ocrModel: "" }
-          : source
-      )));
-    } catch {
-      setError("Could not delete the stored OCR. Please try again.");
-    }
-  };
+    targets.forEach((source) => autoQueuedOcrRef.current.add(source._id));
+    setSources((current) => current.map((source) => (
+      targets.some((target) => target._id === source._id)
+        ? { ...source, ocrStatus: "queued", ocrProgress: 0 }
+        : source
+    )));
+
+    void Promise.all(targets.map(async (source) => {
+      try {
+        const response = await fetch(apiUrl(`/api/sources/${source._id}/ocr/reprocess`), {
+          method: "POST",
+          headers: authHeader(),
+        });
+        if (!response.ok) throw new Error("OCR could not be queued.");
+      } catch {
+        setSources((current) => current.map((item) => (
+          item._id === source._id ? { ...item, ocrStatus: "failed", ocrProgress: 0 } : item
+        )));
+      }
+    }));
+  }, [sources]);
 
   /* ── Close dropdown on outside click ── */
   useEffect(() => {
@@ -150,148 +177,350 @@ const SourcesPage = () => {
 
   /* ── Upload file ── */
   const [uploadCount, setUploadCount] = useState(0);
+  const backgroundUploadCount = backgroundTasks.filter((task) => task.status === "running").length;
 
-  // Split preview is local (pdf-lib page count) and free — no iLovePDF call,
-  // no credits spent — unlike the old per-level compression size check
-  // (confirmed by direct measurement to cost 3 real credits per prompt-open,
-  // low/recommended/extreme, even when the user never compressed anything).
-  // Compression itself is now offered as a single static "Recommended"
-  // button with no upfront size check; a real compression call only happens
-  // if the user actually clicks it.
-  const fetchSplitPreview = useCallback(async (file) => {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch(apiUrl("/api/sources/split-preview"), {
-      method: "POST",
-      headers: authHeader(),
-      body: form,
+  useEffect(() => {
+    for (const task of backgroundTasks) {
+      if (handledBackgroundTasks.current.has(task.id) || task.status === "running") continue;
+      handledBackgroundTasks.current.add(task.id);
+
+      if (task.status === "completed") {
+        const source = task.result?.source;
+        if (source) {
+          setSources((current) => current.some((item) => item._id === source._id)
+            ? current
+            : [withQueuedOcr(source), ...current]);
+        }
+        setInfo(task.result?.duplicate
+          ? `"${task.name}" is already in your sources.`
+          : task.kind === "split"
+            ? `Uploaded "${task.name}" as one source, stored behind the scenes as ${task.result?.partCount || "multiple"} parts.`
+            : `Uploaded "${task.name}".`);
+        dismissSourceTask(task.id);
+        continue;
+      }
+
+      if (task.status === "needs_split") {
+        const data = task.result || {};
+        setCompressionPrompt({
+          file: task.file,
+          type: task.type,
+          reason: readableError(data.error, `"${task.name}" must be split before upload.`),
+          currentSizeBytes: data.currentSizeBytes ?? task.file.size,
+          maxSizeBytes: data.maxSizeBytes ?? CLOUDINARY_RAW_LIMIT_BYTES,
+          splitSuggestion: data.splitSuggestion || null,
+          splitUnavailableReason: data.splitUnavailableReason
+            ? readableError(data.splitUnavailableReason, "The PDF could not be inspected for splitting.")
+            : null,
+          loadingSplit: false,
+        });
+        dismissSourceTask(task.id);
+        continue;
+      }
+
+      if (task.status === "failed") {
+        setError(task.message || `Failed to process "${task.name}".`);
+        dismissSourceTask(task.id);
+      }
+    }
+  }, [backgroundTasks]);
+
+  const pollSplitPreviewJob = useCallback((jobId, onProgress) => new Promise((resolve, reject) => {
+    const poll = async () => {
+      try {
+        const response = await fetch(apiUrl(`/api/sources/ingest/${jobId}`), { headers: authHeader() });
+        const data = await readResponsePayload(response);
+        if (!response.ok) throw new Error(readableError(data.error, "Could not read PDF inspection status."));
+        const job = data.job || {};
+        onProgress?.({
+          stage: "inspecting",
+          stageLabel: job.stage || "Inspecting PDF page structure",
+          progress: Number(job.progress) || 0,
+          uploadJobId: jobId,
+        });
+        if (job.status === "failed") throw new Error(job.error || "PDF inspection failed.");
+        if (job.status === "ready") {
+          resolve({
+            uploadJobId: jobId,
+            currentSizeBytes: job.sizeBytes,
+            maxSizeBytes: CLOUDINARY_RAW_LIMIT_BYTES,
+            splitUnavailableReason: null,
+            splitSuggestion: {
+              numPages: job.pageCount,
+              suggestedParts: job.requestedParts,
+              estimatedPartSizeBytes: Math.ceil(job.sizeBytes / job.requestedParts),
+              repaired: job.stage === "Ready to split after repair",
+            },
+          });
+          return;
+        }
+        window.setTimeout(poll, 1000);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    void poll();
+  }), []);
+
+  // Upload once, then follow the persisted backend inspection job.
+  const fetchSplitPreview = useCallback((file, type, onProgress) => new Promise((resolve, reject) => {
+    splitPreviewXhrRef.current?.abort();
+    const xhr = new XMLHttpRequest();
+    splitPreviewXhrRef.current = xhr;
+    xhr.open("POST", apiUrl("/api/sources/split-preview"));
+    const token = readStoredSession()?.token || "";
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.timeout = 15 * 60 * 1000;
+
+    xhr.upload.addEventListener("progress", (event) => {
+      if (!event.lengthComputable) return;
+      const progress = Math.min(100, Math.round((event.loaded / event.total) * 100));
+      onProgress?.({ stage: progress >= 100 ? "inspecting" : "uploading", progress, loaded: event.loaded, total: event.total });
     });
-    const data = await readResponsePayload(res);
-    if (!res.ok) throw new Error(data.error || "Failed to check split options.");
-    return data;
+    xhr.upload.addEventListener("load", () => {
+      onProgress?.({ stage: "inspecting", progress: 100, loaded: file.size, total: file.size });
+    });
+    xhr.addEventListener("load", () => {
+      splitPreviewXhrRef.current = null;
+      const data = (() => {
+        if (!xhr.responseText) return {};
+        try { return JSON.parse(xhr.responseText); } catch { return { error: xhr.responseText }; }
+      })();
+      if (xhr.status < 200 || xhr.status >= 300) {
+        reject(new Error(readableError(data.error, "Failed to check split options.")));
+        return;
+      }
+      if (xhr.status === 202 && data.jobId) {
+        onProgress?.({ stage: "inspecting", stageLabel: data.stage, progress: data.progress || 5, uploadJobId: data.jobId });
+        void pollSplitPreviewJob(data.jobId, onProgress).then(resolve, reject);
+        return;
+      }
+      resolve(data);
+    });
+    xhr.addEventListener("error", () => {
+      splitPreviewXhrRef.current = null;
+      reject(new Error("The PDF checker lost its connection to the backend."));
+    });
+    xhr.addEventListener("timeout", () => {
+      splitPreviewXhrRef.current = null;
+      reject(new Error("The PDF checker timed out after 15 minutes."));
+    });
+    xhr.addEventListener("abort", () => {
+      splitPreviewXhrRef.current = null;
+      reject(new DOMException("PDF check cancelled.", "AbortError"));
+    });
+
+    const form = new FormData();
+    form.append("file", file, file?.name || "source.pdf");
+    form.append("type", type || "textbook");
+    form.append("name", file?.name || "source.pdf");
+    xhr.send(form);
+  }), [pollSplitPreviewJob]);
+
+  const updateSplitCheckProgress = useCallback((file, progress) => {
+    setCompressionPrompt((current) => current && (!file || current.file === file)
+      ? {
+        ...current,
+        checkerStage: progress.stage,
+        checkerStageLabel: progress.stageLabel || current.checkerStageLabel,
+        checkerProgress: progress.progress,
+        checkerLoaded: progress.loaded ?? current.checkerLoaded,
+        checkerTotal: progress.total ?? current.checkerTotal,
+        uploadJobId: progress.uploadJobId || current.uploadJobId,
+      }
+      : current);
   }, []);
 
-  const offerPdfCompression = useCallback(async (file, type, reason, knownOptions = null) => {
-    setCompressionPrompt({
+  useEffect(() => {
+    if (!compressionPrompt?.loadingSplit) {
+      setSplitCheckElapsed(0);
+      return undefined;
+    }
+    const startedAt = compressionPrompt.checkerStartedAt || Date.now();
+    const tick = () => setSplitCheckElapsed(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+    tick();
+    const timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [compressionPrompt?.loadingSplit, compressionPrompt?.checkerStartedAt]);
+
+  useEffect(() => () => splitPreviewXhrRef.current?.abort(), []);
+
+  const offerPdfSplit = useCallback(async (file, type, reason, knownOptions = null) => {
+    const pendingValue = {
       file,
       type,
       reason,
       currentSizeBytes: knownOptions?.currentSizeBytes ?? file.size,
       maxSizeBytes: knownOptions?.maxSizeBytes ?? CLOUDINARY_RAW_LIMIT_BYTES,
-      attemptedCompressionLevel: knownOptions?.attemptedCompressionLevel || null,
-      attemptedSizeBytes: knownOptions?.attemptedSizeBytes || null,
-      compressionError: knownOptions?.compressionError || null,
       splitSuggestion: knownOptions?.splitSuggestion || null,
-      loadingSplit: !knownOptions,
+      splitUnavailableReason: knownOptions?.splitUnavailableReason || null,
+    };
+    setCompressionPrompt({
+      ...pendingValue,
+      splitUnavailableReason: knownOptions?.splitUnavailableReason
+        ? readableError(knownOptions.splitUnavailableReason, "The PDF could not be inspected for splitting.")
+        : null,
+      loadingSplit: true,
+      checkerStage: "caching",
+      checkerProgress: 0,
+      checkerLoaded: 0,
+      checkerTotal: file.size,
+      checkerStartedAt: Date.now(),
     });
 
-    if (knownOptions) return;
+    const persisted = await savePendingSplit(pendingValue, (progress) => {
+      updateSplitCheckProgress(file, { ...progress, stage: "caching" });
+    });
+    if (!persisted) {
+      setCompressionPrompt((current) => current?.file === file
+        ? { ...current, loadingSplit: false, splitSuggestion: null, splitUnavailableReason: "The browser could not reserve durable space for this PDF." }
+        : current);
+      return;
+    }
+
+    if (knownOptions) {
+      setCompressionPrompt((current) => current?.file === file
+        ? { ...current, loadingSplit: false, checkerStage: "complete", checkerProgress: 100 }
+        : current);
+      return;
+    }
+
+    setCompressionPrompt((current) => current?.file === file
+      ? { ...current, checkerStage: "uploading", checkerProgress: 0, checkerLoaded: 0, checkerStartedAt: Date.now() }
+      : current);
 
     try {
-      const data = await fetchSplitPreview(file);
+      let persistedServerJobId = "";
+      const data = await fetchSplitPreview(file, type, (progress) => {
+        updateSplitCheckProgress(file, progress);
+        if (progress.uploadJobId && progress.uploadJobId !== persistedServerJobId) {
+          persistedServerJobId = progress.uploadJobId;
+          void savePendingSplit({ ...pendingValue, uploadJobId: progress.uploadJobId });
+        }
+      });
       setCompressionPrompt((prev) => {
         if (!prev || prev.file !== file) return prev;
-        return { ...prev, splitSuggestion: data.splitSuggestion || null, loadingSplit: false };
+        return {
+          ...prev,
+          splitSuggestion: data.splitSuggestion || null,
+          splitUnavailableReason: data.splitUnavailableReason
+            ? readableError(data.splitUnavailableReason, "The PDF could not be inspected for splitting.")
+            : null,
+          loadingSplit: false,
+          checkerStage: "complete",
+          checkerProgress: 100,
+          uploadJobId: data.uploadJobId || null,
+        };
+      });
+      void savePendingSplit({
+        file,
+        type,
+        reason,
+        currentSizeBytes: data.currentSizeBytes ?? file.size,
+        maxSizeBytes: data.maxSizeBytes ?? CLOUDINARY_RAW_LIMIT_BYTES,
+        splitSuggestion: data.splitSuggestion || null,
+        splitUnavailableReason: data.splitUnavailableReason || null,
+        uploadJobId: data.uploadJobId || null,
       });
     } catch (e) {
       setCompressionPrompt((prev) => {
         if (!prev || prev.file !== file) return prev;
-        return { ...prev, compressionError: e.message, loadingSplit: false };
+        return { ...prev, splitUnavailableReason: e.message, loadingSplit: false };
       });
     }
-  }, [fetchSplitPreview]);
+  }, [fetchSplitPreview, updateSplitCheckProgress]);
 
-  const uploadFile = useCallback(async (file, type, options = {}) => {
-    const { compressPdf = false, compressPdfLevel = "" } = options;
-    setError(null);
-    setInfo(null);
-    setUploadCount((n) => n + 1);
-    try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("type", type);
-      form.append("name", file.name);
-      if (compressPdf) form.append("compressPdf", "true");
-      if (compressPdfLevel) form.append("compressPdfLevel", compressPdfLevel);
-      const res  = await fetch(apiUrl("/api/sources/save"), { method: "POST", headers: authHeader(), body: form });
-      const data = await readResponsePayload(res);
-      if (!res.ok) {
-        const message = data.error || `"${file.name}" failed.`;
-        if (isPdfFile(file) && data.needsCompression) {
-          void offerPdfCompression(file, type, message, data);
-          return;
-        }
-        if (isPdfFile(file) && isCloudinarySizeError(message, res.status)) {
-          void offerPdfCompression(file, type, `"${file.name}" is over the Cloudinary upload limit. Compress it and retry?`);
-          return;
-        }
-        throw new Error(message);
-      }
-      if (data.duplicate) {
-        setInfo(`"${file.name}" is already in your sources.`);
+  useEffect(() => {
+    let cancelled = false;
+    void loadPendingSplit().then((pending) => {
+      if (cancelled || !pending) return;
+      if (pending.uploadJobId && pending.splitSuggestion) {
+        setCompressionPrompt({ ...pending, loadingSplit: false, checkerStage: "complete", checkerProgress: 100 });
         return;
       }
-      setSources((prev) => [withQueuedOcr(data.source), ...prev]);
-    } catch (e) {
-      setError(e.message);
-    } finally {
-      setUploadCount((n) => n - 1);
-    }
-  }, [offerPdfCompression]);
+      if (pending.uploadJobId) {
+        setCompressionPrompt({
+          ...pending,
+          loadingSplit: true,
+          checkerStage: "inspecting",
+          checkerStageLabel: "Restoring PDF inspection",
+          checkerProgress: Number(pending.checkerProgress) || 5,
+          checkerStartedAt: Date.now(),
+        });
+        void pollSplitPreviewJob(pending.uploadJobId, (progress) => {
+          updateSplitCheckProgress(undefined, progress);
+        }).then((data) => {
+          if (cancelled) return;
+          const refreshed = { ...pending, ...data, loadingSplit: false, checkerStage: "complete", checkerProgress: 100 };
+          setCompressionPrompt(refreshed);
+          void savePendingSplit(refreshed);
+        }).catch((inspectionError) => {
+          if (!cancelled) setCompressionPrompt((current) => ({
+            ...current,
+            loadingSplit: false,
+            splitSuggestion: null,
+            splitUnavailableReason: inspectionError.message,
+          }));
+        });
+        return;
+      }
+      if (!pending.file) {
+        void clearPendingSplit();
+        setError("The browser could not restore the selected PDF. Select it again to resume uploading.");
+        return;
+      }
+      // A previous server failure is diagnostic state, not a permanent result.
+      // Always re-inspect the persisted PDF so backend parser/repair fixes can
+      // replace stale errors such as pdf-lib's malformed PDFDict exception.
+      setCompressionPrompt({
+        ...pending,
+        splitUnavailableReason: null,
+        loadingSplit: true,
+        checkerStage: "uploading",
+        checkerProgress: 0,
+        checkerLoaded: 0,
+        checkerTotal: pending.file.size,
+        checkerStartedAt: Date.now(),
+      });
+      void fetchSplitPreview(pending.file, pending.type, (progress) => updateSplitCheckProgress(pending.file, progress)).then((data) => {
+        if (cancelled) return;
+        const refreshed = {
+          ...pending,
+          ...data,
+          splitUnavailableReason: data.splitUnavailableReason || null,
+          loadingSplit: false,
+          checkerStage: "complete",
+          checkerProgress: 100,
+          uploadJobId: data.uploadJobId || null,
+        };
+        setCompressionPrompt((current) => current?.file === pending.file ? refreshed : current);
+        void savePendingSplit(refreshed);
+      }).catch((error) => {
+        if (!cancelled) setCompressionPrompt((current) => current?.file === pending.file
+          ? { ...current, splitSuggestion: null, splitUnavailableReason: error.message, loadingSplit: false }
+          : current);
+      });
+    });
+    return () => { cancelled = true; };
+  }, [fetchSplitPreview, pollSplitPreviewJob, updateSplitCheckProgress]);
 
-  const handleCompressAndUpload = useCallback(async (compressionLevel) => {
-    if (!compressionPrompt?.file || !compressionPrompt?.type || !compressionLevel) return;
-    setCompressionBusy(true);
+  const uploadFile = useCallback((file, type) => {
     setError(null);
     setInfo(null);
-    try {
-      setInfo(`Compressing "${compressionPrompt.file.name}" with iLovePDF (${COMPRESSION_LABELS[compressionLevel] || compressionLevel}) and uploading now…`);
-      setCompressionPrompt(null);
-      await uploadFile(compressionPrompt.file, compressionPrompt.type, {
-        compressPdf: true,
-        compressPdfLevel: compressionLevel,
-      });
-    } catch (e) {
-      setError(e.message || "Failed to compress this PDF.");
-    } finally {
-      setCompressionBusy(false);
-    }
-  }, [compressionPrompt, uploadFile]);
+    startSourceUpload({ file, type });
+  }, []);
 
-  const handleSplitAndUpload = useCallback(async () => {
+  const handleSplitAndUpload = useCallback(() => {
     const prompt = compressionPrompt;
     const parts = prompt?.splitSuggestion?.suggestedParts;
-    if (!prompt?.file || !prompt?.type || !parts) return;
-    setCompressionBusy(true);
+    if ((!prompt?.file && !prompt?.uploadJobId) || !prompt?.type || !parts) return;
+    const sourceName = prompt.file?.name || prompt.fileName || "source.pdf";
     setError(null);
     setInfo(null);
-    try {
-      setInfo(`Splitting "${prompt.file.name}" into ${parts} parts behind the scenes…`);
-      setCompressionPrompt(null);
-      const form = new FormData();
-      form.append("file", prompt.file);
-      form.append("type", prompt.type);
-      form.append("name", prompt.file.name);
-      form.append("parts", String(parts));
-      setUploadCount((n) => n + 1);
-      const res  = await fetch(apiUrl("/api/sources/split-and-save"), { method: "POST", headers: authHeader(), body: form });
-      const data = await readResponsePayload(res);
-      if (!res.ok) throw new Error(data.error || `Failed to split "${prompt.file.name}".`);
-      if (data.duplicate) {
-        setInfo(`"${prompt.file.name}" is already in your sources.`);
-      } else {
-        setSources((prev) => [withQueuedOcr(data.source), ...prev]);
-        setInfo(
-          `Uploaded "${prompt.file.name}" as one source, stored behind the scenes as ${data.partCount} parts` +
-          (data.oversizedParts ? ` (${data.oversizedParts} part${data.oversizedParts > 1 ? "s" : ""} still over the limit even after compressing).` : ".")
-        );
-      }
-    } catch (e) {
-      setError(e.message || "Failed to split this PDF.");
-    } finally {
-      setCompressionBusy(false);
-      setUploadCount((n) => n - 1);
-    }
+    setInfo(`Splitting "${sourceName}" into ${parts} parts in the background. You can browse other pages.`);
+    setCompressionPrompt(null);
+    void clearPendingSplit();
+    startSourceSplit({ file: prompt.file, type: prompt.type, parts, uploadJobId: prompt.uploadJobId, name: sourceName });
   }, [compressionPrompt]);
 
   /* ── Save YouTube link ── */
@@ -346,6 +575,42 @@ const SourcesPage = () => {
     } catch {}
   }, []);
 
+  const toggleSourceSelection = useCallback((id) => {
+    setSelectedSourceIds((current) => current.includes(id)
+      ? current.filter((selectedId) => selectedId !== id)
+      : [...current, id]);
+  }, []);
+
+  const toggleAllSourceSelection = useCallback(() => {
+    setSelectedSourceIds((current) => (
+      current.length === sources.length ? [] : sources.map((source) => source._id)
+    ));
+  }, [sources]);
+
+  const deleteSelectedSources = useCallback(async () => {
+    if (!selectedSourceIds.length || deleteBusy) return;
+    if (!window.confirm(`Delete ${selectedSourceIds.length} selected source${selectedSourceIds.length === 1 ? "" : "s"}?`)) return;
+    setDeleteBusy(true);
+    try {
+      const results = await Promise.all(selectedSourceIds.map(async (id) => {
+        const response = await fetch(apiUrl(`/api/sources/${id}`), {
+          method: "DELETE",
+          headers: authHeader(),
+        });
+        return { id, ok: response.ok };
+      }));
+      const deletedIds = new Set(results.filter((result) => result.ok).map((result) => result.id));
+      setSources((current) => current.filter((source) => !deletedIds.has(source._id)));
+      setSelectedSourceIds((current) => current.filter((id) => !deletedIds.has(id)));
+      if (deletedIds.size !== results.length) setError("Some selected sources could not be deleted.");
+      else setDeleteMode(false);
+    } catch {
+      setError("Could not delete the selected sources. Please try again.");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [deleteBusy, selectedSourceIds]);
+
   /* ── Rename ── inline edit in the Name column, not a modal — one field,
      no reason to interrupt with a dialog. renamingId tracks which row (if
      any) is currently in edit mode; renameValue is that row's own draft
@@ -394,16 +659,20 @@ const SourcesPage = () => {
     e.target.value = "";
     for (const file of files) {
       const resolvedType = type === "doc" ? pendingDocType.current : type;
+      if (isPdfFile(file) && file.size > MAX_SPLIT_PDF_BYTES) {
+        setError(`"${file.name}" is too large (${formatMb(file.size)}). The local splitter currently supports PDFs up to ${formatMb(MAX_SPLIT_PDF_BYTES)}.`);
+        continue;
+      }
       if (file.size > MAX_UPLOAD_BYTES) {
         if (isPdfFile(file)) {
-          void offerPdfCompression(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the 100 MB Cloudinary limit. Compress it before upload?`);
+          void offerPdfSplit(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the upload limit and must be split.`);
         } else {
           setError(`"${file.name}" is too large (${formatMb(file.size)}). Maximum is 100 MB.`);
         }
         continue;
       }
       if (isPdfFile(file) && file.size > CLOUDINARY_RAW_LIMIT_BYTES) {
-        void offerPdfCompression(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the ${formatMb(CLOUDINARY_RAW_LIMIT_BYTES)} Cloudinary PDF upload limit. Compress it with iLovePDF before uploading?`);
+        void offerPdfSplit(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the ${formatMb(CLOUDINARY_RAW_LIMIT_BYTES)} PDF upload limit and must be split.`);
         continue;
       }
       uploadFile(file, resolvedType);
@@ -417,7 +686,35 @@ const SourcesPage = () => {
       <div id="sources_header">
         <button id="sources_back_btn" onClick={() => navigate("/home")}>←</button>
         <span id="sources_header_title">Hyle Source Organisation</span>
-        {uploadCount > 0 && <span id="sources_uploading_label">Uploading {uploadCount > 1 ? `${uploadCount} files` : ""}…</span>}
+        <div className="sources_bulk_actions" aria-label="Source selection actions">
+          {deleteMode && (
+            <button
+              type="button"
+              className="sources_bulk_cancel_btn"
+              onClick={() => { setDeleteMode(false); setSelectedSourceIds([]); }}
+              disabled={deleteBusy}
+            >Cancel</button>
+          )}
+          <button
+            type="button"
+            id="sources_delete_btn"
+            className={deleteMode ? "sources_delete_btn--active" : ""}
+            onClick={() => {
+              if (!deleteMode) {
+                setDeleteMode(true);
+                return;
+              }
+              void deleteSelectedSources();
+            }}
+            disabled={deleteBusy || (deleteMode && selectedSourceIds.length === 0)}
+            title={deleteMode ? "Delete selected sources" : "Choose sources to delete"}
+          >
+            {deleteBusy ? "Deleting…" : deleteMode ? `Delete selected${selectedSourceIds.length ? ` (${selectedSourceIds.length})` : ""}` : "Delete"}
+          </button>
+        </div>
+        {(uploadCount + backgroundUploadCount) > 0 && (
+          <span id="sources_uploading_label">Working in background {(uploadCount + backgroundUploadCount) > 1 ? `(${uploadCount + backgroundUploadCount})` : ""}…</span>
+        )}
 
         <div id="sources_add_wrap">
           <button
@@ -515,27 +812,48 @@ const SourcesPage = () => {
       {compressionPrompt && (
         <div id="sources_compress_prompt">
           <div className="sources_compress_prompt__copy">
-            <strong>Compress PDF for upload?</strong>
+            <strong>Split PDF for upload?</strong>
             <p>{compressionPrompt.reason}</p>
             <p>
-              Current size: <span>{formatMb(compressionPrompt.currentSizeBytes || compressionPrompt.file.size)}</span>
+              Current size: <span>{formatMb(compressionPrompt.currentSizeBytes || compressionPrompt.file?.size || 0)}</span>
             </p>
-            {compressionPrompt.attemptedCompressionLevel && compressionPrompt.attemptedSizeBytes ? (
-              <p className="sources_compress_prompt__note">
-                Last attempt: <span>{COMPRESSION_LABELS[compressionPrompt.attemptedCompressionLevel] || compressionPrompt.attemptedCompressionLevel}</span> produced {formatMb(compressionPrompt.attemptedSizeBytes)}.
-              </p>
-            ) : null}
-
-            {/* Split is offered up front, before compression — it's instant
-                and free (local pdf-lib page count, no iLovePDF call), so
-                users who'd rather just split don't wait on anything. */}
             {compressionPrompt.loadingSplit ? (
-              <p className="sources_compress_prompt__loading">Checking whether this PDF can be split…</p>
+              <div className="sources_split_checker" aria-live="polite">
+                <div className="sources_split_checker__status">
+                  <strong>
+                    {compressionPrompt.checkerStage === "inspecting"
+                      ? `${compressionPrompt.checkerStageLabel || "Inspecting PDF page structure"}: ${compressionPrompt.checkerProgress || 0}%`
+                      : compressionPrompt.checkerStage === "caching"
+                        ? `Preparing reload-safe copy: ${compressionPrompt.checkerProgress || 0}%`
+                      : `Uploading to checker: ${compressionPrompt.checkerProgress || 0}%`}
+                  </strong>
+                  <span>{formatDuration(splitCheckElapsed)}</span>
+                </div>
+                <div
+                  className={`sources_split_checker__track${compressionPrompt.checkerStage === "inspecting" ? " sources_split_checker__track--inspecting" : ""}`}
+                  role="progressbar"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                  aria-valuenow={compressionPrompt.checkerProgress || 0}
+                >
+                  <span style={{ width: `${compressionPrompt.checkerProgress || 0}%` }} />
+                </div>
+                <p>
+                  {compressionPrompt.checkerStage === "inspecting"
+                    ? "Upload complete. Progress is reported by the persisted backend inspection job."
+                    : compressionPrompt.checkerStage === "caching"
+                      ? `${formatMb(compressionPrompt.checkerLoaded || 0)} of ${formatMb(compressionPrompt.checkerTotal || compressionPrompt.file?.size || 0)} saved in browser storage`
+                    : `${formatMb(compressionPrompt.checkerLoaded || 0)} of ${formatMb(compressionPrompt.checkerTotal || compressionPrompt.file?.size || 0)}`}
+                </p>
+              </div>
             ) : compressionPrompt.splitSuggestion ? (
               <div className="sources_split_option">
                 <p className="sources_compress_prompt__note">
-                  Split it into {compressionPrompt.splitSuggestion.suggestedParts} pieces behind the scenes instead (~{formatMb(compressionPrompt.splitSuggestion.estimatedPartSizeBytes)} each, {compressionPrompt.splitSuggestion.numPages} pages total) — no compression needed, and it still shows up as one source that opens and reads like a single PDF.
+                  Split it into {compressionPrompt.splitSuggestion.suggestedParts} pieces behind the scenes (~{formatMb(compressionPrompt.splitSuggestion.estimatedPartSizeBytes)} each, {compressionPrompt.splitSuggestion.numPages} pages total). It still appears as one source that opens and reads like a single PDF.
                 </p>
+                {compressionPrompt.splitSuggestion.repaired && (
+                  <p className="sources_compress_prompt__note">The PDF structure was automatically repaired before its {compressionPrompt.splitSuggestion.numPages} pages were counted.</p>
+                )}
                 <button
                   type="button"
                   className="sources_compress_option"
@@ -548,45 +866,26 @@ const SourcesPage = () => {
               </div>
             ) : (
               <p className="sources_compress_prompt__note">
-                This PDF can't be split further (too few pages) — compression is the only option below.
+                Splitting is unavailable: {compressionPrompt.splitUnavailableReason || "the PDF page structure could not be inspected."}
               </p>
             )}
-
-            {/* No upfront size check here on purpose (that cost 3 real
-                iLovePDF credits per prompt-open just to show estimates,
-                confirmed by direct measurement) — "Recommended" is offered
-                as a static, immediately-clickable action; the real
-                compression call only happens if actually clicked. Falls
-                forward to "Extreme" only if Recommended genuinely wasn't
-                enough. */}
-            <p className="sources_compress_prompt__note">Or compress it instead, via the existing iLovePDF flow on the backend:</p>
-            {compressionPrompt.attemptedCompressionLevel === "extreme" ? (
-              <p className="sources_compress_prompt__note">
-                Extreme compression still wasn't enough — splitting (above) is the remaining option.
-              </p>
-            ) : (
-              <div className="sources_compress_options">
-                <button
-                  type="button"
-                  className="sources_compress_option"
-                  disabled={compressionBusy || compressionPrompt.compressionAvailable === false}
-                  onClick={() => handleCompressAndUpload(compressionPrompt.attemptedCompressionLevel === "recommended" ? "extreme" : "recommended")}
-                >
-                  <strong>{compressionPrompt.attemptedCompressionLevel === "recommended" ? "Try extreme compression" : "Compress (recommended)"}</strong>
-                  <span>Runs the real iLovePDF compression and retries the upload — no preview, size isn't known until this finishes</span>
-                </button>
-              </div>
-            )}
-            {compressionPrompt.compressionError ? (
-              <p className="sources_compress_prompt__error">{compressionPrompt.compressionError}</p>
-            ) : null}
           </div>
           <div className="sources_compress_prompt__actions">
             <button
               type="button"
               className="sources_compress_btn"
               disabled={compressionBusy}
-              onClick={() => setCompressionPrompt(null)}
+              onClick={() => {
+                splitPreviewXhrRef.current?.abort();
+                if (compressionPrompt.uploadJobId) {
+                  void fetch(apiUrl(`/api/sources/ingest/${compressionPrompt.uploadJobId}`), {
+                    method: "DELETE",
+                    headers: authHeader(),
+                  });
+                }
+                setCompressionPrompt(null);
+                void clearPendingSplit();
+              }}
             >
               Cancel
             </button>
@@ -599,19 +898,38 @@ const SourcesPage = () => {
         <table id="sources_table">
           <thead>
             <tr>
-              <th>Type</th>
-              <th>Format</th>
-              <th>Name</th>
-              <th></th>
+              {deleteMode && (
+                <th className="sources_select_col">
+                  <input
+                    type="checkbox"
+                    checked={sources.length > 0 && selectedSourceIds.length === sources.length}
+                    onChange={toggleAllSourceSelection}
+                    aria-label="Select all sources"
+                  />
+                </th>
+              )}
+              <th className="sources_type_col">Type</th>
+              <th className="sources_format_col">Format</th>
+              <th className="sources_name_col">Name</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
-              <tr><td colSpan={4} className="sources_td_status">Loading…</td></tr>
+              <tr><td colSpan={deleteMode ? 4 : 3} className="sources_td_status">Loading…</td></tr>
             ) : sources.length === 0 ? (
-              <tr><td colSpan={4} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
+              <tr><td colSpan={deleteMode ? 4 : 3} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
             ) : sources.map((s) => (
               <tr key={s._id}>
+                {deleteMode && (
+                  <td className="sources_select_col">
+                    <input
+                      type="checkbox"
+                      checked={selectedSourceIds.includes(s._id)}
+                      onChange={() => toggleSourceSelection(s._id)}
+                      aria-label={`Select ${s.name}`}
+                    />
+                  </td>
+                )}
                 <td>
                   <span className="sources_type_badge" style={{ "--src-color": TYPE_COLORS[s.type] || "#aaa" }}>
                     {TYPE_LABELS[s.type] || s.type}
@@ -684,15 +1002,6 @@ const SourcesPage = () => {
                       {["queued", "uploading", "processing", "completed", "partial"].includes(s.ocrStatus) && <span className="sources_ocr_progress_value">{Math.round((Number(s.ocrProgress) || 0) * 100)}%</span>}
                     </span>
                   )}
-                </td>
-                <td className="sources_td_actions">
-                  {String(s.format || "").toLowerCase() === "pdf" && !["queued", "uploading", "processing"].includes(s.ocrStatus) && (
-                    <button className="sources_ocr_retry_btn" onClick={() => retryOcr(s._id)} title="Replace cached OCR with a new Tesseract OCR run">OCR</button>
-                  )}
-                  {String(s.format || "").toLowerCase() === "pdf" && (s.ocrJobId || ["completed", "partial", "failed"].includes(s.ocrStatus)) && (
-                    <button className="sources_ocr_delete_btn" onClick={() => deleteOcr(s._id)} title="Delete stored OCR, not the PDF">Delete OCR</button>
-                  )}
-                  <button className="sources_del_btn" onClick={() => deleteSource(s._id)}>✕</button>
                 </td>
               </tr>
             ))}

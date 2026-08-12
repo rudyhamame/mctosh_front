@@ -3,7 +3,16 @@
   display: flex;
   flex-direction: row;
   height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px));
-  background: var(--color-bg);
+  --reader-bg: #f7f7f9;
+  --reader-canvas: #ececf1;
+  --reader-surface: #ffffff;
+  --reader-border: #dedee6;
+  --reader-border-subtle: #e8e8ed;
+  --reader-text: #20212a;
+  --reader-muted: #696b78;
+  --reader-accent: #6757d9;
+  --reader-accent-soft: rgba(103, 87, 217, 0.10);
+  background: var(--reader-canvas);
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
@@ -48,6 +57,7 @@
 }
 
 #pdfw_main {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -57,17 +67,18 @@
 
 #pdfw_header {
   display: flex;
-  align-items: flex-start;
-  gap: 0.8rem;
-  padding: 1rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  background: var(--color-surface);
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
+  align-items: center;
+  min-height: 48px;
+  box-sizing: border-box;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--reader-border-subtle);
+  background: var(--reader-surface);
+  box-shadow: none;
   flex-shrink: 0;
   position: relative;
   z-index: 30;
-  backdrop-filter: blur(18px) saturate(1.05);
-  -webkit-backdrop-filter: blur(18px) saturate(1.05);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 #pdfw_header_main {
@@ -75,18 +86,51 @@
   flex: 1 1 auto;
   min-width: 0;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0;
   container-type: inline-size;
   container-name: pdfw-header-main;
 }
 
 #pdfw_toolbar_host {
-  flex: 1 1 auto;
-  min-width: 0;
+  position: absolute;
+  z-index: 25;
+  inset: 48px auto 0 0;
+  width: 56px;
+  min-width: 56px;
+  overflow: visible;
+  border-right: 1px solid var(--reader-border-subtle);
+  background: var(--reader-surface);
 }
 
 #pdfw_toolbar_host:empty {
   display: none;
+}
+
+/* The active tool's controls have their own stable mount point. Keeping this
+   sibling to the icon rail avoids clipping by the rail's scroll container and
+   makes mounting independent of the toolbar's current overflow/layout state. */
+#pdfw_subtoolbar_host {
+  position: absolute;
+  z-index: 26;
+  top: 48px;
+  left: 56px;
+  right: 0;
+  min-width: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+#pdfw_subtoolbar_host:empty {
+  display: none;
+}
+
+#pdfw_subtoolbar_host > .annot_tool_options {
+  pointer-events: auto;
+}
+
+#pdfw_panes {
+  margin-left: 56px;
+  background: var(--reader-canvas);
 }
 
 #pdfw_back {
@@ -97,15 +141,13 @@
   width: auto;
   min-width: 2.71rem;
   height: 2.71rem;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 88%, transparent);
-  background: color-mix(in srgb, #eef5f8 84%, var(--color-surface));
-  color: #28495a;
-  padding: 0 0.88rem 0 0.72rem;
+  border-radius: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--reader-muted);
+  padding: 0 0.45rem;
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.34),
-    0 6px 16px rgba(15, 23, 42, 0.08);
+  box-shadow: none;
   transition: transform 0.14s, background 0.14s, border-color 0.14s, box-shadow 0.14s, color 0.14s;
 }
 #pdfw_back svg {
@@ -124,13 +166,10 @@
   white-space: nowrap;
 }
 #pdfw_back:hover {
-  background: color-mix(in srgb, #dff0f6 78%, var(--color-surface));
-  border-color: color-mix(in srgb, #4ea7c7 34%, var(--color-border) 66%);
-  color: #143846;
-  transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,0.36),
-    0 10px 22px rgba(15, 23, 42, 0.12);
+  background: rgba(30, 30, 40, 0.055);
+  color: var(--reader-text);
+  transform: none;
+  box-shadow: none;
 }
 
 #pdfw_split_toggle {
@@ -241,18 +280,6 @@
   min-width: 0;
   flex-wrap: nowrap;
   gap: 0.55rem;
-}
-
-.pdfw_zoom_group {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.12rem;
-  padding: 0.2rem;
-  border: 1px solid color-mix(in srgb, var(--color-border) 86%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-surface) 92%, var(--color-bg) 8%);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.24);
-  flex-shrink: 0;
 }
 
 .pdfw_zoom_surface_label {
@@ -603,10 +630,6 @@
     gap: 0.22rem;
   }
 
-  #pdfw_header_main .pdfw_zoom_group {
-    padding: 0.12rem;
-  }
-
   #pdfw_header_main .pdfw_zoom_btn,
   #pdfw_header_main .pdfw_zoom_label {
     height: 1.85rem;
@@ -686,6 +709,320 @@
   }
 }
 
+/* Final single-row command-bar contract. These rules intentionally override
+   the older wrapping breakpoints above: the bar stays one row and lets the
+   center group scroll while the document title absorbs remaining pressure. */
+#pdfw_header {
+  height: 52px;
+  min-height: 52px;
+  padding: 0 16px;
+  background: #fff;
+  border-bottom: 1px solid #e8e8ed;
+}
+
+#pdfw_header_main {
+  width: 100%;
+  min-width: 0;
+}
+
+#pdfw_header_main .pdfw_tabbar {
+  display: grid !important;
+  grid-template-columns: minmax(180px, 1fr) auto minmax(180px, 1fr) !important;
+  grid-template-areas: "left center right" !important;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  min-height: 52px;
+  flex-wrap: nowrap !important;
+  overflow: visible;
+}
+
+#pdfw_header_main .pdfw_tabbar_left { grid-area: left; min-width: 0; overflow: hidden; }
+#pdfw_header_main .pdfw_tabbar_center { grid-area: center; min-width: 0; overflow-x: auto; overflow-y: hidden; justify-content: center; scrollbar-width: none; }
+#pdfw_header_main .pdfw_tabbar_center::-webkit-scrollbar { display: none; }
+#pdfw_header_main .pdfw_tabbar_right { grid-area: right; min-width: 0; overflow: hidden; justify-content: flex-end; }
+
+#pdfw_header_main .pdfw_tabstrip {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+
+#pdfw_header_main .pdfw_tabbar_left > #pdfw_back,
+#pdfw_header_main .pdfw_tab_add_wrap { flex: 0 0 auto; }
+#pdfw_header_main .pdfw_tab { flex: 0 0 auto; max-width: min(260px, 32vw); }
+#pdfw_header_main .pdfw_tab_label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+#pdfw_header_main .pdfw_page_nav_group,
+#pdfw_header_main #pdf_page_nav,
+#pdfw_header_main #pdf_page_nav_right,
+#pdfw_header_main .pdf_reading_mode_menu_wrap,
+#pdfw_header_main .pdf_notebook_menu_wrap,
+#pdfw_header_main #pdfw_split_mode,
+#pdfw_header_main .pdf_reader_nav_action,
+#pdfw_header_main .pdfw_undo_redo_group,
+#pdfw_header_main .pdfw_overflow_wrap {
+  flex: 0 0 auto;
+}
+
+#pdfw_header_main .pdfw_page_nav_group {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+#pdfw_header_main .pdfw_nav_separator {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: #e4e4e9;
+  flex: 0 0 auto;
+}
+
+#pdfw_header_main #pdfw_split_mode,
+#pdfw_header_main #pdf_reading_mode_toggle,
+#pdfw_header_main #pdf_ocr_companion_toggle,
+#pdfw_header_main #pdf_notebook_toggle {
+  height: 34px;
+  min-width: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #696b78;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+#pdfw_header_main #pdfw_split_mode:hover:not(:disabled),
+#pdfw_header_main #pdfw_split_mode.pdfw_split_mode--active,
+#pdfw_header_main #pdf_reading_mode_toggle.pdf_reading_mode_toggle--active,
+#pdfw_header_main #pdf_ocr_companion_toggle.pdf_ocr_companion_toggle--active,
+#pdfw_header_main #pdf_notebook_toggle.pdf_notebook_toggle--active {
+  background: rgba(103, 87, 217, 0.10);
+  color: #6757d9;
+}
+
+#pdfw_header_main .pdfw_mode_menu_wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+#pdfw_header_main #pdfw_mode_toggle {
+  height: 34px;
+  min-width: 58px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #696b78;
+  box-shadow: none;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+#pdfw_header_main #pdfw_mode_toggle:hover,
+#pdfw_header_main .pdfw_mode_menu_wrap--open #pdfw_mode_toggle,
+#pdfw_header_main #pdfw_mode_toggle.pdfw_mode_toggle--active {
+  background: rgba(103, 87, 217, 0.10);
+  color: #6757d9;
+}
+
+#pdfw_header_main .pdfw_mode_menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 7px);
+  right: 0;
+  display: flex;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(72vh, 480px);
+  overflow-y: auto;
+  flex-direction: column;
+  gap: 0;
+  padding: 6px;
+  border: 1px solid rgba(45, 43, 57, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 36px rgba(30, 30, 45, 0.16), 0 2px 8px rgba(30, 30, 45, 0.07);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(103, 87, 217, 0.28) transparent;
+}
+
+#pdfw_header_main .pdfw_mode_menu_section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 7px 4px 9px;
+  border-bottom: 1px solid rgba(45, 43, 57, 0.08);
+}
+
+#pdfw_header_main .pdfw_mode_menu_section:last-child {
+  padding-bottom: 4px;
+  border-bottom: 0;
+}
+
+#pdfw_header_main .pdfw_mode_menu_heading {
+  padding: 2px 8px 4px;
+  color: #777685;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+#pdfw_header_main .pdfw_mode_menu_items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  margin: 0;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  outline: 0;
+  background: transparent;
+  color: #4f4e5b;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item:hover,
+#pdfw_header_main .pdfw_mode_menu_item:focus-visible {
+  border-color: rgba(103, 87, 217, 0.20);
+  background: rgba(103, 87, 217, 0.07);
+  color: #6757d9;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item--active {
+  border-color: rgba(103, 87, 217, 0.20);
+  background: rgba(103, 87, 217, 0.11);
+  color: #5b4bc9;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item > i:first-child {
+  display: grid;
+  flex: 0 0 24px;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: rgba(84, 82, 96, 0.07);
+  color: #777685;
+  font-size: 15px;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item:hover > i:first-child,
+#pdfw_header_main .pdfw_mode_menu_item:focus-visible > i:first-child,
+#pdfw_header_main .pdfw_mode_menu_item--active > i:first-child {
+  background: rgba(103, 87, 217, 0.12);
+  color: #6757d9;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item > span {
+  flex: 1;
+  min-width: 0;
+  white-space: normal;
+}
+
+#pdfw_header_main .pdfw_mode_menu_check {
+  flex: 0 0 16px;
+  color: #6757d9;
+  font-size: 16px;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item--danger {
+  color: #934d54;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item--danger:hover,
+#pdfw_header_main .pdfw_mode_menu_item--danger:focus-visible {
+  border-color: rgba(147, 77, 84, 0.18);
+  background: rgba(147, 77, 84, 0.08);
+  color: #873f47;
+}
+
+#pdfw_header_main .pdfw_mode_menu_item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+#pdfw_header_main .pdfw_zoom_btn,
+#pdfw_header_main .pdfw_zoom_label,
+#pdfw_header_main .pdf_reader_nav_action,
+#pdfw_header_main #pdf_page_nav button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #696b78;
+  box-shadow: none;
+  flex: 0 0 auto;
+}
+
+#pdfw_header_main .pdfw_zoom_label { width: auto; min-width: 52px; padding-inline: 6px; font-variant-numeric: tabular-nums; }
+#pdfw_header_main .pdfw_zoom_btn:hover:not(:disabled),
+#pdfw_header_main .pdfw_zoom_label:hover:not(:disabled),
+#pdfw_header_main .pdf_reader_nav_action:hover:not(:disabled),
+#pdfw_header_main #pdf_page_nav button:hover:not(:disabled) { background: rgba(30, 30, 40, 0.055); color: #20212a; }
+
+#pdfw_header_main .pdfw_overflow_wrap { display: none; position: relative; }
+#pdfw_header_main .pdfw_overflow_button { width: 36px; height: 36px; border: 0; border-radius: 7px; background: transparent; color: #696b78; cursor: pointer; }
+#pdfw_header_main .pdfw_overflow_button:hover { background: rgba(30, 30, 40, 0.055); color: #20212a; }
+#pdfw_header_main .pdfw_overflow_menu { position: absolute; top: calc(100% + 6px); right: 0; z-index: 60; display: grid; min-width: 210px; padding: 5px; border: 1px solid #dedee6; border-radius: 8px; background: #fff; box-shadow: 0 8px 28px rgba(20, 20, 30, 0.12); }
+#pdfw_header_main .pdfw_overflow_menu button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: #20212a; text-align: left; cursor: pointer; }
+#pdfw_header_main .pdfw_overflow_menu button:hover:not(:disabled) { background: rgba(30, 30, 40, 0.055); }
+#pdfw_header_main .pdfw_overflow_menu button:disabled { color: #92949f; cursor: default; }
+
+@media (max-width: 1100px) {
+  #pdfw_header_main .pdfw_tabbar { grid-template-columns: minmax(150px, 1fr) auto minmax(130px, 1fr) !important; gap: 8px; }
+  #pdfw_header_main .pdfw_undo_redo_group { display: none; }
+  #pdfw_header_main .pdfw_overflow_wrap { display: block; }
+  #pdfw_header_main .pdfw_tab { max-width: min(220px, 27vw); }
+}
+
+@media (max-width: 900px) {
+  #pdfw_header { padding-inline: 8px; }
+  #pdfw_header_main .pdfw_tabbar { grid-template-columns: minmax(120px, 1fr) auto minmax(110px, 1fr) !important; gap: 5px; }
+  #pdfw_header_main .pdf_reader_nav_action { display: none; }
+  #pdfw_header_main .pdfw_nav_separator--before-modes { display: none; }
+  #pdfw_header_main .pdfw_tab { max-width: min(180px, 24vw); }
+}
+
+@media (max-width: 700px) {
+  #pdfw_header_main .pdfw_tabbar { grid-template-columns: minmax(90px, 1fr) auto minmax(90px, 1fr) !important; gap: 3px; }
+  #pdfw_header_main #pdfw_back_label { display: none; }
+  #pdfw_header_main .pdfw_tab { max-width: 130px; }
+  #pdfw_header_main .pdfw_tabbar_center { justify-content: flex-start; }
+}
+
 @container pdfw-header-main (max-width: 460px) {
   #pdfw_header_main .pdfw_tabbar {
     --pdfw-tab-font: 0.5rem;
@@ -761,3 +1098,500 @@
 }
 .pdfw_pane_empty i { font-size: 2rem; opacity: 0.4; }
 .pdfw_pane_empty p { margin: 0; font-size: 0.82rem; }
+
+/* Minimal Scientific Workbench overrides. The existing handlers remain in
+   PDFPage/PDFReaderWorkspace; this block only changes their visual shell. */
+#pdfw_root,
+#pdfw_root * {
+  --color-highlight: var(--reader-accent);
+}
+
+#pdfw_header .pdfw_tabbar {
+  min-height: 44px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#pdfw_header .pdfw_tabbar_left,
+#pdfw_header .pdfw_tabbar_center,
+#pdfw_header .pdfw_tabbar_right {
+  min-height: 44px;
+  gap: 4px;
+}
+
+#pdfw_header .pdfw_tabstrip {
+  min-height: 32px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+}
+
+#pdfw_header .pdfw_tab,
+#pdfw_header .pdfw_tab_add {
+  min-height: 32px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+#pdfw_header .pdfw_tab--active {
+  --pdfw-tab-bg: var(--reader-accent-soft);
+  --pdfw-tab-border: transparent;
+  --pdfw-tab-border-bottom: transparent;
+  --pdfw-tab-text: var(--reader-accent);
+  --pdfw-tab-shadow: none;
+}
+
+#pdfw_header .pdfw_tab_add {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--reader-muted);
+}
+
+#pdfw_header .pdfw_tab_add:hover,
+#pdfw_header .pdfw_tab:hover,
+#pdfw_header #pdfw_back:hover {
+  background: var(--hover, rgba(30, 30, 40, 0.055));
+}
+
+#pdfw_header .pdfw_zoom_btn,
+#pdfw_header .pdfw_zoom_label,
+#pdfw_header .pdf_reader_nav_action,
+#pdfw_header #pdf_page_nav button,
+#pdfw_header #pdf_reading_mode_toggle,
+#pdfw_header #pdf_ocr_companion_toggle,
+#pdfw_header #pdf_notebook_toggle {
+  border-radius: 6px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--reader-muted);
+  box-shadow: none;
+}
+
+#pdfw_header .pdfw_zoom_btn:hover:not(:disabled),
+#pdfw_header .pdfw_zoom_label:hover:not(:disabled),
+#pdfw_header .pdf_reader_nav_action:hover:not(:disabled),
+#pdfw_header #pdf_page_nav button:hover:not(:disabled),
+#pdfw_header #pdf_reading_mode_toggle:hover,
+#pdfw_header #pdf_ocr_companion_toggle:hover,
+#pdfw_header #pdf_notebook_toggle:hover {
+  background: var(--hover, rgba(30, 30, 40, 0.055));
+  color: var(--reader-text);
+}
+
+#pdfw_header #pdf_page_nav,
+#pdfw_header #pdf_page_nav_right {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#pdfw_header #pdf_page_nav_label,
+#pdfw_header #pdf_page_nav_right_label {
+  color: var(--reader-text);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 760px) {
+  #pdfw_header { min-height: 44px; padding-inline: 6px; }
+  #pdfw_toolbar_host { width: 48px; min-width: 48px; }
+  #pdfw_panes { margin-left: 48px; }
+
+}
+
+/* Keep the three toolbar groups from competing for the same pixels. The
+   center navigation is allowed to scroll; it is never allowed to overlap
+   the document tabs or utility controls. */
+#pdfw_header .pdfw_tabbar {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, auto);
+  min-width: 0;
+  overflow: visible;
+}
+
+#pdfw_header .pdfw_tabbar_left,
+#pdfw_header .pdfw_tabbar_center,
+#pdfw_header .pdfw_tabbar_right {
+  min-width: 0;
+  overflow: hidden;
+}
+
+#pdfw_header .pdfw_tabbar_center {
+  justify-content: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+#pdfw_header .pdfw_tabbar_center::-webkit-scrollbar { display: none; }
+#pdfw_header .pdfw_page_nav_group { flex-shrink: 0; white-space: nowrap; }
+#pdfw_header .pdfw_tabbar_right { flex-shrink: 0; }
+
+@container pdfw-header-main (max-width: 900px) {
+  #pdfw_header_main .pdfw_tabbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "tabs utilities"
+      "navigation navigation";
+    align-items: center;
+    gap: 2px 6px;
+    width: 100%;
+    overflow: visible;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_left {
+    grid-area: tabs;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_center {
+    grid-area: navigation;
+    justify-content: flex-start;
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_right {
+    grid-area: utilities;
+    justify-content: flex-end;
+    min-width: max-content;
+    overflow: visible;
+  }
+
+  #pdfw_header_main .pdfw_tabstrip {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}
+
+@container pdfw-header-main (max-width: 620px) {
+  #pdfw_header_main .pdfw_tabbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_left {
+    min-width: 0;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_right {
+    gap: 2px;
+  }
+
+  #pdfw_header_main .pdfw_undo_redo_group {
+    display: none;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_center {
+    justify-content: flex-start;
+  }
+}
+
+/* iPad portrait has enough width for the reader command bar, but the
+   container query above previously promoted it into a two-row layout. That
+   made the tab strip look distorted and increased the apparent gap above the
+   footer. Keep the command bar a single horizontal rail; each group may
+   shrink or scroll internally instead of changing the header height. */
+@media (orientation: portrait) and (max-width: 1024px) {
+  #pdfw_root {
+    height: 100%;
+    max-height: 100%;
+  }
+
+  #pdfw_header_main .pdfw_tabbar {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+    min-height: 44px;
+    gap: 4px;
+    overflow: hidden;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_left {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_center {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 46%;
+    justify-content: flex-start;
+    overflow-x: auto !important;
+    overflow-y: hidden;
+    white-space: nowrap;
+  }
+
+  #pdfw_header_main .pdfw_tabstrip {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+  }
+}
+
+/* The MODE menu must be able to extend below the header instead of being
+   clipped by the center region's horizontal scroller. */
+#pdfw_header_main .pdfw_tabbar_center {
+  overflow: visible !important;
+}
+
+#pdfw_header_main .pdfw_mode_menu_wrap {
+  z-index: 50;
+}
+
+/* Keep the center command region flat; the page navigation inherits older
+   toolbar capsule styles from pdfPage.css. */
+#pdfw_header_main .pdfw_tabbar_center,
+#pdfw_header_main #pdf_page_nav_row,
+#pdfw_header_main #pdf_page_nav,
+#pdfw_header_main #pdf_page_nav_right {
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+#pdfw_header_main #pdf_annot_actions {
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+/* The right-side header region has been removed; place the remaining center
+   navigation at the right edge beside the document tabs. */
+#pdfw_header_main .pdfw_tabbar {
+  grid-template-columns: minmax(0, 1fr) auto !important;
+  grid-template-areas: "left center" !important;
+}
+
+#pdfw_header_main .pdfw_tabbar_center {
+  grid-area: center;
+  justify-self: end;
+}
+
+#pdfw_header_main .pdfw_tabbar_left {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#pdfw_header_main .pdfw_tabstrip {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
+}
+
+#pdfw_header_main .pdfw_tab_add_wrap {
+  flex: 0 0 auto;
+  margin-left: 0;
+}
+
+#pdfw_header_main .pdfw_search_group {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 36px;
+  height: 34px;
+  gap: 3px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #696b78;
+}
+
+#pdfw_header_main .pdfw_search_group--open {
+  min-width: 230px;
+  padding: 0 4px 0 9px;
+  border: 1px solid #e2e2e8;
+  background: #fff;
+}
+
+#pdfw_header_main .pdfw_search_toggle,
+#pdfw_header_main .pdfw_search_action {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #696b78;
+}
+
+#pdfw_header_main .pdfw_search_toggle:hover:not(:disabled),
+#pdfw_header_main .pdfw_search_action:hover:not(:disabled) {
+  background: rgba(30, 30, 40, 0.055);
+  color: #20212a;
+}
+
+#pdfw_header_main .pdfw_search_icon {
+  flex: 0 0 auto;
+  color: #858593;
+  font-size: 15px;
+}
+
+#pdfw_header_main .pdfw_search_input {
+  width: 112px;
+  min-width: 0;
+  flex: 1 1 auto;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #20212a;
+  font: inherit;
+  font-size: 12px;
+}
+
+#pdfw_header_main .pdfw_search_count {
+  min-width: 30px;
+  color: #858593;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* Hoisted annotation actions live directly in the PDF toolbar now, without
+   the old nested action-group capsule. */
+#pdf_toolbar .pdfw_toolbar_annotation_actions {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 0.18rem;
+}
+
+#pdf_toolbar.pdf_toolbar--left .pdfw_toolbar_annotation_actions,
+#pdf_toolbar.pdf_toolbar--right .pdfw_toolbar_annotation_actions {
+  flex-direction: column;
+}
+
+#pdf_toolbar .pdfw_toolbar_annotation_actions .pdf_annot_active_surface {
+  width: var(--pdf-toolbar-btn-size);
+  min-width: var(--pdf-toolbar-btn-size);
+  height: 1.55rem;
+  min-height: 1.55rem;
+  margin: 0 0 0.12rem;
+  padding: 0 0.2rem;
+  border: 1px solid rgba(103, 87, 217, 0.35);
+  border-radius: 6px;
+  background: rgba(103, 87, 217, 0.10);
+  color: #6757d9;
+  box-shadow: none;
+  font-size: 0.57rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+}
+
+#pdf_toolbar .pdfw_toolbar_annotation_actions .pdf_annot_active_surface--md {
+  border-color: rgba(33, 136, 155, 0.38);
+  background: rgba(59, 166, 184, 0.12);
+  color: #176f7e;
+}
+
+#pdf_toolbar .pdfw_toolbar_annotation_actions .pdf_annot_active_surface--nb {
+  border-color: rgba(199, 124, 36, 0.4);
+  background: rgba(230, 162, 77, 0.14);
+  color: #925817;
+}
+
+#pdf_toolbar .pdfw_toolbar_annotation_actions .annot_action_btn,
+#pdf_toolbar .pdfw_toolbar_annotation_actions #pdf_insert_blank_page_btn {
+  width: var(--pdf-toolbar-btn-size);
+  min-width: var(--pdf-toolbar-btn-size);
+  height: var(--pdf-toolbar-btn-size);
+  min-height: var(--pdf-toolbar-btn-size);
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+}
+
+#pdf_toolbar .pdfw_toolbar_annotation_actions .annot_action_btn:hover:not(:disabled),
+#pdf_toolbar .pdfw_toolbar_annotation_actions #pdf_insert_blank_page_btn:hover:not(:disabled) {
+  background: rgba(30, 30, 40, 0.055);
+}
+
+/* Final portrait override: this is intentionally last so the later desktop
+   command-bar cleanup rules cannot re-enable wrapping or visible overflow. */
+@media (orientation: portrait) and (max-width: 1024px) {
+  #pdfw_header_main .pdfw_tabbar {
+    display: flex !important;
+    flex-flow: row nowrap !important;
+    align-items: center;
+    height: 44px;
+    min-height: 44px;
+    overflow: hidden;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_left {
+    display: flex;
+    flex: 1 1 0;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  #pdfw_header_main .pdfw_tabstrip {
+    display: flex;
+    flex: 0 1 auto;
+    flex-flow: row nowrap;
+    align-items: center;
+    min-width: 0;
+    max-width: 100%;
+    height: 34px;
+    min-height: 34px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+  }
+
+  #pdfw_header_main .pdfw_tab_add_wrap {
+    flex: 0 0 auto;
+  }
+
+  #pdfw_header_main .pdfw_tabbar_center {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 46%;
+    min-width: 0;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    white-space: nowrap;
+  }
+
+  /* The generic <=900px header rule hides all reader navigation actions.
+     Portrait keeps the outline/document-navigation action available as the
+     first fixed item in the horizontally scrollable command group. */
+  #pdfw_header_main .pdfw_page_nav_group > .pdf_reader_nav_action {
+    display: inline-grid !important;
+    place-items: center;
+    flex: 0 0 34px;
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+    min-height: 34px;
+  }
+
+  #pdfw_header_main .pdfw_tab {
+    flex: 0 0 auto;
+    min-height: 30px;
+    max-width: 34vw;
+  }
+}

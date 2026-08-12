@@ -1,0 +1,30 @@
+.vocabs_footer_tool { position: relative; }
+.vocabs_footer_button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--color-border); border-radius: 7px; background: transparent; color: var(--color-text-muted); cursor: pointer; }
+.vocabs_footer_button:hover, .vocabs_footer_button--active { border-color: var(--color-highlight); color: var(--color-text); background: color-mix(in srgb, var(--color-highlight) 10%, transparent); }
+.vocabs_footer_panel { position: fixed; right: 1rem; bottom: calc(var(--app-footer-height, 44px) + .65rem); z-index: 1002; width: min(25rem, calc(100vw - 2rem)); max-height: min(36rem, calc(100vh - var(--app-footer-height, 44px) - 2rem)); overflow-y: auto; padding: .9rem; border: 1px solid color-mix(in srgb, var(--color-highlight) 22%, var(--color-border)); border-radius: 16px; background: color-mix(in srgb, var(--color-surface) 97%, transparent); box-shadow: 0 22px 55px rgba(8, 20, 35, .3); backdrop-filter: blur(18px); }
+.vocabs_footer_queue_panel { width: min(21rem, calc(100vw - 2rem)); }
+.vocabs_footer_panel::before { content: ""; position: absolute; inset: 0 0 auto; height: 3px; border-radius: 16px 16px 0 0; background: linear-gradient(90deg, var(--color-highlight), color-mix(in srgb, var(--color-highlight) 25%, transparent)); }
+.vocabs_footer_panel_header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .8rem; padding: .1rem .05rem .65rem; border-bottom: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent); color: var(--color-text); font-size: .75rem; font-weight: 800; cursor: grab; user-select: none; }
+.vocabs_footer_panel_header:active { cursor: grabbing; }
+.vocabs_footer_panel_header span { display: inline-flex; align-items: center; gap: .4rem; }
+.vocabs_footer_panel_header span i { display: grid; place-items: center; width: 1.7rem; height: 1.7rem; border-radius: 7px; background: color-mix(in srgb, var(--color-highlight) 12%, transparent); color: var(--color-highlight); }
+.vocabs_footer_panel_header button { display: grid; place-items: center; width: 1.6rem; height: 1.6rem; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--color-text-muted); font-size: 1.1rem; cursor: pointer; }
+.vocabs_footer_panel_header button:hover { background: color-mix(in srgb, var(--color-highlight) 8%, transparent); color: var(--color-text); }
+.vocabs_footer_queue_form { display: grid; grid-template-columns: minmax(0, 1fr) 2rem; align-items: center; gap: .4rem; }
+.vocabs_footer_queue_form input { width: 100%; min-width: 0; height: 2.1rem; box-sizing: border-box; padding: 0 .62rem; border: 1px solid var(--color-border); border-radius: 7px; outline: 0; background: color-mix(in srgb, var(--color-bg) 75%, transparent); color: var(--color-text); font: inherit; font-size: .68rem; }
+.vocabs_footer_queue_form input:focus { border-color: var(--color-highlight); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-highlight) 12%, transparent); }
+.vocabs_footer_queue_form button { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 1px solid var(--color-highlight); border-radius: 7px; background: var(--color-highlight); color: #fff; cursor: pointer; }
+.vocabs_footer_queue_form button:disabled { opacity: .45; cursor: wait; }
+.vocabs_footer_queue_status, .vocabs_footer_queue_error { display: flex; align-items: center; gap: .3rem; margin: .55rem 0 0; font-size: .62rem; line-height: 1.35; }
+.vocabs_footer_queue_status { color: #2e7d52; }
+.vocabs_footer_queue_error { color: #c94c4c; }
+.vocabs_lookup--compact .vocabs_search { grid-template-columns: minmax(0, 1fr) auto; }
+.vocabs_lookup--compact .vocabs_search > button { min-width: 2.45rem; width: 2.45rem; padding: .55rem; box-shadow: none; }
+.vocabs_lookup--compact .vocabs_search > button span { display: none; }
+.vocabs_lookup--compact .vocabs_missing { grid-template-columns: auto minmax(0, 1fr); }
+.vocabs_lookup--compact .vocabs_missing > button { grid-column: 1 / -1; width: 100%; }
+.vocabs_lookup--compact .vocabs_result { max-height: 19rem; overflow-y: auto; }
+
+@media (max-width: 520px) {
+  .vocabs_footer_panel { right: .5rem; width: calc(100vw - 1rem); }
+}

@@ -282,6 +282,7 @@ export const bendPointAwayFromObstacles = (point, obstacles, gap = BBOX_MIN_GAP)
 };
 
 export const TEXT_FONT_FAMILIES = [
+  { key: "IBM Plex Mono", label: "IBM Plex Mono" },
   { key: "Georgia", label: "Georgia" },
   { key: "Arial", label: "Arial" },
   { key: "Verdana", label: "Verdana" },

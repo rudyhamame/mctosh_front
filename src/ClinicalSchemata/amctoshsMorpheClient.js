@@ -38,6 +38,12 @@ export const listMorpheSchemaNames = async () => {
   return parseJsonResponse(res);
 };
 
+export const listMorpheSources = async () => {
+  const res = await fetch(apiUrl("/api/sources/"), { headers: authHeaders() });
+  const data = await parseJsonResponse(res);
+  return data.sources || [];
+};
+
 /** Create a one-word or multi-word Schema from a Smart Pen stroke, or return its existing match. */
 export const upsertSmartPenSchema = async ({ name, sourceId, page }) => {
   const res = await fetch(apiUrl("/api/amctoshs-morphe/schemas/smart-pen"), {
@@ -59,6 +65,9 @@ export const upsertSmartPenTrace = async ({ name, sourceSchemaId, sourceSchemaNa
 };
 
 const typedCrud = (resource) => ({
+  create: async (payload) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}`), {
+    method: "POST", headers: jsonHeaders(), body: JSON.stringify(payload),
+  })),
   get: async (id) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}/${id}`), { headers: authHeaders() })),
   update: async (id, patch) => parseJsonResponse(await fetch(apiUrl(`/api/amctoshs-morphe/${resource}/${id}`), {
     method: "PATCH", headers: jsonHeaders(), body: JSON.stringify(patch),

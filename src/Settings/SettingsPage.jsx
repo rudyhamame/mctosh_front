@@ -8,6 +8,7 @@ import objectivesEn from "../MCC/mccqeObjectivesData.json";
 import objectivesAr from "../MCC/mccqeObjectivesArabicData.json";
 import AvatarProviderSelector from "../Avatar/AvatarProviderSelector";
 import CameraPresetTab from "./CameraPresetTab";
+import ContextSettingsTab from "./ContextSettingsTab";
 import { readDevAiSettings, writeDevAiSettings } from "../App/devAiSettings";
 import {
   readVoiceSettings, writeVoiceSettings,
@@ -22,7 +23,9 @@ import {
 } from "../Avatar/local3d/sttProviderSettings";
 import { AVATAR_POSE_CONTROLS, emitAvatarPoseUpdate, readSavedPose, writeSavedPose } from "../Avatar/local3d/avatarPoseSettings";
 import { applyTheme, readStoredTheme } from "../utils/theme";
-import { readTranslatorProvider, TRANSLATOR_PROVIDERS, writeTranslatorProvider } from "../utils/translatorSettings";
+import { MEDICAL_DICTIONARY_API_URL, OTHER_DICTIONARY_API_URL } from "../utils/dictionarySettings";
+import { listSavedVocabulary } from "../utils/vocabApi";
+import { readUmlsLanguage, UMLS_LANGUAGE_OPTIONS, writeUmlsLanguage } from "../Vocabs/umlsSettings";
 import "./settingsPage.css";
 
 const TTS_PROVIDER_OPTIONS = [
@@ -33,6 +36,43 @@ const TTS_PROVIDER_OPTIONS = [
 ];
 
 const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
+
+const CORPUS_INPUTS = [
+  { id: "hyle_text", label: "Hyle Text extraction Text" },
+  { id: "hyle_ocr", label: "Hyle OCR Text" },
+  { id: "notebook", label: "Notebook Typing Text" },
+  { id: "vocabs", label: "AMCTOSHS Vocabs text" },
+];
+
+const corpusTokens = (value) => String(value || "")
+  .normalize("NFKC")
+  .toLocaleLowerCase()
+  .match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) || [];
+
+const corpusDataType = (string) => /[\p{L}]/u.test(string) && /[\p{N}]/u.test(string)
+  ? "alphanumeric"
+  : /^[\p{N}]+$/u.test(string) ? "number" : "word";
+
+const countCorpusWords = (sourceTexts) => {
+  const counts = new Map();
+  sourceTexts.forEach(({ source, texts }) => texts.forEach((text) => corpusTokens(text).forEach((word) => {
+    const current = counts.get(word) || { occurrence: 0, sources: new Set(), sourceCounts: {} };
+    current.occurrence += 1;
+    current.sources.add(source);
+    current.sourceCounts[source] = (current.sourceCounts[source] || 0) + 1;
+    counts.set(word, current);
+  })));
+  return [...counts.entries()]
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { sensitivity: "base" }))
+    .map(([string, details], index) => ({
+      id: `corpus#${index + 1}`,
+      string,
+      occurrence: details.occurrence,
+      sources: [...details.sources].join(", "),
+      sourceCounts: details.sourceCounts,
+      dataType: corpusDataType(string),
+    }));
+};
 
 const DEFAULT_SEMANTIC_DETECTION_SETTINGS = {
   enabled: true,
@@ -73,9 +113,11 @@ const SECTIONS = [
   { id: "personal",   label: "Personal Information", icon: "fi fi-rr-user" },
   { id: "prompts",    label: "Prompts",         icon: "fi fi-rr-document" },
   { id: "ai",         label: "AI Providers",    icon: "fi fi-rr-microchip-ai" },
+  { id: "vocabs",     label: "AMCTOSHS Vocabs", icon: "fi fi-rr-book-alt" },
   { id: "ai_access",  label: "AI Access",       icon: "fi fi-rr-shield-check" },
   { id: "social",     label: "Social Publish",  icon: "fi fi-rr-megaphone" },
-  { id: "prediction", label: "Predictive Text", icon: "fi fi-rr-keyboard" },
+  { id: "prediction", label: "Corpus", icon: "fi fi-rr-keyboard" },
+  { id: "context",    label: "Context", icon: "fi fi-rr-brain-circuit" },
   { id: "pdf_reader", label: "PDF Reader",      icon: "fi fi-rr-file-pdf" },
   { id: "theme",      label: "Theme",           icon: "fi fi-rr-palette" },
 ];
@@ -170,9 +212,11 @@ const SettingsPage = () => {
   const visibleSections = canSeeCameraTab ? [...SECTIONS, CAMERA_SECTION] : SECTIONS;
   const [theme,     setTheme]     = useState(() => readStoredTheme());
   const [pdfTranslateLang, setPdfTranslateLang] = useState(() => localStorage.getItem("mctosh_pdf_translate_lang") || "English");
-  const [translatorProvider, setTranslatorProvider] = useState(() => readTranslatorProvider());
-  const [translators, setTranslators] = useState([]);
+  const [vocabTranslateLang, setVocabTranslateLang] = useState(() => localStorage.getItem("mctosh_vocab_translate_lang") || "French");
+  const [umlsLanguage, setUmlsLanguage] = useState(() => readUmlsLanguage());
   const [providers, setProviders] = useState([]);
+  const [translators, setTranslators] = useState([]);
+  const [phoneticProviders, setPhoneticProviders] = useState([]);
   const [semanticDetectionSettings, setSemanticDetectionSettings] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS);
   const [semanticDetectionUsage, setSemanticDetectionUsage] = useState(DEFAULT_SEMANTIC_DETECTION_SETTINGS.usage);
   const [semanticDetectionSaving, setSemanticDetectionSaving] = useState(false);
@@ -200,6 +244,17 @@ const SettingsPage = () => {
   const [predictLoading, setPredictLoading] = useState(true);
   const [predictBusyKey, setPredictBusyKey] = useState(null);
   const [predictError,   setPredictError]   = useState("");
+  const [predictionEnabled, setPredictionEnabled] = useState(() => localStorage.getItem("mctosh_prediction_enabled") === "true");
+  const [corpusRows, setCorpusRows] = useState([]);
+  const [corpusInputCounts, setCorpusInputCounts] = useState(() => Object.fromEntries(CORPUS_INPUTS.map(({ id }) => [id, 0])));
+  const [selectedCorpusSource, setSelectedCorpusSource] = useState("all");
+  const [corpusSettingsOpen, setCorpusSettingsOpen] = useState(false);
+  const [corpusDataTypes, setCorpusDataTypes] = useState({ word: true, number: true, alphanumeric: true });
+  const [corpusRefreshTick, setCorpusRefreshTick] = useState(0);
+  const [corpusLoading, setCorpusLoading] = useState(false);
+  const [corpusProgress, setCorpusProgress] = useState(0);
+  const [corpusError, setCorpusError] = useState("");
+  const corpusTextsRef = useRef(Object.fromEntries(CORPUS_INPUTS.map(({ id }) => [id, []])));
   const [socialConfig, setSocialConfig] = useState({
     metaAppId: "",
     metaAppSecret: "",
@@ -398,16 +453,13 @@ const SettingsPage = () => {
   useEffect(() => {
     fetch(apiUrl("/api/settings/ai-status"))
       .then(r => r.json())
-      .then(d => setProviders(d.providers || []))
+      .then(d => {
+        setProviders(d.providers || []);
+        setTranslators(d.translators || []);
+        setPhoneticProviders(d.phonetics || []);
+      })
       .catch(() => {})
       .finally(() => setAiLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetch(apiUrl("/api/settings/translator-status?live=1"))
-      .then((response) => response.json())
-      .then((data) => setTranslators(data.translators || []))
-      .catch(() => {});
   }, []);
 
   // Dev AI Avatar (Anam) usage — org-wide minutes used this calendar month,
@@ -518,16 +570,11 @@ const SettingsPage = () => {
   const handleRefreshProviders = async () => {
     setAiRefreshing(true);
     try {
-      const [providerResponse, translatorResponse] = await Promise.all([
-        fetch(apiUrl("/api/settings/ai-status?live=1")),
-        fetch(apiUrl("/api/settings/translator-status?live=1")),
-      ]);
-      const [providerData, translatorData] = await Promise.all([
-        providerResponse.json().catch(() => ({})),
-        translatorResponse.json().catch(() => ({})),
-      ]);
+      const providerResponse = await fetch(apiUrl("/api/settings/ai-status?live=1"));
+      const providerData = await providerResponse.json().catch(() => ({}));
       setProviders(providerData.providers || []);
-      setTranslators(translatorData.translators || []);
+      setTranslators(providerData.translators || []);
+      setPhoneticProviders(providerData.phonetics || []);
     } catch {
       // leave the existing list in place on failure
     } finally {
@@ -537,10 +584,177 @@ const SettingsPage = () => {
 
   useEffect(() => {
     getPredictionPools()
-      .then(setPredictPools)
+      .then((pools) => {
+        setPredictPools(pools);
+        if (localStorage.getItem("mctosh_prediction_enabled") === null) {
+          setPredictionEnabled(pools.some((pool) => pool.enabled));
+        }
+      })
       .catch((e) => setPredictError(e.message))
       .finally(() => setPredictLoading(false));
   }, []);
+
+  useEffect(() => {
+    // Corpus construction is deliberately independent of the selected
+    // settings section. It starts when Settings mounts and keeps running in
+    // the background while the user visits another settings tab.
+    if (corpusRefreshTick === 0) {
+      try {
+        const snapshot = JSON.parse(localStorage.getItem("mctosh_corpus_snapshot") || "null");
+        if (snapshot?.rows && snapshot?.inputCounts) {
+          setCorpusRows(snapshot.rows);
+          setCorpusInputCounts(snapshot.inputCounts);
+          setCorpusProgress(100);
+          setCorpusLoading(false);
+          return undefined;
+        }
+        const cachedWords = JSON.parse(localStorage.getItem("mctosh_corpus_words") || "[]");
+        if (Array.isArray(cachedWords) && cachedWords.length > 0) {
+          const cachedRows = cachedWords.map((string, index) => ({
+            id: `corpus#${index + 1}`,
+            string: String(string),
+            occurrence: 1,
+            sources: "—",
+            sourceCounts: {},
+            dataType: corpusDataType(String(string)),
+          }));
+          setCorpusRows(cachedRows);
+          setCorpusProgress(100);
+          setCorpusLoading(false);
+          return undefined;
+        }
+      } catch {
+        // A malformed cache is ignored; the explicit refresh can rebuild it.
+      }
+    }
+    const controller = new AbortController();
+    const request = (url) => fetch(apiUrl(url), { headers: authHeader(), signal: controller.signal })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok && response.status !== 202) throw new Error(readApiError(data, "Corpus request failed."));
+        return data;
+      });
+
+    const loadCorpus = async () => {
+      setCorpusLoading(true);
+      setCorpusProgress(0);
+      setCorpusInputCounts(Object.fromEntries(CORPUS_INPUTS.map(({ id }) => [id, 0])));
+      corpusTextsRef.current = Object.fromEntries(CORPUS_INPUTS.map(({ id }) => [id, []]));
+      setCorpusRows([]);
+      localStorage.removeItem("mctosh_corpus_words");
+      localStorage.removeItem("mctosh_corpus_unit_words");
+      setCorpusError("");
+      localStorage.setItem("mctosh_corpus_status", "building");
+      window.dispatchEvent(new Event("amctoshs:corpus-status"));
+      try {
+        const sourceData = await request("/api/sources/");
+        setCorpusProgress(8);
+        const pdfSources = (sourceData.sources || []).filter((source) => {
+          const format = String(source.format || "").toLowerCase();
+          return format === "pdf" || format === "application/pdf";
+        });
+        const totalTasks = Math.max(1, pdfSources.length * 3 + 1);
+        let completedTasks = 0;
+        const track = (promise, inputId, getText) => promise
+          .then((data) => {
+            if (inputId && getText) {
+              const text = getText(data);
+              corpusTextsRef.current[inputId].push(text);
+              setCorpusInputCounts((current) => ({
+                ...current,
+                [inputId]: current[inputId] + corpusTokens(text).length,
+              }));
+              const liveRows = countCorpusWords(CORPUS_INPUTS.map(({ id }, index) => ({
+                source: String(index + 1).padStart(2, "0"),
+                texts: corpusTextsRef.current[id],
+              })));
+              localStorage.setItem("mctosh_corpus_words", JSON.stringify(liveRows.map((row) => row.string)));
+              window.dispatchEvent(new Event("amctoshs:corpus-words"));
+              setCorpusRows(liveRows);
+            }
+            return data;
+          })
+          .finally(() => {
+            completedTasks += 1;
+            setCorpusProgress(8 + Math.round((completedTasks / totalTasks) * 88));
+          });
+
+        const [nativeResults, ocrResults, notebookResults, vocabResult] = await Promise.all([
+          Promise.allSettled(pdfSources.map((source) => track(
+            request(`/api/sources/${source._id}/text`),
+            "hyle_text",
+            (data) => data.text || "",
+          ))),
+          Promise.allSettled(pdfSources.map((source) => track(
+            request(`/api/sources/${source._id}/markdown`),
+            "hyle_ocr",
+            (data) => data.markdown || "",
+          ))),
+          Promise.allSettled(pdfSources.map((source) => track(
+            request(`/api/source-annotations/${source._id}`),
+            "notebook",
+            (data) => data?.readerState?.notebookText || "",
+          ))),
+          track(
+            listSavedVocabulary(),
+            "vocabs",
+            (data) => (Array.isArray(data?.saved) ? data.saved : []).map((entry) => entry.word || entry.term || "").join("\n"),
+          ),
+        ]);
+
+        const nativeText = nativeResults.flatMap((result) => result.status === "fulfilled" ? [result.value.text || ""] : []);
+        const ocrText = ocrResults.flatMap((result) => result.status === "fulfilled" ? [result.value.markdown || ""] : []);
+        const notebookText = notebookResults.flatMap((result) => {
+          const value = result.status === "fulfilled" ? result.value?.readerState?.notebookText : "";
+          return typeof value === "string" ? [value] : [];
+        });
+        const vocabText = (Array.isArray(vocabResult?.saved) ? vocabResult.saved : [])
+          .map((entry) => entry.word || entry.term || "")
+          .join("\n");
+        const inputTexts = { hyle_text: nativeText, hyle_ocr: ocrText, notebook: notebookText, vocabs: [vocabText] };
+        const inputCounts = Object.fromEntries(CORPUS_INPUTS.map(({ id }) => [id, inputTexts[id].reduce((total, text) => total + corpusTokens(text).length, 0)]));
+        setCorpusInputCounts(inputCounts);
+        const completedRows = countCorpusWords(CORPUS_INPUTS.map(({ id }, index) => ({
+          source: String(index + 1).padStart(2, "0"),
+          texts: inputTexts[id],
+        })));
+        localStorage.setItem("mctosh_corpus_words", JSON.stringify(completedRows.map((row) => row.string)));
+        try {
+          localStorage.setItem("mctosh_corpus_snapshot", JSON.stringify({ rows: completedRows, inputCounts }));
+        } catch {
+          // Large corpora may exceed localStorage; the word-list cache still
+          // lets the next visit avoid an automatic rebuild.
+        }
+        window.dispatchEvent(new Event("amctoshs:corpus-words"));
+        setCorpusRows(completedRows);
+        setCorpusProgress(100);
+        localStorage.setItem("mctosh_corpus_status", "ready");
+        window.dispatchEvent(new Event("amctoshs:corpus-status"));
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          setCorpusError(error.message || "Could not build the Corpus.");
+          localStorage.setItem("mctosh_corpus_status", "error");
+          window.dispatchEvent(new Event("amctoshs:corpus-status"));
+        }
+      } finally {
+        if (!controller.signal.aborted) setCorpusLoading(false);
+      }
+    };
+    void loadCorpus();
+    return () => controller.abort();
+  }, [corpusRefreshTick]);
+
+  useEffect(() => {
+    const deduplicatedWords = corpusRows
+      .filter((row) => corpusDataTypes[row.dataType])
+      .map((row) => row.string);
+    try {
+      localStorage.setItem("mctosh_corpus_unit_words", JSON.stringify(deduplicatedWords));
+      window.dispatchEvent(new Event("amctoshs:corpus-words"));
+    } catch {
+      // Prediction can fall back to the server if browser storage is unavailable.
+    }
+  }, [corpusDataTypes, corpusRows]);
 
   useEffect(() => {
     void loadSocialConfig();
@@ -629,6 +843,34 @@ const SettingsPage = () => {
     }
   };
 
+  const handlePredictionToggle = async (enabled) => {
+    setPredictionEnabled(enabled);
+    localStorage.setItem("mctosh_prediction_enabled", String(enabled));
+    window.dispatchEvent(new Event("amctoshs:prediction-toggle"));
+    setPredictError("");
+    if (predictPools.length === 0) return;
+    setPredictBusyKey("all");
+    try {
+      const nextPools = await Promise.all(predictPools.map(async (pool) => {
+        const updated = await setPredictionPoolEnabled(pool.key, enabled);
+        return updated || { ...pool, enabled };
+      }));
+      setPredictPools(nextPools);
+    } catch (error) {
+      setPredictionEnabled(!enabled);
+      localStorage.setItem("mctosh_prediction_enabled", String(!enabled));
+      setPredictError(error.message);
+    } finally {
+      setPredictBusyKey(null);
+    }
+  };
+
+  const handleRefreshCorpus = () => {
+    localStorage.setItem("mctosh_corpus_status", "building");
+    localStorage.removeItem("mctosh_corpus_snapshot");
+    setCorpusRefreshTick((value) => value + 1);
+  };
+
   const handleRefreshPredictPool = async (pool) => {
     setPredictBusyKey(pool.key);
     setPredictError("");
@@ -653,10 +895,6 @@ const SettingsPage = () => {
   const handleProvider = (id) => {
     setDefProvider(id);
     localStorage.setItem("mctosh_ai_provider", id);
-  };
-
-  const handleTranslatorProvider = (id) => {
-    setTranslatorProvider(writeTranslatorProvider(id));
   };
 
   const updateSemanticDetectionSettings = async (patch) => {
@@ -844,7 +1082,7 @@ const SettingsPage = () => {
         setSocialOrig(next);
       }
 
-      const returnTo = new URL("/cvs/settings?section=social", window.location.origin).toString();
+      const returnTo = new URL("/settings?section=social", window.location.origin).toString();
       const res = await fetch(`${apiUrl("/api/settings/instagram-connect/start")}?returnTo=${encodeURIComponent(returnTo)}`, {
         headers: authHeader(false),
       });
@@ -927,6 +1165,19 @@ const SettingsPage = () => {
   const canTestSocialConnection = socialMeta.hasAccessToken || Boolean(socialConfig.accessToken.trim());
 
   const mctoshDefaultText = localStorage.getItem("mctosh_prompt_mctosh") || MCTOSH_PROMPT_TEXT;
+  const datatypeCorpusRows = corpusRows.filter((row) => corpusDataTypes[row.dataType]);
+  const visibleCorpusRows = selectedCorpusSource === "all"
+    ? corpusRows
+    : selectedCorpusSource === "unique"
+      ? datatypeCorpusRows.map((row) => ({ ...row, occurrence: 1 }))
+      : datatypeCorpusRows
+      .filter((row) => row.sourceCounts[selectedCorpusSource])
+      .map((row) => ({
+        ...row,
+        sources: selectedCorpusSource,
+        occurrence: row.sourceCounts[selectedCorpusSource],
+      }));
+  const corpusTotalOccurrences = corpusRows.reduce((total, row) => total + row.occurrence, 0);
 
   return (
     <div id="sett_page">
@@ -1177,7 +1428,7 @@ const SettingsPage = () => {
                   {ocrSaving && <span className="sett_usage_card_period">Saving…</span>}
                 </div>
                 <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
-                  Process each unique PDF version once after upload, store its page structure, and reuse it for BBoxes, search, semantic detection, and the PDF assistant.
+                  Run OCR manually from the Sources table, then store and reuse its page structure for BBoxes, search, semantic detection, and the PDF assistant.
                 </p>
                 <div className="sett_stt_model_row">
                   <span><strong>Provider / exact model</strong><small>The model version is part of the persistent cache key.</small></span>
@@ -1185,7 +1436,6 @@ const SettingsPage = () => {
                 </div>
                 {[
                   ["enabled", "Enable document OCR"],
-                  ["automaticallyProcessOnUpload", "Process PDFs after upload"],
                   ["persistRawResponse", "Persist raw provider pages"],
                   ["retryFailedJobs", "Retry failed jobs"],
                 ].map(([key, label]) => (
@@ -1488,64 +1738,6 @@ const SettingsPage = () => {
                 )}
               </div>
 
-              <div className="sett_usage_card sett_translators_card">
-                <div className="sett_usage_card_header">
-                  <span className="sett_usage_card_title">Translators</span>
-                  <span className="sett_usage_card_period">PDF selection tool</span>
-                </div>
-                <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
-                  Choose the service used by Translate when a word or phrase is selected in the PDF Reader.
-                </p>
-                <label className="sett_stt_model_row sett_translator_language_row">
-                  <span><strong>Translate to</strong><small>Applied to the PDF selection translator.</small></span>
-                  <select
-                    value={pdfTranslateLang}
-                    onChange={(event) => {
-                      setPdfTranslateLang(event.target.value);
-                      localStorage.setItem("mctosh_pdf_translate_lang", event.target.value);
-                    }}
-                  >
-                    {TRANSLATE_LANGUAGES.map((language) => <option key={language} value={language}>{language}</option>)}
-                  </select>
-                </label>
-                <div className="sett_translator_grid">
-                  {(translators.length ? translators : [
-                    { id: TRANSLATOR_PROVIDERS.LIBRETRANSLATE, label: "LibreTranslate", status: "unknown", statusMessage: "Checking local service…" },
-                    { id: TRANSLATOR_PROVIDERS.AI, label: "AI Provider", status: "online", statusMessage: "Uses the default AI provider and model below." },
-                  ]).map((translator) => (
-                    <button
-                      type="button"
-                      key={translator.id}
-                      className={`sett_provider_card sett_translator_card${translatorProvider === translator.id ? " sett_provider_card--active" : ""}`}
-                      onClick={() => handleTranslatorProvider(translator.id)}
-                    >
-                      <div className="sett_provider_top">
-                        <span className="sett_provider_name">{translator.label}</span>
-                        <span className={`sett_provider_badge sett_provider_badge--${translator.status === "online" ? "ok" : translator.status === "error" ? "error" : "off"}`}>
-                          {translator.status === "online" ? "Online" : translator.status === "error" ? "Offline" : "Checking"}
-                        </span>
-                      </div>
-                      <span className="sett_provider_base">{translator.baseUrl || (translator.id === TRANSLATOR_PROVIDERS.AI ? "Default AI provider" : "Local service")}</span>
-                      <span className={`sett_provider_status_msg${translator.status === "error" ? " sett_provider_status_msg--error" : ""}`}>{translator.statusMessage}</span>
-                      {translatorProvider === translator.id && <span className="sett_provider_active_tag">Active</span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div id="sett_provider_default_row">
-                <span className="sett_field_label">Default provider</span>
-                <select
-                  id="sett_provider_select"
-                  value={defProvider}
-                  onChange={e => handleProvider(e.target.value)}
-                >
-                  {providers.map(p => (
-                    <option key={p.id} value={p.id}>{p.label}</option>
-                  ))}
-                </select>
-              </div>
-
               {aiLoading
                 ? <div className="sett_ai_loading">Checking providers…</div>
                 : (
@@ -1598,6 +1790,143 @@ const SettingsPage = () => {
                   </div>
                 )
               }
+            </div>
+          )}
+
+          {/* ═══ AMCTOSHS VOCABS ═══ */}
+          {section === "vocabs" && (
+            <div className="sett_section">
+              <h2 className="sett_section_title">AMCTOSHS Vocabs</h2>
+              <p className="sett_section_desc">
+                Configure the three terminology layers used by AMCTOSHS: dictionary definitions, translation, and UMLS medical concept mapping.
+              </p>
+
+              <div className="sett_usage_card sett_translator_provider_card sett_translator_provider_card--first">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Translation Provider</span>
+                  <span className="sett_usage_card_period">Translated terms</span>
+                </div>
+                {translators.map((translator) => (
+                  <div className="sett_translator_provider_row" key={translator.id}>
+                    <div>
+                      <strong>{translator.label}</strong>
+                      <small>{translator.baseUrl} · model {translator.model}</small>
+                      <small>Backend environment variable: <code>{translator.envKey}</code></small>
+                    </div>
+                    <span className={`sett_provider_badge sett_provider_badge--${translator.configured ? "ok" : "off"}`}>
+                      {translator.configured ? "Configured" : "No key"}
+                    </span>
+                  </div>
+                ))}
+                <div className="sett_translator_language_row">
+                  <label htmlFor="sett_vocab_translate_lang_select">Translate vocabulary to</label>
+                  <select
+                    id="sett_vocab_translate_lang_select"
+                    value={vocabTranslateLang}
+                    onChange={(event) => {
+                      setVocabTranslateLang(event.target.value);
+                      localStorage.setItem("mctosh_vocab_translate_lang", event.target.value);
+                    }}
+                  >
+                    {TRANSLATE_LANGUAGES.map((language) => <option key={language} value={language}>{language}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div className="sett_usage_card sett_translator_provider_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Phonetic Provider</span>
+                  <span className="sett_usage_card_period">IPA and pronunciation audio</span>
+                </div>
+                {phoneticProviders.map((phoneticProvider) => (
+                  <div className="sett_translator_provider_row" key={phoneticProvider.id}>
+                    <div>
+                      <strong>{phoneticProvider.label}</strong>
+                      <small>{phoneticProvider.baseUrl}/&lt;word&gt;</small>
+                      <small>{(phoneticProvider.capabilities || []).join(" · ")} · No API key required</small>
+                    </div>
+                    <span className="sett_provider_badge sett_provider_badge--ok">Available</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="sett_usage_card sett_translators_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">Dictionary Providers</span>
+                  <span className="sett_usage_card_period">Definitions and usage</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0 0 0.8rem" }}>
+                  The Dictionary tool checks Merriam-Webster Medical first, then the Collegiate Dictionary, with AI as the final fallback when configured.
+                </p>
+                <div className="sett_translator_grid">
+                  <div className="sett_provider_card sett_translator_card sett_provider_card--active">
+                    <div className="sett_provider_top">
+                      <span className="sett_provider_name">Merriam-Webster Medical Dictionary</span>
+                      <span className="sett_provider_badge">Primary</span>
+                    </div>
+                    <span className="sett_provider_base">{MEDICAL_DICTIONARY_API_URL}/&lt;term&gt;</span>
+                    <span className="sett_provider_status_msg">Medical definitions, pronunciations, parts of speech, and spelling suggestions. Requires <code>MERRIAM_WEBSTER_MEDICAL_API_KEY</code> on the backend.</span>
+                    <span className="sett_provider_active_tag">Medical</span>
+                  </div>
+                  <div className="sett_provider_card sett_translator_card sett_provider_card--active">
+                    <div className="sett_provider_top">
+                      <span className="sett_provider_name">Merriam-Webster's Collegiate Dictionary</span>
+                      <span className="sett_provider_badge">Fallback</span>
+                    </div>
+                    <span className="sett_provider_base">{OTHER_DICTIONARY_API_URL}/&lt;term&gt;</span>
+                    <span className="sett_provider_status_msg">General definitions, pronunciations, parts of speech, and spelling suggestions. Requires <code>MERRIAM_WEBSTER_COLLEGIATE_API_KEY</code> on the backend.</span>
+                    <span className="sett_provider_active_tag">General</span>
+                  </div>
+                  <div className="sett_provider_card sett_translator_card sett_provider_card--active sett_vocab_ai_fallback_card">
+                    <div className="sett_provider_top">
+                      <span className="sett_provider_name">AI Dictionary</span>
+                      <span className="sett_provider_badge">Final fallback</span>
+                    </div>
+                    <select
+                      className="sett_provider_model_select"
+                      value={defProvider}
+                      onChange={e => handleProvider(e.target.value)}
+                      aria-label="Default AI fallback provider"
+                    >
+                      {providers.map(p => (
+                        <option key={p.id} value={p.id}>{p.label}</option>
+                      ))}
+                    </select>
+                    <span className="sett_provider_status_msg">Used only when the configured Merriam-Webster dictionaries cannot return a definition.</span>
+                    <span className="sett_provider_active_tag">{providers.find((provider) => provider.id === defProvider)?.label || "AI"}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="sett_usage_card sett_translator_provider_card">
+                <div className="sett_usage_card_header">
+                  <span className="sett_usage_card_title">UMLS</span>
+                  <span className="sett_usage_card_period">Medical terminology and concepts</span>
+                </div>
+                <div className="sett_translator_provider_row">
+                  <div>
+                    <strong>Unified Medical Language System</strong>
+                    <small>Concepts, CUIs, synonyms, semantic types, relationships, and source vocabulary codes.</small>
+                    <small>Backend environment variable: <code>UMLS_API_KEY</code></small>
+                  </div>
+                  <span className="sett_provider_badge sett_provider_badge--off">Backend integration</span>
+                </div>
+                <p className="sett_section_desc" style={{ margin: "0.7rem 0 0" }}>
+                  UMLS is the terminology layer for AMCTOSHS Vocabs. Add your UTS API key to <code>back/.env</code>; it should be called through the backend, never directly from the browser.
+                </p>
+                <div className="sett_translator_language_row">
+                  <label htmlFor="sett_umls_language_select">UMLS result language</label>
+                  <select
+                    id="sett_umls_language_select"
+                    value={umlsLanguage}
+                    onChange={(event) => setUmlsLanguage(writeUmlsLanguage(event.target.value))}
+                  >
+                    {UMLS_LANGUAGE_OPTIONS.map(({ code, label }) => (
+                      <option key={code} value={code}>{label} ({code})</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1803,51 +2132,131 @@ const SettingsPage = () => {
             </div>
           )}
 
-          {/* ═══ PREDICTIVE TEXT ═══ */}
+          {/* ═══ CORPUS ═══ */}
           {section === "prediction" && (
             <div className="sett_section">
-              <h2 className="sett_section_title">Predictive Text</h2>
-              <p className="sett_section_desc">
-                Word suggestions appear while typing in any text field across AMCTOSHS. Check which text pools feed the
-                suggestion list below — each pool's word frequencies are combined, so you can mix and match. Turning
-                everything off disables suggestions entirely.
-              </p>
-
-              {predictError && <p className="sett_section_desc" style={{ color: "#f44336" }}>⚠ {predictError}</p>}
-
-              {predictLoading ? (
-                <div className="sett_ai_loading">Loading pools…</div>
-              ) : (
-                <div id="sett_predict_pools">
-                  {predictPools.map((pool) => (
-                    <label key={pool.key} className="sett_predict_pool_row">
+              <div className="sett_corpus_title_row">
+                <h2 className="sett_section_title">Corpus</h2>
+                <div className="sett_corpus_title_actions">
+                  <button
+                    type="button"
+                    className="sett_corpus_settings_btn"
+                    onClick={handleRefreshCorpus}
+                    disabled={corpusLoading}
+                    aria-label="Refresh corpus"
+                    title="Refresh corpus"
+                  >
+                    <i className="fi fi-rr-refresh" />
+                  </button>
+                  <button
+                    type="button"
+                    className="sett_corpus_settings_btn"
+                    onClick={() => setCorpusSettingsOpen((open) => !open)}
+                    aria-label="Corpus settings"
+                    title="Corpus settings"
+                  >
+                    <i className="fi fi-rr-settings" />
+                  </button>
+                </div>
+              </div>
+              {corpusSettingsOpen && (
+                <div className="sett_corpus_settings_menu" role="group" aria-label="Corpus datatype settings">
+                  <div className="sett_corpus_settings_menu_title">Datatypes included in prediction text</div>
+                  {Object.keys(corpusDataTypes).map((dataType) => (
+                    <label className="sett_corpus_datatype_option" key={dataType}>
                       <input
                         type="checkbox"
-                        checked={pool.enabled}
-                        onChange={(e) => handleTogglePredictPool(pool.key, e.target.checked)}
+                        checked={corpusDataTypes[dataType]}
+                        onChange={(event) => setCorpusDataTypes((current) => ({ ...current, [dataType]: event.target.checked }))}
                       />
-                      <div className="sett_predict_pool_info">
-                        <span className="sett_predict_pool_label">{pool.label}</span>
-                        <span className="sett_predict_pool_meta">
-                          {pool.wordCount > 0
-                            ? `${pool.wordCount.toLocaleString()} words indexed${pool.builtAt ? ` · updated ${new Date(pool.builtAt).toLocaleDateString()}` : ""}`
-                            : "Not indexed yet"}
-                        </span>
-                      </div>
-                      <button
-                        type="button"
-                        className="sett_btn sett_btn--ghost"
-                        onClick={(e) => { e.preventDefault(); handleRefreshPredictPool(pool); }}
-                        disabled={predictBusyKey === pool.key}
-                      >
-                        {predictBusyKey === pool.key ? "Working…" : pool.source === "computed" ? "Rebuild" : "Sync"}
-                      </button>
+                      <span>{dataType}</span>
                     </label>
                   ))}
                 </div>
               )}
+              <p className="sett_section_desc">
+                Corpus is assembled from the text that AMCTOSHS can access. Every word is normalized, counted across
+                all four inputs, and listed alphabetically.
+              </p>
+
+              <button
+                type="button"
+                className={`sett_prediction_pill${predictionEnabled ? " sett_prediction_pill--on" : ""}`}
+                role="switch"
+                aria-checked={predictionEnabled}
+                onClick={() => handlePredictionToggle(!predictionEnabled)}
+                disabled={predictLoading || predictBusyKey === "all"}
+              >
+                <span className="sett_prediction_pill_track"><span /></span>
+                <span>{predictBusyKey === "all" ? "Updating prediction text…" : predictionEnabled ? "Prediction text: On" : "Prediction text: Off"}</span>
+              </button>
+
+              {corpusError && <p className="sett_section_desc sett_corpus_error">⚠ {corpusError}</p>}
+
+              {corpusLoading && (
+                <div className="sett_corpus_progress_block" aria-live="polite">
+                  <div className="sett_corpus_progress_header">
+                    <span>Building corpus…</span>
+                    <strong>{corpusProgress}%</strong>
+                  </div>
+                  <div className="sett_corpus_progress_track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow={corpusProgress}>
+                    <div className="sett_corpus_progress_value" style={{ width: `${corpusProgress}%` }} />
+                  </div>
+                  <div className="sett_corpus_progress_note">The table updates as each stored text source finishes.</div>
+                </div>
+              )}
+
+              <div className="sett_corpus_inputs" aria-label="Corpus inputs">
+                <button
+                  type="button"
+                  className={`sett_corpus_input${selectedCorpusSource === "all" ? " sett_corpus_input--active" : ""}`}
+                  onClick={() => setSelectedCorpusSource("all")}
+                >
+                  <span className="sett_corpus_input_index">ALL</span>
+                  <span className="sett_corpus_input_label">All corpus sources</span>
+                  <strong>{corpusTotalOccurrences.toLocaleString()}</strong>
+                  <span className="sett_corpus_input_meta">word occurrences</span>
+                </button>
+                <button
+                  type="button"
+                  className={`sett_corpus_input${selectedCorpusSource === "unique" ? " sett_corpus_input--active" : ""}`}
+                  onClick={() => setSelectedCorpusSource("unique")}
+                >
+                  <span className="sett_corpus_input_index">DEDUP</span>
+                  <span className="sett_corpus_input_label">Deduplicated strings</span>
+                  <strong>{datatypeCorpusRows.length.toLocaleString()}</strong>
+                  <span className="sett_corpus_input_meta">unique strings</span>
+                </button>
+                {CORPUS_INPUTS.map(({ id, label }, index) => (
+                  <button
+                    type="button"
+                    className={`sett_corpus_input${selectedCorpusSource === String(index + 1).padStart(2, "0") ? " sett_corpus_input--active" : ""}`}
+                    key={id}
+                    onClick={() => setSelectedCorpusSource(String(index + 1).padStart(2, "0"))}
+                  >
+                    <span className="sett_corpus_input_index">{String(index + 1).padStart(2, "0")}</span>
+                    <span className="sett_corpus_input_label">{label}</span>
+                    <strong>{corpusInputCounts[id].toLocaleString()}</strong>
+                    <span className="sett_corpus_input_meta">{corpusLoading ? "live word occurrences" : "word occurrences"}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="sett_corpus_table_wrap">
+                <table className="sett_corpus_table">
+                  <thead><tr><th>Source</th><th>Corpus ID</th><th>String</th><th>Occurrence</th><th>Data type</th></tr></thead>
+                  <tbody>
+                    {visibleCorpusRows.length > 0 ? visibleCorpusRows.map((row) => (
+                      <tr key={row.id}><td><code>{row.sources}</code></td><td><code>{row.id}</code></td><td>{row.string}</td><td>{row.occurrence.toLocaleString()}</td><td>{row.dataType}</td></tr>
+                    )) : <tr><td colSpan="5" className="sett_corpus_empty">{corpusLoading ? "Waiting for the first source…" : "No words found in the available inputs."}</td></tr>}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
+
+          {/* ═══ CONTEXT ═══ */}
+          {section === "context" && <ContextSettingsTab />}
 
           {/* ═══ PDF READER ═══ */}
           {section === "pdf_reader" && (

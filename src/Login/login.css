@@ -2003,3 +2003,1061 @@ html.theme-light #login_toggle:hover {
     margin-top: 2rem;
   }
 }
+
+/* ════════════════════════════════════════════════════════════════
+   RESPONSIVE PATIENT REALITY LOGIN
+   The legacy 3D selectors above are intentionally left available for
+   historical views; this composition is the active login presentation.
+   ════════════════════════════════════════════════════════════════ */
+#login_page.loginPage {
+  --login-bg: #070c10;
+  --login-text: #edf3f1;
+  --login-muted: rgba(225, 235, 232, 0.66);
+  --login-faint: rgba(225, 235, 232, 0.4);
+  --login-panel-bg: rgba(8, 13, 16, 0.42);
+  --login-panel-border: rgba(224, 238, 234, 0.12);
+  --login-soft-surface: rgba(255, 255, 255, 0.045);
+  --login-soft-border: rgba(224, 238, 234, 0.14);
+  --login-field-bg: rgba(255, 255, 255, 0.055);
+  display: grid;
+  grid-template-columns: minmax(0, 66fr) minmax(340px, 34fr);
+  width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--login-bg);
+  color: var(--login-text);
+}
+
+#login_page.loginPage::before {
+  display: none;
+}
+
+.patientRealityArtwork {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+  background: #0a1217;
+}
+
+.patientRealityPicture,
+.patientRealityImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.patientRealityPicture {
+  position: absolute;
+  inset: 0;
+}
+
+.patientRealityImage {
+  object-fit: cover;
+  object-position: left center;
+}
+
+.patientRealityOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(90deg, rgba(2, 6, 8, 0.12) 0%, rgba(2, 6, 8, 0.01) 58%, rgba(4, 8, 10, 0.38) 100%),
+    linear-gradient(180deg, rgba(2, 6, 8, 0.18), transparent 38%, rgba(2, 6, 8, 0.48));
+  pointer-events: none;
+}
+
+.patientRealityBrand {
+  position: absolute;
+  z-index: 2;
+  top: max(clamp(1.5rem, 4vw, 4rem), env(safe-area-inset-top));
+  left: clamp(1.5rem, 4vw, 4.5rem);
+  right: clamp(1.5rem, 4vw, 4.5rem);
+  display: flex;
+  align-items: flex-start;
+  gap: clamp(0.75rem, 1.4vw, 1.1rem);
+  color: #eef5f3;
+  text-shadow: 0 2px 22px rgba(0, 0, 0, 0.6);
+}
+
+.patientRealityBrandMark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: clamp(2.15rem, 3.4vw, 3rem);
+  aspect-ratio: 1;
+  border: 1px solid rgba(226, 241, 236, 0.62);
+  border-radius: 0.35rem;
+  background: rgba(7, 14, 17, 0.5);
+  font-size: clamp(0.8rem, 1.2vw, 1rem);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.patientRealityBrand h1 {
+  margin: 0;
+  color: inherit;
+  font-size: clamp(1.65rem, 3.5vw, 3.7rem);
+  font-weight: 760;
+  line-height: 0.95;
+  letter-spacing: 0.12em;
+}
+
+.patientRealityBrand p {
+  max-width: 58rem;
+  margin: clamp(0.55rem, 1vw, 0.85rem) 0 0;
+  color: rgba(233, 242, 239, 0.7);
+  font-size: clamp(0.63rem, 1vw, 0.86rem);
+  line-height: 1.6;
+  letter-spacing: 0.055em;
+}
+
+#login_panel.loginArea {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: clamp(0.75rem, 2vw, 1.5rem);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  overflow-y: auto;
+  animation: panel_enter 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.loginCard {
+  width: min(100%, 25rem);
+  margin: auto;
+  border: 1px solid rgba(224, 238, 234, 0.12);
+  border-radius: 0.75rem;
+  background: rgba(5, 10, 12, 0.44);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  overflow: hidden;
+}
+
+.loginCard #login_role_tabs {
+  margin: clamp(1rem, 2vw, 1.4rem) clamp(1rem, 2vw, 1.4rem) 0;
+}
+
+.loginCard #login_video_toggle {
+  margin: 0.85rem clamp(1rem, 2vw, 1.4rem) 0;
+}
+
+.loginCard #login_video_container {
+  padding-inline: clamp(1rem, 2vw, 1.4rem);
+}
+
+.loginCard #login_form {
+  display: flex;
+  flex: none;
+  gap: clamp(0.8rem, 1.5vh, 1.05rem);
+  padding: clamp(1rem, 2vw, 1.5rem);
+  overflow: visible;
+}
+
+.loginCard #login_form_head {
+  margin-bottom: clamp(0.6rem, 1.5vh, 1.2rem);
+}
+
+.loginCard #login_footer {
+  position: static;
+  padding: 0 clamp(1rem, 2vw, 1.4rem) clamp(1rem, 2vw, 1.35rem);
+  color: rgba(225, 235, 232, 0.38);
+}
+
+html.theme-light #login_page.loginPage {
+  --login-bg: #070c10;
+  --login-text: #edf3f1;
+  --login-muted: rgba(225, 235, 232, 0.66);
+  --login-faint: rgba(225, 235, 232, 0.4);
+  --login-panel-bg: rgba(8, 13, 16, 0.42);
+  --login-panel-border: rgba(224, 238, 234, 0.12);
+  --login-soft-surface: rgba(255, 255, 255, 0.045);
+  --login-soft-border: rgba(224, 238, 234, 0.14);
+  --login-field-bg: rgba(255, 255, 255, 0.055);
+}
+
+html.theme-light #login_panel.loginArea {
+  background: transparent;
+}
+
+html.theme-light .loginCard {
+  background-color: rgba(8, 13, 16, 0.44);
+  color: var(--login-text);
+}
+
+html.theme-light .loginCard #login_form input {
+  border-color: var(--login-soft-border);
+  background: var(--login-field-bg);
+  color: var(--login-text);
+}
+
+html.theme-light .loginCard #login_form input:focus {
+  border-color: rgba(151, 194, 184, 0.62);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 3px rgba(151, 194, 184, 0.1);
+}
+
+html.theme-light .loginCard #login_submit {
+  background: #d9e7e3;
+  color: #0b1719;
+  box-shadow: none;
+}
+
+@media (max-width: 900px) {
+  #login_page.loginPage {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    place-items: center;
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: max(5.75rem, calc(env(safe-area-inset-top) + 4.5rem))
+      max(1.25rem, env(safe-area-inset-right))
+      max(1.25rem, env(safe-area-inset-bottom))
+      max(1.25rem, env(safe-area-inset-left));
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .patientRealityArtwork {
+    grid-column: 1;
+    grid-row: 1;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100dvh;
+  }
+
+  .patientRealityImage {
+    object-position: left center;
+  }
+
+  .patientRealityOverlay {
+    background:
+      linear-gradient(180deg, rgba(2, 6, 8, 0.42) 0%, rgba(2, 6, 8, 0.7) 34%, rgba(2, 6, 8, 0.88) 100%),
+      linear-gradient(90deg, rgba(2, 6, 8, 0.26), rgba(2, 6, 8, 0.08), rgba(2, 6, 8, 0.26));
+  }
+
+  .patientRealityBrand {
+    position: fixed;
+    top: max(1.25rem, env(safe-area-inset-top));
+    left: max(1.25rem, env(safe-area-inset-left));
+    right: max(1.25rem, env(safe-area-inset-right));
+  }
+
+  .patientRealityBrand h1 {
+    font-size: clamp(1.35rem, 5vw, 2rem);
+  }
+
+  .patientRealityBrand p {
+    font-size: clamp(0.58rem, 1.8vw, 0.74rem);
+  }
+
+  #login_panel.loginArea {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    width: min(100%, 31rem);
+    min-height: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    overflow: visible;
+  }
+
+  .loginCard {
+    background: rgba(6, 11, 14, 0.56);
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+}
+
+@media (max-width: 600px) {
+  #login_page.loginPage {
+    place-items: start center;
+    padding-top: max(4.9rem, calc(env(safe-area-inset-top) + 4.1rem));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+  }
+
+  .patientRealityImage {
+    object-position: left center;
+  }
+
+  .patientRealityBrand {
+    top: max(0.9rem, env(safe-area-inset-top));
+    left: max(1rem, env(safe-area-inset-left));
+    right: max(1rem, env(safe-area-inset-right));
+    align-items: center;
+  }
+
+  .patientRealityBrandMark {
+    width: 2rem;
+  }
+
+  .patientRealityBrand h1 {
+    font-size: 1.25rem;
+  }
+
+  .patientRealityBrand p {
+    display: none;
+  }
+
+  .loginCard {
+    width: 100%;
+    border-radius: 0.8rem;
+  }
+
+  .loginCard #login_role_tabs {
+    margin: 0.8rem 0.8rem 0;
+  }
+
+  .loginCard #login_video_toggle {
+    min-height: 42px;
+    margin: 0.65rem 0.8rem 0;
+  }
+
+  .loginCard #login_video_container {
+    padding: 0.8rem 0.8rem 0.35rem;
+  }
+
+  .loginCard #login_intro_video {
+    height: clamp(8.5rem, 34vw, 11rem);
+  }
+
+  .loginCard #login_form {
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
+  .loginCard #login_form_head {
+    margin-bottom: 0.4rem;
+  }
+
+  .loginCard #login_form input,
+  .loginCard #login_submit {
+    min-height: 48px;
+    font-size: 1rem;
+  }
+
+  .loginCard #login_submit {
+    font-size: 0.76rem;
+  }
+
+  .loginCard #login_footer {
+    padding-bottom: 0.8rem;
+    font-size: 0.52rem;
+  }
+}
+
+@media (max-height: 700px) and (max-width: 900px) {
+  #login_page.loginPage {
+    place-items: start center;
+  }
+
+  .loginCard #login_form {
+    gap: 0.65rem;
+  }
+
+  .loginCard #login_form_head {
+    margin-bottom: 0.2rem;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   SCROLL-DRIVEN PATIENT REALITY JOURNEY
+   ════════════════════════════════════════════════════════════════ */
+#login_page.loginJourney {
+  --login-bg: #f3f1ec;
+  --login-text: #18201f;
+  --login-panel-bg: rgba(255, 255, 255, 0.92);
+  --login-panel-border: rgba(24, 32, 31, 0.14);
+  --login-soft-surface: rgba(247, 246, 242, 0.92);
+  --login-soft-border: rgba(24, 32, 31, 0.16);
+  --login-field-bg: rgba(255, 255, 255, 0.96);
+  --login-muted: #5f6865;
+  --login-faint: #8a928f;
+  display: block;
+  position: relative;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  padding: 0;
+  overflow: visible;
+  background: #f3f1ec;
+  color: #18201f;
+  touch-action: pan-y;
+}
+
+.patientRealitySticky {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  height: var(--ontology-viewport-height, 100dvh);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 22%, rgba(255, 255, 255, 0.98), transparent 34%),
+    radial-gradient(circle at 78% 72%, rgba(211, 221, 216, 0.5), transparent 42%),
+    linear-gradient(145deg, #f8f7f3 0%, #eceae4 100%);
+  isolation: isolate;
+}
+
+.patientRealityJourneyShade {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.patientRealityJourneyShade {
+  z-index: 1;
+  background: transparent;
+  pointer-events: none;
+}
+
+.patientRealityJourneyBrand {
+  position: absolute;
+  z-index: 3;
+  top: max(clamp(1.2rem, 3vw, 2.5rem), env(safe-area-inset-top));
+  left: max(clamp(1.2rem, 4vw, 4rem), env(safe-area-inset-left));
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  color: #17201e;
+  opacity: max(0.56, calc(1 - var(--journey-progress, 0) * 1.6));
+  text-shadow: none;
+}
+
+.patientRealityJourneyBrand h1,
+.patientRealityJourneyBrand p {
+  margin: 0;
+  color: inherit;
+}
+
+.patientRealityJourneyBrand h1 {
+  font-size: clamp(1.1rem, 2.4vw, 2rem);
+  line-height: 1;
+  letter-spacing: 0.14em;
+}
+
+.patientRealityJourneyBrand p {
+  margin-top: 0.28rem;
+  color: rgba(23, 32, 30, 0.58);
+  font-size: clamp(0.58rem, 0.9vw, 0.72rem);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.patientRealityJourneyBrand .patientRealityBrandMark {
+  width: clamp(2rem, 3vw, 2.55rem);
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(23, 32, 30, 0.2);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.patientRealitySignIn {
+  position: absolute;
+  z-index: 4;
+  top: max(clamp(1.2rem, 3vw, 2.5rem), env(safe-area-inset-top));
+  right: max(clamp(1.2rem, 4vw, 4rem), env(safe-area-inset-right));
+  min-height: 42px;
+  padding: 0.65rem 1rem;
+  border: 1px solid rgba(23, 32, 30, 0.24);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.7);
+  color: #17201e;
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.patientRealitySignIn:hover,
+.patientRealitySignIn:focus-visible {
+  border-color: rgba(23, 32, 30, 0.65);
+  background: #fff;
+}
+
+.stageIdentity {
+  position: absolute;
+  z-index: 3;
+  top: 75%;
+  left: 0;
+  width: 100%;
+  height: 25%;
+  padding:
+    0 max(clamp(1.3rem, 6vw, 6rem), env(safe-area-inset-right))
+    max(clamp(2.8rem, 6vh, 4.8rem), env(safe-area-inset-bottom))
+    max(clamp(1.3rem, 6vw, 6rem), env(safe-area-inset-left));
+  pointer-events: none;
+}
+
+.stageIdentityLabel {
+  position: relative;
+  z-index: 1;
+  height: 100%;
+  display: flex;
+  align-items: baseline;
+  align-content: end;
+  flex-wrap: wrap;
+  gap: clamp(0.8rem, 1.8vw, 1.5rem);
+  color: #17201e;
+  text-shadow: none;
+  animation: journey_label_in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.stageNumber {
+  color: rgba(23, 32, 30, 0.5);
+  font-size: clamp(0.72rem, 1vw, 0.92rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2em;
+}
+
+.stageIdentity h2 {
+  margin: 0;
+  color: inherit;
+  font-size: clamp(2.4rem, 7vw, 7rem);
+  font-weight: 580;
+  line-height: 0.88;
+  letter-spacing: -0.035em;
+}
+
+@keyframes journey_label_in {
+  from { opacity: 0; transform: translateY(0.65rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.patientRealityProgress {
+  position: absolute;
+  z-index: 3;
+  right: max(clamp(1.2rem, 4vw, 4rem), env(safe-area-inset-right));
+  bottom: max(clamp(1.25rem, 4vh, 2.5rem), env(safe-area-inset-bottom));
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  color: rgba(23, 32, 30, 0.58);
+}
+
+.patientRealityProgress::before {
+  content: "";
+  width: clamp(5rem, 10vw, 8rem);
+  height: 1px;
+  background: rgba(23, 32, 30, 0.18);
+}
+
+.patientRealityProgress > span {
+  position: absolute;
+  left: 0;
+  width: clamp(5rem, 10vw, 8rem);
+  height: 1px;
+  background: rgba(23, 32, 30, 0.82);
+  transform: scaleX(var(--stage-progress, 0.125));
+  transform-origin: left center;
+  transition: transform 320ms ease;
+}
+
+.patientRealityProgress small {
+  font-size: 0.58rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.13em;
+}
+
+.patientRealityStages {
+  position: relative;
+  z-index: 0;
+  margin-top: calc(-1 * var(--ontology-viewport-height, 100dvh));
+  pointer-events: none;
+}
+
+.patientRealityScrollStage {
+  position: relative;
+  width: 100%;
+  height: var(--ontology-viewport-height, 100dvh);
+}
+
+.loginOverlay {
+  --login-card-left: max(clamp(0.85rem, 2vw, 1.75rem), env(safe-area-inset-left));
+  --login-card-width: min(19rem, calc(40vw - 2rem));
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  padding: 0;
+  background: transparent;
+  overflow: hidden;
+  animation: login_overlay_in 220ms ease both;
+}
+
+@keyframes login_overlay_in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.loginOverlay #login_panel.loginArea {
+  position: absolute;
+  top: 50%;
+  left: var(--login-card-left);
+  display: block;
+  width: var(--login-card-width);
+  min-height: 0;
+  padding: 0;
+  overflow: visible;
+  transform: translateY(-50%);
+  animation: login_panel_left_in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.loginOverlay .vk_panel--login {
+  left: calc(var(--login-card-left) + var(--login-card-width) + 0.75rem);
+  right: auto;
+  top: 50%;
+  bottom: auto;
+  width: min(30rem, calc(100vw - var(--login-card-left) - var(--login-card-width) - 1.5rem));
+  max-height: calc(100dvh - 1.5rem);
+  padding: 0.5rem;
+  border-width: 1px;
+  border-radius: 0.75rem;
+  transform: translateY(-50%);
+  border-color: rgba(236, 242, 240, 0.14);
+  background: rgba(15, 19, 19, 0.78);
+  color: #f1f5f3;
+  box-shadow: 0 14px 38px rgba(10, 14, 13, 0.28);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: login_keyboard_left_in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.loginOverlay .vk_panel--login .vk_panel_header,
+.loginOverlay .vk_panel--login .vk_no_target {
+  color: rgba(238, 244, 242, 0.68);
+}
+
+.loginOverlay .vk_panel--login .vk_stt_provider {
+  border-color: rgba(220, 235, 231, 0.16);
+  background: rgba(255, 255, 255, 0.07);
+  color: #dce9e5;
+}
+
+.loginOverlay .vk_panel--login .vk_stt_provider small {
+  color: rgba(238, 244, 242, 0.58);
+}
+
+.loginOverlay .vk_panel--login .vk_row button {
+  border-color: rgba(231, 240, 237, 0.16);
+  border-bottom-color: rgba(231, 240, 237, 0.25);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.07));
+  color: #f3f7f5;
+  box-shadow:
+    0 0.2rem 0 rgba(4, 7, 7, 0.48),
+    0 0.3rem 0.45rem rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+.loginOverlay .vk_panel--login .vk_row button:hover,
+.loginOverlay .vk_panel--login .vk_row button.vk_key--active {
+  border-color: rgba(186, 218, 209, 0.34);
+  background: linear-gradient(180deg, rgba(170, 210, 199, 0.2), rgba(126, 174, 162, 0.12));
+  color: #fff;
+}
+
+.loginOverlay .vk_panel--login .vk_row button:active {
+  box-shadow:
+    0 0.03rem 0 rgba(4, 7, 7, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+@keyframes login_keyboard_left_in {
+  from { opacity: 0; transform: translate(-0.7rem, -50%); }
+  to { opacity: 1; transform: translate(0, -50%); }
+}
+
+@keyframes login_panel_left_in {
+  from { opacity: 0; transform: translate(-0.8rem, -50%); }
+  to { opacity: 1; transform: translate(0, -50%); }
+}
+
+.patientRealityModes {
+  min-width: 0;
+  padding: 1.25rem 1.35rem;
+  border-left: 1px solid rgba(23, 32, 30, 0.18);
+  color: #17201e;
+  text-shadow: none;
+}
+
+.patientRealityModes header {
+  margin-bottom: 1.15rem;
+}
+
+.patientRealityModes header span,
+.patientRealityModes header p {
+  display: block;
+  margin: 0;
+  color: rgba(23, 32, 30, 0.48);
+  font-size: 0.54rem;
+  font-weight: 650;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.patientRealityModes h2 {
+  margin: 0.3rem 0;
+  color: inherit;
+  font-size: clamp(1.15rem, 2.2vw, 1.6rem);
+  font-weight: 580;
+  letter-spacing: -0.02em;
+}
+
+.patientRealityModes ol {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.patientRealityModes li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 0.65rem 1fr;
+  align-items: center;
+  gap: 0.65rem;
+  min-height: 2.35rem;
+  color: rgba(23, 32, 30, 0.58);
+}
+
+.patientRealityModes li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: calc(50% + 0.28rem);
+  bottom: calc(-50% + 0.28rem);
+  left: 0.28rem;
+  width: 1px;
+  background: rgba(23, 32, 30, 0.24);
+}
+
+.patientRealityModes li > span {
+  position: relative;
+  z-index: 1;
+  width: 0.58rem;
+  height: 0.58rem;
+  border: 1px solid rgba(23, 32, 30, 0.4);
+  border-radius: 50%;
+  background: #f5f3ee;
+}
+
+.patientRealityModes li strong {
+  font-size: 0.72rem;
+  font-weight: 540;
+  letter-spacing: 0.06em;
+}
+
+.patientRealityModes li.is-current {
+  color: #17201e;
+}
+
+.patientRealityModes li.is-current > span {
+  border-color: #17201e;
+  background: #17201e;
+  box-shadow: 0 0 0 4px rgba(23, 32, 30, 0.08);
+}
+
+.loginOverlay .loginCard {
+  position: relative;
+  width: 100%;
+  max-height: calc(100dvh - 1.5rem);
+  margin: 0;
+  border-radius: 0.55rem;
+  background: rgba(255, 255, 255, 0.84);
+  border-color: rgba(23, 32, 30, 0.14);
+  box-shadow: 0 14px 38px rgba(47, 54, 51, 0.15);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.loginCardClose {
+  position: absolute;
+  z-index: 2;
+  top: 0.3rem;
+  right: 0.3rem;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(23, 32, 30, 0.68);
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.loginOverlay .loginCard #login_role_tabs {
+  margin: 0.65rem 2.35rem 0 0.75rem;
+}
+
+.loginOverlay .loginCard #login_video_toggle,
+.loginOverlay .loginCard #login_video_container,
+.loginOverlay .loginCard #login_demo_note,
+.loginOverlay .loginCard #login_links,
+.loginOverlay .loginCard #login_footer {
+  display: none;
+}
+
+.loginOverlay .loginCard #login_form {
+  gap: 0.65rem;
+  padding: 0.75rem 0.85rem 0.9rem;
+}
+
+.loginOverlay .loginCard #login_form_head {
+  margin-bottom: 0.1rem;
+}
+
+.loginOverlay .loginCard #login_form input,
+.loginOverlay .loginCard #login_submit {
+  min-height: 40px;
+}
+
+.loginOverlay .loginCard #login_toggle {
+  font-size: 0.62rem;
+}
+
+#login_page.loginJourney .login_role_tab--active {
+  background: #17201e;
+  color: #fff;
+  box-shadow: none;
+}
+
+#login_page.loginJourney #login_video_toggle {
+  border-color: rgba(23, 32, 30, 0.18);
+  color: #59625f;
+}
+
+#login_page.loginJourney #login_video_toggle:hover {
+  border-color: rgba(23, 32, 30, 0.46);
+  background: rgba(23, 32, 30, 0.04);
+  color: #17201e;
+}
+
+#login_page.loginJourney #login_form_bar {
+  background: #17201e;
+  box-shadow: none;
+}
+
+#login_page.loginJourney #login_demo_note {
+  border-color: rgba(23, 32, 30, 0.13);
+  background: #f5f4f0;
+  color: #59625f;
+}
+
+#login_page.loginJourney #login_form input:focus {
+  border-color: #17201e;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(23, 32, 30, 0.08);
+}
+
+#login_page.loginJourney .loginOverlay .loginCard #login_form input:focus {
+  border-color: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+#login_page.loginJourney #login_submit {
+  background: #17201e;
+  color: #fff;
+  box-shadow: 0 12px 28px rgba(23, 32, 30, 0.18);
+}
+
+#login_page.loginJourney #login_submit:hover:not(:disabled) {
+  box-shadow: 0 16px 34px rgba(23, 32, 30, 0.24);
+}
+
+#login_page.loginJourney #login_toggle:hover,
+#login_page.loginJourney .login_link:hover {
+  color: #17201e;
+}
+
+@media (max-width: 900px) {
+  #login_page.loginJourney {
+    display: block;
+    height: auto;
+    min-height: 0;
+    padding: 0;
+    overflow: visible;
+  }
+
+}
+
+@media (max-width: 700px) {
+  .loginOverlay {
+    --login-card-width: min(19rem, calc(44vw - 1rem));
+  }
+
+  .loginOverlay #login_panel.loginArea {
+    width: var(--login-card-width);
+  }
+
+  .patientRealityModes {
+    width: 100%;
+    padding: 0.8rem 1rem;
+  }
+
+  .patientRealityModes header {
+    margin-bottom: 0.45rem;
+  }
+
+  .patientRealityModes ol {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 1rem;
+  }
+
+  .patientRealityModes li {
+    min-height: 1.65rem;
+  }
+
+  .patientRealityModes li::after {
+    display: none;
+  }
+}
+
+@media (max-width: 600px) {
+  #login_page.loginJourney {
+    padding: 0;
+  }
+
+  .patientRealityJourneyBrand {
+    top: max(0.9rem, env(safe-area-inset-top));
+    left: max(0.9rem, env(safe-area-inset-left));
+  }
+
+  .patientRealityJourneyBrand .patientRealityBrandMark {
+    width: 1.9rem;
+  }
+
+  .patientRealityJourneyBrand h1 {
+    font-size: 1rem;
+  }
+
+  .patientRealityJourneyBrand p {
+    font-size: 0.52rem;
+  }
+
+  .patientRealitySignIn {
+    top: max(0.9rem, env(safe-area-inset-top));
+    right: max(0.9rem, env(safe-area-inset-right));
+    min-height: 40px;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.62rem;
+  }
+
+  .stageIdentity {
+    top: 73.5%;
+    height: 26.5%;
+    padding:
+      0 max(1rem, env(safe-area-inset-right))
+      max(3.8rem, env(safe-area-inset-bottom))
+      max(1rem, env(safe-area-inset-left));
+  }
+
+  .stageIdentityLabel {
+    gap: 0.65rem;
+  }
+
+  .stageIdentity h2 {
+    font-size: clamp(2rem, 12vw, 3.5rem);
+  }
+
+  .stageNumber {
+    font-size: 0.62rem;
+  }
+
+  .patientRealityProgress {
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+
+  .loginOverlay .loginCard {
+    max-height: calc(100dvh - 1.3rem);
+  }
+}
+
+@media (orientation: portrait) {
+  .loginOverlay #login_panel.loginArea {
+    top: max(5rem, calc(env(safe-area-inset-top) + 4rem));
+    left: 50%;
+    width: min(20rem, calc(100vw - 1.5rem));
+    transform: translateX(-50%);
+    animation-name: login_panel_top_in;
+  }
+
+  .loginOverlay .loginCard {
+    max-height: calc(100dvh - 6rem);
+  }
+
+  .loginOverlay .vk_panel--login {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-height: 48dvh;
+    border-width: 1px 0 0;
+    border-radius: 0.9rem 0.9rem 0 0;
+    transform: none;
+    animation-name: login_keyboard_bottom_in;
+  }
+}
+
+@keyframes login_panel_top_in {
+  from { opacity: 0; transform: translate(-50%, -0.8rem); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+@keyframes login_keyboard_bottom_in {
+  from { opacity: 0; transform: translateY(0.8rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #login_page.loginJourney {
+    min-height: 100dvh;
+  }
+
+  .stageIdentityLabel,
+  .loginOverlay {
+    animation: none;
+  }
+
+  .patientRealityProgress > span {
+    transition-duration: 0.01ms;
+  }
+}

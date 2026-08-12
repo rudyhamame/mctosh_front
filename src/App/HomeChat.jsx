@@ -8,8 +8,7 @@ import { readStoredSession } from "../utils/sessionCleanup";
 import { AVATAR_GREETING, speakableText } from "./AnamAvatar";
 import { readDevAiSettings } from "./devAiSettings";
 import AvatarContainer from "../Avatar/AvatarContainer";
-
-const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+import { startConfiguredStt } from "../Shared/configuredStt";
 
 const appendToLast = (msgs, delta) => {
   const next = [...msgs];
@@ -220,9 +219,6 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
     const rec = interruptRecRef.current;
     interruptRecRef.current = null;
     if (!rec) return;
-    rec.onresult = null;
-    rec.onend = null;
-    rec.onerror = null;
     try { rec.stop(); } catch {}
   };
 
@@ -232,107 +228,88 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
     window.speechSynthesis.cancel();
   };
 
-  const startListening = () => {
-    if (!SR || !activeRef.current) return;
+  const startListening = async () => {
+    if (!activeRef.current) return;
     stopInterruptRecognizer();
     clearSpeakingTimer();
     interruptedRef.current = false;
     setCallState("listening");
     setTranscript("");
 
-    const rec = new SR();
-    rec.continuous     = false;
-    rec.interimResults = true;
-    rec.lang           = "en-US";
-
     let finalText = "";
-
-    rec.onresult = (e) => {
-      const t = Array.from(e.results).map(r => r[0].transcript).join("");
-      setTranscript(t);
-      if (e.results[e.results.length - 1].isFinal) {
-        finalText = t;
-        rec.stop();
-      }
-    };
-
-    rec.onend = () => {
-      if (!activeRef.current) return;
-      if (finalText.trim()) {
-        setCallState("thinking");
-        setTranscript(finalText);
-        sendRef.current(finalText);
-      } else {
-        // Nothing heard — listen again
-        setTimeout(startListening, 400);
-      }
-    };
-
-    rec.onerror = (e) => {
-      if (!activeRef.current) return;
-      if (e.error === "no-speech") {
-        setTimeout(startListening, 400);
-      } else {
-        setCallState("listening");
-        setTimeout(startListening, 1000);
-      }
-    };
-
-    recRef.current = rec;
-    try { rec.start(); } catch {}
+    const pending = { stop: () => {}, abort: () => {} };
+    recRef.current = pending;
+    try {
+      const rec = await startConfiguredStt({
+        continuous: false,
+        language: "en-US",
+        onText: (text, { final }) => {
+          setTranscript(text);
+          if (final) finalText = text;
+        },
+        onEnd: () => {
+          recRef.current = null;
+          if (!activeRef.current) return;
+          if (finalText.trim()) {
+            setCallState("thinking");
+            setTranscript(finalText);
+            sendRef.current(finalText);
+          } else setTimeout(startListening, 400);
+        },
+        onError: () => {
+          if (activeRef.current) setTimeout(startListening, 1000);
+        },
+      });
+      if (recRef.current !== pending) rec.abort?.();
+      else recRef.current = rec;
+    } catch {
+      recRef.current = null;
+      if (activeRef.current) setTimeout(startListening, 1000);
+    }
   };
 
-  const startInterruptionListening = () => {
-    if (!SR || !activeRef.current || !avatarRef?.current?.isLive?.()) return;
+  const startInterruptionListening = async () => {
+    if (!activeRef.current || !avatarRef?.current?.isLive?.()) return;
     if (!readDevAiSettings().interruptOnSpeech) return;
     stopInterruptRecognizer();
     interruptedRef.current = false;
 
-    const rec = new SR();
-    rec.continuous = false;
-    rec.interimResults = true;
-    rec.lang = "en-US";
     let finalText = "";
-
-    rec.onresult = (e) => {
-      const nextText = Array.from(e.results).map((r) => r[0].transcript).join("");
-      if (!isInterruptingTranscript(nextText)) return;
-      setTranscript(nextText);
-
-      if (!interruptedRef.current) {
-        interruptedRef.current = true;
-        stopCurrentReply();
-        setCallState("listening");
-      }
-
-      if (e.results[e.results.length - 1]?.isFinal) {
-        finalText = nextText;
-        try { rec.stop(); } catch {}
-      }
-    };
-
-    rec.onend = () => {
+    const pending = { stop: () => {}, abort: () => {} };
+    interruptRecRef.current = pending;
+    try {
+      const rec = await startConfiguredStt({
+        continuous: false,
+        language: "en-US",
+        onText: (nextText, { final }) => {
+          if (!isInterruptingTranscript(nextText)) return;
+          setTranscript(nextText);
+          if (!interruptedRef.current) {
+            interruptedRef.current = true;
+            stopCurrentReply();
+            setCallState("listening");
+          }
+          if (final) finalText = nextText;
+        },
+        onEnd: () => {
+          interruptRecRef.current = null;
+          if (!activeRef.current) return;
+          if (finalText.trim()) {
+            setCallState("thinking");
+            setTranscript(finalText);
+            sendRef.current(finalText);
+          } else if (interruptedRef.current) setTimeout(startListening, 250);
+        },
+        onError: () => {
+          interruptRecRef.current = null;
+          if (activeRef.current && interruptedRef.current) setTimeout(startListening, 400);
+        },
+      });
+      if (interruptRecRef.current !== pending) rec.abort?.();
+      else interruptRecRef.current = rec;
+    } catch {
       interruptRecRef.current = null;
-      if (!activeRef.current) return;
-      if (finalText.trim()) {
-        setCallState("thinking");
-        setTranscript(finalText);
-        sendRef.current(finalText);
-        return;
-      }
-      if (interruptedRef.current) {
-        setTimeout(startListening, 250);
-      }
-    };
-
-    rec.onerror = () => {
-      interruptRecRef.current = null;
-      if (!activeRef.current || !interruptedRef.current) return;
-      setTimeout(startListening, 400);
-    };
-
-    interruptRecRef.current = rec;
-    try { rec.start(); } catch {}
+    }
   };
 
   // When streaming ends → speak the reply → then listen again. If the
@@ -491,7 +468,9 @@ const HomeChat = () => {
           }
           setIsOpen(false);
         }}
-        title={isOpen ? "Close AI" : "Dev AI"}
+        title={isOpen ? "Close AMCTOSHS Assistant" : "Open AMCTOSHS Assistant"}
+        aria-label={isOpen ? "Close AMCTOSHS Assistant" : "Open AMCTOSHS Assistant"}
+        aria-expanded={isOpen}
         className={isOpen ? "home_chat_fab--open" : ""}
       >
         <i className={`fi ${isOpen ? "fi-ss-cross-small" : "fi-ss-message-bot"}`} />

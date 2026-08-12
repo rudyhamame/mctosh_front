@@ -7,6 +7,7 @@ export const BBOX_TYPE_DEFINITIONS = Object.freeze({
     extractsText: true,
     autoFitsText: true,
     canBeNested: true,
+    containsBlocks: true,
   }),
   subLineBBox: Object.freeze({
     role: "text-structure",
@@ -93,7 +94,7 @@ export const canBBoxContain = (parentType, childType) => {
     return ["columnBBox", "bbox", "imageBBox"].includes(childType);
   }
   if (parentType === "columnBBox") return ["bbox", "imageBBox"].includes(childType);
-  if (parentType === "bbox") return childType === "subLineBBox";
+  if (parentType === "bbox") return ["bbox", "subLineBBox"].includes(childType);
   return false;
 };
 

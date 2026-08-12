@@ -28,10 +28,8 @@ import { readStoredSession } from "../../utils/sessionCleanup";
 // configurable later; nothing else in this file assumes anything about the
 // model beyond "a glTF scene, maybe with morph targets/bones AvatarModel.jsx
 // can detect." Built through BASE_URL (same pattern as TalkingHead.jsx and
-// SymptomBodyMapPanel.jsx) rather than a hardcoded leading slash — this app
-// is served from /cvs/ (see vite.config's own base), so a literal
-// "/models/..." path 404s in every real deployment even though the file is
-// sitting right there in public/.
+// SymptomBodyMapPanel.jsx) so the asset path remains compatible with the
+// deployment base configured by Vite.
 const LOCAL_3D_AVATAR_MODEL_URL = `${import.meta.env.BASE_URL}models/avatar/avatar.glb`;
 const SPEECH_ACTIVITY_DECAY_MS = 220;
 const MAX_STREAMED_SENTENCE_LENGTH = 260;

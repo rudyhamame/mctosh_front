@@ -2,29 +2,24 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./clinicalSchemata.css";
 import "./morphePanels.css";
-import { listMorphe, morpheSchemas, morpheInstances, morpheTraceSchemas, morpheTraceInstances, morpheTextRelations } from "./amctoshsMorpheClient";
+import { listMorphe, morpheSchemas, morpheTraceInstances, morpheTraceSchemas, morpheTextRelations } from "./amctoshsMorpheClient";
 import { buildMorpheIndex } from "./amctoshsMorpheGraph";
-import MorpheDomainPanel from "./MorpheDomainPanel";
-import MorpheEntityNav, { MorpheEntityTabs } from "./MorpheEntityNav";
-import MorpheEditorPanel from "./MorpheEditorPanel";
+import MorpheEntityNav, { MORPHE_MODE_GROUPS } from "./MorpheEntityNav";
 import MorpheInfoTab from "./MorpheInfoTab";
+import MorpheObjectsAside from "./MorpheObjectsAside";
 import MorpheTraceTable from "./MorpheTraceTable";
+import Morphe3DTraceCreator from "./Morphe3DTraceCreator";
+import { MORPHE_OBJECT_MODES } from "./amctoshsMorpheConstants";
 
 // AMCTOSHS Morphe — the structured DESTINATION where accepted AMCTOSHS
-// Sub-Entity Schemata/Instances, Trace Schemata/Instances, and Relations
-// are browsed and edited, organized by AMCTOSHS Domain. This page is
+// Objects, 3D traces/instances, and 4D relations/traces/schemata are
+// browsed and edited through the grouped AMCTOSHS Morphe modes. This page is
 // browse/edit ONLY — it never triggers AI extraction itself. The
 // extraction action ("Extract AMCTOSHS Relations") lives on the AMCTOSHS
 // Segmentation page instead (see ../Segmentations/SegmentationsPage.jsx);
 // accepted results saved from there simply appear here. AMCTOSHS
 // Reasoning (a separate page/tool) is downstream of what's saved here — it
 // is never triggered from this page either.
-
-const ENTITY_MODEL_CLIENT = {
-  schemas: morpheSchemas, instances: morpheInstances,
-  traceSchemas: morpheTraceSchemas, traceInstances: morpheTraceInstances,
-  textRelations: morpheTextRelations,
-};
 
 export default function ClinicalSchemata() {
   const navigate = useNavigate();
@@ -33,13 +28,14 @@ export default function ClinicalSchemata() {
   const [morpheLoading, setMorpheLoading] = useState(true);
   const [morpheError, setMorpheError] = useState("");
 
-  const [activeDomain, setActiveDomain] = useState("all");
-  const [activeEntityType, setActiveEntityType] = useState("schemas");
-  const [selectedItemType, setSelectedItemType] = useState("schemas");
+  const [activeDimension, setActiveDimension] = useState("3d");
+  const [activeEntityType, setActiveEntityType] = useState("traceSchemas3d");
   const [selectedItemId, setSelectedItemId] = useState(null);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editError, setEditError] = useState("");
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [objectCreating, setObjectCreating] = useState(false);
+  const [objectCreateError, setObjectCreateError] = useState("");
+  const [selectedObjectId, setSelectedObjectId] = useState(null);
+  const [traceCreating, setTraceCreating] = useState(false);
+  const [traceCreateError, setTraceCreateError] = useState("");
   const [activeMorpheView, setActiveMorpheView] = useState("entities");
 
   const refreshMorphe = async () => {
@@ -67,75 +63,130 @@ export default function ClinicalSchemata() {
     return built;
   }, [morpheData]);
 
-  const countsByDomain = useMemo(() => {
-    const map = new Map();
-    for (const [domain, group] of index.byDomain.entries()) {
-      map.set(domain, {
-        schemas: group.schemas.length, instances: group.instances.length,
-        traceSchemas: group.traceSchemas.length, traceInstances: group.traceInstances.length,
-      });
-    }
-    return map;
-  }, [index]);
-
-  const selectedItem = selectedItemId ? index[`${selectedItemType}ById`]?.get(selectedItemId) || null : null;
-
-  const selectDomain = (domain) => {
-    setActiveDomain(domain);
-    setSelectedItemId(null);
-    setDrawerOpen(false);
-  };
-
   const selectEntityType = (type) => {
+    if (["traceSchemas3d", "instances"].includes(type)) setActiveDimension("3d");
+    if (["textRelations", "traceSchemas4d", "schemas"].includes(type)) setActiveDimension("4d");
     setActiveEntityType(type);
-    setSelectedItemType(type === "traces" ? "traceSchemas" : type);
     setSelectedItemId(null);
   };
 
   const selectItem = (type, id) => {
-    setActiveEntityType(type === "traceSchemas" || type === "traceInstances" ? "traces" : type);
-    setSelectedItemType(type);
+    if (type === "traceSchemas") {
+      const traceSchema = index.traceSchemasById?.get(String(id));
+      const dimension = String(traceSchema?.traceDimension || "3D").toUpperCase();
+      setActiveDimension(dimension === "4D" ? "4d" : "3d");
+      setActiveEntityType(dimension === "4D" ? "traceSchemas4d" : "traceSchemas3d");
+    } else if (type === "traceInstances") {
+      setActiveDimension("3d");
+      setActiveEntityType("instances");
+    } else if (type === "textRelations") {
+      setActiveDimension("4d");
+      setActiveEntityType("textRelations");
+    } else if (type === "schemas") {
+      setActiveDimension("4d");
+      setActiveEntityType("schemas");
+    }
     setSelectedItemId(id);
-    setEditError("");
-    setDrawerOpen(false);
   };
 
-  const handleEditSave = async (patch) => {
-    setEditSaving(true);
-    setEditError("");
+  const selectObject = (object) => {
+    setSelectedObjectId(object._id);
+    setSelectedItemId(object._id);
+  };
+
+  const create3DTrace = async ({ biologicalSensor, accessMethod, proxyDevices, traceName }) => {
+    if (!selectedObjectId) {
+      setTraceCreateError("Select an AMCTOSHS object first.");
+      return false;
+    }
+    setTraceCreating(true);
+    setTraceCreateError("");
     try {
-      await ENTITY_MODEL_CLIENT[selectedItemType].update(selectedItemId, patch);
+      const result = await morpheTraceSchemas.create({ sourceSchemaId: selectedObjectId, biologicalSensor, accessMethod, proxyDevices, traceName });
       await refreshMorphe();
+      if (result.traceSchema) selectItem("traceSchemas", result.traceSchema._id);
+      return true;
     } catch (err) {
-      setEditError(err.message || "Failed to save changes.");
+      setTraceCreateError(err.message || "Failed to create the 3D Trace.");
+      return false;
     } finally {
-      setEditSaving(false);
+      setTraceCreating(false);
     }
   };
 
-  const handleEditDelete = async () => {
-    const label = selectedItem?.name || selectedItem?.instanceName || selectedItem?.sourceInstanceName
-      || (selectedItem?.subject ? `${selectedItem.subject} —${selectedItem.predicate}→ ${selectedItem.object}` : null)
-      || "this item";
-    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
+  const createObject = async ({ modeOfAccess, schemaName }) => {
+    setObjectCreating(true);
+    setObjectCreateError("");
     try {
-      await ENTITY_MODEL_CLIENT[selectedItemType].remove(selectedItemId);
-      setSelectedItemId(null);
+      const result = await morpheSchemas.create({ modeOfAccess, schemaName: String(schemaName || "").trim() });
       await refreshMorphe();
+      if (result.schema) selectObject(result.schema);
+      return true;
     } catch (err) {
-      setEditError(err.message || "Failed to delete that item.");
+      setObjectCreateError(err.message || "Failed to create the AMCTOSHS object.");
+      return false;
+    } finally {
+      setObjectCreating(false);
     }
+  };
+
+  const editObject = async (object, patch) => {
+    try {
+      const updated = await morpheSchemas.update(object._id, patch);
+      await refreshMorphe();
+      if (selectedObjectId === object._id) selectObject(updated);
+      return true;
+    } catch (err) {
+      setObjectCreateError(err.message || "Failed to edit the AMCTOSHS object.");
+      return false;
+    }
+  };
+
+  const deleteObject = async (object) => {
+    try {
+      await morpheSchemas.remove(object._id);
+      if (selectedObjectId === object._id) {
+        setSelectedObjectId(null);
+        setSelectedItemId(null);
+      }
+      await refreshMorphe();
+      return true;
+    } catch (err) {
+      setObjectCreateError(err.message || "Failed to delete the AMCTOSHS object.");
+      return false;
+    }
+  };
+
+  const createTraceValue = async ({ traceSchemaId, value, unit }) => {
+    await morpheTraceInstances.create({ traceSchemaId, value, unit });
+    await refreshMorphe();
+    selectItem("traceSchemas", traceSchemaId);
   };
 
   const totalSaved = morpheData.schemas.length + morpheData.instances.length + morpheData.traceSchemas.length
     + morpheData.traceInstances.length + morpheData.textRelations.length;
 
-  const domainPanelEl = <MorpheDomainPanel activeDomain={activeDomain} onSelectDomain={selectDomain} countsByDomain={countsByDomain} />;
-  const entityCounts = {
-    schemas: activeDomain === "all" ? morpheData.schemas.length : (countsByDomain.get(activeDomain)?.schemas || 0),
-    instances: activeDomain === "all" ? morpheData.instances.length : (countsByDomain.get(activeDomain)?.instances || 0),
-    traces: activeDomain === "all" ? morpheData.traceSchemas.length + morpheData.traceInstances.length : ((countsByDomain.get(activeDomain)?.traceSchemas || 0) + (countsByDomain.get(activeDomain)?.traceInstances || 0)),
-    textRelations: morpheData.textRelations.length,
+  const entityCounts = useMemo(() => {
+    const counts = {
+      schemas: morpheData.schemas.length,
+      instances: morpheData.traceInstances.filter((trace) => {
+        const parent = index.traceSchemasById?.get(String(trace.traceSchemaId));
+        return String(parent?.traceDimension || "3D").toUpperCase() === "3D";
+      }).length,
+      traceSchemas4d: morpheData.traceSchemas.filter((trace) => String(trace.traceDimension || "3D").toUpperCase() === "4D").length,
+      traceSchemas3d: morpheData.traceSchemas.filter((trace) => String(trace.traceDimension || "3D").toUpperCase() === "3D").length,
+      textRelations: morpheData.textRelations.length,
+    };
+    for (const { domain } of MORPHE_OBJECT_MODES) {
+      counts[`object:${domain}`] = morpheData.schemas.filter((schema) => schema.domain === domain).length;
+    }
+    return counts;
+  }, [index, morpheData]);
+
+  const activeDimensionGroup = MORPHE_MODE_GROUPS.find((group) => group.key === activeDimension);
+  const selectDimension = (dimension) => {
+    setActiveDimension(dimension);
+    selectEntityType(dimension === "3d" ? "traceSchemas3d" : "textRelations");
   };
 
   return (
@@ -143,9 +194,6 @@ export default function ClinicalSchemata() {
       <div id="cs_header">
         <button id="cs_back" onClick={() => navigate("/home")} title="Back">
           <i className="fi fi-rr-arrow-left" />
-        </button>
-        <button id="cs_drawer_toggle" onClick={() => setDrawerOpen((v) => !v)} title="Browse AMCTOSHS Domains">
-          <i className="fi fi-rr-menu-burger" />
         </button>
         <div id="cs_header_titles">
           <span id="cs_title">
@@ -163,7 +211,7 @@ export default function ClinicalSchemata() {
               <i className="bx bx-info-circle" aria-hidden="true" />
             </button>
           </span>
-          <span id="cs_subtitle">Sub-Entity Schema / Instance / Trace Schema / Trace Instance / Relation</span>
+          <span id="cs_subtitle">Objects / 3D Traces and Instances / 4D Relations, Traces and Schemata</span>
         </div>
         <div id="cs_header_meta">
           <span className="cs_count_badge">{totalSaved} saved item{totalSaved !== 1 ? "s" : ""}</span>
@@ -181,56 +229,46 @@ export default function ClinicalSchemata() {
         {activeMorpheView === "information" ? (
           <MorpheInfoTab onBackToEntities={() => setActiveMorpheView("entities")} />
         ) : (
-          <>
-        <div id="mrp_tab_header">
-          <div className="mrp_tab_row mrp_domain_tab_row">
-            <div className="mrp_tab_row_title">AMCTOSHS Domain</div>
-            {domainPanelEl}
-          </div>
-          <div className="mrp_tab_row mrp_entity_tab_row">
-            <div className="mrp_tab_row_title">AMCTOSHS Morphe Mode</div>
-            <MorpheEntityTabs activeEntityType={activeEntityType} onSelectEntityType={selectEntityType} counts={entityCounts} />
-          </div>
-        </div>
-
-        {drawerOpen && (
-          <div id="cs_drawer_backdrop" onClick={() => setDrawerOpen(false)}>
-            <div id="cs_drawer_sheet" onClick={(e) => e.stopPropagation()}>{domainPanelEl}</div>
-          </div>
-        )}
-
         <div id="mrp_content">
-        <aside id="mrp_items_aside">
-          {morpheLoading ? (
-            <div id="cs_no_selection"><i className="bx bx-loader-circle mrp_icon_spin" /><p>Loading AMCTOSHS Morphe…</p></div>
-          ) : (
-            <MorpheEntityNav
-              index={index}
-              activeDomain={activeDomain}
-              activeEntityType={activeEntityType}
-              onSelectEntityType={selectEntityType}
-              selectedItemId={selectedItemId}
-              onSelectItem={selectItem}
-              textRelations={morpheData.textRelations}
-              showTabs={false}
-            />
-          )}
-        </aside>
-
-        <main id="cs_right">
-          {!morpheLoading && <MorpheTraceTable index={index} activeDomain={activeDomain} onSelectItem={selectItem} selectedItemId={selectedItemId} />}
-          <MorpheEditorPanel
-            itemType={selectedItemType}
-            item={selectedItem}
-            index={index}
-            saving={editSaving}
-            saveError={editError}
-            onSave={handleEditSave}
-            onDelete={handleEditDelete}
-          />
+        <MorpheObjectsAside
+          schemas={morpheData.schemas}
+          selectedItemId={selectedObjectId}
+          creating={objectCreating}
+          error={objectCreateError}
+          onCreate={createObject}
+          onSelect={selectObject}
+          onEdit={editObject}
+          onDelete={deleteObject}
+        />
+        <main id="mrp_dimension_main">
+          <div id="mrp_dimension_tabs" role="tablist" aria-label="AMCTOSHS object dimension">
+            <button type="button" role="tab" aria-selected={activeDimension === "3d"} className={`mrp_dimension_tab${activeDimension === "3d" ? " mrp_dimension_tab--active" : ""}`} onClick={() => selectDimension("3d")}>AMCTOSHS OBJECT in 3D</button>
+            <button type="button" role="tab" aria-selected={activeDimension === "4d"} className={`mrp_dimension_tab${activeDimension === "4d" ? " mrp_dimension_tab--active" : ""}`} onClick={() => selectDimension("4d")}>AMCTOSHS OBJECT in 4D</button>
+          </div>
+          <div id="mrp_dimension_subtabs" role="tablist" aria-label={`${activeDimension.toUpperCase()} modes`}>
+            {activeDimensionGroup?.children.map(([key, label, description]) => (
+              <button key={key} type="button" role="tab" title={description || label} aria-selected={activeEntityType === key} className={`mrp_dimension_subtab${activeEntityType === key ? " mrp_dimension_subtab--active" : ""}`} onClick={() => selectEntityType(key)}>
+                {label}<span className="mrp_entity_tab_count">{entityCounts[key] || 0}</span>
+              </button>
+            ))}
+          </div>
+          <div id="mrp_dimension_workspace">
+            <aside id="mrp_items_aside">
+              {activeDimension === "3d" && (
+                <Morphe3DTraceCreator traceSchemas={morpheData.traceSchemas} selectedObject={selectedObjectId ? index.schemasById?.get(selectedObjectId) : null} creating={traceCreating} error={traceCreateError} onCreate={create3DTrace} />
+              )}
+              {morpheLoading ? (
+                <div id="cs_no_selection"><i className="bx bx-loader-circle mrp_icon_spin" /><p>Loading AMCTOSHS Morphe…</p></div>
+              ) : (
+                <MorpheEntityNav index={index} activeEntityType={activeEntityType} onSelectEntityType={selectEntityType} selectedItemId={selectedItemId} onSelectItem={selectItem} textRelations={morpheData.textRelations} showTabs={false} />
+              )}
+            </aside>
+            <section id="cs_right">
+              {!morpheLoading && <MorpheTraceTable index={index} selectedItemId={selectedItemId} onCreateValue={createTraceValue} />}
+            </section>
+          </div>
         </main>
         </div>
-          </>
         )}
       </div>
     </div>
