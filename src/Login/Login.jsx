@@ -1,112 +1,67 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./login.css";
 import { apiUrl } from "../config/api";
 import { writeStoredSession } from "../utils/sessionCleanup";
-import OntologyScrollScene from "./ontology/OntologyScrollScene";
+import { writeStoredPatientSession } from "../utils/patientSessionCleanup";
 import VirtualKeyboard from "../Shared/VirtualKeyboard";
-import {
-  ONTOLOGY_DEBUG_ENABLED,
-  ONTOLOGY_LEVELS,
-  ONTOLOGY_TRANSITION_COUNT,
-} from "./ontology/ontologyLevels";
-import {
-  ONTOLOGY_SUBJECT_SWAP_PROGRESS,
-  clamp,
-  getOntologyVisualState,
-} from "./ontology/ontologyTimeline";
+import RandomFissureSeparator from "./RandomFissureSeparator";
+import RabbitLogoBlink from "../Shared/RabbitLogoBlink";
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, onTransitionComplete, patientMode = false }) {
   const navigate = useNavigate();
-  const journeyRef = useRef(null);
-  const ontologySceneRef = useRef(null);
   const videoRef = useRef(null);
-  const [activeStage, setActiveStage] = useState(0);
-  const [loginOpen, setLoginOpen] = useState(false);
+  const loginAudioRef = useRef(null);
+  const pendingAuthRef = useRef(null);
   const [videoPaused, setVideoPaused] = useState(true);
   const [videoVisible, setVideoVisible] = useState(false);
   const [mode, setMode] = useState("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [transitionActive, setTransitionActive] = useState(false);
+  const [musicPlaying, setMusicPlaying] = useState(false);
 
   useEffect(() => {
-    let frameRequest = 0;
-    let lastStage = -1;
-
-    const updateJourney = () => {
-      const journey = journeyRef.current;
-      if (!journey) return;
-
-      const viewportHeight = Math.max(1, window.innerHeight);
-      journey.style.setProperty("--ontology-viewport-height", `${viewportHeight}px`);
-      const rect = journey.getBoundingClientRect();
-      const scrollDistance = clamp(
-        -rect.top,
-        0,
-        viewportHeight * ONTOLOGY_TRANSITION_COUNT,
-      );
-      const viewportProgress = scrollDistance / viewportHeight;
-      const visualState = getOntologyVisualState(viewportProgress);
-      const nextActiveStage = visualState.localProgress >= ONTOLOGY_SUBJECT_SWAP_PROGRESS
-        ? visualState.toIndex
-        : visualState.fromIndex;
-
-      journey.style.setProperty(
-        "--journey-progress",
-        String(viewportProgress / ONTOLOGY_TRANSITION_COUNT),
-      );
-      ontologySceneRef.current?.setVisualState(visualState);
-      if (nextActiveStage !== lastStage) {
-        lastStage = nextActiveStage;
-        setActiveStage(nextActiveStage);
-      }
-
-    };
-
-    const queuePaint = () => {
-      if (frameRequest) return;
-      frameRequest = window.requestAnimationFrame(() => {
-        frameRequest = 0;
-        updateJourney();
-      });
-    };
-
-    updateJourney();
-    const scrollContainer = journeyRef.current?.closest("#app_route_view");
-    const scrollTarget = scrollContainer || window;
-    scrollTarget.addEventListener("scroll", queuePaint, { passive: true });
-    window.addEventListener("resize", queuePaint);
-    return () => {
-      scrollTarget.removeEventListener("scroll", queuePaint);
-      window.removeEventListener("resize", queuePaint);
-      window.cancelAnimationFrame(frameRequest);
-    };
+    const previousTitle = document.title;
+    document.title = "Rabbit Hole";
+    return () => { document.title = previousTitle; };
   }, []);
 
   useEffect(() => {
-    if (!loginOpen) return undefined;
-    const previousBodyOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    const closeOnEscape = (event) => {
-      if (event.key === "Escape") setLoginOpen(false);
-    };
-    window.addEventListener("keydown", closeOnEscape);
+    const audio = loginAudioRef.current;
+    if (!audio) return undefined;
+
+    audio.volume = 0.32;
+    const handlePlay = () => setMusicPlaying(true);
+    const handlePause = () => setMusicPlaying(false);
+
+    audio.addEventListener("play", handlePlay);
+    audio.addEventListener("pause", handlePause);
+
     return () => {
-      document.body.style.overflow = previousBodyOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
+      audio.removeEventListener("play", handlePlay);
+      audio.removeEventListener("pause", handlePause);
+      audio.pause();
     };
-  }, [loginOpen]);
+  }, []);
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+    if (loading || transitionActive) return;
     setError("");
     setLoading(true);
-    const endpoint = mode === "signup" ? "/api/user/signup" : "/api/user/login";
-    const body = mode === "signup" ? { username, password, name } : { username, password };
+    const endpoint = patientMode
+      ? "/api/patient-auth/login"
+      : mode === "signup" ? "/api/user/signup" : "/api/user/login";
+    const body = patientMode
+      ? { email: username, password }
+      : mode === "signup" ? { username, password, name } : { username, password };
 
+    let authenticated = false;
     try {
       const response = await fetch(apiUrl(endpoint), {
         method: "POST",
@@ -118,16 +73,46 @@ export default function Login({ onLogin }) {
         setError(data?.error?.message || "Something went wrong.");
         return;
       }
-      writeStoredSession(data);
+      if (patientMode) {
+        writeStoredPatientSession(data);
+      } else {
+        writeStoredSession(data);
+      }
+      authenticated = true;
+      // Authentication is complete now. The tunnel is only the visual
+      // post-auth transition and must not delay the authenticated state.
       onLogin(data);
+      setTransitionActive(true);
     } catch {
       setError("Network error. Please try again.");
     } finally {
-      setLoading(false);
+      if (!authenticated) setLoading(false);
     }
   };
 
+  const fillLoginAndSubmit = () => {
+    if (patientMode || mode !== "login" || loading || transitionActive) return;
+    setUsername("rudyhamame");
+    setPassword("roro1995");
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        document.getElementById("login_form")?.requestSubmit();
+      });
+    });
+  };
+
+  const handleTransitionComplete = useCallback(() => {
+    pendingAuthRef.current = null;
+    onTransitionComplete?.();
+    if (patientMode) navigate("/patient/call");
+  }, [navigate, onTransitionComplete, patientMode]);
+
   const toggleMode = () => {
+    if (transitionActive) return;
+    if (patientMode) {
+      navigate("/patient/signup");
+      return;
+    }
     setMode((current) => (current === "login" ? "signup" : "login"));
     setError("");
   };
@@ -152,138 +137,140 @@ export default function Login({ onLogin }) {
     }
   };
 
-  const currentStage = ONTOLOGY_LEVELS[activeStage];
-  const currentStageNumber = String(activeStage).padStart(2, "0");
+  const toggleMusicPlayback = () => {
+    const audio = loginAudioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      audio.play().catch(() => {});
+    } else {
+      audio.pause();
+    }
+  };
 
   return (
-    <div id="login_page" className="loginPage loginJourney" ref={journeyRef}>
-      <div className="patientRealitySticky">
-        <OntologyScrollScene ref={ontologySceneRef} />
-        <div className="patientRealityJourneyShade" aria-hidden="true" />
+    <div
+      id="login_page"
+      className={`loginPage loginJourney${transitionActive ? " is-black-hole-collapsing" : ""}${musicPlaying ? " is-music-playing" : ""}`}
+    >
+      <div className="rabbitHoleSticky">
 
-        <header className="patientRealityJourneyBrand">
-          <span className="patientRealityBrandMark" aria-hidden="true">M</span>
-          <div>
-            <h1>AMCTOSHS</h1>
-            <p>Patient Reality</p>
+        <audio
+          ref={loginAudioRef}
+          className="rhLoginAmbientAudio"
+          src={`${import.meta.env.BASE_URL}audio/login-optimized.mp3`}
+          preload="auto"
+          aria-hidden="true"
+        />
+
+        {!transitionActive && (
+          <>
+          <div className="loginSecondaryActions" data-black-hole-item>
+            <button
+              type="button"
+              className="rhMusicToggle"
+              aria-label={musicPlaying ? "Pause ambient music" : "Play ambient music"}
+              aria-pressed={musicPlaying}
+              onClick={toggleMusicPlayback}
+            >
+              <i className={musicPlaying ? "bx bx-pause" : "bx bx-play"} aria-hidden="true" />
+              <span>{musicPlaying ? "PAUSE MUSIC" : "PLAY MUSIC"}</span>
+            </button>
+            <button id="login_video_toggle" type="button" disabled={transitionActive} onClick={toggleVideo}>{videoVisible ? "CLOSE INTRO ×" : "VIEW INTRO →"}</button>
+            <button type="button" disabled={transitionActive} onClick={() => navigate("/about/meta-patient-noumena")}>ABOUT →</button>
+            <button type="button" disabled={transitionActive} onClick={() => navigate("/portfolio")}>PORTFOLIO →</button>
           </div>
-        </header>
-
-        <button type="button" className="patientRealitySignIn" onClick={() => setLoginOpen(true)}>
-          Sign in
-        </button>
-
-        <div className="stageIdentity">
-          <div className="stageIdentityLabel" key={currentStage.id} aria-live="polite">
-            <span className="stageNumber">{currentStageNumber}</span>
-            <h2>{currentStage.label}</h2>
+          <section className="rhEntryComposition is-active" aria-label="Rabbit Hole access interface">
+          <div className="rhEditorialField" aria-hidden="true">
+            <h1 data-black-hole-item>
+              <span>RABBIT</span>
+              <span>
+                H<span className="rhHoleO"><RabbitLogoBlink aria-hidden="true" musicPlaying={musicPlaying} musicAudioRef={loginAudioRef} /></span>LE
+              </span>
+            </h1>
+            <p data-black-hole-item>
+              <span>“Down, down, down. Would the fall never come to an end!”</span>
+              <cite>— Lewis Carroll, <em>Alice’s Adventures in Wonderland</em></cite>
+            </p>
+            <RandomFissureSeparator audioRef={loginAudioRef} isPlaying={musicPlaying} />
           </div>
-        </div>
 
-        <div className="patientRealityProgress" aria-hidden="true">
-          <span style={{ "--stage-progress": activeStage / ONTOLOGY_TRANSITION_COUNT }} />
-          <small>{currentStageNumber} / 02</small>
-        </div>
-
-        {loginOpen && (
-          <div className="loginOverlay" role="presentation" onPointerDown={(event) => {
-            if (event.target === event.currentTarget) setLoginOpen(false);
-          }}>
-            <main id="login_panel" className="loginArea" aria-label="AMCTOSHS sign in">
-              <div className="loginCard">
-                <button type="button" className="loginCardClose" aria-label="Close sign in" onClick={() => setLoginOpen(false)}>
-                  <i className="fi fi-rr-cross-small" />
-                </button>
-
-                <div id="login_role_tabs" role="tablist" aria-label="Log in as">
-                  <button type="button" role="tab" aria-selected="true" className="login_role_tab login_role_tab--active">Clinician</button>
-                  <button type="button" role="tab" aria-selected="false" className="login_role_tab" onClick={() => navigate("/patient/login")}>Patient</button>
+          <main id="login_panel" className="loginArea" aria-label="Rabbit Hole sign in">
+            <div className="loginCard">
+              <div className="loginAccessHeader">
+                <div className="loginAccessHeading" data-black-hole-item>
+                  <strong>{mode === "login" ? "THE GATE" : "NEW INSTANCE"}</strong>
                 </div>
 
-                <button id="login_video_toggle" type="button" onClick={toggleVideo}>
-                  <i className={`fi ${videoVisible ? "fi-rr-cross-small" : "fi-rr-play-alt"}`} />
-                  {videoVisible ? "Hide intro" : "Watch intro"}
-                </button>
+                <div id="login_role_tabs" data-black-hole-item role="tablist" aria-label="Log in as">
+                  <button type="button" role="tab" disabled={transitionActive} aria-selected={!patientMode} className={`login_role_tab${patientMode ? "" : " login_role_tab--active"}`} onClick={() => patientMode && navigate("/login")}>Clinician</button>
+                  <button type="button" role="tab" disabled={transitionActive} aria-selected={patientMode} className={`login_role_tab${patientMode ? " login_role_tab--active" : ""}`} onClick={() => !patientMode && navigate("/patient/login")}>Patient →</button>
+                </div>
+              </div>
 
-                {videoVisible && (
-                  <div id="login_video_container">
-                    <video
-                      id="login_intro_video"
-                      ref={videoRef}
-                      src="https://res.cloudinary.com/dtoxkii3q/video/upload/v1782581889/sample1/user-images/6a237f080175aacbdb3962ff/copy_dbc85ec1-1520-4cba-af16-b27eb6de8979.mp4"
-                      loop
-                      playsInline
-                    />
-                    <button id="login_video_btn" type="button" aria-label={videoPaused ? "Play" : "Pause"} onClick={toggleVideoPlayback}>
-                      {videoPaused ? (
-                        <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>
-                      ) : (
-                        <svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="3" width="4" height="18" /><rect x="15" y="3" width="4" height="18" /></svg>
-                      )}
-                    </button>
+              <form id="login_form" onSubmit={handleSubmit}>
+
+                {mode === "signup" && (
+                  <div className="login_field" data-black-hole-item>
+                    <label className="login_field_label" htmlFor="lf_name"><span>00</span> INSTANCE / DISPLAY NAME</label>
+                  <input id="lf_name" disabled={transitionActive} type="text" placeholder="Your name" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" />
                   </div>
                 )}
 
-                <form id="login_form" onSubmit={handleSubmit}>
-                  <div id="login_form_head"><div id="login_form_bar" /><span id="login_form_title">{mode === "login" ? "Access system" : "Create account"}</span></div>
+                <div className="login_field" data-black-hole-item>
+                  <label className="login_field_label" htmlFor="lf_user"><span>01</span> {patientMode ? "PATIENT / EMAIL" : "IDENTITY / USERNAME"}</label>
+                  <input id="lf_user" disabled={transitionActive} type={patientMode ? "email" : "text"} placeholder={patientMode ? "Enter email" : "Enter identity"} value={username} onChange={(event) => setUsername(event.target.value)} autoComplete={patientMode ? "email" : "username"} autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+                </div>
 
-                  {mode === "login" && (
-                    <div id="login_demo_note"><span>To try my app you can use the credentials:</span><strong>username: test</strong><strong>password: test123</strong></div>
-                  )}
-
-                  {mode === "signup" && (
-                    <div className="login_field">
-                      <label className="login_field_label" htmlFor="lf_name">Display name</label>
-                      <input id="lf_name" type="text" placeholder="Your name" value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" />
-                    </div>
-                  )}
-
-                  <div className="login_field">
-                    <label className="login_field_label" htmlFor="lf_user">Username</label>
-                    <input id="lf_user" type="text" placeholder="Enter username" value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+                <div className="login_field" data-black-hole-item>
+                  <label className="login_field_label" htmlFor="lf_pass"><span>02</span> CREDENTIAL / PASSWORD</label>
+                  <div className="login_password_control">
+                    <input id="lf_pass" disabled={transitionActive} type={passwordVisible ? "text" : "password"} placeholder="Enter credential" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "signup" ? "new-password" : "current-password"} autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
+                    <button
+                      type="button"
+                      className="login_password_toggle"
+                      onClick={() => setPasswordVisible((visible) => !visible)}
+                      disabled={transitionActive}
+                      aria-label={passwordVisible ? "Hide password" : "Show password"}
+                      title={passwordVisible ? "Hide password" : "Show password"}
+                    >
+                      <i className={`fi ${passwordVisible ? "fi-rr-eye-crossed" : "fi-rr-eye"}`} aria-hidden="true" />
+                    </button>
                   </div>
+                  <small>02 → ACTIVE</small>
+                </div>
 
-                  <div className="login_field">
-                    <label className="login_field_label" htmlFor="lf_pass">Password</label>
-                    <input id="lf_pass" type="password" placeholder="Enter password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === "signup" ? "new-password" : "current-password"} autoCapitalize="none" autoCorrect="off" spellCheck={false} required />
-                  </div>
+                {error && <p id="login_error" data-black-hole-item role="alert"><span>ERR/01</span>{error}</p>}
+                <button type="submit" id="login_submit" data-black-hole-item disabled={loading || transitionActive}>{loading ? "AUTHENTICATING…" : mode === "signup" ? "CREATE IDENTITY →" : patientMode ? "ENTER PATIENT SIDE →" : "ENTER CLINICIAN SIDE →"}</button>
+                <button type="button" id="login_toggle" data-black-hole-item disabled={transitionActive} onClick={toggleMode}>{mode === "signup" ? "Existing identity? Enter →" : patientMode ? "New patient? Create an account →" : "No identity? Create one →"}</button>
+              </form>
 
-                  {error && <p id="login_error" role="alert">{error}</p>}
-                  <button type="submit" id="login_submit" disabled={loading}>{loading ? "Authenticating…" : mode === "signup" ? "Create account" : "Enter AMCTOSHS"}</button>
-                  <button type="button" id="login_toggle" onClick={toggleMode}>{mode === "signup" ? "Already have an account? Sign in" : "No account? Sign up"}</button>
-                  <div id="login_links">
-                    <button type="button" className="login_link" onClick={() => navigate("/about")}>About</button>
-                    <span className="login_link_sep">·</span>
-                    <button type="button" className="login_link" onClick={() => navigate("/portfolio")}>Portfolio</button>
-                  </div>
-                </form>
+              {videoVisible && (
+                <div id="login_video_container" data-black-hole-item>
+                  <video id="login_intro_video" ref={videoRef} src="https://res.cloudinary.com/dtoxkii3q/video/upload/v1782581889/sample1/user-images/6a237f080175aacbdb3962ff/copy_dbc85ec1-1520-4cba-af16-b27eb6de8979.mp4" loop playsInline />
+                  <button id="login_video_btn" type="button" aria-label={videoPaused ? "Play" : "Pause"} onClick={toggleVideoPlayback}>{videoPaused ? "PLAY →" : "PAUSE ‖"}</button>
+                </div>
+              )}
+            </div>
+          </main>
 
-                <footer id="login_footer"><span>AMCTOSHS · From representation to reality</span><span>© {new Date().getFullYear()} Rudy Hamame</span></footer>
-              </div>
-            </main>
-            <VirtualKeyboard
-              autoOpenOnFocus
-              showToggle={false}
-              panelClassName="vk_panel--login"
-            />
+        </section>
+
+        <footer id="login_footer" data-black-hole-item>
+          <div className="loginFooterIdentity">
+            <span className="loginFooterStatement">I am not trying to disnify Medicine, I am trying to medicinate Disney!</span>
+            <span>RABBIT HOLE © {new Date().getFullYear()}</span>
           </div>
-        )}
-      </div>
+          <span>RH / SYSTEM / RUDY HAMAME</span>
+        </footer>
 
-      <div className="patientRealityStages" aria-hidden="true">
-        {ONTOLOGY_LEVELS.map((stage, index) => (
-          <section
-            className="patientRealityScrollStage"
-            key={stage.id}
-            data-stage={index}
-          >
-            {ONTOLOGY_DEBUG_ENABLED && (
-              <div className="ontologyDebugMarker">
-                <span>{index * 100}vh {stage.label}</span>
-              </div>
-            )}
-          </section>
-        ))}
+          <VirtualKeyboard
+            autoOpenOnFocus
+            showToggle={false}
+            panelClassName="vk_panel--login"
+            onLoginAutofill={!patientMode && mode === "login" ? fillLoginAndSubmit : null}
+          />
+          </>
+        )}
       </div>
     </div>
   );

@@ -54,6 +54,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
   let onSpokenTextCb = null;
   let onExpressionCb = null;
   let onPlaybackStartCb = null;
+  let onDurationCb = null;
   // Real network-backed providers (OpenVoiceClone) can take several seconds
   // to synthesize — stop() must be able to cancel a request still in flight,
   // not just audio that already started playing, or an obsolete reply can
@@ -164,6 +165,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
       }
       currentBuffer = decoded;
       pausedOffset = 0;
+      onDurationCb?.(Math.max(400, Number(result.durationMs) || decoded.duration * 1000));
 
       analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
@@ -219,6 +221,7 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     utt.lang = result._language;
     if (result._voice) utt.voice = result._voice;
     currentUtterance = utt;
+    onDurationCb?.(Math.max(400, Number(result.durationMs) || 0));
 
     let pulseUntil = 0;
     emitSpokenText("");
@@ -269,12 +272,13 @@ export const createLocalAvatarSpeechService = (ttsProvider) => {
     // provider (OpenVoiceClone) can take 10-30s+ to return, especially
     // under CPU/memory pressure, and without this the avatar just sits
     // idle with no visible sign anything is happening.
-    async speak(text, { language, voice, voiceProfileId, kokoroVoice, supertonicVoice, onAmplitude, onViseme, onSpokenText, onExpressionChange, onSynthesisStart, onPlaybackStart } = {}) {
+    async speak(text, { language, voice, voiceProfileId, kokoroVoice, supertonicVoice, onAmplitude, onViseme, onSpokenText, onExpressionChange, onSynthesisStart, onPlaybackStart, onDuration } = {}) {
       onAmplitudeCb = onAmplitude || null;
       onVisemeCb = onViseme || null;
       onSpokenTextCb = onSpokenText || null;
       onExpressionCb = onExpressionChange || null;
       onPlaybackStartCb = onPlaybackStart || null;
+      onDurationCb = onDuration || null;
       currentAbortController = new AbortController();
       const { signal } = currentAbortController;
       onSynthesisStart?.();

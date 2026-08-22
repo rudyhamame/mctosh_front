@@ -239,31 +239,40 @@ const scrollPageNodeIntoPanel = (panel, pageNode) => {
   return true;
 };
 
-const PdfOutlineItems = ({ items = [], onSelect, level = 0 }) => (
-  <div className="pdf_outline_items" style={{ "--outline-level": level }}>
-    {items.map((item, index) => (
-      <div className="pdf_outline_item" key={`${item.title || "item"}-${index}`}>
-        <button type="button" onClick={() => onSelect(item)} title={item.title || "Go to section"}>
-          <i className="bx bx-chevron-right" aria-hidden="true" />
-          <span>{item.title || "Untitled section"}</span>
-        </button>
-        {item.items?.length ? <PdfOutlineItems items={item.items} onSelect={onSelect} level={level + 1} /> : null}
-      </div>
-    ))}
-  </div>
-);
-
-const PdfMiniPage = ({ pdfDoc, pageNumber, active, rangeEnd, outlineDraft, onChangeOutlineTitle, onSubmitOutline, onCancelOutline, bookmarked, onSelect, onSelectRangePage, onToggleBookmark, onAddOutline, onInsertBlankPage, registerNode, stacked = false }) => {
+const PdfMiniPage = ({ pdfDoc, pageNumber, active, rangeEnd, outlineDraft, onChangeOutlineTitle, onSubmitOutline, onCancelOutline, bookmarked, bookmarkLabel = "", onSelect, onSelectRangePage, onToggleBookmark, onUpdateBookmark, onInsertBlankPage, registerNode, stacked = false }) => {
   const rootRef = useRef(null);
   const canvasRef = useRef(null);
   const [visible, setVisible] = useState(active);
   const [failed, setFailed] = useState(false);
+  const [bookmarkEditorOpen, setBookmarkEditorOpen] = useState(false);
+  const [bookmarkNote, setBookmarkNote] = useState(bookmarkLabel);
+
+  const openBookmarkEditor = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (bookmarked) {
+      onToggleBookmark(pageNumber);
+      setBookmarkEditorOpen(false);
+      return;
+    }
+    onToggleBookmark(pageNumber);
+    setBookmarkNote(bookmarkLabel);
+    setBookmarkEditorOpen(true);
+  };
+
+  const submitBookmarkNote = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const note = bookmarkNote.trim();
+    if (!note || onUpdateBookmark?.(pageNumber, note) === false) return;
+    setBookmarkEditorOpen(false);
+  };
 
   useEffect(() => {
     const node = rootRef.current;
     if (!node) return undefined;
     registerNode(pageNumber, node);
-    const panel = node.closest("#pdf_outline_panel");
+    const panel = node.closest("#pdf_navigator_panel, #pdf_outline_panel");
     if (!window.IntersectionObserver || !panel) {
       setVisible(true);
       return () => registerNode(pageNumber, null);
@@ -335,8 +344,7 @@ const PdfMiniPage = ({ pdfDoc, pageNumber, active, rangeEnd, outlineDraft, onCha
             ariaLabel="Outline section name"
             required
           />
-          <small>Click the last page thumbnail, then save.</small>
-          <button type="submit" className="pdf_outline_inline_editor_save"><i className="bx bx-check" /> Save section · p. {outlineDraft.endPage}</button>
+          <small>Click the last page thumbnail to set the section end.</small>
         </form>
       )}
       <button type="button" className="pdf_mini_page_preview" onClick={() => onSelectRangePage ? onSelectRangePage(pageNumber) : onSelect(pageNumber)} title={stacked ? "Open section" : onSelectRangePage ? `Set page ${pageNumber} as the last page` : `Go to page ${pageNumber}`}>
@@ -344,25 +352,33 @@ const PdfMiniPage = ({ pdfDoc, pageNumber, active, rangeEnd, outlineDraft, onCha
         {failed && <i className="bx bx-error-circle pdf_mini_page_error" aria-hidden="true" />}
         <span>{pageNumber}</span>
       </button>
+      {!stacked && bookmarkEditorOpen && (
+        <form className="pdf_mini_bookmark_editor" onSubmit={submitBookmarkNote} onClick={(event) => event.stopPropagation()}>
+          <input
+            type="text"
+            value={bookmarkNote}
+            onChange={(event) => setBookmarkNote(event.target.value)}
+            placeholder="Bookmark note"
+            aria-label={`Bookmark note for page ${pageNumber}`}
+            autoFocus
+          />
+          <button type="submit" disabled={!bookmarkNote.trim()} title="Save bookmark note" aria-label={`Save bookmark note for page ${pageNumber}`}><i className="bx bx-check" /></button>
+          <button type="button" onClick={() => setBookmarkEditorOpen(false)} title="Cancel bookmark note" aria-label={`Cancel bookmark note for page ${pageNumber}`}><i className="bx bx-x" /></button>
+        </form>
+      )}
+      {!stacked && bookmarked && bookmarkLabel && !bookmarkEditorOpen && (
+        <small className="pdf_mini_bookmark_note" title={bookmarkLabel}>{bookmarkLabel}</small>
+      )}
+      {!stacked && outlineDraft && outlineDraft.endPage === pageNumber && (
+        <button
+          type="button"
+          className="pdf_outline_inline_editor_save pdf_outline_inline_editor_save--at-end"
+          onClick={onSubmitOutline}
+        >
+          <i className="bx bx-check" /> Save section · p. {outlineDraft.endPage}
+        </button>
+      )}
       {!stacked && <div className="pdf_mini_page_actions">
-        <button
-          type="button"
-          className={bookmarked ? "pdf_mini_page_action pdf_mini_page_action--active" : "pdf_mini_page_action"}
-          onClick={() => onToggleBookmark(pageNumber)}
-          title={bookmarked ? "Remove bookmark" : "Bookmark page"}
-          aria-label={bookmarked ? `Remove bookmark from page ${pageNumber}` : `Bookmark page ${pageNumber}`}
-        ><i className="bx bx-bookmark" /></button>
-        <button
-          type="button"
-          className="pdf_mini_page_action"
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onAddOutline(pageNumber);
-          }}
-          title="Add outline section"
-          aria-label={`Add outline section starting at page ${pageNumber}`}
-        ><i className="bx bx-list-plus" /></button>
         <button
           type="button"
           className="pdf_mini_page_action"
@@ -374,6 +390,13 @@ const PdfMiniPage = ({ pdfDoc, pageNumber, active, rangeEnd, outlineDraft, onCha
           title={`Insert blank page after page ${pageNumber}`}
           aria-label={`Insert blank page after page ${pageNumber}`}
         ><i className="bx bx-file-plus" /></button>
+        <button
+          type="button"
+          className={bookmarked ? "pdf_mini_page_action pdf_mini_page_action--active" : "pdf_mini_page_action"}
+          onClick={openBookmarkEditor}
+          title={bookmarked ? "Remove bookmark" : "Bookmark page and add note"}
+          aria-label={bookmarked ? `Remove bookmark from page ${pageNumber}` : `Bookmark page ${pageNumber} and add note`}
+        ><i className="bx bx-bookmark" /></button>
       </div>}
     </div>
   );
@@ -411,7 +434,6 @@ const PDFDocumentNavigator = ({
   bookmarks = [],
   bookmarkLabels = {},
   customOutlines = [],
-  pdfOutline = [],
   onClose,
   onSelectPage,
   onToggleBookmark,
@@ -420,7 +442,9 @@ const PDFDocumentNavigator = ({
   onUpdateOutline,
   onInsertBlankPage,
   onDeleteOutline,
-  onSelectPdfOutline,
+  onChangeView,
+  onOpenNavigator,
+  activeView = "navigator",
 }) => {
   const panelRef = useRef(null);
   const pageNodesRef = useRef(new Map());
@@ -428,8 +452,7 @@ const PDFDocumentNavigator = ({
   const [activeSectionId, setActiveSectionId] = useState(null);
   const [unsectionedOpen, setUnsectionedOpen] = useState(false);
   const [editingSection, setEditingSection] = useState(null);
-  const [editingBookmark, setEditingBookmark] = useState(null);
-  const [activeTab, setActiveTab] = useState("navigator");
+  const activeTab = activeView === "navigator" ? "navigator" : "outlines";
   const currentPageRef = useRef(currentPage);
   currentPageRef.current = currentPage;
   const { sections, unsectioned } = useMemo(
@@ -472,6 +495,7 @@ const PDFDocumentNavigator = ({
       active={page === currentPage}
       rangeEnd={outlineDraft?.endPage === page}
       bookmarked={bookmarks.includes(page)}
+      bookmarkLabel={bookmarkLabels[page] || ""}
       onSelect={options.onSelect || onSelectPage}
       onSelectRangePage={!options.stacked && outlineDraft ? chooseOutlineEndPage : null}
       outlineDraft={options.stacked ? null : outlineDraft}
@@ -479,7 +503,7 @@ const PDFDocumentNavigator = ({
       onSubmitOutline={submitOutline}
       onCancelOutline={() => setOutlineDraft(null)}
       onToggleBookmark={onToggleBookmark}
-      onAddOutline={openOutlineForm}
+      onUpdateBookmark={onUpdateBookmark}
       onInsertBlankPage={onInsertBlankPage}
       registerNode={registerNode}
       stacked={Boolean(options.stacked)}
@@ -490,32 +514,22 @@ const PDFDocumentNavigator = ({
   const openOutlineForm = (page) => {
     const startPage = clampPage(page, pageCount);
     setOutlineDraft({
-      title: `Section from page ${startPage}`,
+      type: "section",
+      title: "",
       startPage,
       endPage: startPage,
     });
   };
-  const addOutlineFromFirstUnsectionedPage = () => {
-    const startPage = unsectioned[0];
-    if (!startPage) return;
+  const beginOutlineFromCurrentPage = () => {
     setActiveSectionId(null);
     setUnsectionedOpen(true);
-    setActiveTab("navigator");
-    openOutlineForm(startPage);
-
-    let attempts = 0;
-    const revealStartPage = () => {
-      attempts += 1;
-      const pageNode = pageNodesRef.current.get(startPage);
-      if (scrollPageNodeIntoPanel(panelRef.current, pageNode) || attempts >= 4) return;
-      window.requestAnimationFrame(revealStartPage);
-    };
-    window.requestAnimationFrame(revealStartPage);
+    openOutlineForm(currentPage);
   };
   const submitOutline = (event) => {
     event.preventDefault();
     if (!outlineDraft?.title.trim()) return;
     const added = onAddOutline({
+      type: outlineDraft.type,
       title: outlineDraft.title.trim(),
       startPage: outlineDraft.startPage,
       endPage: outlineDraft.endPage,
@@ -530,14 +544,22 @@ const PDFDocumentNavigator = ({
   const selectSection = (sectionId) => {
     setActiveSectionId((current) => current === sectionId ? null : sectionId);
     window.requestAnimationFrame(() => {
-      panelRef.current?.querySelector(".pdf_outline_scroll")?.scrollTo({ top: 0, behavior: "smooth" });
+      panelRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     });
   };
 
   const openSection = (sectionId) => {
+    const section = sections.find((candidate) => candidate.id === sectionId);
+    // Keep the left structure aside mounted. Its outline rows focus the
+    // dedicated right navigator instead of changing this panel's view and
+    // producing a second navigator instance.
+    if (activeTab !== "navigator") {
+      if (section?.startPage) onSelectPage(section.startPage);
+      onOpenNavigator?.();
+      return;
+    }
     setActiveSectionId(sectionId);
-    setActiveTab("navigator");
-    window.requestAnimationFrame(() => panelRef.current?.querySelector(".pdf_outline_scroll")?.scrollTo({ top: 0 }));
+    window.requestAnimationFrame(() => panelRef.current?.scrollTo({ top: 0 }));
   };
 
   const visibleSections = activeSectionId ? sections.filter((section) => section.id === activeSectionId) : sections;
@@ -548,117 +570,62 @@ const PDFDocumentNavigator = ({
     if (onUpdateOutline(editingSection.id, editingSection.title) !== false) setEditingSection(null);
   };
 
-  const submitBookmarkTitle = (event) => {
-    event.preventDefault();
-    if (!editingBookmark?.title.trim()) return;
-    if (onUpdateBookmark(editingBookmark.page, editingBookmark.title) !== false) setEditingBookmark(null);
-  };
-
   return (
     <aside
       ref={panelRef}
-      id="pdf_outline_panel"
-      aria-label="PDF outline and bookmarks"
+      id={activeTab === "navigator" ? "pdf_navigator_panel" : "pdf_outline_panel"}
+      aria-label={activeTab === "navigator" ? "PDF page navigator" : "PDF document structure"}
       onWheel={stopPropagation}
       onTouchStart={stopPropagation}
       onTouchMove={stopPropagation}
       onTouchEnd={stopPropagation}
       onPointerDown={stopPropagation}
     >
-      <div id="pdf_outline_header">
-        <div>
-          <span className="pdf_outline_kicker">Document navigation</span>
-          <strong>Document navigator</strong>
+      {activeTab === "navigator" && (
+        <div aria-label="PDF pages">
+          {Array.from({ length: pageCount }, (_, index) => renderPage(index + 1, "navigator"))}
         </div>
-        <div className="pdf_outline_header_actions">
-          {activeTab === "navigator" && activeSectionId && <button type="button" onClick={() => setActiveSectionId(null)} aria-label="Show all document pages" title="Show all pages"><i className="bx bx-grid-alt" /></button>}
-          <button type="button" onClick={onClose} aria-label="Close outline and bookmarks"><i className="bx bx-x" /></button>
-        </div>
-      </div>
-
-      <div className="pdf_outline_tabs" role="tablist" aria-label="Document navigation views">
-        <button type="button" role="tab" aria-selected={activeTab === "outlines"} className={activeTab === "outlines" ? "is-active" : ""} onClick={() => setActiveTab("outlines")}><i className="bx bx-list-ul" /> Outlines <span>{customOutlines.length + pdfOutline.length}</span></button>
-        <button type="button" role="tab" aria-selected={activeTab === "bookmarks"} className={activeTab === "bookmarks" ? "is-active" : ""} onClick={() => setActiveTab("bookmarks")}><i className="bx bx-bookmark" /> Bookmarks <span>{bookmarks.length}</span></button>
-        <button type="button" role="tab" aria-selected={activeTab === "navigator"} className={activeTab === "navigator" ? "is-active" : ""} onClick={() => setActiveTab("navigator")}><i className="bx bx-grid-alt" /> Navigator</button>
-      </div>
-
-      <div className="pdf_outline_scroll">
-      {activeTab === "navigator" && <div className="pdf_mini_pages" aria-label="PDF pages">
-        <section className={`pdf_outline_document_container${activeSectionId ? " is-section-open" : ""}`}>
-        {!activeSectionId && (
-          <div className="pdf_outline_document_container_header">
-            <strong>Document pages</strong>
-            <small>{sections.length} {sections.length === 1 ? "section" : "sections"} · {unsectioned.length} unsectioned</small>
-          </div>
-        )}
-        <div className="pdf_outline_document_container_items">
-        {visibleSections.length > 0 && (
-          <section className="pdf_outline_page_group pdf_outline_page_group--sectioned">
-            <div className="pdf_outline_page_group_header pdf_outline_page_group_label">
-              <strong>Segmented document part</strong>
-              <small>{visibleSections.length} {visibleSections.length === 1 ? "section" : "sections"}</small>
-            </div>
-            <div className="pdf_outline_sectioned_pages">
-        {visibleSections.map((section) => (
-          <section className={`pdf_outline_page_group${activeSectionId === section.id ? " is-open" : ""}`} key={`pages-${section.id}`}>
-            <div className="pdf_outline_page_group_header_row">
-              {editingSection?.id === section.id ? (
-                <form className="pdf_outline_page_group_edit_form" onSubmit={submitSectionTitle}>
-                  <SelectionFreeInput value={editingSection.title} onChange={(event) => setEditingSection((current) => ({ ...current, title: event.target.value }))} ariaLabel={`Edit title for ${section.title}`} autoFocus />
-                  <button type="submit" aria-label="Save section title" title="Save title"><i className="bx bx-check" /></button>
-                  <button type="button" onClick={() => setEditingSection(null)} aria-label="Cancel title editing" title="Cancel"><i className="bx bx-x" /></button>
-                </form>
-              ) : (
-                <>
-                  <button type="button" className={`pdf_outline_page_group_header${activeSectionId === section.id ? " is-active" : ""}`} onClick={() => selectSection(section.id)} title={`Show only ${section.title} pages`}>
-                    <strong>{section.title}</strong>
-                    <span className="pdf_outline_page_group_meta">
-                      <small>pp. {section.startPage}–{section.endPage}</small>
-                      <small>{section.pages.length} {section.pages.length === 1 ? "page" : "pages"}</small>
-                    </span>
-                    <i className="bx bx-chevron-right" aria-hidden="true" />
-                  </button>
-                  <button type="button" className="pdf_outline_page_group_edit" onClick={() => setEditingSection({ id: section.id, title: section.title })} aria-label={`Edit ${section.title}`} title="Edit section title"><i className="bx bx-pencil" /></button>
-                </>
-              )}
-            </div>
-            <div className="pdf_outline_page_group_pages">
-              {activeSectionId === section.id
-                ? section.pages.map((page) => renderPage(page, section.id))
-                : renderPage(section.pages[0], `stack-${section.id}`, { stacked: true, onSelect: () => selectSection(section.id) })}
-            </div>
-          </section>
-        ))}
-            </div>
-          </section>
-        )}
-        {!activeSectionId && unsectioned.length > 0 && (
-          <section className="pdf_outline_page_group pdf_outline_page_group--unsectioned">
-            <button type="button" className="pdf_outline_page_group_header" onClick={() => setUnsectionedOpen((open) => !open)} title={unsectionedOpen ? "Collapse unsegmented document pages" : "Open unsegmented document pages"}>
-              <strong>Unsegmented document part</strong>
-              <span className="pdf_outline_page_group_meta">
-                <small>Stack</small>
-                <small>{unsectioned.length} {unsectioned.length === 1 ? "page" : "pages"}</small>
-              </span>
-              <i className={`bx bx-chevron-right${unsectionedOpen ? " is-open" : ""}`} aria-hidden="true" />
-            </button>
-            <div className="pdf_outline_page_group_pages">
-              {unsectionedOpen
-                ? unsectioned.map((page) => renderPage(page, "unsectioned"))
-                : renderPage(unsectioned[0], "unsectioned-stack", { stacked: true, onSelect: () => setUnsectionedOpen(true) })}
-            </div>
-          </section>
-        )}
-        </div>
-        </section>
-      </div>}
+      )}
 
       {activeTab === "outlines" && <section className="pdf_outline_section">
-        <h3>
-          <i className="bx bx-list-ul" /> Outline
-          <button type="button" className="pdf_outline_add" onClick={addOutlineFromFirstUnsectionedPage} disabled={!unsectioned.length} title={unsectioned.length ? "Add outline section from the first unsectioned page" : "All pages are already sectioned"} aria-label="Add outline section from the first unsectioned page"><i className="bx bx-plus" /></button>
-        </h3>
-        {pdfOutline.length ? <PdfOutlineItems items={pdfOutline} onSelect={onSelectPdfOutline} /> : null}
+        {outlineDraft ? (
+          <form className="pdf_outline_draft_editor" onSubmit={submitOutline}>
+            <h3>
+              <i className="bx bx-list-ul" /> New Entity
+              <span className="pdf_outline_draft_actions">
+                <button type="submit" className="pdf_outline_apply" disabled={!outlineDraft.title.trim()} title="Apply outline" aria-label="Apply outline">Apply</button>
+                <button type="button" className="pdf_outline_cancel" onClick={() => setOutlineDraft(null)} title="Cancel outline" aria-label="Cancel outline">Cancel</button>
+              </span>
+            </h3>
+            <label className="pdf_outline_draft_field">
+              <span>Type</span>
+              <select value={outlineDraft.type} onChange={(event) => setOutlineDraft((draft) => ({ ...draft, type: event.target.value }))}>
+                <option value="part">Part</option>
+                <option value="chapter">Chapter</option>
+                <option value="section">Section</option>
+                <option value="subsection">Subsection</option>
+                <option value="appendix">Appendix</option>
+              </select>
+            </label>
+            <label className="pdf_outline_draft_field">
+              <span>Title</span>
+              <input type="text" value={outlineDraft.title} onChange={(event) => setOutlineDraft((draft) => ({ ...draft, title: event.target.value }))} placeholder="Enter title" autoFocus required />
+            </label>
+            <div className="pdf_outline_range_field">
+              <div><span>Pages</span><strong>{outlineDraft.startPage}–{outlineDraft.endPage}</strong></div>
+              <input type="range" min={outlineDraft.startPage} max={pageCount} value={outlineDraft.endPage} onChange={(event) => chooseOutlineEndPage(Number(event.target.value))} aria-label="Outline ending page" />
+              <small>Starts at the currently open page. Slide the handle to choose the last page.</small>
+            </div>
+          </form>
+        ) : (
+          <h3>
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M19 9c-1.3 0-2.4.84-2.82 2H13V2h-2v3H7.82A2.99 2.99 0 0 0 5 3C3.35 3 2 4.35 2 6s1.35 3 3 3c1.3 0 2.4-.84 2.82-2H11v10H7.82A2.99 2.99 0 0 0 5 15c-1.65 0-3 1.35-3 3s1.35 3 3 3c1.3 0 2.4-.84 2.82-2H11v3h2v-9h3.18c.41 1.16 1.51 2 2.82 2 1.65 0 3-1.35 3-3s-1.35-3-3-3M5 7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1m0 12c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1m14-6c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1" />
+            </svg>
+            Document Form
+            <button type="button" className="pdf_outline_add" onClick={beginOutlineFromCurrentPage} title={`Add outline from current page ${currentPage}`} aria-label={`Add outline from current page ${currentPage}`}><i className="bx bx-plus" /></button>
+          </h3>
+        )}
         {customOutlines.length ? (
           <div className="pdf_custom_outline_items">
             {customOutlines.map((item) => (
@@ -683,50 +650,9 @@ const PDFDocumentNavigator = ({
             ))}
           </div>
         ) : null}
-        {!pdfOutline.length && !customOutlines.length && <p className="pdf_outline_empty">This PDF does not include an outline. Add a section with +.</p>}
+        {!customOutlines.length && <p className="pdf_outline_empty">This PDF does not include an outline. Add a section with +.</p>}
       </section>}
 
-      {activeTab === "bookmarks" && <section className="pdf_outline_section pdf_bookmark_section">
-        <h3>
-          <i className="bx bx-bookmark" /> Bookmarks <span>{bookmarks.length}</span>
-          <button
-            type="button"
-            className="pdf_outline_add"
-            onClick={() => onToggleBookmark(currentPage)}
-            disabled={bookmarks.includes(currentPage)}
-            title={bookmarks.includes(currentPage) ? `Page ${currentPage} is already bookmarked` : `Bookmark page ${currentPage}`}
-            aria-label={bookmarks.includes(currentPage) ? `Page ${currentPage} is already bookmarked` : `Add bookmark for page ${currentPage}`}
-          ><i className="bx bx-plus" /></button>
-        </h3>
-        {bookmarks.length ? (
-          <div className="pdf_bookmark_items">
-            {bookmarks.map((page) => (
-              <div className={`pdf_bookmark_item${page === currentPage ? " pdf_bookmark_item--active" : ""}`} key={page}>
-                {editingBookmark?.page === page ? (
-                  <form className="pdf_bookmark_edit_form" onSubmit={submitBookmarkTitle}>
-                    <SelectionFreeInput value={editingBookmark.title} onChange={(event) => setEditingBookmark((current) => ({ ...current, title: event.target.value }))} ariaLabel={`Edit bookmark for page ${page}`} autoFocus />
-                    <small>p. {page}</small>
-                    <button type="submit" aria-label="Save bookmark title" title="Save title"><i className="bx bx-check" /></button>
-                    <button type="button" onClick={() => setEditingBookmark(null)} aria-label="Cancel bookmark editing" title="Cancel"><i className="bx bx-x" /></button>
-                  </form>
-                ) : (
-                  <>
-                    <button type="button" className="pdf_bookmark_open" onClick={() => onSelectPage(page)}>
-                      <i className="bx bx-bookmark" />
-                      <span>{bookmarkLabels[page] || `Page ${page}`}</span>
-                      <small>p. {page}</small>
-                      <i className="bx bx-chevron-right" />
-                    </button>
-                    <button type="button" className="pdf_bookmark_edit" onClick={() => setEditingBookmark({ page, title: bookmarkLabels[page] || `Page ${page}` })} aria-label={`Edit bookmark for page ${page}`} title="Edit bookmark"><i className="bx bx-pencil" /></button>
-                    <button type="button" className="pdf_bookmark_delete" onClick={() => onToggleBookmark(page)} aria-label={`Delete bookmark for page ${page}`} title="Delete bookmark"><i className="bx bx-trash" /></button>
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : <p className="pdf_outline_empty">Bookmark a page to keep it here.</p>}
-      </section>}
-      </div>
     </aside>
   );
 };

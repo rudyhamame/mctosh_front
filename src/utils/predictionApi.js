@@ -1,5 +1,6 @@
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "./sessionCleanup";
+import { readUmlsLanguage } from "../Vocabs/umlsSettings";
 
 const authHeader = () => {
   const token = readStoredSession()?.token || "";
@@ -64,21 +65,29 @@ export const suggestPredictions = async (prefix, limit = 6) => {
       return [];
     }
   })();
-  if (localSuggestions.length > 0) return localSuggestions;
+  // General prediction and inline autocomplete are intentionally Corpus-only.
+  // Medical UMLS suggestions are fetched separately for the keyboard rail.
+  return localSuggestions;
+};
 
-  // The browser DEDUP cache is intentionally usable without a provider
-  // request. Only the server fallback requires an authenticated session.
+export const suggestMedicalPredictions = async (prefix, limit = 6) => {
+  if (localStorage.getItem("mctosh_prediction_enabled") === "false") return [];
+  const normalizedPrefix = String(prefix || "").trim();
   const token = readStoredSession()?.token || "";
-  if (!token) return [];
+  if (normalizedPrefix.length < 2 || !token) return [];
 
   try {
-    const res = await fetch(apiUrl(`/api/prediction/suggest?q=${encodeURIComponent(prefix)}&limit=${limit}`), {
-      headers: authHeader(),
+    const language = readUmlsLanguage();
+    const params = new URLSearchParams({
+      q: normalizedPrefix,
+      limit: String(limit),
+      languages: language,
     });
-    if (!res.ok) return localSuggestions;
+    const res = await fetch(apiUrl(`/api/terminology/suggest?${params}`), { headers: authHeader() });
+    if (!res.ok) return [];
     const data = await res.json();
-    return [...new Set([...localSuggestions, ...(data.suggestions || [])])].slice(0, limit);
+    return Array.isArray(data.suggestions) ? data.suggestions : [];
   } catch {
-    return localSuggestions;
+    return [];
   }
 };

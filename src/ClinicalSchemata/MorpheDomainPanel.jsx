@@ -1,7 +1,7 @@
 import React from "react";
 import { DOMAINS, DOMAIN_LABELS } from "./amctoshsMorpheConstants";
 
-// Left panel (spec §12) — the 9-AMCTOSHS-domain selector, plus an "All
+// Left panel (spec §12) — the 9-RabbitHole-domain selector, plus an "All
 // Domains" convenience option (not part of the spec's own enum, purely a
 // UI affordance) so the page isn't forced to land on a domain with no
 // saved data yet.
@@ -14,7 +14,7 @@ export default function MorpheDomainPanel({ activeDomain, onSelectDomain, counts
 
   return (
     <div id="mrp_domain_panel">
-      <div className="mrp_panel_label">AMCTOSHS Domain</div>
+      <div className="mrp_panel_label">RabbitHole Domain</div>
       <button
         type="button"
         className={`mrp_domain_row${activeDomain === "all" ? " mrp_domain_row--active" : ""}`}

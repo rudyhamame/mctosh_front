@@ -167,7 +167,7 @@ export default function LoginAnim() {
     scene.add(buildGlass(PR_R, 0x4fc3f7, 0.06));
     scene.add(buildRimGlow(PR_R + 3, 0x1a6080, 0.18));
 
-    // ── AMCTOSHS sphere ────────────────────────────────────────────
+    // ── RabbitHole sphere ────────────────────────────────────────────
     scene.add(buildGlass(MS_R, 0x00e5ff, 0.09, THREE.DoubleSide));
     scene.add(buildRimGlow(MS_R - 1, 0x00e5ff, 0.24));
 
@@ -240,7 +240,18 @@ export default function LoginAnim() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       controls.dispose();
+      scene.traverse((object) => {
+        object.geometry?.dispose?.();
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.filter(Boolean).forEach((material) => {
+          Object.values(material).forEach((value) => value?.isTexture && value.dispose());
+          material.dispose?.();
+        });
+      });
+      scene.clear();
+      renderer.renderLists?.dispose?.();
       renderer.dispose();
+      renderer.forceContextLoss?.();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
   }, []);

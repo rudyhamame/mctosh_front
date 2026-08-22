@@ -1,6 +1,6 @@
 // amctoshsReasoningClient.js
 //
-// Thin fetch wrapper for the AMCTOSHS Reasoning backend
+// Thin fetch wrapper for the RabbitHole Reasoning backend
 // (back/routes/AmctoshsReasoningAPI.js) — same authHeaders/jsonHeaders/
 // parseJsonResponse convention as ClinicalSchemata/amctoshsMorpheClient.js.
 // Extraction input here is a set of already-saved Morphe Trace/Schema
@@ -25,7 +25,7 @@ const parseJsonResponse = async (res) => {
   return data;
 };
 
-/** Everything this user has SAVED in AMCTOSHS Reasoning — {reasoningEntities, relations}. */
+/** Everything this user has SAVED in RabbitHole Reasoning — {reasoningEntities, relations}. */
 export const listReasoning = async () => {
   const res = await fetch(apiUrl("/api/amctoshs-reasoning/"), { headers: authHeaders() });
   return parseJsonResponse(res);

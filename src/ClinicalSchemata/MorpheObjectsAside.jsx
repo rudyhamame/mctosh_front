@@ -50,7 +50,7 @@ export default function MorpheObjectsAside({ schemas, selectedItemId, creating, 
     setEditForm({
       schemaName: object.name || "",
       modeOfAccess: object.modeOfAccess || "ATOM",
-      entityClass: object.entityClass || "AMCTOSHS Object",
+      entityClass: object.entityClass || "RabbitHole Object",
       extractionBasis: object.extractionBasis || "manually_added",
       epistemicStatus: object.epistemicStatus || "manually_added",
       manualOverrideReason: object.manualOverrideReason || "",
@@ -84,7 +84,7 @@ export default function MorpheObjectsAside({ schemas, selectedItemId, creating, 
 
   const deleteObject = async (event, object) => {
     event.stopPropagation();
-    if (!window.confirm(`Delete AMCTOSHS Object “${object.objectId || object.name}”? Its associated traces will also be deleted.`)) return;
+    if (!window.confirm(`Delete RabbitHole Object “${object.objectId || object.name}”? Its associated traces will also be deleted.`)) return;
     setActionBusyId(object._id);
     setActionError("");
     const deleted = await onDelete(object);
@@ -93,10 +93,10 @@ export default function MorpheObjectsAside({ schemas, selectedItemId, creating, 
   };
 
   return (
-    <aside id="mrp_objects_aside" aria-label="AMCTOSHS objects">
+    <aside id="mrp_objects_aside" aria-label="RabbitHole objects">
       <div id="mrp_objects_aside_header">
-        <h2>AMCTOSHS objects</h2>
-        <button type="button" id="mrp_add_object_btn" onClick={() => setFormOpen((open) => !open)} aria-expanded={formOpen} aria-controls="mrp_add_object_form" title="Add AMCTOSHS object">
+        <h2>RabbitHole objects</h2>
+        <button type="button" id="mrp_add_object_btn" onClick={() => setFormOpen((open) => !open)} aria-expanded={formOpen} aria-controls="mrp_add_object_form" title="Add RabbitHole object">
           <span aria-hidden="true">+</span>
         </button>
       </div>
@@ -124,7 +124,7 @@ export default function MorpheObjectsAside({ schemas, selectedItemId, creating, 
 
       <div id="mrp_objects_list">
         {objects.length === 0 ? (
-          <p className="mrp_empty_hint">No AMCTOSHS objects yet.</p>
+          <p className="mrp_empty_hint">No RabbitHole objects yet.</p>
         ) : objects.map((object) => (
           <div key={object._id} className={`mrp_object_row${selectedItemId === object._id ? " mrp_object_row--active" : ""}`}>
             <>

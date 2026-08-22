@@ -61,6 +61,9 @@ export const MEDICAL_VOCABULARY = new Set([
   "symptoms", "examination", "physical", "clinical", "chronic",
   "acute", "severe", "moderate", "mild", "bilateral", "unilateral",
   "anterior", "posterior", "lateral", "medial", "proximal", "distal",
+
+  // UMLS terminology fields treated as literal words, not expanded abbreviations
+  "tty", "sty",
 ]);
 
 /** Adds one or more terms at runtime (e.g. a future per-user custom list) — lowercase, no punctuation, matching how split-word candidates are checked. */

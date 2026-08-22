@@ -1,3063 +1,1259 @@
-/* ════════════════════════════════════════════════════════════════
-   AMCTOSHS LOGIN — 3D Rotatable Animation (Three.js)
-   ════════════════════════════════════════════════════════════════ */
-
-/* ── Page shell ── */
-#login_page {
-  height: calc(var(--vh, 1vh) * 100);
-  max-height: 100dvh;
-  display: flex;
-  flex-direction: row;
-  background: var(--login-bg, #04060f);
-  color: var(--login-text, #dde3ef);
-  overflow: hidden;
-  position: relative;
-  font-family: inherit;
-  touch-action: manipulation; /* block browser pinch-zoom on the page */
-}
-
-html.theme-light #login_page {
-  --login-bg: #f5f5f5;
-  --login-text: #111;
-  --login-panel-bg: rgba(255, 255, 255, 0.94);
-  --login-panel-border: #d7d7d7;
-  --login-soft-surface: rgba(245, 245, 245, 0.92);
-  --login-soft-border: #cfcfcf;
-  --login-field-bg: #fff;
-  --login-muted: #555;
-  --login-faint: #8a8a8a;
-}
-
-html.theme-dark #login_page {
-  --login-bg: var(--color-bg);
-  --login-text: var(--color-text);
-  --login-panel-bg: color-mix(in srgb, var(--color-surface) 80%, transparent);
-  --login-panel-border: color-mix(in srgb, var(--color-border) 82%, transparent);
-  --login-soft-surface: color-mix(in srgb, var(--color-surface) 72%, transparent);
-  --login-soft-border: color-mix(in srgb, var(--color-border) 86%, transparent);
-  --login-field-bg: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  --login-muted: var(--color-text-muted);
-  --login-faint: color-mix(in srgb, var(--color-text-muted) 56%, transparent);
-}
-
-
-#login_page::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 65% 65% at 38% 50%, rgba(0,229,255,0.035) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 50% at 5%  5%,  rgba(79,195,247,0.04)  0%, transparent 65%),
-    radial-gradient(ellipse 45% 40% at 80% 90%, rgba(206,147,216,0.03) 0%, transparent 60%);
-  pointer-events: none;
-  z-index: 0;
-}
-
-html.theme-light #login_page::before {
-  background:
-    radial-gradient(ellipse 62% 58% at 36% 45%, rgba(255,255,255,0.86) 0%, transparent 72%),
-    radial-gradient(ellipse 38% 42% at 8% 8%, rgba(0,0,0,0.055) 0%, transparent 68%),
-    radial-gradient(ellipse 40% 38% at 82% 92%, rgba(0,0,0,0.045) 0%, transparent 62%);
-}
-
-/* ══════════════════════════════════════
-   LEFT — Animation Panel
-   ══════════════════════════════════════ */
-#login_anim_panel {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: space-between;
-  padding: 2rem 2rem 1.5rem;
-  position: relative;
-  z-index: 1;
-  -webkit-user-select: none;
-  user-select: none;
-}
-
-/* ── Brand ── */
-#login_brand {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  align-self: flex-start;
-}
-
-#login_sigil {
-  width: 36px;
-  height: 36px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #00e5ff, #26a69a);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 0 22px rgba(0,229,255,0.35);
-  flex-shrink: 0;
-}
-#login_sigil span {
-  font-size: 1.4rem;
-  font-weight: 900;
-  color: #fff;
-  line-height: 1;
-}
-
-#login_brand_text {
-  display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
-}
-
-#login_wordmark {
-  margin: 0;
-  font-size: clamp(1.5rem, 2.4vw, 2.4rem);
-  font-weight: 900;
-  letter-spacing: 0.26em;
-  line-height: 1;
-  background: linear-gradient(130deg, #e8edf8 0%, #b0bec5 30%, #00e5ff 60%, #26a69a 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: wordmark_shimmer 6s ease-in-out infinite alternate;
-}
-
-html.theme-light #login_sigil {
-  background: linear-gradient(135deg, #111, #555);
-  box-shadow: 0 10px 28px rgba(0,0,0,0.16);
-}
-
-html.theme-light #login_wordmark {
-  background: linear-gradient(130deg, #111 0%, #333 45%, #777 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  animation: none;
-}
-
-html.theme-light #login_platform_label,
-html.theme-light #login_scene_title,
-html.theme-light #ms_word {
-  color: #333;
-}
-
-html.theme-light #login_scene_text {
-  color: #333;
-}
-
-html.theme-light .login_scene_ring {
-  border-color: rgba(0,0,0,0.14);
-  box-shadow: 0 18px 50px rgba(0,0,0,0.05);
-}
-
-html.theme-light #login_scene_pulse {
-  background:
-    radial-gradient(circle, #fff 0%, #eee 28%, rgba(180,180,180,0.45) 58%, transparent 100%);
-  box-shadow: 0 0 54px rgba(0,0,0,0.12);
-}
-
-html.theme-light #login_scene_mark {
-  color: #fff;
-  background: linear-gradient(145deg, #111, #666);
-  box-shadow: 0 18px 46px rgba(0,0,0,0.16);
-}
-
-html.theme-light .login_scene_schema_chip {
-  border-color: #d4d4d4;
-  background: rgba(255,255,255,0.82);
-  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.16);
-  color: #111;
-}
-
-@keyframes wordmark_shimmer {
-  from { filter: brightness(1); }
-  to   { filter: brightness(1.2) drop-shadow(0 0 18px rgba(0,229,255,0.4)); }
-}
-
-#login_platform_label {
-  margin: 0;
-  font-size: 0.58rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: #26a69a;
-  font-weight: 600;
-}
-
-#login_scene_fallback {
-  flex: 1;
-  min-height: clamp(320px, 52vh, 760px);
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: clamp(1.25rem, 3vw, 2.5rem);
-  padding: 1.5rem;
-}
-
-#login_scene_core {
-  position: relative;
-  width: min(46vw, 360px);
-  aspect-ratio: 1;
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-
-.login_scene_ring {
-  position: absolute;
-  inset: 50%;
-  border-radius: 50%;
-  border: 1px solid rgba(255,255,255,0.14);
-  transform: translate(-50%, -50%);
-  box-shadow: 0 0 30px rgba(0,229,255,0.08);
-}
-
-.login_scene_ring--outer {
-  width: 100%;
-  height: 100%;
-  border-color: rgba(140, 110, 255, 0.22);
-}
-
-.login_scene_ring--mid {
-  width: 72%;
-  height: 72%;
-  border-color: rgba(0, 229, 255, 0.28);
-}
-
-.login_scene_ring--inner {
-  width: 42%;
-  height: 42%;
-  border-color: rgba(92, 245, 160, 0.32);
-}
-
-#login_scene_pulse {
-  position: absolute;
-  width: 28%;
-  height: 28%;
-  border-radius: 50%;
-  background:
-    radial-gradient(circle, rgba(255,255,255,0.92) 0%, rgba(0,229,255,0.88) 20%, rgba(38,166,154,0.32) 55%, transparent 100%);
-  box-shadow: 0 0 60px rgba(0,229,255,0.22);
-}
-
-#login_scene_mark {
-  position: relative;
-  z-index: 1;
-  width: 74px;
-  height: 74px;
-  border-radius: 22px;
-  display: grid;
-  place-items: center;
-  font-size: 2rem;
-  font-weight: 900;
-  color: #071018;
-  background: linear-gradient(145deg, #00e5ff, #5cf5a0);
-  box-shadow: 0 18px 50px rgba(0,229,255,0.22);
-}
-
-#login_scene_copy {
-  max-width: 320px;
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-#login_scene_title {
-  font-size: 0.78rem;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: #5cf5a0;
-  font-weight: 700;
-}
-
-#login_scene_text {
-  margin: 0;
-  color: rgba(221,227,239,0.78);
-  line-height: 1.6;
-  font-size: 0.96rem;
-}
-
-#login_scene_schema_list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem;
-}
-
-.login_scene_schema_chip {
-  min-width: 46px;
-  padding: 0.45rem 0.7rem;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,0.14);
-  background: rgba(7,16,24,0.82);
-  box-shadow: inset 0 0 0 1px var(--orb-color);
-  color: #eff6ff;
-  font-size: 0.76rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-align: center;
-}
-
-/* ── Shared footer — everything that used to float over the 3D stage
-   lives here instead, in normal flow below it, so nothing overlaps the
-   object. Scrolls on its own if content exceeds the available height
-   rather than pushing the rest of the panel around. ── */
-#anim_footer {
-  flex-shrink: 0;
-  width: calc(100% + 2.4rem);
-  max-height: 34vh;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
-  padding: 0.9rem 1.2rem 1.1rem;
-  margin: 0 -1.2rem;
-  border-top: 1px solid rgba(255,255,255,0.07);
-}
-#anim_footer_row {
-  display: flex;
-  gap: 0.5rem;
-}
-
-#anim_footer_row.anim_footer_row--single {
-  display: block;
-}
-#anim_footer_3d {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.footer_section_title {
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: rgba(255,255,255,0.75);
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-}
-.footer_section_sub {
-  font-size: 0.54rem;
-  font-weight: 400;
-  letter-spacing: 0.02em;
-  text-transform: none;
-  color: rgba(255,255,255,0.4);
-}
-
-/* ── Items — shared by both objects, so it sits once below both columns
-   instead of living inside just one of them. ── */
-#anim_footer_items {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 1.1rem;
-  padding-top: 0.6rem;
-  border-top: 1px dashed rgba(255,255,255,0.08);
-}
-
-#login_stage_wrap {
-  flex: 1;
-  width: 100%;
-  min-height: clamp(320px, 52vh, 760px);
-  min-width: 0;
-  position: relative;
-  touch-action: none; /* JS pinch handler takes over here */
-  cursor: grab;
-  perspective: 2200px; /* lives on the parent so #login_stage's own 3D transform gets a vanishing point */
-}
-#login_stage_wrap:active { cursor: grabbing; }
-
-/* ── Object details overlay — flat, never rotates with the stage ── */
-#object_info {
-  display: flex;
-  flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.4rem 0.6rem;
-  background: rgba(4,6,15,0.6);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 6px;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-}
-.object_info_row {
-  display: flex;
-  align-items: baseline;
-  gap: 0.4rem;
-  font-size: 0.62rem;
-  white-space: nowrap;
-}
-.object_info_row--hint { justify-content: flex-end; }
-.object_info_label {
-  color: rgba(255,255,255,0.35);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-size: 0.55rem;
-}
-.object_info_value { color: rgba(150,220,255,0.92); font-weight: 700; }
-.object_info_sub { color: rgba(255,255,255,0.4); font-weight: 400; }
-
-/* ── Stage (900×900, absolutely centered, scaled via JS) ──
-   Everything inside — spheres, orbit rings, labels, the arc control, the
-   identity stack — is one rigid 3D object now: the rotation lives here, not
-   on some inner piece, so the whole thing tilts and spins together. */
-#login_stage {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 900px;
-  height: 900px;
-  margin-top: -450px;
-  margin-left: -450px;
-  will-change: transform;
-  transform-style: preserve-3d;
-  transition: transform 0.6s cubic-bezier(0.22, 1, 0.36, 1);
-}
-#login_stage.login_stage--dragging { transition: none; }
-
-/* ── Travel slider — flat 2D, sits below the object entirely (not
-   overlapping it at all) so it never competes with or gets disrupted by
-   the 3D rotation. ── */
-#travel_slider_wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.2rem;
-  width: 100%;
-  max-width: 260px;
-}
-#travel_slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(
-    to right,
-    rgba(0,220,110,0.7) 0%,
-    rgba(255,60,60,0.7) var(--slider-fill, 0%),
-    rgba(255,255,255,0.12) var(--slider-fill, 0%)
-  );
-  cursor: pointer;
-  outline: none;
-}
-#travel_slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: #fff;
-  border: 2px solid rgba(160,110,255,0.8);
-  box-shadow: 0 0 6px rgba(160,110,255,0.5);
-  cursor: pointer;
-}
-#travel_slider::-moz-range-thumb {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: #fff;
-  border: 2px solid rgba(160,110,255,0.8);
-  box-shadow: 0 0 6px rgba(160,110,255,0.5);
-  cursor: pointer;
-  border: none;
-}
-.slider_label {
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
-  color: rgba(255,255,255,0.45);
-  text-transform: uppercase;
-}
-
-/* ── Cutaway slider ── */
-#cutaway_slider_wrap {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0.2rem;
-  width: 100%;
-  max-width: 260px;
-}
-#cutaway_slider {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 100%;
-  height: 4px;
-  border-radius: 2px;
-  background: linear-gradient(
-    to right,
-    rgba(160,110,255,0.75) 0%,
-    rgba(160,110,255,0.75) var(--slider-fill, 0%),
-    rgba(255,255,255,0.12) var(--slider-fill, 0%)
-  );
-  cursor: pointer;
-  outline: none;
-}
-#cutaway_slider:disabled { cursor: not-allowed; opacity: 0.35; }
-#cutaway_slider::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: #fff;
-  border: 2px solid rgba(150,130,210,0.85);
-  box-shadow: 0 0 6px rgba(150,130,210,0.5);
-  cursor: pointer;
-}
-#cutaway_slider::-moz-range-thumb {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: #fff;
-  border: 2px solid rgba(150,130,210,0.85);
-  box-shadow: 0 0 6px rgba(150,130,210,0.5);
-  cursor: pointer;
-  border: none;
-}
-
-html.theme-light #travel_slider,
-html.theme-light #cutaway_slider {
-  background: linear-gradient(
-    to right,
-    #111 0%,
-    #111 var(--slider-fill, 0%),
-    #d7d7d7 var(--slider-fill, 0%)
-  );
-}
-
-html.theme-light #travel_slider::-webkit-slider-thumb,
-html.theme-light #cutaway_slider::-webkit-slider-thumb {
-  background: #fff;
-  border-color: #111;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.22);
-}
-
-html.theme-light #travel_slider::-moz-range-thumb,
-html.theme-light #cutaway_slider::-moz-range-thumb {
-  background: #fff;
-  border: 2px solid #111;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.22);
-}
-
-html.theme-light .slider_label {
-  color: #222;
-}
-
-/* ── The identity stack: precomputed identities layered along Z ──
-   No rotation of its own — #login_stage carries that for the whole object.
-   Just preserve-3d so translateZ actually separates the slices in depth
-   instead of flattening onto the stage plane. */
-#identity_stack {
-  position: absolute;
-  inset: 0;
-  transform-style: preserve-3d;
-}
-
-.identity_slice {
-  position: absolute;
-  inset: 0;
-  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
-  pointer-events: none;
-}
-/* No filter/drop-shadow here — those force expensive per-layer compositing
-   once dozens of these sit in a 3D transform context, which is exactly
-   what made this unusable on iPad. Border-color/width swaps on the shell
-   ring (below) carry the "current" highlight instead. */
-
-/* The item dots + rope: ONE shared instance (see renderItems in Login.jsx),
-   not duplicated per slice — always fully visible, never dims or
-   disappears as the plate moves. It just snaps to a new transform (via the
-   .identity_slice-style transition below) whenever the plate crosses into
-   a new sampled slice's range. */
-.identity_items {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-/* Recovery-track items — the "healing hasn't caught up yet" possibility for
-   the current severity — read as a touch dimmer/cooler than the onset
-   track so the two remain visually distinguishable, without ever actually
-   disappearing. */
-.identity_items--recovery {
-  opacity: 0.85;
-}
-
-.identity_rope_svg {
-  position: absolute;
-  inset: 0;
-  width: 900px;
-  height: 900px;
-  pointer-events: none;
-  z-index: 7;
-}
-
-/* Patient Reality border cross-section, one per slice depth — matches
-   #pr_sphere's own diameter/center exactly so the extruded tube lines up
-   with the static front sphere rather than floating independently.
-   Kept at a consistently visible weight/opacity (not tied to the slice's
-   own dimming) across every slice, ontic or not, so the whole stack of
-   rings reads as real depth rather than disappearing into the fog. */
-.identity_shell_ring {
-  position: absolute;
-  width: 720px;
-  height: 720px;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  border: 2px solid rgba(150,130,210,0.4);
-  opacity: 0.5;
-  pointer-events: none;
-  z-index: 1;
-}
-.identity_slice--recovery .identity_shell_ring { opacity: 0.32; }
-/* The ontic slice's border needs to stay legible even as it recedes deep
-   into the object (smaller on screen from perspective, and everything
-   around it is intentionally dimmed) — thicker and a touch more defined
-   rather than just a thin line the same weight as every other slice. Same
-   muted purple family as the rest, not a bright per-slice color, so the
-   whole stack reads as one coherent object instead of a rainbow. */
-.identity_slice--current .identity_shell_ring {
-  opacity: 1;
-  border-width: 3px;
-  border-color: rgba(180,160,225,0.75);
-  box-shadow: 0 0 10px rgba(150,130,210,0.3);
-}
-
-html.theme-light .identity_shell_ring {
-  border-color: rgba(0,0,0,0.28);
-  opacity: 0.42;
-}
-
-html.theme-light .identity_slice--recovery .identity_shell_ring {
-  opacity: 0.24;
-  border-style: dashed;
-}
-
-html.theme-light .identity_slice--current .identity_shell_ring {
-  border-color: #111;
-  opacity: 0.86;
-  box-shadow: 0 0 0 1px rgba(255,255,255,0.8), 0 0 18px rgba(0,0,0,0.18);
-}
-
-html.theme-light .identity_rope_svg line {
-  stroke: #111;
-  opacity: 0.42;
-}
-
-html.theme-light .identity_items--recovery {
-  opacity: 0.62;
-}
-
-#login_svg {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-}
-
-/* ══════════════════════════════════════
-   Orbital Keyframes
-   ══════════════════════════════════════ */
-@keyframes orbit_cw {
-  from { transform: rotate(-90deg) translateX(var(--r)); }
-  to   { transform: rotate(270deg) translateX(var(--r)); }
-}
-@keyframes orbit_ccw {
-  from { transform: rotate(-90deg)  translateX(var(--r)); }
-  to   { transform: rotate(-450deg) translateX(var(--r)); }
-}
-
-/* ── Soft orbit path rings ── */
-.orb_ring {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  border-radius: 50%;
-  border: 1.75px solid color-mix(in srgb, var(--orb-color) 45%, transparent);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--orb-color) 22%, transparent);
-  pointer-events: none;
-  z-index: 4;
-  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-/* ── Base particle ── */
-.bio_particle {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  animation-duration:        var(--dur);
-  animation-delay:           var(--delay);
-  animation-timing-function: linear;
-  animation-iteration-count: infinite;
-  animation-fill-mode:       both;
-  pointer-events: none;
-  will-change: transform;
-  z-index: 8;  /* above spheres (z-index 5) */
-  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-/* ── Counter-rotation keyframes — keep letter upright as dot orbits ── */
-@keyframes counter_cw  { from { transform: rotate(90deg); } to { transform: rotate(-270deg); } }
-@keyframes counter_ccw { from { transform: rotate(90deg); } to { transform: rotate(450deg); } }
-
-/* ── Orbital dot ── */
-.orb_dot {
-  width: 32px;
-  height: 32px;
-  margin: -16px;
-  border-radius: 50%;
-  background: var(--orb-color);
-  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-/* ── Letter inside the dot — counter-rotates to stay upright ── */
-.orb_dot_letter {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 13px;
-  font-weight: 900;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  color: #04060f;
-  line-height: 1;
-  letter-spacing: 0;
-}
-
-/* ══════════════════════════════════════
-   AMCTOSHS Pipeline Nodes
-   ══════════════════════════════════════ */
-.mctosh_node {
-  position: absolute;
-  left: var(--nx);
-  top:  var(--ny);
-  transform: translate(-50%, -50%);
-  width: 148px;
-  height: 148px;
-  border-radius: 50%;
-  background: rgba(4, 22, 40, 0.88);
-  border: 1.5px solid rgba(79,195,247,0.4);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  z-index: 10;
-  backdrop-filter: blur(10px);
-  box-shadow:
-    0 0 28px rgba(79,195,247,0.18),
-    0 0 56px rgba(79,195,247,0.08),
-    inset 0 0 18px rgba(79,195,247,0.06);
-  animation: node_breathe 4.5s ease-in-out infinite;
-  gap: 6px;
-  padding: 0 14px;
-}
-
-.mctosh_node::before {
-  content: "";
-  position: absolute;
-  inset: -8px;
-  border-radius: 50%;
-  border: 1px solid rgba(79,195,247,0.15);
-  animation: node_ring_expand 4.5s ease-in-out infinite;
-}
-
-@keyframes node_breathe {
-  0%, 100% {
-    box-shadow:
-      0 0 22px rgba(79,195,247,0.14),
-      0 0 44px rgba(79,195,247,0.06),
-      inset 0 0 12px rgba(79,195,247,0.04);
-  }
-  50% {
-    box-shadow:
-      0 0 32px rgba(79,195,247,0.28),
-      0 0 60px rgba(79,195,247,0.12),
-      inset 0 0 18px rgba(79,195,247,0.08);
-    border-color: rgba(79,195,247,0.6);
-  }
-}
-
-@keyframes node_ring_expand {
-  0%, 100% { transform: scale(1);    opacity: 0.5; }
-  50%       { transform: scale(1.15); opacity: 0.15; }
-}
-
-.mn_ring {
-  position: absolute;
-  inset: -18px;
-  border-radius: 50%;
-  border: 1px dashed rgba(79,195,247,0.12);
-  animation: node_ring_expand 4.5s ease-in-out infinite;
-  animation-delay: -2.25s;
-}
-
-.mn_step {
-  font-size: 1.5rem;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  font-weight: 700;
-  color: #4fc3f7;
-  letter-spacing: 0.05em;
-  line-height: 1;
-}
-
-.mn_label {
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: rgba(200,230,255,0.8);
-  letter-spacing: 0.01em;
-  text-align: center;
-  max-width: 124px;
-  line-height: 1.3;
-}
-
-html.theme-light .mn_ring {
-  border-color: rgba(0,0,0,0.12);
-}
-
-html.theme-light .mn_step {
-  color: #111;
-}
-
-html.theme-light .mn_label {
-  color: #222;
-}
-
-/* ══════════════════════════════════════
-   Center Photo
-   ══════════════════════════════════════ */
-#login_center {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 5;
-}
-
-.observation_ring {
-  transition: none;
-}
-
-#login_center_glow {
-  position: absolute;
-  width: 780px;
-  height: 780px;
-  border-radius: 50%;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: radial-gradient(circle,
-    rgba(160,110,255,0.14) 0%,
-    rgba(120,80,220,0.07) 50%,
-    transparent 78%
-  );
-  pointer-events: none;
-  animation: center_glow 7s ease-in-out infinite;
-  z-index: -1;
-}
-
-@keyframes center_glow {
-  0%, 100% { transform: translate(-50%, -50%) scale(1);    opacity: 0.7; }
-  50%       { transform: translate(-50%, -50%) scale(1.12); opacity: 1;   }
-}
-
-/* ══════════════════════════════════════
-   Patient Reality — 3D glass sphere
-   ══════════════════════════════════════ */
-#pr_sphere {
-  position: relative;
-  width: 720px;
-  height: 720px;
-  border-radius: 50%;
-  /* Deliberately near-opaque — this is a solid plate blocking the ghost
-     slices behind it, not a tinted window onto them. A translucent gradient
-     over a dark page just reads as "still see-through" no matter how much
-     you raise its alpha in isolation. */
-  background: radial-gradient(ellipse at 38% 35%,
-    rgba(60,44,100,0.97) 0%,
-    rgba(30,22,58,0.98) 55%,
-    rgba(8,6,18,0.99) 100%
-  );
-  border: 2px solid rgba(160,110,255,0.68);
-  box-shadow:
-    inset 0 0 200px rgba(0,0,0,0.16),
-    0 0  110px rgba(160,110,255,0.22),
-    0 0  220px rgba(120,80,220,0.1);
-  overflow: hidden;
-  animation: pr_breathe 7s ease-in-out infinite;
-}
-
-/* Zone divider SVG */
-#pr_zone_svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 1;
-}
-
-/* Zone labels inside PR sphere */
-#pr_zone_physio,
-#pr_zone_comp,
-#pr_zone_detr {
-  position: absolute;
-  font-family: "Courier New", monospace;
-  font-size: 0.62rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  line-height: 1.3;
-  text-align: center;
-  pointer-events: none;
-  z-index: 2;
-}
-
-#pr_zone_physio {
-  top:   14%;
-  left:  58%;
-  color: rgba(0, 220, 110, 0.55);
-}
-
-#pr_zone_comp {
-  top:   14%;
-  right: 58%;
-  color: rgba(255, 195, 0, 0.55);
-}
-
-#pr_zone_detr {
-  bottom: 14%;
-  left:   50%;
-  transform: translateX(-50%);
-  color: rgba(255, 70, 70, 0.50);
-}
-
-@keyframes pr_breathe {
-  0%, 100% {
-    box-shadow:
-      inset 0 0 200px rgba(0,0,0,0.08),
-      0 0  110px rgba(160,110,255,0.16),
-      0 0  220px rgba(120,80,220,0.07);
-  }
-  50% {
-    box-shadow:
-      inset 0 0 200px rgba(0,0,0,0.06),
-      0 0  145px rgba(160,110,255,0.26),
-      0 0  280px rgba(120,80,220,0.12);
-  }
-}
-
-/* Specular highlights on the glass surface */
-#pr_spec_a {
-  display: none;
-}
-
-#pr_spec_b {
-  display: none;
-}
-
-#pr_rim { display: none; }
-
-/* ── Labels card — AMCTOSHS / Patient Reality naming + item legend ──
-   Flat, outside #login_stage like #object_info, so it never rotates,
-   curves, or tilts with the 3D object and stays legible at all times. */
-#labels_card_head {
-  display: flex;
-  flex-direction: column;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-  gap: 0.1rem;
-  padding-bottom: 0.35rem;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
-}
-
-#labels_card_mctoshs {
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: rgba(0, 229, 255, 0.75);
-}
-
-#labels_card_pr {
-  font-size: 0.62rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: rgba(210,190,255,0.65);
-}
-
-#labels_card_list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.9rem;
-  font-family: ui-monospace, "Cascadia Code", monospace;
-}
-
-#labels_card_list li {
-  display: flex;
-  align-items: baseline;
-  gap: 0.35rem;
-  font-size: 0.58rem;
-  white-space: nowrap;
-}
-
-.labels_card_dot {
-  width: 7px;
-  height: 7px;
-  min-width: 7px;
-  border-radius: 50%;
-  background: var(--orb-color);
-  box-shadow: 0 0 5px var(--orb-color);
-  align-self: center;
-}
-
-.labels_card_name {
-  color: rgba(255,255,255,0.75);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.labels_card_letter {
-  color: rgba(255,255,255,0.35);
-}
-
-/* ══════════════════════════════════════
-   AMCTOSHS — inner 3D solid sphere
-   ══════════════════════════════════════ */
-/* AMCTOSHS sphere — glass orb containing all 7 orbital modes inside it */
-#mctosh_sphere {
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  width: 520px;
-  height: 520px;
-  border-radius: 50%;
-  background:
-    radial-gradient(ellipse 46% 28% at 28% 22%,
-      rgba(0,229,255,0.20) 0%,
-      rgba(0,200,230,0.06) 40%,
-      transparent 100%
-    ),
-    radial-gradient(circle at 50% 50%,
-      transparent 52%,
-      rgba(0,20,45,0.18) 66%,
-      rgba(0,12,32,0.50) 80%,
-      rgba(0,6,18,0.80) 100%
-    );
-  border: none;
-  box-shadow:
-    inset 0 0 160px rgba(0,30,60,0.12),
-    0 0  70px rgba(0,229,255,0.22),
-    0 0 130px rgba(0,180,220,0.10);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  animation: ms_pulse 5s ease-in-out infinite;
-  z-index: 3;
-}
-
-/* Void center — inside M orbit, not part of AMCTOSHS; matches Patient Reality color */
-#ms_void {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 100px;
-  height: 100px;
-  margin-top: -50px;
-  margin-left: -50px;
-  border-radius: 50%;
-  background: transparent;
-  pointer-events: none;
-  z-index: 2;
-}
-
-/* Inner M-orbit ring — marks the hollow void boundary inside AMCTOSHS */
-#ms_m_ring {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 100px;
-  height: 100px;
-  margin-top: -50px;
-  margin-left: -50px;
-  border-radius: 50%;
-  border: 1px solid rgba(0, 229, 255, 0.40);
-  pointer-events: none;
-}
-
-#ms_rim {
-  position: absolute;
-  bottom: 12%; right: 14%;
-  width: 22%; height: 14%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, rgba(0,229,255,0.14) 0%, transparent 100%);
-  filter: blur(18px);
-  pointer-events: none;
-}
-
-@keyframes ms_pulse {
-  0%, 100% {
-    box-shadow:
-      inset 0 0 160px rgba(0,30,60,0.12),
-      0 0  70px rgba(0,229,255,0.22),
-      0 0 130px rgba(0,180,220,0.10);
-    border-color: rgba(0,229,255,0.30);
-  }
-  50% {
-    box-shadow:
-      inset 0 0 160px rgba(0,30,60,0.08),
-      0 0  95px rgba(0,229,255,0.36),
-      0 0 170px rgba(0,180,220,0.16);
-    border-color: rgba(0,229,255,0.48);
-  }
-}
-
-/* AMCTOSHS label — shown at center of the glass sphere */
-#ms_label {
-  position: absolute;
-  top: 50%; left: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  pointer-events: none;
-}
-
-#ms_word {
-  font-size: 0.70rem;
-  font-weight: 700;
-  letter-spacing: 0.28em;
-  color: rgba(0,229,255,0.75);
-  text-transform: uppercase;
-}
-
-
-/* Tagline */
-/* ── Disease timeline selector ── */
-#disease_selector {
-  width: 100%;
-  max-width: 260px;
-  background: rgba(4,6,15,0.6);
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 7px;
-  overflow: visible;
-}
-
-#ds_head {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.22rem 0.5rem;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
-  color: rgba(255,255,255,0.28);
-  font-size: 0.6rem;
-}
-
-#ds_stack_toggle {
-  margin-left: auto;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  border-radius: 4px;
-  color: rgba(255,255,255,0.55);
-  font-size: 0.56rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  cursor: pointer;
-  padding: 0.12rem 0.4rem;
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  font-family: inherit;
-  transition: color 0.12s, border-color 0.12s;
-}
-#ds_stack_toggle:hover { color: rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.24); }
-
-#ds_collapse_btn {
-  background: none;
-  border: none;
-  color: rgba(255,255,255,0.28);
-  font-size: 0.6rem;
-  cursor: pointer;
-  padding: 0 0.1rem;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  transition: color 0.12s;
-}
-#ds_collapse_btn:hover { color: rgba(255,255,255,0.60); }
-
-#ds_list.ds_list--hidden {
-  display: none;
-}
-
-#ds_disease_select {
-  background: none;
-  border: none;
-  color: rgba(255,255,255,0.60);
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  outline: none;
-  cursor: pointer;
-  font-family: inherit;
-  padding: 0;
-}
-#ds_disease_select option { background: #0a0e1e; color: #dde3ef; }
-
-#ds_list {
-  max-height: 110px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  border-radius: 0 0 7px 7px;
-}
-
-.ds_item {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-  padding: 0.18rem 0.5rem;
-  background: none;
-  border: none;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.10s;
-  white-space: nowrap;
-}
-.ds_item:last-child { border-bottom: none; }
-.ds_item:hover { background: rgba(255,255,255,0.04); }
-.ds_item--active { background: color-mix(in srgb, var(--sc) 10%, transparent) !important; }
-
-.ds_dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--sc);
-  flex-shrink: 0;
-}
-
-.ds_abbr {
-  font-family: 'Courier New', monospace;
-  font-size: 0.62rem;
-  font-weight: 700;
-  color: var(--sc);
-  min-width: 36px;
-}
-
-.ds_desc {
-  font-size: 0.58rem;
-  color: rgba(255,255,255,0.38);
-}
-
-.ds_engaged {
-  display: flex;
-  gap: 0.12rem;
-  flex-shrink: 0;
-  margin-left: 0.2rem;
-}
-
-.ds_badge {
-  font-family: 'Courier New', monospace;
-  font-size: 0.48rem;
-  font-weight: 700;
-  color: var(--sc);
-  background: color-mix(in srgb, var(--sc) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--sc) 25%, transparent);
-  border-radius: 2px;
-  padding: 0.02rem 0.16rem;
-  opacity: 0.70;
-  line-height: 1.3;
-}
-.ds_item--active .ds_badge { opacity: 1; }
-
-
-#login_tagline {
-  margin: 0;
-  font-size: 0.68rem;
-  color: rgba(255,255,255,0.18);
-  font-style: italic;
-  letter-spacing: 0.05em;
-  text-align: center;
-}
-
-html.theme-light #login_center_glow {
-  background: radial-gradient(circle,
-    rgba(255,255,255,0.86) 0%,
-    rgba(160,160,160,0.18) 48%,
-    transparent 78%
-  );
-}
-
-html.theme-light .orb_ring {
-  border-color: rgba(0,0,0,0.22);
-  box-shadow: 0 0 12px rgba(0,0,0,0.08);
-}
-
-html.theme-light .orb_dot {
-  background: #111;
-  box-shadow: 0 8px 18px rgba(0,0,0,0.22);
-}
-
-html.theme-light .orb_dot_letter {
-  color: #fff;
-}
-
-html.theme-light .mctosh_node {
-  background: rgba(255,255,255,0.88);
-  border-color: rgba(0,0,0,0.24);
-  box-shadow:
-    0 22px 48px rgba(0,0,0,0.12),
-    inset 0 0 18px rgba(255,255,255,0.72);
-  animation: none;
-}
-
-html.theme-light .mctosh_node::before {
-  border-color: rgba(0,0,0,0.10);
-}
-
-html.theme-light #pr_sphere {
-  background: radial-gradient(ellipse at 38% 35%,
-    rgba(255,255,255,0.98) 0%,
-    rgba(238,238,238,0.98) 56%,
-    rgba(188,188,188,0.98) 100%
-  );
-  border-color: rgba(0,0,0,0.28);
-  box-shadow:
-    inset 0 0 190px rgba(255,255,255,0.36),
-    inset 0 -44px 100px rgba(0,0,0,0.13),
-    0 34px 90px rgba(0,0,0,0.18);
-  animation: none;
-}
-
-html.theme-light #pr_zone_physio,
-html.theme-light #pr_zone_comp,
-html.theme-light #pr_zone_detr {
-  color: #111;
-  background: rgba(255,255,255,0.78);
-  border: 1px solid rgba(0,0,0,0.10);
-  border-radius: 999px;
-  padding: 0.16rem 0.36rem;
-  text-shadow: 0 1px 0 #fff;
-}
-
-html.theme-light #pr_zone_svg line {
-  stroke: rgba(0,0,0,0.18);
-}
-
-html.theme-light #labels_card_head {
-  border-bottom-color: rgba(0,0,0,0.12);
-}
-
-html.theme-light #labels_card_mctoshs,
-html.theme-light #labels_card_pr {
-  color: #111;
-}
-
-html.theme-light .labels_card_dot {
-  background: #111;
-  box-shadow: 0 0 5px rgba(0,0,0,0.28);
-}
-
-html.theme-light .labels_card_name {
-  color: #111;
-}
-
-html.theme-light .labels_card_letter {
-  color: #444;
-}
-
-html.theme-light #mctosh_sphere {
-  background:
-    radial-gradient(ellipse 46% 28% at 28% 22%,
-      rgba(255,255,255,0.86) 0%,
-      rgba(220,220,220,0.34) 44%,
-      transparent 100%
-    ),
-    radial-gradient(circle at 50% 50%,
-      transparent 52%,
-      rgba(140,140,140,0.12) 66%,
-      rgba(80,80,80,0.30) 82%,
-      rgba(20,20,20,0.52) 100%
-    );
-  box-shadow:
-    inset 0 0 150px rgba(255,255,255,0.26),
-    0 22px 70px rgba(0,0,0,0.16);
-  animation: none;
-}
-
-html.theme-light #ms_m_ring {
-  border-color: rgba(0,0,0,0.28);
-}
-
-html.theme-light #ms_rim {
-  background: radial-gradient(ellipse, rgba(0,0,0,0.10) 0%, transparent 100%);
-}
-
-html.theme-light #disease_selector,
-html.theme-light #object_info {
-  background: rgba(255,255,255,0.94);
-  border-color: rgba(0,0,0,0.18);
-  box-shadow: 0 16px 38px rgba(0,0,0,0.13);
-}
-
-html.theme-light .object_info_label {
-  color: #444;
-}
-
-html.theme-light .object_info_value,
-html.theme-light .object_info_sub {
-  color: #111;
-}
-
-html.theme-light #ds_head {
-  border-bottom-color: rgba(0,0,0,0.10);
-  color: #333;
-}
-
-html.theme-light #ds_stack_toggle {
-  background: #f5f5f5;
-  border-color: #bdbdbd;
-  color: #111;
-}
-
-html.theme-light #ds_stack_toggle:hover,
-html.theme-light #ds_collapse_btn:hover {
-  color: #111;
-  border-color: #999;
-}
-
-html.theme-light #ds_collapse_btn,
-html.theme-light #ds_disease_select,
-html.theme-light .ds_desc {
-  color: #222;
-}
-
-html.theme-light #ds_disease_select option {
-  background: #fff;
-  color: #111;
-}
-
-html.theme-light .ds_item {
-  border-bottom-color: rgba(0,0,0,0.06);
-}
-
-html.theme-light .ds_item:hover,
-html.theme-light .ds_item--active {
-  background: #f5f5f5 !important;
-}
-
-html.theme-light .ds_dot,
-html.theme-light .ds_badge {
-  background: #111;
-}
-
-html.theme-light .ds_abbr {
-  color: #111;
-}
-
-html.theme-light .ds_badge {
-  color: #fff;
-  border-color: #111;
-}
-
-html.theme-light #login_tagline {
-  color: #333;
-}
-
-html.theme-light #anim_footer {
-  border-top-color: rgba(0,0,0,0.12);
-}
-
-html.theme-light .footer_section_title {
-  color: #111;
-}
-
-html.theme-light .footer_section_sub {
-  color: #444;
-}
-
-html.theme-light #anim_footer_items {
-  border-top-color: rgba(0,0,0,0.12);
-}
-
-/* ══════════════════════════════════════
-   RIGHT — Glassmorphism Form Panel
-   ══════════════════════════════════════ */
-
-/* ── Role tabs — clinician (this panel's own form) vs. patient (routes
-   away to the separate patient account system) ── */
-#login_role_tabs {
-  display: flex;
-  gap: 0.4rem;
-  margin: 1.4rem 1.25rem 0;
-  padding: 0.25rem;
-  background: var(--login-soft-surface, rgba(255,255,255,0.03));
-  border: 1px solid var(--login-soft-border, rgba(255,255,255,0.07));
-  border-radius: 9px;
-  flex-shrink: 0;
-}
-
-.login_role_tab {
-  flex: 1;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  padding: 0.55rem 0.75rem;
-  color: var(--login-muted, rgba(221,227,239,0.5));
-  font-size: 0.75rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-  transition: color 0.15s, background 0.15s;
-  font-family: inherit;
-}
-
-.login_role_tab:hover { color: var(--login-text, rgba(221,227,239,0.85)); }
-
-.login_role_tab--active {
-  background: linear-gradient(135deg, rgba(0,229,255,0.18), rgba(38,166,154,0.18));
-  color: var(--login-text, #fff);
-  box-shadow: inset 0 0 0 1px rgba(0,229,255,0.35);
-}
-
-html.theme-light .login_role_tab--active {
-  background: #111;
-  color: #fff;
-  box-shadow: none;
-}
-
-#login_video_toggle {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  margin: 0.9rem 1.25rem 0;
-  padding: 0.3rem 0.75rem;
-  background: none;
-  border: 1px solid rgba(0,229,255,0.18);
-  border-radius: 6px;
-  color: rgba(0,229,255,0.60);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, background 0.15s;
-  flex-shrink: 0;
-}
-#login_video_toggle:hover {
-  color: rgba(0,229,255,0.90);
-  border-color: rgba(0,229,255,0.40);
-  background: rgba(0,229,255,0.06);
-}
-
-html.theme-light #login_video_toggle {
-  border-color: #cfcfcf;
-  color: #444;
-}
-html.theme-light #login_video_toggle:hover {
-  color: #111;
-  border-color: #999;
-  background: #f5f5f5;
-}
-
-#login_video_container {
-  padding: 1.25rem 1.25rem 0.75rem;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--login-panel-border, rgba(255,255,255,0.06));
-  position: relative;
-}
-
-#login_video_btn {
-  position: absolute;
-  bottom: 1.3rem;
-  right: 1.7rem;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: 1px solid rgba(0,229,255,0.30);
-  background: var(--login-soft-surface, rgba(4,6,15,0.65));
-  backdrop-filter: blur(6px);
-  color: rgba(0,229,255,0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  padding: 0;
-  transition: background 0.18s, border-color 0.18s, color 0.18s;
-}
-#login_video_btn svg { width: 12px; height: 12px; display: block; }
-#login_video_btn:hover {
-  background: rgba(0,229,255,0.15);
-  border-color: rgba(0,229,255,0.65);
-  color: #fff;
-}
-
-html.theme-light #login_video_btn {
-  border-color: #cfcfcf;
-  color: #333;
-  box-shadow: 0 8px 22px rgba(0,0,0,0.10);
-}
-html.theme-light #login_video_btn:hover {
-  background: #111;
-  border-color: #111;
-  color: #fff;
-}
-
-#login_intro_video {
-  width: 100%;
-  height: 190px;
-  object-fit: cover;
-  display: block;
-  border-radius: 10px;
-  border: 1px solid rgba(0,229,255,0.10);
-  box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.04);
-}
-
-html.theme-light #login_intro_video {
-  border-color: #d7d7d7;
-  box-shadow: 0 16px 42px rgba(0,0,0,0.12), 0 0 0 1px #fff;
-}
-
-/* ── Panel collapse toggle ── */
-#login_panel_toggle {
-  position: absolute;
-  right: 400px;
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 20;
-  background: var(--login-soft-surface, rgba(10,14,30,0.82));
-  border: 1px solid var(--login-soft-border, rgba(255,255,255,0.10));
-  border-right: none;
-  color: var(--login-faint, rgba(255,255,255,0.45));
-  width: 22px;
-  height: 52px;
-  border-radius: 7px 0 0 7px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.75rem;
-  transition: color 0.15s, background 0.15s, right 0.35s cubic-bezier(0.22,1,0.36,1);
-  backdrop-filter: blur(8px);
-}
-#login_panel_toggle:hover { color: rgba(255,255,255,0.85); background: rgba(20,28,55,0.90); }
-
-html.theme-light #login_panel_toggle {
-  box-shadow: -8px 0 24px rgba(0,0,0,0.08);
-}
-html.theme-light #login_panel_toggle:hover {
-  color: #111;
-  background: #fff;
-}
-
-#login_panel_toggle.login_panel_toggle--collapsed {
-  right: 0;
-  border-radius: 7px 0 0 7px;
-}
-
-#login_panel {
-  width: 400px;
-  flex-shrink: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-start;
-  padding: 0;
-  background: var(--login-panel-bg, rgba(255,255,255,0.022));
-  border-left: 1px solid var(--login-panel-border, rgba(255,255,255,0.06));
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
-  overflow: visible;
-  position: relative;
-  z-index: 1;
-  animation: panel_enter 0.6s cubic-bezier(0.22,1,0.36,1) both;
-  transition: width 0.35s cubic-bezier(0.22,1,0.36,1),
-              opacity 0.25s ease;
-}
-
-html.theme-light #login_panel {
-  box-shadow: -28px 0 70px rgba(0,0,0,0.10);
-}
-
-.login_panel_hidden {
-  width: 0 !important;
-  opacity: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-/* When panel is hidden, move the toggle to the far right edge */
-#login_form {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1.1rem;
-  padding: 2rem 3rem 5rem;
-  overflow-y: auto;
-  overflow-x: visible;
-}
-
-@keyframes panel_enter {
-  from { opacity: 0; transform: translateX(24px); }
-  to   { opacity: 1; transform: translateX(0); }
-}
-
-/* Form header */
-#login_form_head {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  margin-bottom: 2rem;
-}
-
-#login_form_bar {
-  width: 3px;
-  height: 22px;
-  background: linear-gradient(to bottom, #00e5ff, #26a69a);
-  border-radius: 2px;
-  box-shadow: 0 0 14px rgba(0,229,255,0.55);
-}
-
-html.theme-light #login_form_bar {
-  background: linear-gradient(to bottom, #111, #777);
-  box-shadow: none;
-}
-
-#login_form_title {
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--login-text, #c5cfe0);
-}
-
-#login_demo_note {
-  display: flex;
-  flex-direction: column;
-  gap: 0.28rem;
-  padding: 0.75rem 0.9rem;
-  border-radius: 8px;
-  border: 1px solid rgba(0,229,255,0.16);
-  background: rgba(0,229,255,0.045);
-  color: rgba(221,227,239,0.72);
-  font-size: 0.72rem;
-  line-height: 1.4;
-  margin-top: -0.85rem;
-}
-
-#login_demo_note strong {
-  color: var(--login-text, #fff);
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-html.theme-light #login_demo_note {
-  border-color: #d7d7d7;
-  background: #f5f5f5;
-  color: #333;
-}
-
-/* Fields */
-.login_field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.login_field_label {
-  font-size: 0.6rem;
-  font-weight: 700;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--login-muted, #37474f);
-}
-
-#login_form input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 0.78rem 1rem;
-  min-height: 44px;
-  border-radius: 7px;
-  border: 1px solid var(--login-soft-border, rgba(255,255,255,0.07));
-  background: var(--login-field-bg, rgba(255,255,255,0.035));
-  color: var(--login-text, #dde3ef);
-  font-size: 0.875rem;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
-}
-
-#login_form input:focus {
-  border-color: rgba(0,229,255,0.4);
-  background: rgba(0,229,255,0.03);
-  box-shadow:
-    0 0 0 3px rgba(0,229,255,0.07),
-    inset 0 0 0 1px rgba(0,229,255,0.1);
-}
-
-html.theme-light #login_form input:focus {
-  border-color: #111;
-  background: #fff;
-  box-shadow:
-    0 0 0 3px rgba(0,0,0,0.08),
-    inset 0 0 0 1px rgba(0,0,0,0.08);
-}
-
-#login_form input::placeholder { color: var(--login-faint, #1e3038); }
-
-/* Error */
-#login_error {
-  font-size: 0.75rem;
-  color: #ef5350;
-  background: rgba(239,83,80,0.07);
-  border: 1px solid rgba(239,83,80,0.18);
-  border-radius: 6px;
-  padding: 0.55rem 0.85rem;
-  margin: 0;
-  letter-spacing: 0.02em;
-}
-
-/* Submit */
-#login_submit {
-  margin-top: 0.4rem;
-  padding: 0.88rem;
-  min-height: 44px;
-  border-radius: 8px;
-  border: none;
-  background: linear-gradient(135deg, #00bcd4 0%, #26a69a 50%, #00897b 100%);
-  color: #fff;
-  font-size: 0.82rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
-  box-shadow:
-    0 4px 22px rgba(0,229,255,0.22),
-    inset 0 1px 0 rgba(255,255,255,0.15);
-  position: relative;
-  overflow: hidden;
-}
-
-html.theme-light #login_submit {
-  background: #111;
-  color: #fff;
-  box-shadow:
-    0 14px 32px rgba(0,0,0,0.18),
-    inset 0 1px 0 rgba(255,255,255,0.18);
-}
-
-#login_submit::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 55%);
-  pointer-events: none;
-}
-
-#login_submit:hover:not(:disabled) {
-  transform: translateY(-1px);
-  box-shadow:
-    0 8px 28px rgba(0,229,255,0.35),
-    inset 0 1px 0 rgba(255,255,255,0.2);
-}
-
-html.theme-light #login_submit:hover:not(:disabled) {
-  box-shadow:
-    0 18px 42px rgba(0,0,0,0.24),
-    inset 0 1px 0 rgba(255,255,255,0.2);
-}
-#login_submit:active:not(:disabled) { transform: translateY(0); }
-#login_submit:disabled { opacity: 0.45; cursor: default; }
-
-/* Toggle */
-#login_toggle {
-  background: none;
-  border: none;
-  color: var(--login-muted, #37474f);
-  font-size: 0.72rem;
-  cursor: pointer;
-  text-align: center;
-  padding: 0.2rem 0;
-  letter-spacing: 0.03em;
-  transition: color 0.15s;
-  font-family: inherit;
-}
-#login_toggle:hover { color: #00e5ff; }
-
-html.theme-light #login_toggle:hover {
-  color: #111;
-}
-
-/* Links */
-#login_links {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  justify-content: center;
-  margin-top: 0.25rem;
-}
-
-.login_link {
-  background: none;
-  border: none;
-  color: var(--login-muted, #263238);
-  font-size: 0.62rem;
-  cursor: pointer;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 0;
-  transition: color 0.15s;
-  font-family: inherit;
-}
-.login_link:hover { color: var(--color-highlight); }
-.login_link_sep { color: var(--login-faint, #1a2730); font-size: 0.6rem; }
-
-/* Footer */
-#login_footer {
-  position: absolute;
-  bottom: 1.5rem;
-  left: 0;
-  right: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.15rem;
-  font-size: 0.58rem;
-  color: var(--login-faint, #1e2e32);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-/* ══════════════════════════════════════
-   Accessibility
-   ══════════════════════════════════════ */
-@media (prefers-reduced-motion: reduce) {
-  .bio_particle,
-  #login_center_glow,
-  #pr_sphere,
-  #pr_spec_a,
-  #pr_spec_b,
-  #mctosh_sphere,
-  #login_wordmark {
-    animation: none !important;
-  }
-}
-
-/* ══════════════════════════════════════
-   Responsive
-   ══════════════════════════════════════ */
-@media (max-width: 960px) {
-  #login_page {
-    flex-direction: column;
-    height: auto;
-    min-height: 100dvh;
-    overflow-y: auto;
-  }
-  #login_anim_panel {
-    height: 58vw;
-    min-height: 260px;
-    flex: none;
-    padding: 1.5rem 1rem 1rem;
-    overflow: visible;
-  }
-  #login_stage_wrap {
-    min-height: 0;
-  }
-  #login_scene_fallback {
-    min-height: 0;
-    height: 100%;
-    padding: 1rem 0 0;
-    gap: 1rem;
-  }
-  #login_scene_core {
-    width: min(38vw, 220px);
-  }
-  #login_scene_copy {
-    max-width: 280px;
-  }
-  #login_scene_text {
-    font-size: 0.88rem;
-    line-height: 1.45;
-  }
-  #login_panel {
-    flex: 1;
-    width: 100%;
-    border-left: none;
-    border-top: 1px solid rgba(255,255,255,0.06);
-    padding: 2rem 2rem 4rem;
-    backdrop-filter: none;
-    overflow: visible;
-  }
-  #login_footer {
-    position: static;
-    margin-top: 2rem;
-  }
-}
-
-/* ════════════════════════════════════════════════════════════════
-   RESPONSIVE PATIENT REALITY LOGIN
-   The legacy 3D selectors above are intentionally left available for
-   historical views; this composition is the active login presentation.
-   ════════════════════════════════════════════════════════════════ */
-#login_page.loginPage {
-  --login-bg: #070c10;
-  --login-text: #edf3f1;
-  --login-muted: rgba(225, 235, 232, 0.66);
-  --login-faint: rgba(225, 235, 232, 0.4);
-  --login-panel-bg: rgba(8, 13, 16, 0.42);
-  --login-panel-border: rgba(224, 238, 234, 0.12);
-  --login-soft-surface: rgba(255, 255, 255, 0.045);
-  --login-soft-border: rgba(224, 238, 234, 0.14);
-  --login-field-bg: rgba(255, 255, 255, 0.055);
-  display: grid;
-  grid-template-columns: minmax(0, 66fr) minmax(340px, 34fr);
-  width: 100%;
-  height: 100dvh;
-  min-height: 100dvh;
-  overflow: hidden;
-  background: var(--login-bg);
-  color: var(--login-text);
-}
-
-#login_page.loginPage::before {
-  display: none;
-}
-
-.patientRealityArtwork {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  isolation: isolate;
-  background: #0a1217;
-}
-
-.patientRealityPicture,
-.patientRealityImage {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.patientRealityPicture {
-  position: absolute;
-  inset: 0;
-}
-
-.patientRealityImage {
-  object-fit: cover;
-  object-position: left center;
-}
-
-.patientRealityOverlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  background:
-    linear-gradient(90deg, rgba(2, 6, 8, 0.12) 0%, rgba(2, 6, 8, 0.01) 58%, rgba(4, 8, 10, 0.38) 100%),
-    linear-gradient(180deg, rgba(2, 6, 8, 0.18), transparent 38%, rgba(2, 6, 8, 0.48));
-  pointer-events: none;
-}
-
-.patientRealityBrand {
-  position: absolute;
-  z-index: 2;
-  top: max(clamp(1.5rem, 4vw, 4rem), env(safe-area-inset-top));
-  left: clamp(1.5rem, 4vw, 4.5rem);
-  right: clamp(1.5rem, 4vw, 4.5rem);
-  display: flex;
-  align-items: flex-start;
-  gap: clamp(0.75rem, 1.4vw, 1.1rem);
-  color: #eef5f3;
-  text-shadow: 0 2px 22px rgba(0, 0, 0, 0.6);
-}
-
-.patientRealityBrandMark {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: clamp(2.15rem, 3.4vw, 3rem);
-  aspect-ratio: 1;
-  border: 1px solid rgba(226, 241, 236, 0.62);
-  border-radius: 0.35rem;
-  background: rgba(7, 14, 17, 0.5);
-  font-size: clamp(0.8rem, 1.2vw, 1rem);
-  font-weight: 800;
-  letter-spacing: 0.08em;
-}
-
-.patientRealityBrand h1 {
-  margin: 0;
-  color: inherit;
-  font-size: clamp(1.65rem, 3.5vw, 3.7rem);
-  font-weight: 760;
-  line-height: 0.95;
-  letter-spacing: 0.12em;
-}
-
-.patientRealityBrand p {
-  max-width: 58rem;
-  margin: clamp(0.55rem, 1vw, 0.85rem) 0 0;
-  color: rgba(233, 242, 239, 0.7);
-  font-size: clamp(0.63rem, 1vw, 0.86rem);
-  line-height: 1.6;
-  letter-spacing: 0.055em;
-}
-
-#login_panel.loginArea {
-  grid-column: 2;
-  grid-row: 1;
-  position: relative;
-  z-index: 3;
-  display: grid;
-  place-items: center;
-  width: auto;
-  min-width: 0;
-  min-height: 0;
-  padding: clamp(0.75rem, 2vw, 1.5rem);
-  border: 0;
-  background: transparent;
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  overflow-y: auto;
-  animation: panel_enter 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.loginCard {
-  width: min(100%, 25rem);
-  margin: auto;
-  border: 1px solid rgba(224, 238, 234, 0.12);
-  border-radius: 0.75rem;
-  background: rgba(5, 10, 12, 0.44);
-  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  overflow: hidden;
-}
-
-.loginCard #login_role_tabs {
-  margin: clamp(1rem, 2vw, 1.4rem) clamp(1rem, 2vw, 1.4rem) 0;
-}
-
-.loginCard #login_video_toggle {
-  margin: 0.85rem clamp(1rem, 2vw, 1.4rem) 0;
-}
-
-.loginCard #login_video_container {
-  padding-inline: clamp(1rem, 2vw, 1.4rem);
-}
-
-.loginCard #login_form {
-  display: flex;
-  flex: none;
-  gap: clamp(0.8rem, 1.5vh, 1.05rem);
-  padding: clamp(1rem, 2vw, 1.5rem);
-  overflow: visible;
-}
-
-.loginCard #login_form_head {
-  margin-bottom: clamp(0.6rem, 1.5vh, 1.2rem);
-}
-
-.loginCard #login_footer {
-  position: static;
-  padding: 0 clamp(1rem, 2vw, 1.4rem) clamp(1rem, 2vw, 1.35rem);
-  color: rgba(225, 235, 232, 0.38);
-}
-
-html.theme-light #login_page.loginPage {
-  --login-bg: #070c10;
-  --login-text: #edf3f1;
-  --login-muted: rgba(225, 235, 232, 0.66);
-  --login-faint: rgba(225, 235, 232, 0.4);
-  --login-panel-bg: rgba(8, 13, 16, 0.42);
-  --login-panel-border: rgba(224, 238, 234, 0.12);
-  --login-soft-surface: rgba(255, 255, 255, 0.045);
-  --login-soft-border: rgba(224, 238, 234, 0.14);
-  --login-field-bg: rgba(255, 255, 255, 0.055);
-}
-
-html.theme-light #login_panel.loginArea {
-  background: transparent;
-}
-
-html.theme-light .loginCard {
-  background-color: rgba(8, 13, 16, 0.44);
-  color: var(--login-text);
-}
-
-html.theme-light .loginCard #login_form input {
-  border-color: var(--login-soft-border);
-  background: var(--login-field-bg);
-  color: var(--login-text);
-}
-
-html.theme-light .loginCard #login_form input:focus {
-  border-color: rgba(151, 194, 184, 0.62);
-  background: rgba(255, 255, 255, 0.07);
-  box-shadow: 0 0 0 3px rgba(151, 194, 184, 0.1);
-}
-
-html.theme-light .loginCard #login_submit {
-  background: #d9e7e3;
-  color: #0b1719;
-  box-shadow: none;
-}
-
-@media (max-width: 900px) {
-  #login_page.loginPage {
-    position: relative;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    place-items: center;
-    height: 100dvh;
-    min-height: 100dvh;
-    padding: max(5.75rem, calc(env(safe-area-inset-top) + 4.5rem))
-      max(1.25rem, env(safe-area-inset-right))
-      max(1.25rem, env(safe-area-inset-bottom))
-      max(1.25rem, env(safe-area-inset-left));
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
-
-  .patientRealityArtwork {
-    grid-column: 1;
-    grid-row: 1;
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    height: 100dvh;
-  }
-
-  .patientRealityImage {
-    object-position: left center;
-  }
-
-  .patientRealityOverlay {
-    background:
-      linear-gradient(180deg, rgba(2, 6, 8, 0.42) 0%, rgba(2, 6, 8, 0.7) 34%, rgba(2, 6, 8, 0.88) 100%),
-      linear-gradient(90deg, rgba(2, 6, 8, 0.26), rgba(2, 6, 8, 0.08), rgba(2, 6, 8, 0.26));
-  }
-
-  .patientRealityBrand {
-    position: fixed;
-    top: max(1.25rem, env(safe-area-inset-top));
-    left: max(1.25rem, env(safe-area-inset-left));
-    right: max(1.25rem, env(safe-area-inset-right));
-  }
-
-  .patientRealityBrand h1 {
-    font-size: clamp(1.35rem, 5vw, 2rem);
-  }
-
-  .patientRealityBrand p {
-    font-size: clamp(0.58rem, 1.8vw, 0.74rem);
-  }
-
-  #login_panel.loginArea {
-    grid-column: 1;
-    grid-row: 1;
-    align-self: center;
-    width: min(100%, 31rem);
-    min-height: auto;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    overflow: visible;
-  }
-
-  .loginCard {
-    background: rgba(6, 11, 14, 0.56);
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-  }
-}
-
-@media (max-width: 600px) {
-  #login_page.loginPage {
-    place-items: start center;
-    padding-top: max(4.9rem, calc(env(safe-area-inset-top) + 4.1rem));
-    padding-right: max(0.75rem, env(safe-area-inset-right));
-    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
-    padding-left: max(0.75rem, env(safe-area-inset-left));
-  }
-
-  .patientRealityImage {
-    object-position: left center;
-  }
-
-  .patientRealityBrand {
-    top: max(0.9rem, env(safe-area-inset-top));
-    left: max(1rem, env(safe-area-inset-left));
-    right: max(1rem, env(safe-area-inset-right));
-    align-items: center;
-  }
-
-  .patientRealityBrandMark {
-    width: 2rem;
-  }
-
-  .patientRealityBrand h1 {
-    font-size: 1.25rem;
-  }
-
-  .patientRealityBrand p {
-    display: none;
-  }
-
-  .loginCard {
-    width: 100%;
-    border-radius: 0.8rem;
-  }
-
-  .loginCard #login_role_tabs {
-    margin: 0.8rem 0.8rem 0;
-  }
-
-  .loginCard #login_video_toggle {
-    min-height: 42px;
-    margin: 0.65rem 0.8rem 0;
-  }
-
-  .loginCard #login_video_container {
-    padding: 0.8rem 0.8rem 0.35rem;
-  }
-
-  .loginCard #login_intro_video {
-    height: clamp(8.5rem, 34vw, 11rem);
-  }
-
-  .loginCard #login_form {
-    gap: 0.75rem;
-    padding: 1rem;
-  }
-
-  .loginCard #login_form_head {
-    margin-bottom: 0.4rem;
-  }
-
-  .loginCard #login_form input,
-  .loginCard #login_submit {
-    min-height: 48px;
-    font-size: 1rem;
-  }
-
-  .loginCard #login_submit {
-    font-size: 0.76rem;
-  }
-
-  .loginCard #login_footer {
-    padding-bottom: 0.8rem;
-    font-size: 0.52rem;
-  }
-}
-
-@media (max-height: 700px) and (max-width: 900px) {
-  #login_page.loginPage {
-    place-items: start center;
-  }
-
-  .loginCard #login_form {
-    gap: 0.65rem;
-  }
-
-  .loginCard #login_form_head {
-    margin-bottom: 0.2rem;
-  }
-}
-
-/* ════════════════════════════════════════════════════════════════
-   SCROLL-DRIVEN PATIENT REALITY JOURNEY
-   ════════════════════════════════════════════════════════════════ */
+/* Rabbit Hole / Scientific Editorial Brutalism */
 #login_page.loginJourney {
-  --login-bg: #f3f1ec;
-  --login-text: #18201f;
-  --login-panel-bg: rgba(255, 255, 255, 0.92);
-  --login-panel-border: rgba(24, 32, 31, 0.14);
-  --login-soft-surface: rgba(247, 246, 242, 0.92);
-  --login-soft-border: rgba(24, 32, 31, 0.16);
-  --login-field-bg: rgba(255, 255, 255, 0.96);
-  --login-muted: #5f6865;
-  --login-faint: #8a928f;
-  display: block;
+  --rh-paper: #f2f0e8;
+  --rh-paper-alt: #e9e6dc;
+  --rh-ink: #11110f;
+  --rh-muted: #66635b;
+  --rh-faint: #9a968b;
+  --rh-rule: rgba(17, 17, 15, 0.27);
+  --rh-line-step: 2.59rem;
+  --rh-error: #8c261e;
+  --rh-pattern-blur: 6px;
+  --rh-display-font: Georgia, "Times New Roman", serif;
+  --rh-mono-font: "Courier New", Courier, monospace;
   position: relative;
+  display: block;
   width: 100%;
-  height: auto;
+  height: 100svh;
+  min-height: 100svh;
   min-height: 0;
-  max-height: none;
-  padding: 0;
-  overflow: visible;
-  background: #f3f1ec;
-  color: #18201f;
+  overflow: hidden;
+  background: var(--rh-paper);
+  color: var(--rh-ink);
+  font-family: var(--rh-mono-font);
   touch-action: pan-y;
 }
 
-.patientRealitySticky {
-  position: sticky;
-  top: 0;
+html.theme-disabled-dark #login_page.loginJourney {
+  --rh-paper: #171714;
+  --rh-paper-alt: #20201c;
+  --rh-ink: #e8e4d8;
+  --rh-muted: #aaa69b;
+  --rh-faint: #706e67;
+  --rh-rule: rgba(232, 228, 216, 0.25);
+  --rh-error: #ef8b7d;
+}
+
+.rabbitHoleSticky {
   z-index: 1;
+  display: flex;
+  flex-direction: column;
   width: 100%;
-  height: var(--ontology-viewport-height, 100dvh);
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 18% 22%, rgba(255, 255, 255, 0.98), transparent 34%),
-    radial-gradient(circle at 78% 72%, rgba(211, 221, 216, 0.5), transparent 42%),
-    linear-gradient(145deg, #f8f7f3 0%, #eceae4 100%);
+  background: var(--rh-paper);
   isolation: isolate;
 }
 
-.patientRealityJourneyShade {
+.rabbitHoleSticky::before {
+  content: "";
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  z-index: 0;
+  inset: -4px;
+  background-image: url("/login%20pattern.png");
+  background-position: center;
+  background-repeat: repeat;
+  background-size: clamp(44rem, 78vw, 70rem) auto;
+  filter: blur(var(--rh-pattern-blur));
+  opacity: 0.1;
+  transition: opacity 3200ms ease;
+  pointer-events: none;
+  user-select: none;
 }
 
-.patientRealityJourneyShade {
-  z-index: 1;
-  background: transparent;
+#login_page.loginJourney.is-music-playing .rabbitHoleSticky::before {
+  filter: none;
+  opacity: 1;
+}
+
+html.theme-disabled-dark .rabbitHoleSticky::before {
+  filter: invert(1) blur(var(--rh-pattern-blur));
+  opacity: 0;
+}
+
+html.theme-disabled-dark #login_page.loginJourney.is-music-playing .rabbitHoleSticky::before {
+  filter: invert(1);
+  opacity: 1;
+}
+
+.rhLoginAmbientAudio {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
   pointer-events: none;
 }
 
-.patientRealityJourneyBrand {
+.rhDocumentHeader {
   position: absolute;
-  z-index: 3;
-  top: max(clamp(1.2rem, 3vw, 2.5rem), env(safe-area-inset-top));
-  left: max(clamp(1.2rem, 4vw, 4rem), env(safe-area-inset-left));
+  z-index: 8;
+  top: 0;
+  left: max(1.2rem, env(safe-area-inset-left));
+  right: max(1.2rem, env(safe-area-inset-right));
   display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  box-sizing: border-box;
+  height: var(--rh-line-step);
+  padding-top: max(0.35rem, env(safe-area-inset-top));
+  padding-bottom: 0.35rem;
   align-items: center;
-  gap: 0.8rem;
-  color: #17201e;
-  opacity: max(0.56, calc(1 - var(--journey-progress, 0) * 1.6));
-  text-shadow: none;
+  border-bottom: 1px solid var(--rh-rule);
+  color: var(--rh-muted);
+  font-size: clamp(0.48rem, 0.7vw, 0.64rem);
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
 }
 
-.patientRealityJourneyBrand h1,
-.patientRealityJourneyBrand p {
-  margin: 0;
-  color: inherit;
+.rhEntryComposition {
+  position: relative;
+  z-index: 4;
+  flex: 1 1 auto;
+  display: grid;
+  width: 100%;
+  min-height: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(min-content, 1fr);
+  align-items: stretch;
+  box-sizing: border-box;
+  padding: calc(2 * var(--rh-line-step)) max(4.5vw, env(safe-area-inset-right)) max(4rem, calc(env(safe-area-inset-bottom) + 2.5rem)) max(4.5vw, env(safe-area-inset-left));
+  opacity: calc(1 - var(--entry-progress, 0));
+  transform: translate3d(0, 0, 0) scale(calc(1 + var(--entry-progress, 0)));
+  transform-origin: 53% 58%;
+  pointer-events: none;
+  will-change: transform, opacity;
 }
 
-.patientRealityJourneyBrand h1 {
-  font-size: clamp(1.1rem, 2.4vw, 2rem);
-  line-height: 1;
+.rhEntryComposition.is-active { pointer-events: auto; }
+
+.rhMusicToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rh-muted);
+  font: 0.52rem/1.5 var(--rh-mono-font);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.rhMusicToggle i { font-size: 0.9rem; line-height: 1; }
+
+.rhMusicToggle:hover,
+.rhMusicToggle:focus-visible,
+.rhMusicToggle[aria-pressed="true"] { color: var(--rh-ink); text-decoration: underline; text-underline-offset: 0.25rem; }
+
+.rhEditorialField {
+  position: relative;
+  z-index: 3;
+  isolation: isolate;
+  grid-column: 2;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  container-type: inline-size;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2rem;
+}
+
+.rhEditorialField::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 0;
+  width: clamp(8rem, 14vw, 14rem);
+  height: clamp(11rem, 24vw, 20rem);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(17, 17, 15, 0.24) 0%,
+    rgba(17, 17, 15, 0.13) 30%,
+    rgba(17, 17, 15, 0.045) 52%,
+    transparent 74%
+  );
+  filter: blur(0.65rem);
+  opacity: 0;
+  transition: opacity 3200ms ease;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+#login_page.loginJourney.is-music-playing .rhEditorialField::before {
+  opacity: 0.8;
+}
+
+/* Login success becomes the Rabbit Tunnel: reveal the pattern first, then
+   accelerate its downward movement for a full 15 seconds before
+   BlackHoleLoginTransition completes and the Home route mounts. */
+#login_page.loginJourney.is-black-hole-collapsing .rabbitHoleSticky::before {
+  background-position: center top;
+  background-repeat: repeat-y;
+  background-size: 100% 100svh;
+  filter: blur(var(--rh-pattern-blur));
+  opacity: 0.1;
+  will-change: background-position-y, filter, opacity;
+  animation:
+    rhLoginTunnelReveal 1.5s ease-out forwards,
+    rhLoginTunnelFall 13.5s linear 1.5s forwards;
+}
+
+@keyframes rhLoginTunnelReveal {
+  0% {
+    filter: blur(var(--rh-pattern-blur));
+    opacity: 0.1;
+  }
+  100% {
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+
+@keyframes rhLoginTunnelFall {
+  0% {
+    background-position-y: 0;
+    animation-timing-function: cubic-bezier(.92, 0, 1, 1);
+  }
+  62% {
+    background-position-y: -1500svh;
+    animation-timing-function: cubic-bezier(.18, .82, .24, 1);
+  }
+  82% {
+    background-position-y: -1710svh;
+    animation-timing-function: cubic-bezier(.08, .7, .18, 1);
+  }
+  100% { background-position-y: -1800svh; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #login_page.loginJourney.is-black-hole-collapsing .rabbitHoleSticky::before {
+    animation:
+      rhLoginTunnelReveal 1.5s ease-out forwards,
+      rhLoginTunnelFall 13.5s linear 1.5s forwards;
+  }
+}
+
+@keyframes rhLoginTunnelRevealReduced {
+  from {
+    filter: blur(var(--rh-pattern-blur));
+    opacity: 0.1;
+  }
+  to {
+    filter: blur(0);
+    opacity: 1;
+  }
+}
+
+.rhBoundarySeparator {
+  position: absolute;
+  z-index: 1000;
+  top: 50%;
+  left: 0;
+  display: block;
+  width: clamp(8rem, 16vw, 18rem);
+  aspect-ratio: 2 / 3;
+  max-width: none;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.94;
+  filter:
+    grayscale(1)
+    contrast(0.96)
+    brightness(1.03);
+  mix-blend-mode: normal;
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.88) 7%, #000 16%, #000 84%, rgba(0, 0, 0, 0.88) 93%, transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0%, rgba(0, 0, 0, 0.88) 7%, #000 16%, #000 84%, rgba(0, 0, 0, 0.88) 93%, transparent 100%);
+  transform: translate(-50%, -50%);
+  transform-origin: center;
+  transition: opacity 3200ms ease;
+}
+
+.rhBoundarySeparator::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 18%;
+  right: 18%;
+  bottom: 18%;
+  left: 18%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(17, 17, 15, 0.28) 0%,
+    rgba(17, 17, 15, 0.16) 34%,
+    rgba(17, 17, 15, 0.055) 58%,
+    transparent 78%
+  );
+  filter: blur(0.75rem);
+  opacity: 0;
+  transition: opacity 3200ms ease;
+  pointer-events: none;
+}
+
+.rhBoundarySeparator:not(.is-faded)::before {
+  opacity: 1;
+}
+
+.rhBoundarySeparatorFrame {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: none;
+  will-change: opacity;
+}
+
+.rhBoundarySeparator.is-faded {
+  opacity: 0;
+}
+
+.rhBoundarySeparatorFrame.is-active {
+  z-index: 2;
+  opacity: 1;
+}
+
+html.theme-disabled-dark .rhBoundarySeparator {
+  opacity: 0.9;
+  filter:
+    grayscale(1)
+    invert(1)
+    contrast(0.92)
+    brightness(0.96);
+  mix-blend-mode: normal;
+}
+
+html.theme-disabled-dark .rhBoundarySeparator.is-faded {
+  opacity: 0;
+}
+
+html.theme-disabled-dark .rhEditorialField::before {
+  opacity: 0;
+}
+
+html.theme-disabled-dark #login_page.loginJourney.is-music-playing .rhEditorialField::before {
+  opacity: 0.55;
+}
+
+.rhEntryCode {
+  position: relative;
+  padding-left: 2.8rem;
+  color: var(--rh-muted);
+  font-size: 0.62rem;
   letter-spacing: 0.14em;
 }
 
-.patientRealityJourneyBrand p {
-  margin-top: 0.28rem;
-  color: rgba(23, 32, 30, 0.58);
-  font-size: clamp(0.58rem, 0.9vw, 0.72rem);
+.rhEntryCode::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 2.2rem;
+  height: 1px;
+  background: var(--rh-ink);
+}
+
+.rhEditorialField h1 {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  isolation: isolate;
+  box-sizing: border-box;
+  left: 0;
+  width: 100%;
+  max-width: 100%;
+  min-height: 1.84em;
+  padding-bottom: 0.16em;
+  color: var(--rh-ink);
+  font-family: var(--rh-display-font);
+  font-size: clamp(5rem, 23cqw, 13.5rem);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.09em;
+}
+
+.rhEditorialField h1 > span {
+  display: block;
+  flex: 0 0 1em;
+  height: 1em;
+  line-height: inherit;
+}
+.rhEditorialField h1 > span:last-child {
+  max-width: calc(100% - 0.55em);
+  margin-top: -0.32em;
+}
+.rhEditorialField h1 > span:first-child {
+  position: relative;
+  z-index: 0;
+}
+.rhHoleO {
+  position: relative;
+  z-index: 100;
+  display: inline-block;
+  width: 0.72em;
+  height: 1em;
+  line-height: inherit;
+  transform-style: preserve-3d;
+  perspective: 5em;
+}
+
+.rhHoleO img {
+  position: absolute;
+  z-index: 101;
+  top: 42%;
+  left: 50%;
+  width: 1.32em;
+  height: 1.32em;
+  object-fit: contain;
+  filter:
+    drop-shadow(1px 0 0 var(--rh-paper))
+    drop-shadow(-1px 0 0 var(--rh-paper))
+    drop-shadow(0 1px 0 var(--rh-paper))
+    drop-shadow(0 -1px 0 var(--rh-paper));
+  mix-blend-mode: normal;
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(calc(var(--entry-progress, 0) * 720deg)) scale(calc(1 - (var(--entry-progress, 0) * 0.92)));
+  transform-origin: center;
+  opacity: calc(1 - var(--entry-progress, 0));
+  will-change: transform, opacity;
+}
+
+.rhEditorialField > p {
+  position: static;
+  flex: 0 0 auto;
+  align-self: center;
+  margin: clamp(0.75rem, 2vh, 1.5rem) 0 0 2%;
+  font-family: var(--rh-display-font);
+  font-size: clamp(1rem, 1.8vw, 1.55rem);
+  font-style: italic;
+}
+
+.rhEditorialField > p span,
+.rhEditorialField > p cite { display: block; }
+
+.rhEditorialField > p cite {
+  margin-top: 0.45rem;
+  color: var(--rh-muted);
+  font-size: 0.72em;
+  font-style: normal;
+  letter-spacing: 0.025em;
+}
+
+.rhEditorialField > p cite em { font-style: italic; }
+
+.rhDescentDiagram {
+  position: absolute;
+  right: 2%;
+  bottom: 2%;
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  color: var(--rh-muted);
+  font-size: 0.54rem;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
-.patientRealityJourneyBrand .patientRealityBrandMark {
-  width: clamp(2rem, 3vw, 2.55rem);
-  background: rgba(255, 255, 255, 0.72);
-  border-color: rgba(23, 32, 30, 0.2);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
+.rhDescentDiagram i { display: block; width: 1px; height: clamp(0.65rem, 1.5vh, 1.2rem); background: var(--rh-rule); }
+.rhDescentDiagram b,
+.rhDescentDiagram strong,
+.rhDescentDiagram em { color: var(--rh-ink); font-style: normal; font-weight: 400; }
+.rhDescentDiagram strong { transform: translateX(1.7rem); }
+.rhDescentDiagram em { transform: translateX(3.1rem); }
+
+.rhEntryNode {
+  position: absolute;
+  top: 62%;
+  left: 41%;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: var(--rh-muted);
+  font-size: 0.52rem;
+  letter-spacing: 0.1em;
 }
 
-.patientRealitySignIn {
+.rhEntryNode::before { content: ""; width: clamp(4rem, 9vw, 9rem); height: 1px; background: var(--rh-rule); }
+.rhEntryNode b { width: 0.72rem; height: 0.72rem; border: 1px solid var(--rh-ink); border-radius: 50%; background: var(--rh-paper); }
+
+.rhRotatedNote {
   position: absolute;
-  z-index: 4;
-  top: max(clamp(1.2rem, 3vw, 2.5rem), env(safe-area-inset-top));
-  right: max(clamp(1.2rem, 4vw, 4rem), env(safe-area-inset-right));
-  min-height: 42px;
-  padding: 0.65rem 1rem;
-  border: 1px solid rgba(23, 32, 30, 0.24);
-  border-radius: 0.35rem;
-  background: rgba(255, 255, 255, 0.7);
-  color: #17201e;
-  font: inherit;
-  font-size: 0.7rem;
-  font-weight: 700;
+  bottom: 18%;
+  left: -2.5rem;
+  color: var(--rh-muted);
+  font-size: 0.5rem;
+  letter-spacing: 0.13em;
+  transform: rotate(-90deg);
+}
+
+#login_panel.loginArea {
+  position: relative;
+  z-index: 2;
+  grid-column: 1;
+  grid-row: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 2rem;
+}
+
+.loginCard {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+  background: transparent;
+  scrollbar-width: thin;
+}
+
+
+.loginAccessHeader {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.loginAccessHeader .loginAccessHeading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.loginAccessHeading span,
+.loginAccessHeading small {
+  color: var(--rh-muted);
+  font-size: 0.54rem;
+}
+
+.loginAccessHeading strong {
+  grid-column: 1 / -1;
+  font-family: var(--rh-display-font);
+  font-size: clamp(1.55rem, 2.5vw, 2.25rem);
+  font-weight: 400;
+  line-height: 1;
+}
+
+.loginAccessHeading small { grid-column: 2; grid-row: 1; }
+
+#login_role_tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  box-sizing: border-box;
+  height: var(--rh-line-step);
+  margin: 0;
+  flex: 0 1 min(48%, 18rem);
+}
+
+.login_role_tab {
+  flex: 1 1 0;
+  min-width: 0;
+  box-sizing: border-box;
+  height: var(--rh-line-step);
+  padding: 0 0.75rem;
+  border: 1px solid var(--rh-ink);
+  border-radius: 0;
+  background: transparent;
+  color: var(--rh-muted);
+  font: 0.58rem/1 var(--rh-mono-font);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   cursor: pointer;
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
-  transition: background-color 180ms ease, border-color 180ms ease;
+  text-align: left;
+  transition: background 160ms ease, color 160ms ease;
 }
 
-.patientRealitySignIn:hover,
-.patientRealitySignIn:focus-visible {
-  border-color: rgba(23, 32, 30, 0.65);
-  background: #fff;
+.login_role_tab:hover,
+.login_role_tab:focus-visible {
+  background: var(--rh-paper-alt);
+  color: var(--rh-ink);
 }
 
-.stageIdentity {
-  position: absolute;
-  z-index: 3;
-  top: 75%;
-  left: 0;
-  width: 100%;
-  height: 25%;
-  padding:
-    0 max(clamp(1.3rem, 6vw, 6rem), env(safe-area-inset-right))
-    max(clamp(2.8rem, 6vh, 4.8rem), env(safe-area-inset-bottom))
-    max(clamp(1.3rem, 6vw, 6rem), env(safe-area-inset-left));
-  pointer-events: none;
+.login_role_tab + .login_role_tab { margin-left: 0; }
+.login_role_tab--active {
+  background: var(--rh-ink);
+  color: var(--rh-paper);
+  font-weight: 700;
 }
 
-.stageIdentityLabel {
-  position: relative;
-  z-index: 1;
-  height: 100%;
-  display: flex;
-  align-items: baseline;
-  align-content: end;
-  flex-wrap: wrap;
-  gap: clamp(0.8rem, 1.8vw, 1.5rem);
-  color: #17201e;
-  text-shadow: none;
-  animation: journey_label_in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+.login_role_tab--active:hover,
+.login_role_tab--active:focus-visible {
+  background: var(--rh-ink);
+  color: var(--rh-paper);
 }
 
-.stageNumber {
-  color: rgba(23, 32, 30, 0.5);
-  font-size: clamp(0.72rem, 1vw, 0.92rem);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.2em;
-}
-
-.stageIdentity h2 {
-  margin: 0;
-  color: inherit;
-  font-size: clamp(2.4rem, 7vw, 7rem);
-  font-weight: 580;
-  line-height: 0.88;
-  letter-spacing: -0.035em;
-}
-
-@keyframes journey_label_in {
-  from { opacity: 0; transform: translateY(0.65rem); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.patientRealityProgress {
-  position: absolute;
-  z-index: 3;
-  right: max(clamp(1.2rem, 4vw, 4rem), env(safe-area-inset-right));
-  bottom: max(clamp(1.25rem, 4vh, 2.5rem), env(safe-area-inset-bottom));
-  display: flex;
-  align-items: center;
-  gap: 0.8rem;
-  color: rgba(23, 32, 30, 0.58);
-}
-
-.patientRealityProgress::before {
-  content: "";
-  width: clamp(5rem, 10vw, 8rem);
-  height: 1px;
-  background: rgba(23, 32, 30, 0.18);
-}
-
-.patientRealityProgress > span {
-  position: absolute;
-  left: 0;
-  width: clamp(5rem, 10vw, 8rem);
-  height: 1px;
-  background: rgba(23, 32, 30, 0.82);
-  transform: scaleX(var(--stage-progress, 0.125));
-  transform-origin: left center;
-  transition: transform 320ms ease;
-}
-
-.patientRealityProgress small {
-  font-size: 0.58rem;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.13em;
-}
-
-.patientRealityStages {
-  position: relative;
-  z-index: 0;
-  margin-top: calc(-1 * var(--ontology-viewport-height, 100dvh));
-  pointer-events: none;
-}
-
-.patientRealityScrollStage {
-  position: relative;
-  width: 100%;
-  height: var(--ontology-viewport-height, 100dvh);
-}
-
-.loginOverlay {
-  --login-card-left: max(clamp(0.85rem, 2vw, 1.75rem), env(safe-area-inset-left));
-  --login-card-width: min(19rem, calc(40vw - 2rem));
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  padding: 0;
-  background: transparent;
-  overflow: hidden;
-  animation: login_overlay_in 220ms ease both;
-}
-
-@keyframes login_overlay_in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-.loginOverlay #login_panel.loginArea {
-  position: absolute;
-  top: 50%;
-  left: var(--login-card-left);
-  display: block;
-  width: var(--login-card-width);
-  min-height: 0;
-  padding: 0;
-  overflow: visible;
-  transform: translateY(-50%);
-  animation: login_panel_left_in 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.loginOverlay .vk_panel--login {
-  left: calc(var(--login-card-left) + var(--login-card-width) + 0.75rem);
-  right: auto;
-  top: 50%;
-  bottom: auto;
-  width: min(30rem, calc(100vw - var(--login-card-left) - var(--login-card-width) - 1.5rem));
-  max-height: calc(100dvh - 1.5rem);
-  padding: 0.5rem;
-  border-width: 1px;
-  border-radius: 0.75rem;
-  transform: translateY(-50%);
-  border-color: rgba(236, 242, 240, 0.14);
-  background: rgba(15, 19, 19, 0.78);
-  color: #f1f5f3;
-  box-shadow: 0 14px 38px rgba(10, 14, 13, 0.28);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  animation: login_keyboard_left_in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.loginOverlay .vk_panel--login .vk_panel_header,
-.loginOverlay .vk_panel--login .vk_no_target {
-  color: rgba(238, 244, 242, 0.68);
-}
-
-.loginOverlay .vk_panel--login .vk_stt_provider {
-  border-color: rgba(220, 235, 231, 0.16);
-  background: rgba(255, 255, 255, 0.07);
-  color: #dce9e5;
-}
-
-.loginOverlay .vk_panel--login .vk_stt_provider small {
-  color: rgba(238, 244, 242, 0.58);
-}
-
-.loginOverlay .vk_panel--login .vk_row button {
-  border-color: rgba(231, 240, 237, 0.16);
-  border-bottom-color: rgba(231, 240, 237, 0.25);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.07));
-  color: #f3f7f5;
-  box-shadow:
-    0 0.2rem 0 rgba(4, 7, 7, 0.48),
-    0 0.3rem 0.45rem rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
-}
-
-.loginOverlay .vk_panel--login .vk_row button:hover,
-.loginOverlay .vk_panel--login .vk_row button.vk_key--active {
-  border-color: rgba(186, 218, 209, 0.34);
-  background: linear-gradient(180deg, rgba(170, 210, 199, 0.2), rgba(126, 174, 162, 0.12));
-  color: #fff;
-}
-
-.loginOverlay .vk_panel--login .vk_row button:active {
-  box-shadow:
-    0 0.03rem 0 rgba(4, 7, 7, 0.55),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
-@keyframes login_keyboard_left_in {
-  from { opacity: 0; transform: translate(-0.7rem, -50%); }
-  to { opacity: 1; transform: translate(0, -50%); }
-}
-
-@keyframes login_panel_left_in {
-  from { opacity: 0; transform: translate(-0.8rem, -50%); }
-  to { opacity: 1; transform: translate(0, -50%); }
-}
-
-.patientRealityModes {
-  min-width: 0;
-  padding: 1.25rem 1.35rem;
-  border-left: 1px solid rgba(23, 32, 30, 0.18);
-  color: #17201e;
-  text-shadow: none;
-}
-
-.patientRealityModes header {
-  margin-bottom: 1.15rem;
-}
-
-.patientRealityModes header span,
-.patientRealityModes header p {
-  display: block;
-  margin: 0;
-  color: rgba(23, 32, 30, 0.48);
-  font-size: 0.54rem;
-  font-weight: 650;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-}
-
-.patientRealityModes h2 {
-  margin: 0.3rem 0;
-  color: inherit;
-  font-size: clamp(1.15rem, 2.2vw, 1.6rem);
-  font-weight: 580;
-  letter-spacing: -0.02em;
-}
-
-.patientRealityModes ol {
+#login_form {
   display: grid;
   gap: 0;
+  box-sizing: border-box;
+}
+
+.login_field {
+  position: relative;
+  display: grid;
+  grid-template-rows: var(--rh-line-step) var(--rh-line-step);
+  align-items: end;
+  gap: 0;
+  height: calc(2 * var(--rh-line-step));
+}
+
+.login_field_label {
+  display: flex;
+  gap: 0.65rem;
+  color: var(--rh-muted);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+}
+
+.login_field_label span { color: var(--rh-ink); }
+
+.login_field input {
+  width: 100%;
+  box-sizing: border-box;
+  height: var(--rh-line-step);
+  min-height: var(--rh-line-step);
+  padding: 0.4rem 4.4rem 0.4rem 0.4rem;
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--rh-ink);
+  font: 0.92rem/1.3 var(--rh-mono-font);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.login_field input::placeholder { color: var(--rh-faint); opacity: 1; }
+.login_field input:hover,
+.login_field input:focus {
+  border-bottom-width: 1px;
+  box-shadow: none;
+}
+.login_field input:invalid:not(:placeholder-shown) { border-color: var(--rh-error); }
+
+.login_password_control { position: relative; }
+
+.login_password_control input { padding-right: 2.4rem; }
+
+.login_password_toggle {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  transform: translateY(-50%);
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--rh-muted);
+  cursor: pointer;
+}
+
+.login_password_toggle:hover,
+.login_password_toggle:focus-visible { color: var(--rh-ink); }
+
+.login_password_toggle:focus-visible { outline: 1px solid var(--rh-ink); outline-offset: 2px; }
+
+.login_password_toggle:disabled { cursor: default; opacity: 0.55; }
+
+.login_field > small {
+  position: absolute;
+  right: 0;
+  bottom: 0.8rem;
+  color: transparent;
+  font-size: 0.48rem;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+}
+
+.login_field:focus-within > small { color: var(--rh-ink); }
+
+#login_error {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.7rem;
+  margin: 0;
+  box-sizing: border-box;
+  min-height: var(--rh-line-step);
+  padding: 0.6rem 0;
+  border-block: 1px solid var(--rh-error);
+  color: var(--rh-error);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
+#login_error span { font-weight: 700; }
+
+#login_submit {
+  justify-self: start;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  height: var(--rh-line-step);
+  min-height: var(--rh-line-step);
+  margin-top: var(--rh-line-step);
+  padding: 0.65rem 1rem;
+  border: 1px solid var(--rh-ink);
+  border-radius: 0;
+  background: var(--rh-ink);
+  color: var(--rh-paper);
+  font: 700 0.7rem/1 var(--rh-mono-font);
+  letter-spacing: 0.15em;
+  text-align: left;
+  cursor: pointer;
+}
+
+#login_submit:hover:not(:disabled),
+#login_submit:focus-visible { background: transparent; color: var(--rh-ink); }
+#login_submit:disabled { cursor: wait; opacity: 0.48; }
+
+#login_toggle {
+  justify-self: start;
+  box-sizing: border-box;
+  height: var(--rh-line-step);
+  padding: 0.2rem 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--rh-muted);
+  font: 0.6rem/1.3 var(--rh-mono-font);
+  cursor: pointer;
+}
+
+#login_toggle:hover,
+#login_toggle:focus-visible { border-color: currentColor; color: var(--rh-ink); }
+
+.loginSecondaryActions {
+  position: relative;
+  z-index: 8;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.45rem 1rem;
+  align-items: center;
+  flex: 0 0 auto;
+  width: fit-content;
+  max-width: 100%;
+  align-self: center;
+  box-sizing: border-box;
+  min-height: var(--rh-line-step);
+  margin: 0 auto;
+  padding: 0 max(4.5vw, env(safe-area-inset-right)) 0 max(4.5vw, env(safe-area-inset-left));
+  border: 1px solid color-mix(in srgb, var(--rh-ink) 18%, transparent);
+  border-top: 0;
+  border-radius: 0 0 1rem 1rem;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, #fff 24%, transparent), transparent 42%),
+    color-mix(in srgb, var(--rh-paper) 58%, transparent);
+  box-shadow:
+    0 0.5rem 1.5rem color-mix(in srgb, var(--rh-ink) 12%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 48%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.35);
+  backdrop-filter: blur(18px) saturate(1.35);
+}
+
+.loginSecondaryActions button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--rh-muted);
+  font: 0.52rem/1.5 var(--rh-mono-font);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.loginSecondaryActions button:hover,
+.loginSecondaryActions button:focus-visible { color: var(--rh-ink); text-decoration: underline; text-underline-offset: 0.25rem; }
+
+#login_video_container {
+  position: fixed;
+  z-index: 12;
+  left: 5vw;
+  bottom: 7vh;
+  width: min(45vw, 42rem);
+  padding: 0.45rem;
+  border: 1px solid var(--rh-ink);
+  background: var(--rh-paper);
+}
+
+#login_intro_video { display: block; width: 100%; max-height: 52vh; object-fit: contain; background: #000; }
+#login_video_btn { width: 100%; padding: 0.45rem; border: 0; border-top: 1px solid var(--rh-rule); background: transparent; color: var(--rh-ink); font: 0.58rem/1 var(--rh-mono-font); text-align: left; cursor: pointer; }
+
+#login_footer {
+  z-index: 8;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: 0.55rem 0.75rem max(0.55rem, env(safe-area-inset-bottom));
+  border-top: 1px solid color-mix(in srgb, var(--rh-ink) 16%, transparent);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, #fff 24%, transparent), transparent 58%),
+    color-mix(in srgb, var(--rh-paper) 82%, transparent);
+  color: var(--rh-muted);
+  font-size: 0.5rem;
+  letter-spacing: 0.1em;
+  box-shadow:
+    0 0.45rem 1.4rem color-mix(in srgb, var(--rh-ink) 8%, transparent),
+    inset 0 1px 0 color-mix(in srgb, #fff 52%, transparent);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
+  backdrop-filter: blur(22px) saturate(1.25);
+}
+
+.loginFooterIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.rhDepthIndicator {
+  position: absolute;
+  z-index: 7;
+  top: calc(2 * var(--rh-line-step));
+  left: max(1.2rem, env(safe-area-inset-left));
+  width: clamp(7.5rem, 9vw, 9.25rem);
+  color: var(--rh-ink);
+}
+
+.rhDepthTitle {
+  display: block;
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.42rem;
+  border-bottom: 1px solid var(--rh-rule);
+  color: var(--rh-muted);
+  font-size: 0.54rem;
+  letter-spacing: 0.15em;
+}
+
+.rhDepthIndicator ol {
+  display: grid;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.patientRealityModes li {
+.rhDepthIndicator li {
   position: relative;
-  display: grid;
-  grid-template-columns: 0.65rem 1fr;
-  align-items: center;
-  gap: 0.65rem;
-  min-height: 2.35rem;
-  color: rgba(23, 32, 30, 0.58);
+  min-height: 1.62rem;
 }
 
-.patientRealityModes li:not(:last-child)::after {
+.rhDepthIndicator li.is-hyle {
+  min-height: 2.75rem;
+  margin-bottom: 0.55rem;
+  padding-bottom: 0.55rem;
+  border-bottom: 1px solid var(--rh-rule);
+}
+
+.rhDepthIndicator li:not(:last-child):not(.is-hyle)::after {
   content: "";
   position: absolute;
-  top: calc(50% + 0.28rem);
-  bottom: calc(-50% + 0.28rem);
-  left: 0.28rem;
+  top: 1.12rem;
+  bottom: -0.15rem;
+  left: 1.34rem;
   width: 1px;
-  background: rgba(23, 32, 30, 0.24);
+  background: var(--rh-rule);
 }
 
-.patientRealityModes li > span {
+.rhDepthIndicator button {
   position: relative;
   z-index: 1;
-  width: 0.58rem;
-  height: 0.58rem;
-  border: 1px solid rgba(23, 32, 30, 0.4);
-  border-radius: 50%;
-  background: #f5f3ee;
-}
-
-.patientRealityModes li strong {
-  font-size: 0.72rem;
-  font-weight: 540;
-  letter-spacing: 0.06em;
-}
-
-.patientRealityModes li.is-current {
-  color: #17201e;
-}
-
-.patientRealityModes li.is-current > span {
-  border-color: #17201e;
-  background: #17201e;
-  box-shadow: 0 0 0 4px rgba(23, 32, 30, 0.08);
-}
-
-.loginOverlay .loginCard {
-  position: relative;
-  width: 100%;
-  max-height: calc(100dvh - 1.5rem);
-  margin: 0;
-  border-radius: 0.55rem;
-  background: rgba(255, 255, 255, 0.84);
-  border-color: rgba(23, 32, 30, 0.14);
-  box-shadow: 0 14px 38px rgba(47, 54, 51, 0.15);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
-.loginCardClose {
-  position: absolute;
-  z-index: 2;
-  top: 0.3rem;
-  right: 0.3rem;
   display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
+  grid-template-columns: 0.55rem 1.35rem 1fr;
+  gap: 0.18rem;
+  align-items: center;
+  width: 100%;
+  min-height: 1.3rem;
+  padding: 0.12rem 0;
   border: 0;
   background: transparent;
-  color: rgba(23, 32, 30, 0.68);
-  font-size: 1rem;
+  color: color-mix(in srgb, var(--rh-ink) 45%, transparent);
+  font: 0.5rem/1.15 var(--rh-mono-font);
+  letter-spacing: 0.07em;
+  text-align: left;
   cursor: pointer;
 }
 
-.loginOverlay .loginCard #login_role_tabs {
-  margin: 0.65rem 2.35rem 0 0.75rem;
+.rhDepthIndicator button:hover { color: var(--rh-ink); }
+.rhDepthIndicator button i { font: normal 0.48rem/1 var(--rh-mono-font); }
+.rhDepthIndicator button span { color: inherit; font-size: 0.46rem; }
+.rhDepthIndicator button strong { overflow: hidden; font-weight: 400; text-overflow: ellipsis; }
+.rhDepthIndicator li.is-current button { color: var(--rh-ink); font-weight: 700; }
+.rhDepthIndicator li.is-current button strong { font-weight: 700; }
+.rhDepthIndicator li.is-passed button { color: color-mix(in srgb, var(--rh-ink) 64%, transparent); }
+
+.rhDepthDirection {
+  display: block;
+  margin-top: 0.65rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--rh-rule);
+  color: var(--rh-muted);
+  font-size: 0.48rem;
+  line-height: 1.45;
+  letter-spacing: 0.14em;
 }
 
-.loginOverlay .loginCard #login_video_toggle,
-.loginOverlay .loginCard #login_video_container,
-.loginOverlay .loginCard #login_demo_note,
-.loginOverlay .loginCard #login_links,
-.loginOverlay .loginCard #login_footer {
-  display: none;
+.rhDepthMobile { display: none; }
+
+@media (min-width: 1100px) {
+  .rhLevelCoordinates { left: max(11rem, 12vw); }
 }
 
-.loginOverlay .loginCard #login_form {
-  gap: 0.65rem;
-  padding: 0.75rem 0.85rem 0.9rem;
+.rhAccessReturn {
+  position: absolute;
+  z-index: 9;
+  top: max(3.2rem, calc(env(safe-area-inset-top) + 2.6rem));
+  right: max(1.2rem, env(safe-area-inset-right));
+  padding: 0.35rem 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: transparent;
+  color: var(--rh-ink);
+  font: 0.55rem/1 var(--rh-mono-font);
+  letter-spacing: 0.1em;
+  cursor: pointer;
 }
 
-.loginOverlay .loginCard #login_form_head {
-  margin-bottom: 0.1rem;
+.rhStageAnnouncement {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  white-space: nowrap !important;
 }
 
-.loginOverlay .loginCard #login_form input,
-.loginOverlay .loginCard #login_submit {
-  min-height: 40px;
+.rabbitHoleScrollTrack {
+  position: relative;
+  z-index: 0;
+  margin-top: calc(-1 * var(--ontology-viewport-height, 100svh));
+  pointer-events: none;
 }
 
-.loginOverlay .loginCard #login_toggle {
-  font-size: 0.62rem;
-}
+.rabbitHoleScrollStage { position: relative; width: 100%; height: var(--ontology-viewport-height, 100svh); }
+.rabbitHoleScrollStage > span { position: absolute; top: 0; left: 0; padding: 0.2rem; color: var(--rh-error); font-size: 0.6rem; }
 
-#login_page.loginJourney .login_role_tab--active {
-  background: #17201e;
-  color: #fff;
+.rabbitHoleSticky .vk_panel--login {
+  position: fixed;
+  z-index: 30;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(40rem, calc(100vw - 2rem));
+  max-height: 48dvh;
+  border: 1px solid var(--rh-ink);
+  border-radius: 0;
+  background: var(--rh-paper-alt);
+  color: var(--rh-ink);
   box-shadow: none;
 }
 
-#login_page.loginJourney #login_video_toggle {
-  border-color: rgba(23, 32, 30, 0.18);
-  color: #59625f;
-}
+.rabbitHoleSticky .vk_panel--login button { border-radius: 0; }
 
-#login_page.loginJourney #login_video_toggle:hover {
-  border-color: rgba(23, 32, 30, 0.46);
-  background: rgba(23, 32, 30, 0.04);
-  color: #17201e;
-}
-
-#login_page.loginJourney #login_form_bar {
-  background: #17201e;
-  box-shadow: none;
-}
-
-#login_page.loginJourney #login_demo_note {
-  border-color: rgba(23, 32, 30, 0.13);
-  background: #f5f4f0;
-  color: #59625f;
-}
-
-#login_page.loginJourney #login_form input:focus {
-  border-color: #17201e;
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(23, 32, 30, 0.08);
-}
-
-#login_page.loginJourney .loginOverlay .loginCard #login_form input:focus {
-  border-color: rgba(255, 255, 255, 0.72);
-  background: rgba(255, 255, 255, 0.14);
+/* Login keyboard — translucent liquid-glass surface */
+.rabbitHoleSticky .vk_panel--login {
+  width: min(40rem, calc(100vw - 1.5rem));
+  max-height: 52dvh;
+  padding: 0.7rem 0.8rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--rh-ink) 18%, transparent);
+  border-radius: 1.35rem;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, #fff 24%, transparent), transparent 52%),
+    color-mix(in srgb, var(--rh-paper) 58%, transparent);
   box-shadow:
-    0 0 0 2px rgba(255, 255, 255, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    0 1.2rem 3rem rgba(17, 17, 15, 0.18),
+    inset 0 1px 0 color-mix(in srgb, #fff 48%, transparent);
+  -webkit-backdrop-filter: blur(28px) saturate(1.45);
+  backdrop-filter: blur(28px) saturate(1.45);
 }
 
-#login_page.loginJourney #login_submit {
-  background: #17201e;
-  color: #fff;
-  box-shadow: 0 12px 28px rgba(23, 32, 30, 0.18);
+.rabbitHoleSticky .vk_panel--login .vk_panel_header {
+  padding: 0.15rem 0.3rem 0.55rem;
+  color: var(--rh-muted);
 }
 
-#login_page.loginJourney #login_submit:hover:not(:disabled) {
-  box-shadow: 0 16px 34px rgba(23, 32, 30, 0.24);
+.rabbitHoleSticky .vk_panel--login .vk_panel_header_actions button,
+.rabbitHoleSticky .vk_panel--login .vk_panel_header button {
+  border: 1px solid color-mix(in srgb, var(--rh-ink) 14%, transparent);
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, #fff 18%, transparent);
+  color: var(--rh-ink);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 34%, transparent);
 }
 
-#login_page.loginJourney #login_toggle:hover,
-#login_page.loginJourney .login_link:hover {
-  color: #17201e;
+.rabbitHoleSticky .vk_panel--login .vk_row {
+  gap: 0.34rem;
+  margin-top: 0.34rem;
 }
 
-@media (max-width: 900px) {
-  #login_page.loginJourney {
-    display: block;
-    height: auto;
+.rabbitHoleSticky .vk_panel--login .vk_row button {
+  min-height: 2.45rem;
+  margin-bottom: 0;
+  border: 1px solid color-mix(in srgb, var(--rh-ink) 16%, transparent);
+  border-radius: 0.78rem;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, #fff 27%, transparent), transparent 68%),
+    color-mix(in srgb, var(--rh-paper) 38%, transparent);
+  color: var(--rh-ink);
+  box-shadow:
+    0 0.22rem 0.7rem rgba(17, 17, 15, 0.08),
+    inset 0 1px 0 color-mix(in srgb, #fff 48%, transparent);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+}
+
+.rabbitHoleSticky .vk_panel--login .vk_row button:hover,
+.rabbitHoleSticky .vk_panel--login .vk_row button.vk_key--active {
+  border-color: color-mix(in srgb, var(--rh-ink) 32%, transparent);
+  background:
+    linear-gradient(145deg, color-mix(in srgb, #fff 38%, transparent), transparent 68%),
+    color-mix(in srgb, var(--rh-paper) 52%, transparent);
+  color: var(--rh-ink);
+}
+
+.rabbitHoleSticky .vk_panel--login .vk_row button:active {
+  transform: translateY(0.08rem);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 28%, transparent),
+    0 0.08rem 0.3rem rgba(17, 17, 15, 0.1);
+}
+
+.rabbitHoleSticky .vk_panel--login .vk_login_autofill_key {
+  flex: 0 1 auto;
+  color: var(--rh-ink);
+  font-size: .62rem;
+}
+
+.rabbitHoleSticky .vk_panel--login .vk_prediction_rail {
+  border-color: color-mix(in srgb, var(--rh-ink) 14%, transparent);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--rh-paper) 28%, transparent);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
+@media (max-width: 520px) {
+  .rabbitHoleSticky .vk_panel--login {
+    right: 0.5rem;
+    bottom: 0.5rem;
+    width: calc(100vw - 1rem);
+    padding-inline: 0.5rem;
+    border-radius: 1.1rem;
+  }
+
+  .rabbitHoleSticky .vk_panel--login .vk_row button { min-height: 2.2rem; border-radius: 0.65rem; }
+}
+
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--rh-ink);
+  outline-offset: 3px;
+}
+
+#login_page.loginJourney .login_field input:focus-visible {
+  outline: 0;
+  outline-offset: 0;
+  border-bottom-width: 1px;
+  box-shadow: inset 0 -1px 0 var(--rh-ink);
+}
+
+@media (max-width: 960px) {
+  .rhEntryComposition { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: clamp(1.5rem, 3vw, 3rem); }
+  .rhEditorialField h1 { font-size: clamp(5rem, 13vw, 9rem); }
+  .rhDepthIndicator { width: 6.7rem; }
+  .rhDepthIndicator button { grid-template-columns: 0.45rem 1.15rem 1fr; font-size: 0.44rem; }
+  .rhDepthIndicator li:not(:last-child):not(.is-hyle)::after { left: 1.12rem; }
+}
+
+@media (max-width: 700px), (orientation: portrait) {
+  .rabbitHoleSticky { min-height: 0; }
+  .rhDocumentHeader { left: max(0.8rem, env(safe-area-inset-left)); right: max(0.8rem, env(safe-area-inset-right)); }
+  .rhDocumentHeader span:last-child { display: none; }
+
+  .rhEntryComposition {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 0.9fr) minmax(14rem, 1.1fr);
+    gap: clamp(0.75rem, 2vh, 1.25rem);
+    padding: calc(1.5 * var(--rh-line-step)) max(1rem, env(safe-area-inset-right)) max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+    transform-origin: 50% 42%;
+  }
+
+  .rhEditorialField {
+    grid-column: 1;
+    grid-row: 2;
     min-height: 0;
-    padding: 0;
-    overflow: visible;
+    padding-right: 0;
+    padding-top: clamp(0.75rem, 2vh, 1.25rem);
+    padding-bottom: 0;
   }
 
-}
-
-@media (max-width: 700px) {
-  .loginOverlay {
-    --login-card-width: min(19rem, calc(44vw - 1rem));
-  }
-
-  .loginOverlay #login_panel.loginArea {
-    width: var(--login-card-width);
-  }
-
-  .patientRealityModes {
-    width: 100%;
-    padding: 0.8rem 1rem;
-  }
-
-  .patientRealityModes header {
-    margin-bottom: 0.45rem;
-  }
-
-  .patientRealityModes ol {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 1rem;
-  }
-
-  .patientRealityModes li {
-    min-height: 1.65rem;
-  }
-
-  .patientRealityModes li::after {
+  .rhEditorialField::before {
     display: none;
   }
-}
 
-@media (max-width: 600px) {
-  #login_page.loginJourney {
-    padding: 0;
+  .rhBoundarySeparator {
+    display: none;
   }
 
-  .patientRealityJourneyBrand {
-    top: max(0.9rem, env(safe-area-inset-top));
-    left: max(0.9rem, env(safe-area-inset-left));
-  }
+  .rhEntryCode { font-size: 0.48rem; }
+  .rhEditorialField h1 {font-size: clamp(3.6rem, 21cqw, 6.5rem); line-height: 1; }
+  .rhEditorialField h1 > span { flex-basis: 1em; height: 1em; }
+  .rhEditorialField > p { margin: 0.7rem 0 0; font-size: 0.9rem; }
+  .rhDescentDiagram { right: 8%; bottom: -0.5rem; transform: scale(0.72); transform-origin: bottom right; }
+  .rhEntryNode, .rhRotatedNote { display: none; }
 
-  .patientRealityJourneyBrand .patientRealityBrandMark {
-    width: 1.9rem;
-  }
-
-  .patientRealityJourneyBrand h1 {
-    font-size: 1rem;
-  }
-
-  .patientRealityJourneyBrand p {
-    font-size: 0.52rem;
-  }
-
-  .patientRealitySignIn {
-    top: max(0.9rem, env(safe-area-inset-top));
-    right: max(0.9rem, env(safe-area-inset-right));
-    min-height: 40px;
-    padding: 0.55rem 0.75rem;
-    font-size: 0.62rem;
-  }
-
-  .stageIdentity {
-    top: 73.5%;
-    height: 26.5%;
-    padding:
-      0 max(1rem, env(safe-area-inset-right))
-      max(3.8rem, env(safe-area-inset-bottom))
-      max(1rem, env(safe-area-inset-left));
-  }
-
-  .stageIdentityLabel {
-    gap: 0.65rem;
-  }
-
-  .stageIdentity h2 {
-    font-size: clamp(2rem, 12vw, 3.5rem);
-  }
-
-  .stageNumber {
-    font-size: 0.62rem;
-  }
-
-  .patientRealityProgress {
-    right: max(1rem, env(safe-area-inset-right));
-    bottom: max(1rem, env(safe-area-inset-bottom));
-  }
-
-
-  .loginOverlay .loginCard {
-    max-height: calc(100dvh - 1.3rem);
-  }
-}
-
-@media (orientation: portrait) {
-  .loginOverlay #login_panel.loginArea {
-    top: max(5rem, calc(env(safe-area-inset-top) + 4rem));
-    left: 50%;
-    width: min(20rem, calc(100vw - 1.5rem));
-    transform: translateX(-50%);
-    animation-name: login_panel_top_in;
-  }
-
-  .loginOverlay .loginCard {
-    max-height: calc(100dvh - 6rem);
-  }
-
-  .loginOverlay .vk_panel--login {
-    top: auto;
-    bottom: 0;
-    left: 0;
-    right: 0;
+  #login_panel.loginArea {
+    position: relative;
+    grid-column: 1;
+    grid-row: 1;
+    inset: auto;
     width: 100%;
-    max-height: 48dvh;
-    border-width: 1px 0 0;
-    border-radius: 0.9rem 0.9rem 0 0;
-    transform: none;
-    animation-name: login_keyboard_bottom_in;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
   }
+
+  .loginCard { padding-left: 0.9rem; }
+  .loginAccessHeading strong { font-size: 1.35rem; }
+  #login_form { gap: 0; }
+  .login_field input { min-height: var(--rh-line-step); }
+  #login_footer { display: none; }
+  #login_video_container { left: 0.75rem; right: 0.75rem; bottom: 0.75rem; width: auto; }
+
+  .rhDepthIndicator {
+    top: calc(var(--rh-line-step) + 0.45rem);
+    right: max(0.8rem, env(safe-area-inset-right));
+    bottom: auto;
+    left: auto;
+    width: 7.5rem;
+    padding: 0.35rem 0.45rem;
+    border-block: 1px solid var(--rh-rule);
+    background: color-mix(in srgb, var(--rh-paper) 92%, transparent);
+  }
+
+  .rhDepthTitle,
+  .rhDepthIndicator ol,
+  .rhDepthDirection { display: none; }
+  .rhDepthMobile { display: grid; grid-template-columns: auto 1fr; gap: 0.16rem 0.45rem; }
+  .rhDepthMobile b,
+  .rhDepthMobile strong,
+  .rhDepthMobile small { font: 0.48rem/1.2 var(--rh-mono-font); letter-spacing: 0.08em; }
+  .rhDepthMobile b { color: var(--rh-muted); }
+  .rhDepthMobile strong { color: var(--rh-ink); }
+  .rhDepthMobile small { grid-column: 2; color: var(--rh-muted); }
 }
 
-@keyframes login_panel_top_in {
-  from { opacity: 0; transform: translate(-50%, -0.8rem); }
-  to { opacity: 1; transform: translate(-50%, 0); }
-}
-
-@keyframes login_keyboard_bottom_in {
-  from { opacity: 0; transform: translateY(0.8rem); }
-  to { opacity: 1; transform: translateY(0); }
+@media (max-height: 680px) and (min-width: 701px) {
+  .rhEntryComposition { padding-top: calc(1.35 * var(--rh-line-step)); padding-bottom: 2.5rem; }
+  .rhEditorialField h1 { font-size: clamp(5rem, 12vw, 9rem); }
+  .loginCard { font-size: 0.9em; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  #login_page.loginJourney {
-    min-height: 100dvh;
+  .rhBoundarySeparatorFrame {
+    animation: none !important;
   }
 
-  .stageIdentityLabel,
-  .loginOverlay {
-    animation: none;
+  .rhEntryComposition {
+    transform: none;
+    will-change: opacity;
   }
 
-  .patientRealityProgress > span {
-    transition-duration: 0.01ms;
+  #login_page.loginJourney *,
+  #login_page.loginJourney *::before,
+  #login_page.loginJourney *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
+}
+
+/* Ontology depth scene */
+.rhOntologyScene {
+  --rh-level-opacity: 0;
+  --rh-level-scale: 1;
+  --rh-level-x: 0;
+  --rh-level-y: 0;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  color: var(--rh-ink, #11110f);
+  pointer-events: none;
+  isolation: isolate;
+}
+
+.rhPaperField {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(to bottom, transparent calc(var(--rh-line-step, 2.6rem) - 1px), rgba(17, 17, 15, 0.026) calc(var(--rh-line-step, 2.6rem) - 1px), rgba(17, 17, 15, 0.026) var(--rh-line-step, 2.6rem)),
+    radial-gradient(circle at 14% 18%, rgba(255, 255, 255, 0.7), transparent 30%),
+    var(--rh-paper, #f2f0e8);
+  background-size: 100% var(--rh-line-step, 2.6rem), auto, auto;
+}
+
+.rhPaperField::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.18;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.12'/%3E%3C/svg%3E");
+  mix-blend-mode: multiply;
+}
+
+.rhLevelScene { position: absolute; inset: 0; visibility: hidden; opacity: var(--rh-level-opacity); transform: translate3d(var(--rh-level-x), var(--rh-level-y), 0) scale(var(--rh-level-scale)); transform-origin: 56% 56%; will-change: transform, opacity; }
+.rhLevelScene h2 { position: absolute; top: 17%; left: 11%; max-width: 82%; margin: 0; color: currentColor; font-family: var(--rh-display-font, Georgia, "Times New Roman", serif); font-size: clamp(4.7rem, 14vw, 13rem); font-weight: 400; line-height: 0.72; letter-spacing: -0.085em; white-space: nowrap; }
+.rhLevelCoordinates, .rhLevelParent, .rhLevelDescriptor, .rhLevelTarget { position: absolute; z-index: 2; font-family: var(--rh-mono-font, "Courier New", monospace); font-size: clamp(0.55rem, 0.72vw, 0.7rem); letter-spacing: 0.11em; line-height: 1.55; text-transform: uppercase; }
+.rhLevelCoordinates { top: 9%; left: 5%; }
+.rhLevelParent { top: 11%; right: 5%; padding-bottom: 0.32rem; border-bottom: 1px solid currentColor; }
+.rhLevelDescriptor { bottom: 8%; left: 5%; color: var(--rh-muted, #5f5d57); }
+.rhLevelTarget { right: 8%; bottom: 8%; display: grid; grid-template-columns: auto auto; align-items: end; gap: 0.2rem 0.85rem; min-width: 11rem; padding-top: 0.55rem; border-top: 1px solid currentColor; }
+.rhLevelTarget span { grid-column: 1 / -1; color: var(--rh-muted, #5f5d57); }
+.rhLevelTarget strong { font: 400 clamp(1.1rem, 2vw, 1.8rem)/1 var(--rh-display-font, Georgia, serif); letter-spacing: 0; }
+.rhLevelTarget i { font-style: normal; font-size: 1.4rem; }
+.rhLevelTarget--terminal { grid-template-columns: 1fr; }
+.rhLevelDiagram { position: absolute; top: 29%; left: 23%; width: min(58vw, 48rem); height: min(55vh, 32rem); }
+.rhLevelDiagram svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.rhDiagramRules { fill: none; stroke: currentColor; stroke-width: 1.05; opacity: 0.55; }
+.rhDiagramRules path { vector-effect: non-scaling-stroke; }
+.rhDiagramNodes { fill: var(--rh-paper, #f2f0e8); stroke: currentColor; stroke-width: 1.2; }
+.rhDiagramNodes circle { vector-effect: non-scaling-stroke; }
+.rhDiagramNodes .is-target { fill: var(--rh-ink, #11110f); stroke: var(--rh-ink, #11110f); }
+.rhDiagramCells circle:not(.is-target) { fill: transparent; }
+.rhDiagramCells .is-target { fill: transparent; stroke-width: 2; }
+.rhDiagramAtom .is-target { fill: transparent; stroke-width: 1; stroke-dasharray: 3 4; }
+.rhDiagramAtom circle:first-child { fill: currentColor; }
+.rhDiagramWeave { opacity: 0.42; }
+.rhLevelScene--humans h2 { left: 23%; letter-spacing: 0.08em; }
+.rhLevelScene--systems h2 { top: 20%; left: 5%; }
+.rhLevelScene--organs h2 { left: 31%; }
+.rhLevelScene--tissues h2 { top: 14%; left: 7%; letter-spacing: 0.02em; }
+.rhLevelScene--cells h2 { left: 40%; }
+.rhLevelScene--molecules h2 { top: 20%; left: 2%; font-size: clamp(4.2rem, 12vw, 11rem); }
+.rhLevelScene--atoms h2 { top: 24%; left: 34%; letter-spacing: 0.16em; }
+.rhLevelScene--atoms .rhLevelDiagram { left: 27%; top: 31%; width: min(48vw, 40rem); }
+.rhOntologyDebug { position: absolute; z-index: 10; right: 1rem; bottom: 1rem; margin: 0; padding: 0.7rem; border: 1px solid currentColor; background: var(--rh-paper, #f2f0e8); font: 0.65rem/1.5 var(--rh-mono-font, monospace); }
+
+html.theme-disabled-dark .rhPaperField { background: linear-gradient(to bottom, transparent calc(var(--rh-line-step, 2.6rem) - 1px), rgba(230, 226, 213, 0.035) calc(var(--rh-line-step, 2.6rem) - 1px), rgba(230, 226, 213, 0.035) var(--rh-line-step, 2.6rem)), radial-gradient(circle at 14% 18%, rgba(255, 255, 255, 0.025), transparent 30%), var(--rh-paper); background-size: 100% var(--rh-line-step, 2.6rem), auto, auto; }
+
+@media (max-width: 760px) {
+  .rhLevelScene h2 { top: 20%; left: 7% !important; max-width: 90%; font-size: clamp(3.2rem, 18vw, 6rem); letter-spacing: -0.055em !important; }
+  .rhLevelCoordinates { top: 12%; left: 5%; }
+  .rhLevelParent { top: auto; right: auto; bottom: 15%; left: 5%; }
+  .rhLevelDescriptor { display: none; }
+  .rhLevelDiagram { top: 31%; left: 7%; width: 86vw; height: 45vh; }
+  .rhLevelTarget { right: 5%; bottom: 5%; min-width: 9rem; }
 }

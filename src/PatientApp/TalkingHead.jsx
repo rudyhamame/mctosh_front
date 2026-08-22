@@ -909,6 +909,7 @@ export default function TalkingHead({ audioElement, active, agentState, avatar =
       mount.removeEventListener("pointercancel", endPointerDrag);
       mount.removeEventListener("wheel", onWheel);
       renderer.dispose();
+      renderer.forceContextLoss?.();
       scene.traverse((obj) => {
         if (obj.geometry) obj.geometry.dispose();
         if (obj.material) {

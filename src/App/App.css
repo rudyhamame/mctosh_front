@@ -1,691 +1,3 @@
-/* ── Home route content ── fills the routed-content slot above the inline
-   app footer owned by AppRouter's App_viewportScale shell. ── */
-#app_home_view {
-  position: relative; /* containing block for any position:absolute toolbar/controls, so they anchor to this box instead of the raw viewport */
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  background: var(--color-bg);
-  color: var(--color-text);
-}
-
-/* ── Profile menu — replaces the old Logout chip with the signed-in user's
-   avatar and a small glass dropdown of account actions. ── */
-#app_profile_menu {
-  position: absolute;
-  top: 1rem;
-  right: 1.25rem;
-  z-index: 3;
-  pointer-events: auto;
-}
-
-#app_profile_trigger {
-  width: 2.5rem;
-  height: 2.5rem;
-  padding: 0;
-  border: 1px solid var(--color-border);
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  color: var(--color-text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, transform 0.15s;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-#app_profile_trigger:hover {
-  color: var(--color-text);
-  border-color: var(--color-text-muted);
-  transform: translateY(-1px);
-}
-
-#app_profile_trigger img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-#app_profile_dropdown {
-  position: absolute;
-  top: calc(100% + 0.6rem);
-  right: 0;
-  min-width: 220px;
-  padding: 0.4rem;
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-#app_profile_summary {
-  padding: 0.65rem 0.75rem 0.55rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
-  margin-bottom: 0.2rem;
-}
-
-#app_profile_summary_name {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-#app_profile_summary_handle {
-  margin-top: 0.18rem;
-  font-size: 0.68rem;
-  color: var(--color-text-muted);
-}
-
-.app_profile_dropdown_item {
-  width: 100%;
-  border: none;
-  background: none;
-  color: var(--color-text-muted);
-  border-radius: 12px;
-  padding: 0.7rem 0.75rem;
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-  text-align: left;
-  font-size: 0.76rem;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
-}
-
-.app_profile_dropdown_item:hover {
-  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
-  color: var(--color-text);
-}
-
-.app_profile_dropdown_item i {
-  font-size: 0.82rem;
-  width: 0.9rem;
-  text-align: center;
-}
-
-.app_profile_dropdown_item--danger:hover {
-  color: #ff8a80;
-  background: rgba(229, 57, 53, 0.12);
-}
-
-/* ── Dev AI — docked in the canvas's opposite corner from Logout, now that
-   the app-wide footer (its usual home, see homeChat.css) is hidden on this
-   route. #home_chat_root itself is just a plain inline flex group with no
-   positioning of its own (it's designed to sit inside the footer strip), so
-   it needs to be pinned here instead. ── */
-#app_scroll_stage #home_chat_root {
-  position: absolute;
-  bottom: 1rem;
-  right: 1.25rem;
-  z-index: 3;
-}
-
-/* The floating avatar stack normally docks above the app footer's reserved
-   height — there's no footer here to clear, so it can sit closer to the
-   edge. */
-#app_scroll_stage #home_avatar_float {
-  bottom: 0;
-}
-
-/* ── Dev AI blends into the canvas ── everywhere else Dev AI lives in the
-   opaque footer strip, where a solid trigger button reads fine. Here it
-   floats directly over the 3D scene, so it gets the same translucent glass
-   treatment as Logout and the level cards above: a blurred, see-through
-   backing instead of a flat one, so it reads as part of the scene rather
-   than a UI bar laid on top of it. Scoped to this canvas-embedded instance
-   only — the footer's own copy on every other page is untouched. The
-   floating avatar stack itself (#home_avatar_float) needs no matching
-   treatment — it has no card/background of its own to blend in the first
-   place. */
-#app_scroll_stage #home_chat_fab {
-  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  border: 1px solid var(--color-border);
-  color: var(--color-text-muted);
-}
-#app_scroll_stage #home_chat_fab:hover {
-  color: var(--color-text);
-  border-color: var(--color-text-muted);
-}
-#app_scroll_stage #home_chat_fab.home_chat_fab--open {
-  background: color-mix(in srgb, var(--color-text-muted) 18%, transparent);
-  color: var(--color-text);
-}
-
-/* ── Home grid — the scroll-driven 3D stage ── */
-#app_home_grid {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  position: relative;
-  scroll-snap-type: none;
-  scroll-behavior: smooth;
-}
-
-/* One viewport-height section per floor gives the scroll container real snap
-   boundaries, so each floor transition takes one full scroll step. */
-#app_scroll_track {
-  position: relative;
-  width: 100%;
-}
-
-/* Pins to the top of #app_home_grid (its nearest scrolling ancestor) for
-   the whole scroll track's height, so the 3D object and the card overlay
-   stay fixed on screen while the page scrolls "through" them. */
-#app_scroll_stage {
-  --app-intro-top-offset: 0;
-  /* Sized to the intro banner's own (now much shorter, single-title +
-     one compact row) real height plus a little breathing room — was
-     clamp(10.5rem, 24vh, 14.5rem) back when the intro was a full
-     multi-line description block; left that large after shortening it
-     just left dead empty space above the object instead of the object
-     filling it. */
-  --app-intro-object-clearance: clamp(6rem, 14vh, 7.5rem);
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
-  overflow: visible;
-}
-
-.app_floor_scroll_step {
-  height: calc(var(--vh, 1vh) * 100);
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
-  pointer-events: none;
-}
-
-/* ── Scroll hint — stays up permanently while scrolling (never fades),
-   kept to a single compact row (title + info icon + domain flow) plus
-   one short sub-line: the long description that used to always sit here
-   now lives behind the info icon instead, so this takes minimal canvas
-   height regardless. ── */
-#app_scroll_hint {
-  position: relative;
-  order: 0;
-  transform: none;
-  width: 100%;
-  min-height: 5.6rem;
-  box-sizing: border-box;
-  padding: 0.55rem max(1.25rem, 4vw) 0.5rem;
-  border-left: none;
-  border-right: none;
-  border-top: none;
-  border-bottom: none;
-  text-align: center;
-  pointer-events: none;
-  z-index: 2;
-}
-
-#app_scroll_hint_content {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-#app_scroll_hint_title {
-  font-size: 1.05rem;
-  font-weight: 800;
-  letter-spacing: 0.2em;
-  color: var(--color-text);
-}
-
-#app_domain_flow {
-  display: inline-block;
-  max-width: 100%;
-  overflow-x: auto;
-  overflow-y: hidden;
-  font-size: clamp(0.58rem, 1.15vw, 0.72rem);
-  color: var(--color-text-muted);
-  white-space: nowrap;
-  scrollbar-width: none;
-}
-
-#app_domain_flow::-webkit-scrollbar {
-  display: none;
-}
-
-#app_scroll_hint_sub {
-  font-size: 0.72rem;
-  letter-spacing: 0.04em;
-  color: var(--color-text-muted);
-}
-
-/* ── Level label overlay — one label/blurb per biological level, stacked in
-   the same spot so only whichever level the camera is currently passing is
-   visible; the rest wait faded-out underneath it. Anchored bottom-left of
-   the canvas — now that the per-level tool buttons live in the AMCTOSHS Tools
-   dropdown instead (see app_study_tools_* below), this is just a short
-   caption, not a tall card, so it no longer needs the old top-anchored
-   "one guaranteed-clear spot" reasoning that was about clearing Hyle's
-   full-width flat coil (see buildGroundThreads in ThreadPyramidLogo.jsx). ── */
-#app_level_overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2;
-}
-
-.app_level_group {
-  position: absolute;
-  left: 4%;
-  bottom: 1.5rem;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.6rem;
-  width: min(320px, 30vw);
-  padding: 0.9rem 1.1rem;
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  opacity: 0;
-  transform: translateY(10px);
-  transition: opacity 0.4s ease, transform 0.4s ease;
-  pointer-events: none;
-}
-
-.app_level_group--active {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.app_level_group_head {
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-}
-
-.app_level_group_letter {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.9rem;
-  height: 1.9rem;
-  border-radius: 50%;
-  border: 1.5px solid color-mix(in srgb, var(--nav-color) 55%, var(--color-border));
-  background: color-mix(in srgb, var(--nav-color) 16%, var(--color-surface));
-  color: var(--nav-color);
-  font-weight: 800;
-  font-size: 0.72rem;
-  letter-spacing: 0.02em;
-}
-
-.app_level_group_label {
-  font-size: 0.6rem;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--nav-color);
-  font-weight: 700;
-}
-
-.app_level_group_blurb {
-  margin: 0;
-  max-width: 100%;
-  text-align: left;
-  font-size: 0.72rem;
-  font-style: italic;
-  line-height: 1.55;
-  color: var(--color-text-muted);
-}
-
-/* ── AMCTOSHS Tools — every level's tool buttons, consolidated into one
-   dropdown on the intro banner's left side (mirrors #app_profile_menu,
-   which owns the right side). ── */
-#app_study_tools_menu {
-  position: absolute;
-  top: 1rem;
-  left: 1.25rem;
-  z-index: 3;
-  pointer-events: auto;
-}
-
-#app_study_tools_trigger {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  height: 2.5rem;
-  padding: 0 0.9rem;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  color: var(--color-text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s, transform 0.15s;
-}
-
-#app_study_tools_trigger:hover {
-  color: var(--color-text);
-  border-color: var(--color-text-muted);
-  transform: translateY(-1px);
-}
-
-#app_study_tools_dropdown {
-  position: absolute;
-  top: calc(100% + 0.6rem);
-  left: 0;
-  width: min(320px, 88vw);
-  max-height: min(70vh, 520px);
-  overflow-y: auto;
-  padding: 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  background: color-mix(in srgb, var(--color-surface) 84%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.26);
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-/* The one named chunk inside the dropdown (AMCTOSHS Hyle + AMCTOSHS
-   Morphe) — everything else in the list stays flat/ungrouped below it. */
-.app_study_tools_group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  padding-bottom: 0.5rem;
-  margin-bottom: 0.1rem;
-  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 85%, transparent);
-}
-
-.app_study_tools_group_label {
-  padding: 0 0.3rem;
-  font-size: 0.6rem;
-  letter-spacing: 0.24em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
-  font-weight: 700;
-}
-
-/* ── Home card — compact and translucent (a glass chip, not an opaque
-   panel) — reused inside the AMCTOSHS Tools dropdown above, its original home
-   before every level's tool buttons were consolidated into one menu. ── */
-.app_home_card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.75rem 0.9rem;
-  width: 100%;
-  border: 1px solid color-mix(in srgb, var(--nav-color) 35%, var(--color-border));
-  border-left: 3px solid var(--nav-color);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--color-surface) 62%, transparent);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  cursor: pointer;
-  text-align: left;
-  transition: border-color 0.15s, background 0.15s, transform 0.12s;
-}
-
-.app_home_card:hover {
-  background: color-mix(in srgb, var(--nav-color) 12%, var(--color-surface) 62%);
-  transform: translateX(3px);
-}
-
-.app_home_card_icon {
-  font-size: 1.1rem;
-  color: var(--nav-color);
-  line-height: 1;
-}
-
-.app_home_card_label {
-  font-size: 0.82rem;
-  font-weight: 700;
-  color: var(--nav-color);
-  letter-spacing: 0.02em;
-}
-
-.app_home_card_desc {
-  font-size: 0.68rem;
-  font-weight: 400;
-  color: var(--color-text-muted);
-  line-height: 1.5;
-}
-
-@media (max-width: 720px) {
-  #app_scroll_stage {
-    /* Narrow screens wrap the domain-flow row onto more lines (see
-       #app_scroll_hint_head's flex-wrap), so this needs more headroom
-       than the desktop value above even though it's shorter than the
-       old multi-paragraph intro this used to be sized for. */
-    --app-intro-object-clearance: clamp(7rem, 20vh, 10rem);
-  }
-
-  /* Not enough width for a legible side column — the card drops back to a
-     bottom-anchored, full-width band over the object instead. */
-  .app_level_group {
-    left: 50%;
-    top: auto;
-    bottom: 4%;
-    align-items: center;
-    width: min(92vw, 420px);
-    transform: translate(-50%, 14px);
-  }
-  .app_level_group--active { transform: translate(-50%, 0); }
-  .app_level_group_blurb { text-align: center; }
-
-  /* Icon-only, matching the profile button's circular footprint on the
-     opposite corner — the full "AMCTOSHS Tools" text label is too wide next
-     to the centered intro banner title on narrow screens. */
-  #app_study_tools_trigger {
-    width: 2.5rem;
-    height: 2.5rem;
-    padding: 0;
-    border-radius: 50%;
-    justify-content: center;
-  }
-  #app_study_tools_trigger span { display: none; }
-  #app_study_tools_dropdown { width: min(88vw, 320px); }
-}
-
-/* ── Home study dashboard ── replaces the former 3D object stage with a
-   readable workspace for the object, study history, and Morphe output. ── */
-#app_home_dashboard {
-  position: relative;
-  order: 1;
-  width: 100%;
-  box-sizing: border-box;
-  padding: 1rem 2rem;
-  background:
-    radial-gradient(circle at 18% 24%, rgba(79, 195, 247, 0.09), transparent 30%),
-    radial-gradient(circle at 86% 72%, rgba(126, 87, 194, 0.08), transparent 34%),
-    linear-gradient(135deg, color-mix(in srgb, var(--color-bg) 94%, #fff), var(--color-bg));
-  scrollbar-width: thin;
-}
-
-.app_dashboard_header,
-.app_dashboard_grid { width: min(1180px, 100%); margin: 0 auto; }
-.app_dashboard_header { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; margin-bottom: 1.35rem; }
-.app_dashboard_eyebrow, .app_card_kicker { margin: 0 0 .45rem; color: var(--color-text-muted); font-size: .62rem; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; }
-.app_dashboard_header h1 { margin: 0; color: var(--color-text); font-size: clamp(1.45rem, 3vw, 2.35rem); letter-spacing: -.04em; }
-.app_dashboard_header p:last-child { margin: .45rem 0 0; color: var(--color-text-muted); font-size: .78rem; }
-.app_dashboard_primary, .app_morphe_action { border: 0; border-radius: 10px; background: var(--color-highlight); color: #fff; padding: .72rem 1rem; font-size: .72rem; font-weight: 800; cursor: pointer; white-space: nowrap; transition: transform .15s, filter .15s; }
-.app_dashboard_primary:hover, .app_morphe_action:hover { filter: brightness(1.08); transform: translateY(-2px); }
-.app_dashboard_primary i { margin-right: .35rem; }
-.app_dashboard_grid { display: grid; grid-template-columns: .82fr 1.18fr; gap: 1rem; align-items: stretch; }
-.app_dashboard_card { min-width: 0; padding: 1.2rem; border: 1px solid color-mix(in srgb, var(--color-border) 78%, transparent); border-radius: 18px; background: color-mix(in srgb, var(--color-surface) 88%, transparent); box-shadow: 0 20px 45px rgba(20, 28, 45, .08); backdrop-filter: blur(14px); }
-.app_morphe_card { grid-column: auto; order: 1; }
-.app_schemata_card { grid-column: 1; grid-row: 3; order: 2; }
-.app_sessions_card { order: 2; }
-.app_spoken_traces_card { grid-column: 1; grid-row: 4; order: 4; }
-.app_unspoken_traces_card { grid-column: 2; grid-row: 4; order: 5; }
-.app_vocabs_card { grid-column: auto; order: 5; }
-.app_about_card { grid-column: 1 / -1; order: 0; }
-.app_card_heading { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; }
-.app_card_heading h2 { margin: 0; color: var(--color-text); font-size: 1.12rem; letter-spacing: -.025em; }
-.app_card_description { max-width: 54ch; margin: .7rem 0 1.1rem; color: var(--color-text-muted); font-size: .75rem; line-height: 1.55; }
-.app_morphe_status { color: #2e7d52; font-size: .62rem; font-weight: 800; }
-.app_morphe_status i { display: inline-block; width: .42rem; height: .42rem; border-radius: 50%; background: #4caf78; }
-.app_dashboard_data_note { margin: 1rem 0 0; color: var(--color-text-muted); font-size: .64rem; }
-.app_dashboard_empty { margin: .8rem 0; padding: .85rem; border: 1px dashed color-mix(in srgb, var(--color-border) 78%, transparent); border-radius: 10px; color: var(--color-text-muted); font-size: .7rem; text-align: center; }
-.app_active_session { display: grid; gap: .3rem; margin: .8rem 0; padding: .85rem; border: 1px solid color-mix(in srgb, #4caf78 42%, var(--color-border)); border-radius: 10px; background: color-mix(in srgb, #4caf78 8%, transparent); }
-.app_active_session_badge { display: inline-flex; align-items: center; gap: .35rem; color: #4caf78; font-size: .62rem; font-weight: 800; }
-.app_active_session_badge i { width: .4rem; height: .4rem; border-radius: 50%; background: #4caf78; box-shadow: 0 0 0 .18rem color-mix(in srgb, #4caf78 18%, transparent); }
-.app_active_session strong { color: var(--color-text); font-size: 1.45rem; letter-spacing: .06em; }
-.app_active_session small { color: var(--color-text-muted); font-size: .62rem; }
-.app_session_empty_actions { display: grid; gap: .55rem; }
-.app_session_empty_actions .app_dashboard_data_note { margin: 0; }
-.app_session_start { justify-self: start; display: inline-flex; align-items: center; gap: .45rem; padding: .55rem .75rem; border: 1px solid color-mix(in srgb, var(--color-highlight) 42%, var(--color-border)); border-radius: 8px; background: color-mix(in srgb, var(--color-highlight) 10%, transparent); color: var(--color-highlight); font-size: .68rem; font-weight: 800; cursor: pointer; transition: background .18s ease, transform .18s ease; }
-.app_session_start:hover { background: color-mix(in srgb, var(--color-highlight) 18%, transparent); transform: translateY(-1px); }
-.app_session_stop { border-color: color-mix(in srgb, #ef5350 45%, var(--color-border)); background: color-mix(in srgb, #ef5350 9%, transparent); color: #ef5350; }
-.app_session_stop:hover { background: color-mix(in srgb, #ef5350 16%, transparent); }
-.app_card_link { border: 0; background: none; color: var(--color-highlight); font-size: .68rem; font-weight: 800; cursor: pointer; }
-.app_session_list { display: grid; gap: .25rem; }
-.app_session_row { display: grid; grid-template-columns: 7.2rem 1fr 4.2rem 1.8rem; align-items: center; gap: .75rem; width: 100%; padding: .65rem .55rem; border: 1px solid transparent; border-radius: 10px; background: none; color: inherit; text-align: left; }
-.app_session_row:hover, .app_session_row.is-selected { border-color: color-mix(in srgb, var(--color-highlight) 28%, var(--color-border)); background: color-mix(in srgb, var(--color-highlight) 6%, transparent); }
-.app_session_date strong, .app_session_date small, .app_session_meta strong, .app_session_meta small { display: block; }
-.app_session_date strong { color: var(--color-text); font-size: .72rem; }
-.app_session_date small, .app_session_meta small { margin-top: .16rem; color: var(--color-text-muted); font-size: .6rem; }
-.app_session_track { position: relative; display: block; height: .38rem; border-radius: 99px; background: color-mix(in srgb, var(--color-border) 55%, transparent); }
-.app_session_track_fill { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #7e57c2, #4fc3f7); }
-.app_session_markers { position: absolute; inset: -.22rem 0; display: flex; justify-content: space-around; }
-.app_session_markers i { width: .12rem; height: .82rem; border-radius: 2px; background: color-mix(in srgb, var(--color-surface) 85%, #fff); }
-.app_session_meta { text-align: right; }
-.app_session_meta strong { color: var(--color-text); font-size: .68rem; }
-.app_session_delete { display: grid; place-items: center; width: 1.65rem; height: 1.65rem; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--color-text-muted); cursor: pointer; }
-.app_session_delete:hover { background: color-mix(in srgb, #ef5350 14%, transparent); color: #ef5350; }
-.app_session_detail { margin-top: .65rem; padding: .85rem; border-radius: 12px; background: color-mix(in srgb, var(--color-bg) 70%, transparent); }
-.app_session_detail_top, .app_session_detail_grid { display: flex; justify-content: space-between; gap: .7rem; }
-.app_session_detail_top strong { color: var(--color-text); font-size: .72rem; }
-.app_session_detail_top span { color: var(--color-text-muted); font-size: .64rem; }
-.app_session_detail_grid { margin-top: .7rem; flex-wrap: wrap; }
-.app_session_detail_grid span { display: grid; gap: .2rem; }
-.app_session_detail_grid small { color: var(--color-text-muted); font-size: .58rem; }
-.app_session_detail_grid strong { color: var(--color-text); font-size: .65rem; }
-.app_morphe_status { display: flex; align-items: center; gap: .3rem; color: #9b6e1b; }
-.app_morphe_graph { position: relative; height: 8rem; margin: .7rem 0 1rem; overflow: hidden; border: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent); border-radius: 13px; background: radial-gradient(circle at 20% 50%, rgba(126, 87, 194, .11), transparent 24%), color-mix(in srgb, var(--color-bg) 58%, transparent); }
-.app_morphe_node { position: absolute; z-index: 1; display: grid; place-items: center; width: 4.5rem; height: 3.2rem; border: 1px solid color-mix(in srgb, var(--color-highlight) 35%, var(--color-border)); border-radius: 12px; background: color-mix(in srgb, var(--color-surface) 90%, transparent); box-shadow: 0 8px 20px rgba(30, 45, 75, .1); }
-.app_morphe_node strong, .app_morphe_node span { color: var(--color-text); font-size: 1rem; }
-.app_morphe_node small { color: var(--color-text-muted); font-size: .57rem; }
-.app_morphe_node_root { left: 7%; top: 2.45rem; width: 4rem; border-color: #7e57c2; background: color-mix(in srgb, #7e57c2 13%, var(--color-surface)); }
-.app_morphe_node_trace { left: 42%; top: .75rem; }
-.app_morphe_node_instance { left: 42%; bottom: .75rem; }
-.app_morphe_node_schema { right: 8%; top: 2.45rem; border-color: #26a69a; background: color-mix(in srgb, #26a69a 10%, var(--color-surface)); }
-.app_morphe_line { position: absolute; z-index: 0; height: 1px; transform-origin: left center; background: linear-gradient(90deg, #7e57c2, #4fc3f7); }
-.app_morphe_line_one { left: 18%; top: 50%; width: 25%; transform: rotate(-22deg); }
-.app_morphe_line_two { left: 18%; top: 50%; width: 25%; transform: rotate(22deg); }
-.app_morphe_action { padding: .6rem .8rem; background: color-mix(in srgb, var(--color-highlight) 12%, transparent); color: var(--color-highlight); }
-.app_morphe_action i { margin-left: .3rem; }
-.app_sources_summary { display: grid; grid-template-columns: 5rem 1fr; gap: 1rem; align-items: center; min-height: 8rem; margin: .7rem 0 1rem; padding: 1rem; border: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent); border-radius: 13px; background: radial-gradient(circle at 18% 50%, rgba(38, 166, 154, .13), transparent 30%), color-mix(in srgb, var(--color-bg) 58%, transparent); }
-.app_sources_count { display: grid; justify-items: center; gap: .2rem; padding-right: 1rem; border-right: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent); }
-.app_sources_count strong { color: var(--color-text); font-size: 2rem; }.app_sources_count small { color: var(--color-text-muted); font-size: .58rem; text-align: center; }.app_sources_list { display: grid; gap: .45rem; min-width: 0; }.app_sources_list span { overflow: hidden; color: var(--color-text-muted); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }.app_sources_list span::before { content: ""; display: inline-block; width: .38rem; height: .38rem; margin: 0 .4rem .05rem 0; border-radius: 50%; background: #26a69a; }
-.app_card_icon_actions { display: flex; align-items: center; gap: .4rem; }
-.app_icon_action { display: grid; place-items: center; flex: 0 0 auto; width: 2rem; height: 2rem; padding: 0; border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent); border-radius: 9px; background: color-mix(in srgb, var(--color-surface) 72%, transparent); color: var(--color-text-muted); cursor: pointer; }
-.app_icon_action:hover { border-color: var(--color-highlight); color: var(--color-highlight); background: color-mix(in srgb, var(--color-highlight) 9%, transparent); }
-.app_icon_action_add { color: var(--color-highlight); }
-.app_vocab_form { display: grid; grid-template-columns: minmax(7rem, .7fr) minmax(7rem, .8fr) minmax(9rem, 1.4fr) auto; align-items: end; gap: .65rem; margin: .8rem 0 1rem; padding: .8rem; border: 1px solid color-mix(in srgb, #26a69a 30%, var(--color-border)); border-radius: 12px; background: color-mix(in srgb, #26a69a 5%, var(--color-bg)); }
-.app_vocab_form label { display: grid; gap: .3rem; min-width: 0; }
-.app_vocab_form label > span { color: var(--color-text-muted); font-size: .56rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-.app_vocab_form input, .app_vocab_form textarea { width: 100%; min-height: 2.55rem; box-sizing: border-box; padding: .58rem .65rem; border: 1px solid var(--color-border); border-radius: 9px; outline: 0; background: color-mix(in srgb, var(--color-surface) 90%, transparent); color: var(--color-text); font: inherit; font-size: .7rem; resize: vertical; }
-.app_vocab_form input:focus, .app_vocab_form textarea:focus { border-color: #26a69a; box-shadow: 0 0 0 3px color-mix(in srgb, #26a69a 10%, transparent); }
-.app_vocab_form_actions { display: flex; gap: .35rem; }
-.app_vocab_form_actions button { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 1px solid var(--color-border); border-radius: 8px; background: transparent; color: var(--color-text-muted); cursor: pointer; }
-.app_vocab_form_actions button:hover:not(:disabled) { border-color: #26a69a; color: #26a69a; background: color-mix(in srgb, #26a69a 8%, transparent); }
-.app_vocab_form_actions button.is-primary { border-color: #26a69a; background: #26a69a; color: #fff; }
-.app_vocab_form_actions button:disabled { opacity: .45; cursor: wait; }
-.app_vocab_table_wrap { max-height: 19rem; overflow: auto; border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent); border-radius: 12px; }
-.app_vocab_table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.app_vocab_table th, .app_vocab_table td { padding: .65rem .7rem; border-bottom: 1px solid color-mix(in srgb, var(--color-border) 62%, transparent); text-align: left; vertical-align: middle; }
-.app_vocab_table tr:last-child td { border-bottom: 0; }
-.app_vocab_table th { position: sticky; top: 0; z-index: 1; background: color-mix(in srgb, var(--color-bg) 92%, var(--color-surface)); color: var(--color-text-muted); font-size: .55rem; letter-spacing: .1em; text-transform: uppercase; }
-.app_vocab_table th:first-child { width: 7rem; }
-.app_vocab_table th:nth-child(2) { width: 8rem; }
-.app_vocab_table th:last-child { width: 5rem; }
-.app_vocab_table td { overflow: hidden; color: var(--color-text-muted); font-size: .67rem; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
-.app_vocab_table td:first-child { color: var(--color-text); font-weight: 750; }
-.app_spoken_trace_form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: end; gap: .7rem; width: 100%; min-width: 0; box-sizing: border-box; margin: .8rem 0 1rem; padding: .8rem; border: 1px solid color-mix(in srgb, var(--color-highlight) 30%, var(--color-border)); border-radius: 12px; background: color-mix(in srgb, var(--color-highlight) 5%, var(--color-bg)); }
-.app_spoken_trace_form label { display: grid; gap: .3rem; min-width: 0; }
-.app_spoken_trace_form > label:first-child { grid-column: 1 / -1; }
-.app_spoken_trace_form label > span, .app_spoken_trace_classification small { color: var(--color-text-muted); font-size: .56rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-.app_spoken_trace_form textarea, .app_spoken_trace_form select { width: 100%; min-height: 2.55rem; box-sizing: border-box; padding: .58rem .65rem; border: 1px solid var(--color-border); border-radius: 9px; outline: 0; background: color-mix(in srgb, var(--color-surface) 90%, transparent); color: var(--color-text); font: inherit; font-size: .7rem; resize: vertical; }
-.app_spoken_trace_form textarea:focus, .app_spoken_trace_form select:focus { border-color: var(--color-highlight); box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-highlight) 10%, transparent); }
-.app_spoken_trace_classification { display: grid; align-content: center; gap: .15rem; min-width: 0; min-height: 2.55rem; padding: .35rem .6rem; border-left: 2px solid var(--color-highlight); overflow-wrap: anywhere; }
-.app_spoken_trace_classification strong { color: var(--color-text); font-size: .68rem; }
-.app_spoken_trace_classification > span { color: var(--color-text-muted); font-size: .56rem; }
-.app_spoken_trace_form_actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: .35rem; }
-.app_spoken_trace_form_actions button, .app_trace_row_actions button { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 1px solid var(--color-border); border-radius: 8px; background: transparent; color: var(--color-text-muted); cursor: pointer; }
-.app_spoken_trace_form_actions button:hover:not(:disabled), .app_trace_row_actions button:hover:not(:disabled) { border-color: var(--color-highlight); color: var(--color-highlight); background: color-mix(in srgb, var(--color-highlight) 8%, transparent); }
-.app_spoken_trace_form_actions button.is-primary { border-color: var(--color-highlight); background: var(--color-highlight); color: #fff; }
-.app_spoken_trace_form_actions button:disabled, .app_trace_row_actions button:disabled { opacity: .45; cursor: wait; }
-.app_spoken_trace_error { margin: .6rem 0; padding: .6rem .7rem; border-radius: 9px; background: color-mix(in srgb, #ef5350 9%, transparent); color: #d74747; font-size: .67rem; }
-.app_spoken_trace_table_wrap { max-height: 19rem; overflow: auto; border: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent); border-radius: 12px; }
-.app_spoken_trace_table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.app_spoken_trace_table th, .app_spoken_trace_table td { padding: .65rem .7rem; border-bottom: 1px solid color-mix(in srgb, var(--color-border) 62%, transparent); text-align: left; vertical-align: middle; }
-.app_spoken_trace_table tr:last-child td { border-bottom: 0; }
-.app_spoken_trace_table th { position: sticky; top: 0; z-index: 1; background: color-mix(in srgb, var(--color-bg) 92%, var(--color-surface)); color: var(--color-text-muted); font-size: .55rem; letter-spacing: .1em; text-transform: uppercase; }
-.app_spoken_trace_table th:nth-child(2) { width: 7.5rem; }
-.app_spoken_trace_table th:nth-child(3) { width: 8rem; }
-.app_spoken_trace_table th:last-child { width: 5rem; }
-.app_spoken_trace_table td:first-child { overflow-wrap: anywhere; color: var(--color-text); font-size: .7rem; line-height: 1.45; }
-.app_trace_mode, .app_trace_type { display: inline-flex; padding: .28rem .48rem; border-radius: 999px; white-space: nowrap; font-size: .58rem; font-weight: 800; }
-.app_trace_mode { background: color-mix(in srgb, #7e57c2 10%, transparent); color: #7e57c2; }
-.app_trace_type.is-direct { background: color-mix(in srgb, #2e9b68 11%, transparent); color: #2e8a60; }
-.app_trace_type.is-indirect { background: color-mix(in srgb, #d28a2e 12%, transparent); color: #a66b1e; }
-.app_trace_row_actions { display: flex; justify-content: flex-end; gap: .3rem; }
-.app_trace_row_actions button.is-delete:hover:not(:disabled) { border-color: #ef5350; background: color-mix(in srgb, #ef5350 9%, transparent); color: #ef5350; }
-.app_spoken_trace_empty { padding: 1.2rem !important; color: var(--color-text-muted) !important; text-align: center !important; }
-.app_about_icon { display: grid; place-items: center; width: 2rem; height: 2rem; padding: 0; border: 0; border-radius: 9px; color: #7e57c2; background: color-mix(in srgb, #7e57c2 12%, transparent); cursor: pointer; }
-.app_about_icon:hover { background: color-mix(in srgb, #7e57c2 20%, transparent); }
-.app_about_card .app_card_description { max-width: 88ch; }
-.app_about_sections { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; }
-.app_about_sections > div { display: grid; gap: .3rem; padding: .75rem; border: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent); border-radius: 11px; background: color-mix(in srgb, var(--color-bg) 45%, transparent); }
-.app_about_sections strong { color: var(--color-highlight); font-size: .68rem; }
-.app_about_sections span { color: var(--color-text-muted); font-size: .66rem; line-height: 1.5; }
-.app_trace_card_icon { display: grid; place-items: center; width: 2rem; height: 2rem; border-radius: 9px; color: var(--color-highlight); background: color-mix(in srgb, var(--color-highlight) 12%, transparent); }
-.app_schemata_summary { display: grid; grid-template-columns: 5rem 1fr; gap: 1rem; align-items: center; min-height: 8rem; margin: .7rem 0 1rem; padding: 1rem; border: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent); border-radius: 13px; background: radial-gradient(circle at 18% 50%, rgba(38, 198, 218, .13), transparent 30%), color-mix(in srgb, var(--color-bg) 58%, transparent); }
-.app_schemata_count { display: grid; justify-items: center; gap: .2rem; padding-right: 1rem; border-right: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent); }
-.app_schemata_count strong { color: var(--color-text); font-size: 2rem; }
-.app_schemata_count small { color: var(--color-text-muted); font-size: .58rem; text-align: center; }
-.app_schemata_list { display: grid; gap: .45rem; min-width: 0; }
-.app_schemata_list span { display: grid; gap: .12rem; min-width: 0; overflow: hidden; }
-.app_schemata_list span:not(.app_schemata_empty)::before { content: ""; display: inline-block; width: .38rem; height: .38rem; margin: .34rem .4rem 0 0; border-radius: 50%; background: #26c6da; float: left; }
-.app_schemata_list strong { overflow: hidden; color: var(--color-text); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
-.app_schemata_list small { color: var(--color-text-muted); font-size: .58rem; text-transform: capitalize; }
-.app_schemata_empty { color: var(--color-text-muted); font-size: .66rem; }
-.app_unspoken_trace_modes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .65rem; }
-.app_unspoken_trace_modes > div { display: grid; gap: .25rem; padding: .7rem; border: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--color-bg) 45%, transparent); }
-.app_unspoken_trace_modes strong { color: var(--color-highlight); font-size: .68rem; }
-.app_unspoken_trace_modes span { color: var(--color-text-muted); font-size: .64rem; line-height: 1.4; }
-
-@media (max-width: 760px) {
-  #app_home_dashboard { padding: 1.5rem 1rem 5rem; }
-  .app_dashboard_header { align-items: flex-start; flex-direction: column; }
-  .app_dashboard_grid { grid-template-columns: 1fr; }
-  .app_morphe_card, .app_schemata_card, .app_vocabs_card, .app_spoken_traces_card, .app_unspoken_traces_card, .app_about_card { grid-column: auto; grid-row: auto; }
-  .app_vocab_form { grid-template-columns: 1fr; }
-  .app_vocab_form_actions { justify-content: end; }
-  .app_vocab_table { min-width: 38rem; }
-  .app_spoken_trace_form { grid-template-columns: 1fr; }
-  .app_spoken_trace_form_actions { justify-content: end; }
-  .app_spoken_trace_table { min-width: 42rem; }
-  .app_about_sections { grid-template-columns: 1fr; }
-  .app_session_row { grid-template-columns: 6rem 1fr 3.4rem 1.8rem; gap: .45rem; }
-}
 input:not([data-browser-callout="allow"]),
 textarea:not([data-browser-callout="allow"]),
 [contenteditable="true"]:not([data-browser-callout="allow"]),
@@ -693,4 +5,355 @@ textarea:not([data-browser-callout="allow"]),
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+/* Rabbit Hole — shared scientific editorial system.
+   This layer is deliberately structural: page-specific layout and behavior
+   remain owned by their existing stylesheets. */
+
+
+#root,
+#App_viewportScale,
+#app_route_view {
+  background-color: var(--rh-paper);
+  color: var(--rh-ink);
+}
+
+/* Keep Home's visible surface unchanged while exposing the document layer
+   around the app so Safari can read html/body's background color. */
+#root:has(#app_home_view),
+#App_viewportScale:has(#app_home_view),
+#app_route_view:has(#app_home_view) {
+  background-color: transparent;
+}
+
+#app_route_view {
+  background-image: none;
+  background-size: auto;
+}
+
+/* Home is mounted behind the login tunnel as soon as authentication
+   succeeds. It rises into view during the final deceleration, so the route
+   switch at the full stop does not replace the page abruptly. */
+.postLoginTransitionStage {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.postLoginTransitionStage__login {
+  position: relative;
+  z-index: 1;
+  min-height: 100%;
+}
+
+.postLoginTransitionStage__home {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  min-height: 100%;
+  overflow: hidden;
+  pointer-events: none;
+  clip-path: inset(100% 0 0);
+  transform: translateY(7vh);
+  animation: postLoginHomeRise 2.4s cubic-bezier(.18, .82, .24, 1) forwards;
+  will-change: clip-path, transform;
+}
+
+@keyframes postLoginHomeRise {
+  from {
+    clip-path: inset(100% 0 0);
+    transform: translateY(7vh);
+  }
+  to {
+    clip-path: inset(0);
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .postLoginTransitionStage__home {
+    animation: postLoginHomeRiseReduced 520ms ease-out forwards;
+  }
+}
+
+@keyframes postLoginHomeRiseReduced {
+  from { clip-path: inset(100% 0 0); transform: translateY(2vh); }
+  to { clip-path: inset(0); transform: translateY(0); }
+}
+
+/* Every routed page receives the paper field. Login and Home retain their
+   more specific compositions while sharing these same tokens. */
+#App_viewportScale #app_route_view :where(
+  #ai_chat,
+  #about_page,
+  #amc_page,
+  #card_page,
+  #cs_root,
+  #cvg_root,
+  #draft_list_page,
+  #draft_page,
+  #faq_page,
+  #ffl_list_page,
+  #ff_page,
+  #ha_page,
+  #hylo_page,
+  #ytsrc_page,
+  #mccqe_page,
+  #mex_root,
+  #pdf_page,
+  #pdfw_root,
+  #pi_root,
+  #phen_page,
+  #podcast_page,
+  #pf_page,
+  #segp_root,
+  #sett_page,
+  #ig_preview_page,
+  #smc_page,
+  #smd_page,
+  #sources_page,
+  #terminology_page,
+  #vocabs_page,
+  #voice_profile_page,
+  #yt_page,
+  #ontology_page
+) {
+  --color-primary: var(--rh-paper-alt);
+  --color-secondary: color-mix(in srgb, var(--rh-paper-alt) 82%, var(--rh-ink));
+  --color-accent: #927856;
+  --color-highlight: var(--rh-ink);
+  --color-text: var(--rh-ink);
+  --color-text-muted: var(--rh-muted);
+  --color-bg: var(--rh-paper);
+  --color-surface: var(--rh-paper-alt);
+  --color-border: var(--rh-rule);
+  background-color: var(--rh-paper);
+  background-image: none;
+  background-size: auto;
+  color: var(--rh-ink);
+}
+
+#app_route_view :where(h1, h2, h3, h4) {
+  color: var(--rh-ink);
+  font-family: var(--font-family-system);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+#app_route_view :where(input, textarea, select) {
+  border-color: var(--rh-rule);
+  background-color: color-mix(in srgb, var(--rh-paper) 88%, transparent);
+  color: var(--rh-ink);
+}
+
+#app_route_view :where(input, textarea)::placeholder { color: var(--rh-faint); }
+
+#app_route_view :where(button, [role="button"]) {
+  letter-spacing: 0.025em;
+}
+
+#app_route_view :where(button, [role="button"]):focus-visible,
+#app_route_view :where(input, textarea, select, a):focus-visible {
+  outline: 1px solid var(--rh-ink);
+  outline-offset: 2px;
+}
+
+/* Cards, panels and overlays retain their dimensions but lose the unrelated
+   glass/rounded-card language. */
+#app_route_view :where(
+  [class*="_card"],
+  [class*="_panel"],
+  [class*="_modal"],
+  [class*="_popover"],
+  [class*="_dropdown"],
+  [class*="_menu"],
+  [role="dialog"],
+  [role="menu"]
+) {
+  border-color: var(--rh-rule);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+#app_route_view :where(
+  [class*="_chip"],
+  [class*="_badge"],
+  [class*="_pill"],
+  [class*="_tag"]
+) {
+  border-radius: 0;
+}
+
+#app_route_view :where(table) {
+  border-color: var(--rh-rule);
+  border-collapse: collapse;
+  color: var(--rh-ink);
+}
+
+#app_route_view :where(th) {
+  background: var(--rh-paper-alt);
+  color: var(--rh-muted);
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#app_route_view :where(th, td) { border-color: var(--rh-rule); }
+
+#app_route_view :where(a) {
+  color: var(--rh-ink);
+  text-decoration-color: var(--rh-rule);
+  text-underline-offset: 0.2em;
+}
+
+#app_route_view :where(hr) { border-color: var(--rh-rule); }
+
+
+#App_viewportScale #app_route_view > :not(#login_page) :where(
+  [class*="_card"],
+  [class*="_panel"],
+  [class*="_modal"],
+  [class*="_popover"],
+  [class*="_dropdown"],
+  [role="dialog"],
+  [role="menu"]
+) {
+  border-color: var(--rh-rule);
+  background-image: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+#App_viewportScale #app_route_view > :not(#login_page) :where(
+  [id$="_header"],
+  [class$="_header"],
+  [class*="_page_header"],
+  [class*="_toolbar"]
+) {
+  border-color: var(--rh-rule);
+  border-radius: 0;
+  background-image: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+/* The patient application previously used a separate neon/glass visual
+   language. It now shares the paper document system while retaining its call
+   layout, avatar canvas and all interaction states. */
+#app_route_view :where(.pa_page, .pa_call_page) {
+  background: var(--rh-paper);
+  color: var(--rh-ink);
+  font-family: var(--rh-mono-font);
+}
+
+#app_route_view :where(.pa_card, .pa_call_stage, .pa_call_panel, .pa_bodymap_card) {
+  border-color: var(--rh-rule);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--rh-paper-alt) 76%, transparent);
+  color: var(--rh-ink);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+#app_route_view :where(.pa_title, .pa_stage_title, .pa_bodymap_title) {
+  color: var(--rh-ink);
+  font-family: var(--rh-display-font);
+  font-weight: 400;
+}
+
+#app_route_view :where(.pa_subtitle, .pa_field label, .pa_switch, .pa_call_status) {
+  color: var(--rh-muted);
+}
+
+#app_route_view :where(.pa_field input, .pa_field select, .pa_bodymap_input) {
+  border-color: var(--rh-rule);
+  border-radius: 0;
+  background: var(--rh-paper);
+  color: var(--rh-ink);
+}
+
+#app_route_view :where(.pa_submit_btn, .pa_call_btn, .pa_bodymap_btn) {
+  border: 1px solid var(--rh-ink);
+  border-radius: 0;
+  background: var(--rh-ink);
+  color: var(--rh-paper);
+  box-shadow: none;
+}
+
+#app_route_view :where(.pa_submit_btn, .pa_call_btn, .pa_bodymap_btn):hover:not(:disabled) {
+  background: transparent;
+  color: var(--rh-ink);
+}
+
+/* Preserve the tactile notebook and actual media canvases as specialized
+   content surfaces inside the shared editorial shell. */
+#app_route_view :where(
+  canvas,
+  video,
+  img,
+  .pdf_book_stack,
+  .pdf_page_curl_layer,
+  .pdf_spiral_binding
+) {
+  box-shadow: revert-layer;
+}
+
+/* Keep focused form controls from drawing the browser/theme focus ring. */
+:where(input, textarea, select):focus,
+:where(input, textarea, select):focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* App-owned option list used for every native select trigger. */
+.global_select_menu {
+  position: fixed;
+  z-index: 200000;
+  display: grid;
+  max-height: min(320px, calc(100dvh - 16px));
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--rh-ink) 16%, transparent);
+  border-radius: 10px;
+  background: var(--rh-paper);
+  color: var(--rh-ink);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .22);
+}
+
+.global_select_menu button {
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.global_select_menu button:hover,
+.global_select_menu button.is-selected {
+  background: color-mix(in srgb, var(--rh-ink) 10%, transparent);
+}
+
+.global_select_menu button:disabled { opacity: .45; cursor: default; }
+
+@media (prefers-reduced-motion: reduce) {
+  #app_route_view *,
+  #app_route_view *::before,
+  #app_route_view *::after {
+    scroll-behavior: auto;
+  }
+}
+
+@media print {
+  #app_route_view { background: #fff; }
 }

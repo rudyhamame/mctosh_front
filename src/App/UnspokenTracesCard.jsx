@@ -3,7 +3,7 @@ export default function UnspokenTracesCard() {
     <article className="app_dashboard_card app_unspoken_traces_card">
       <div className="app_card_heading">
         <div>
-          <span className="app_card_kicker">04 / AMCTOSHS MORPHE: 3D TRACES</span>
+          <span className="app_card_kicker">04 / RabbitHole MORPHE: 3D TRACES</span>
           <h2>Unspoken Traces</h2>
         </div>
         <span className="app_trace_card_icon" aria-hidden="true"><i className="fi fi-rr-eye" /></span>

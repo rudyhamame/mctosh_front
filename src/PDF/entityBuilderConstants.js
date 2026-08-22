@@ -1,10 +1,10 @@
 // entityBuilderConstants.js
 //
-// Shared AMCTOSHS Entity infrastructure — the domain list, sub-entity type
+// Shared RabbitHole Entity infrastructure — the domain list, sub-entity type
 // list, and display formatter used by BOTH:
 //   - EntityBuilderPanel.jsx (PDF Reader — builds/assigns entities from
 //     PDF-derived text)
-//   - ClinicalSchemata.jsx (AMCTOSHS Morphe — the global representational
+//   - ClinicalSchemata.jsx (RabbitHole Morphe — the global representational
 //     container that reads the same entities back across all domains)
 //
 // Extracted out of EntityBuilderPanel.jsx so the two never drift into
@@ -12,9 +12,9 @@
 // ClinicalSchemata.jsx's own disconnected 6-item "dimension" list once did.
 // This is the single canonical source for both.
 
-export const AMCTOSHS_ENTITY_INFO = "An AMCTOSHS sub-entity is a representation of an aspect of a patient (ontic entity), constructed from the observed traces through which that aspect is known.";
+export const AMCTOSHS_ENTITY_INFO = "An RabbitHole sub-entity is a representation of an aspect of a patient (ontic entity), constructed from the observed traces through which that aspect is known.";
 
-// AMCTOSHS Domains — canonical, matches what the backend AmctoshsEntity
+// RabbitHole Domains — canonical, matches what the backend AmctoshsEntity
 // documents actually carry in their `domain` field today (schema-type
 // entities only; trace/trace_value/instance/intervener entities inherit
 // their domain from the schema they're nested under — see
@@ -30,7 +30,7 @@ export const ENTITY_DOMAINS = [
   "Societies",
 ];
 
-// AMCTOSHS Sub-Entity types — the five-way discriminator every
+// RabbitHole Sub-Entity types — the five-way discriminator every
 // AmctoshsEntity document carries in its `type` field.
 export const ENTITY_TYPES = [
   {
@@ -65,21 +65,21 @@ export const ENTITY_TYPES = [
   },
 ];
 
-// Row types that carry an actual AMCTOSHS Trace Value (as opposed to
+// Row types that carry an actual RabbitHole Trace Value (as opposed to
 // "schema" — a sub-entity schema declaration — or "trace" — a named trace
 // slot with no value yet). These are what populate a schema's Trace table
-// in the AMCTOSHS Morphe page.
+// in the RabbitHole Morphe page.
 export const VALUE_BEARING_TYPES = ["trace_value", "instance", "intervener"];
 
 export const formatEntity = (entry) => {
   const lines = [
-    "AMCTOSHS Sub-Entity:",
+    "RabbitHole Sub-Entity:",
     `1. Entity Type: ${entry.typeLabel}`,
   ];
 
   if (entry.type === "schema") {
     lines.push(`2. Entity Schema: ${entry.name || "Untitled Schema"}`);
-    lines.push(`3. AMCTOSHS Sub-Entity schema Domain: ${entry.domain}`);
+    lines.push(`3. RabbitHole Sub-Entity schema Domain: ${entry.domain}`);
     lines.push(`4. Ontic Object Text: ${entry.sourceText}`);
   } else if (entry.type === "trace") {
     lines.push(`2. Entity Schema Trace: ${entry.name || "Untitled Trace"}`);

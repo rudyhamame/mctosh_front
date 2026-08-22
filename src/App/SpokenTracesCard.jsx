@@ -96,7 +96,7 @@ export default function SpokenTracesCard() {
     <article className="app_dashboard_card app_spoken_traces_card">
       <div className="app_card_heading">
         <div>
-          <span className="app_card_kicker">03 / AMCTOSHS MORPHE: 3D TRACES</span>
+          <span className="app_card_kicker">03 / RabbitHole MORPHE: 3D TRACES</span>
           <h2>Spoken Traces</h2>
         </div>
         <button className="app_icon_action app_icon_action_add" type="button" onClick={openAdd} aria-label="Add spoken trace" title="Add spoken trace">

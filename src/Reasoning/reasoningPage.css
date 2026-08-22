@@ -1,4 +1,4 @@
-/* AMCTOSHS Reasoning reuses ClinicalSchemata/clinicalSchemata.css's
+/* RabbitHole Reasoning reuses ClinicalSchemata/clinicalSchemata.css's
    #cs_* shell classes and morphePanels.css's mrp and mrv panel classes
    (imported alongside this file in ReasoningPage.jsx) — both are fully
    generic layout/component styles, not Morphe-specific. This file only

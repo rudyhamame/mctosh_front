@@ -246,7 +246,7 @@ const ReviewRow = ({ reviewedItem, proposal, busy, onDecide, index }) => {
   );
 };
 
-// The per-item review UI for "Extract AMCTOSHS Relations". This stage
+// The per-item review UI for "Extract RabbitHole Relations". This stage
 // only ever produces one item type (free-text Relations — no ontic
 // classification happens here, see amctoshsRelationsExtractor.js's own
 // doc comment), so unlike the retired multi-type review list this
@@ -264,7 +264,7 @@ export default function AmctoshsRelationsReviewList({ extraction, busy, onDecide
   return (
     <div id="mrv_root">
       <div id="mrv_head">
-        <span className="mrp_panel_label">Review AMCTOSHS Relations Proposal</span>
+        <span className="mrp_panel_label">Review RabbitHole Relations Proposal</span>
         {extraction.validation?.warnings?.length > 0 && (
           <span className="mrv_warning_count" title={extraction.validation.warnings.join("\n")}>
             <i className="bx bx-error" /> {extraction.validation.warnings.length} warning{extraction.validation.warnings.length !== 1 ? "s" : ""}

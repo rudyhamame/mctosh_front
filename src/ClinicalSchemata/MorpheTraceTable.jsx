@@ -63,7 +63,7 @@ export default function MorpheTraceTable({ index, selectedItemId, onCreateValue 
     <section id="mrp_trace_table_panel" aria-labelledby="mrp_trace_table_title">
       <div className="mrp_trace_table_head">
         <div>
-          <span className="mrp_panel_label">AMCTOSHS Trace Values</span>
+          <span className="mrp_panel_label">RabbitHole Trace Values</span>
           <h2 id="mrp_trace_table_title">{title}</h2>
         </div>
         <div className="mrp_trace_table_actions">

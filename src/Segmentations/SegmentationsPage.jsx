@@ -21,21 +21,21 @@ import AmctoshsPredicateExtractionReviewList from "./AmctoshsPredicateExtraction
 import AmctoshsPredicateAnalysisReviewList from "./AmctoshsPredicateAnalysisReviewList";
 import ParagraphProcessingContainer from "./ParagraphProcessingContainer";
 
-// AMCTOSHS Segmentation — the single reservoir of every AMCTOSHS Segment
+// RabbitHole Segmentation — the single reservoir of every RabbitHole Segment
 // (a content BBox, drawn and text-extracted in the PDF Reader — see
 // PDF/EntityBuilderPanel.jsx, the same BBOX_CARD_TYPES source of truth)
 // across ALL of the user's source documents at once, grouped by source in
 // a left aside (fetch/flatten logic lives in useAllSegments.js, shared
-// with AMCTOSHS Morphe's own browse page). Each segment carries its own
+// with RabbitHole Morphe's own browse page). Each segment carries its own
 // source + page so it can always be traced back and opened directly in
 // the PDF Reader.
 //
-// This page also OWNS the "Extract AMCTOSHS Relations" action (button
+// This page also OWNS the "Extract RabbitHole Relations" action (button
 // text exact per spec — never "Extract Morphe"): the user checks one or
 // more stored segments, clicks the button, reviews the proposed free-text
 // Relations (subject/predicate/object phrases decomposed straight from
 // the segment text — this stage never classifies anything into an ontic
-// category) inline, and accepted results are saved into AMCTOSHS Morphe
+// category) inline, and accepted results are saved into RabbitHole Morphe
 // (a separate page) — the structured destination they're later browsed/
 // edited in, not the actor that triggers extraction.
 //
@@ -43,7 +43,7 @@ import ParagraphProcessingContainer from "./ParagraphProcessingContainer";
 // Predicates" -> "Analyze Predicates" (back/routes/AMCTOSHSPredicateAPI.js).
 // It shares the same segment selection but is a SEPARATE, strictly
 // linguistic pipeline (predicate-argument structure, grammatical head/
-// core decomposition) — it never classifies anything into an AMCTOSHS
+// core decomposition) — it never classifies anything into an RabbitHole
 // ontic category either, and Predicate Analysis only ever runs over
 // predicate assertions the user has already accepted from Predicate
 // Extraction (never auto-chained).
@@ -209,7 +209,7 @@ export default function SegmentationsPage() {
     dehyphenation, gluedParagraph,
   ]);
 
-  // Which AI provider "Extract AMCTOSHS Relations" runs against — inherits
+  // Which AI provider "Extract RabbitHole Relations" runs against — inherits
   // the app-wide default set on the Settings page's AI Providers section
   // (src/hooks/useAIProvider.js, localStorage key "mctosh_ai_provider").
   // No per-page override here — shown read-only in the footer below.
@@ -773,7 +773,7 @@ export default function SegmentationsPage() {
           <div className="segp_empty">
             <i className="fi fi-rr-shapes" />
             <p>No source documents yet.</p>
-            <p className="segp_empty_hint">Add a PDF in AMCTOSHS Hyle first.</p>
+            <p className="segp_empty_hint">Add a PDF in RabbitHole Hyle first.</p>
           </div>
         ) : totalSegments === 0 ? (
           <div className="segp_empty">
@@ -833,8 +833,8 @@ export default function SegmentationsPage() {
           <i className="fi fi-rr-menu-burger" />
         </button>
         <div id="segp_header_titles">
-          <span id="segp_title">AMCTOSHS Segmentation</span>
-          <span id="segp_subtitle">AMCTOSHS Line Blocks → AMCTOSHS Relations</span>
+          <span id="segp_title">RabbitHole Segmentation</span>
+          <span id="segp_subtitle">RabbitHole Line Blocks → RabbitHole Relations</span>
         </div>
         <div id="segp_header_meta">
           <span className="segp_count_badge">{totalSegments} line block{totalSegments !== 1 ? "s" : ""}</span>
@@ -886,7 +886,7 @@ export default function SegmentationsPage() {
                         </span>
                       )}
                       <span className="segp_dim_badge segp_dim_badge--type">{selectedSegment.typeLabel}</span>
-                      <span className="segp_dim_badge segp_dim_badge--id" title="Global AMCTOSHS Hyle BBox ID">
+                      <span className="segp_dim_badge segp_dim_badge--id" title="Global RabbitHole Hyle BBox ID">
                         ID {selectedSegment.hyleId}
                       </span>
                     </div>

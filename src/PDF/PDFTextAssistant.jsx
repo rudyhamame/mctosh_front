@@ -9,6 +9,7 @@ import "./pdfTextAssistant.css";
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const PDF_CHAT_CLIENT_TIMEOUT_MS = 120000;
+const PDF_CHAT_STALL_TIMEOUT_MS = 35000;
 
 const authFetch = (url, options = {}) => {
   const token = readStoredSession()?.token || "";
@@ -289,7 +290,6 @@ const PDFTextAssistant = ({
     spokenCaptionRef.current = spokenText;
     speechStartedCallbackRef.current?.();
     speechStartedCallbackRef.current = null;
-    setMessages((previous) => replaceLastMessage(previous, spokenText));
   }, []);
 
   const sendQuestion = useCallback(async (rawQuestion, options = {}) => {
@@ -313,10 +313,19 @@ const PDFTextAssistant = ({
     spokenCaptionRef.current = "";
     speechSyncedTurnRef.current = true;
     speechStartedCallbackRef.current = options.onSpeaking || null;
+    let stallTimeoutId = 0;
+    const armStallTimeout = () => {
+      window.clearTimeout(stallTimeoutId);
+      stallTimeoutId = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, PDF_CHAT_STALL_TIMEOUT_MS);
+    };
     const timeoutId = window.setTimeout(() => {
       timedOut = true;
       controller.abort();
     }, PDF_CHAT_CLIENT_TIMEOUT_MS);
+    armStallTimeout();
 
     try {
       const response = await authFetch(apiUrl("/api/ai/pdf-chat"), {
@@ -336,7 +345,7 @@ const PDFTextAssistant = ({
       });
       if (!response.ok || !response.body) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data?.error?.message || "The AMCTOSHS Assistant could not answer.");
+        throw new Error(data?.error?.message || "The RabbitHole Assistant could not answer.");
       }
 
       const reader = response.body.getReader();
@@ -346,6 +355,7 @@ const PDFTextAssistant = ({
       while (!complete) {
         const { done, value } = await reader.read();
         if (done) break;
+        armStallTimeout();
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
@@ -362,6 +372,9 @@ const PDFTextAssistant = ({
             if (event.usage) setTokenUsage(event.usage);
             if (event.delta) {
               fullAnswer += event.delta;
+              setMessages((previous) => replaceLastMessage(previous, fullAnswer));
+              speechStartedCallbackRef.current?.();
+              speechStartedCallbackRef.current = null;
               avatarRef.current?.streamSpeechChunk?.(event.delta);
             }
           } catch (error) {
@@ -385,15 +398,20 @@ const PDFTextAssistant = ({
           previous,
           timedOut
             ? "The assistant timed out while waiting for the AI provider. Please try again."
-            : error.message || "The AMCTOSHS Assistant could not answer.",
+            : error.message || "The RabbitHole Assistant could not answer.",
         ));
       }
     } finally {
       window.clearTimeout(timeoutId);
+      window.clearTimeout(stallTimeoutId);
       abortRef.current = null;
-      await Promise.resolve(avatarRef.current?.endMessage?.());
       if (fullAnswer && !failed) {
         setMessages((previous) => replaceLastMessage(previous, fullAnswer));
+      }
+      try {
+        void Promise.resolve(avatarRef.current?.endMessage?.()).catch(() => {});
+      } catch {
+        // Voice playback is optional and must never hold the text response.
       }
       speechSyncedTurnRef.current = false;
       speechStartedCallbackRef.current = null;
@@ -704,20 +722,20 @@ const PDFTextAssistant = ({
     <section
       id="pdf_text_agent_panel"
       className={minimized ? "pdf_text_agent_panel--minimized" : undefined}
-      aria-label="AMCTOSHS app assistant"
+      aria-label="RabbitHole app assistant"
     >
       <button
         type="button"
         id="pdf_text_agent_restore"
         onClick={() => setMinimized(false)}
-        aria-label="Restore AMCTOSHS Assistant"
-        title="Restore AMCTOSHS Assistant"
+        aria-label="Restore RabbitHole Assistant"
+        title="Restore RabbitHole Assistant"
       >
         <span className={`pdf_text_agent_restore_icon${callActive ? ` pdf_text_agent_restore_icon--${callState}` : ""}`}>
           <i className="bx bx-bot" aria-hidden="true" />
         </span>
         <span className="pdf_text_agent_restore_copy">
-          <strong>AMCTOSHS</strong>
+          <strong>RabbitHole</strong>
           <small>{callActive ? (callState === "thinking" ? "Thinking" : callState === "speaking" ? "Speaking" : "Listening") : streaming ? "Answering" : "Ready"}</small>
         </span>
         <i className="bx bx-window-open" aria-hidden="true" />
@@ -725,7 +743,7 @@ const PDFTextAssistant = ({
       <header id="pdf_text_agent_header">
         <div>
           <span id="pdf_text_agent_eyebrow"><i className="bx bx-radar" /> App-wide awareness</span>
-          <strong>AMCTOSHS Assistant</strong>
+          <strong>RabbitHole Assistant</strong>
           <small title={filename}>{hasDocument ? `${filename || "Current PDF"} · page ${currentPage || 1}` : appContext?.route || "Current app"}</small>
           <div id="pdf_text_agent_model" title={`AI provider: ${providerLabel}; model: ${modelLabel}`}>
             <i className="bx bx-chip" aria-hidden="true" />
@@ -765,7 +783,7 @@ const PDFTextAssistant = ({
             type="button"
             id="pdf_text_agent_minimize"
             onClick={() => setMinimized(true)}
-            aria-label="Minimize AMCTOSHS Assistant"
+            aria-label="Minimize RabbitHole Assistant"
             title="Minimize and keep working in the background"
           >
             <i className="bx bx-minus" />
@@ -774,7 +792,7 @@ const PDFTextAssistant = ({
             type="button"
             id="pdf_text_agent_close"
             onClick={closeAgent}
-            aria-label="Close AMCTOSHS Assistant and end conversation"
+            aria-label="Close RabbitHole Assistant and end conversation"
             title="Close and end conversation"
           >
             <i className="bx bx-x" />
@@ -881,7 +899,7 @@ const PDFTextAssistant = ({
             )}
             {messages.map((message, index) => (
               <div key={`${message.role}-${index}`} className={`pdf_text_agent_message pdf_text_agent_message--${message.role}`}>
-                <span>{message.role === "user" ? "You" : "AMCTOSHS"}</span>
+                <span>{message.role === "user" ? "You" : "RabbitHole"}</span>
                 <p>{message.content || (streaming && index === messages.length - 1 ? "Thinking..." : "")}</p>
               </div>
             ))}

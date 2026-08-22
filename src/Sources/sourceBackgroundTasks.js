@@ -15,7 +15,8 @@ const emit = () => {
 };
 
 const updateTask = (id, patch) => {
-  tasks = tasks.map((task) => (task.id === id ? { ...task, ...patch } : task));
+  const terminal = ["completed", "failed", "cancelled"].includes(patch.status);
+  tasks = tasks.map((task) => (task.id === id ? { ...task, ...patch, ...(terminal ? { file: null } : {}) } : task));
   emit();
 };
 
@@ -193,10 +194,6 @@ export const startSourceUpload = ({ file, type }) => {
       updateTask(id, { status: "completed", phase: "completed", progress: 100, message: data.duplicate ? "Source already exists" : "Upload complete", result: data });
       return;
     }
-    if (data.needsCompression || status === 413) {
-      updateTask(id, { status: "needs_split", phase: "waiting", progress: 100, message: "Split confirmation required", result: data });
-      return;
-    }
     updateTask(id, { status: "failed", phase: "failed", message: errorText(data.error, `Failed to upload "${file.name}".`), result: data });
   });
   return id;
@@ -216,7 +213,7 @@ export const startSourceSplit = ({ file, type, parts, uploadJobId, name }) => {
     if (tasks.find((task) => task.id === id)?.status === "cancelled") return;
     if (ok) {
       if (data.jobId) {
-        updateTask(id, { serverJobId: String(data.jobId), phase: "processing", progress: 0, message: "Splitting PDF in background…" });
+        updateTask(id, { file: null, serverJobId: String(data.jobId), phase: "processing", progress: 0, message: "Splitting PDF in background…" });
         pollSourceJob(id, data.jobId);
         return;
       }

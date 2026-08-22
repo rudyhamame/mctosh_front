@@ -3,7 +3,7 @@ import fs from "node:fs";
 
 const infoSource = fs.readFileSync(new URL("./MorpheInfoTab.jsx", import.meta.url), "utf8");
 
-describe("AMCTOSHS Morphe Information content", () => {
+describe("RabbitHole Morphe Information content", () => {
   it("states the single-slice versus temporal measurability criterion", () => {
     expect(infoSource).toContain("A 3D Trace Value is obtainable from one present ontic slice.");
     expect(infoSource).toContain("A 4D Trace Value requires the retention and relation of temporally distinct 3D Trace Values.");

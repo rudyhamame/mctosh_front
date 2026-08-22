@@ -11,13 +11,13 @@ import MorpheTraceTable from "./MorpheTraceTable";
 import Morphe3DTraceCreator from "./Morphe3DTraceCreator";
 import { MORPHE_OBJECT_MODES } from "./amctoshsMorpheConstants";
 
-// AMCTOSHS Morphe — the structured DESTINATION where accepted AMCTOSHS
+// RabbitHole Morphe — the structured DESTINATION where accepted RabbitHole
 // Objects, 3D traces/instances, and 4D relations/traces/schemata are
-// browsed and edited through the grouped AMCTOSHS Morphe modes. This page is
+// browsed and edited through the grouped RabbitHole Morphe modes. This page is
 // browse/edit ONLY — it never triggers AI extraction itself. The
-// extraction action ("Extract AMCTOSHS Relations") lives on the AMCTOSHS
+// extraction action ("Extract RabbitHole Relations") lives on the RabbitHole
 // Segmentation page instead (see ../Segmentations/SegmentationsPage.jsx);
-// accepted results saved from there simply appear here. AMCTOSHS
+// accepted results saved from there simply appear here. RabbitHole
 // Reasoning (a separate page/tool) is downstream of what's saved here — it
 // is never triggered from this page either.
 
@@ -45,7 +45,7 @@ export default function ClinicalSchemata() {
       setMorpheData(data);
       setMorpheError("");
     } catch (err) {
-      setMorpheError(err.message || "Could not load AMCTOSHS Morphe data.");
+      setMorpheError(err.message || "Could not load RabbitHole Morphe data.");
     } finally {
       setMorpheLoading(false);
     }
@@ -96,7 +96,7 @@ export default function ClinicalSchemata() {
 
   const create3DTrace = async ({ biologicalSensor, accessMethod, proxyDevices, traceName }) => {
     if (!selectedObjectId) {
-      setTraceCreateError("Select an AMCTOSHS object first.");
+      setTraceCreateError("Select an RabbitHole object first.");
       return false;
     }
     setTraceCreating(true);
@@ -123,7 +123,7 @@ export default function ClinicalSchemata() {
       if (result.schema) selectObject(result.schema);
       return true;
     } catch (err) {
-      setObjectCreateError(err.message || "Failed to create the AMCTOSHS object.");
+      setObjectCreateError(err.message || "Failed to create the RabbitHole object.");
       return false;
     } finally {
       setObjectCreating(false);
@@ -137,7 +137,7 @@ export default function ClinicalSchemata() {
       if (selectedObjectId === object._id) selectObject(updated);
       return true;
     } catch (err) {
-      setObjectCreateError(err.message || "Failed to edit the AMCTOSHS object.");
+      setObjectCreateError(err.message || "Failed to edit the RabbitHole object.");
       return false;
     }
   };
@@ -152,7 +152,7 @@ export default function ClinicalSchemata() {
       await refreshMorphe();
       return true;
     } catch (err) {
-      setObjectCreateError(err.message || "Failed to delete the AMCTOSHS object.");
+      setObjectCreateError(err.message || "Failed to delete the RabbitHole object.");
       return false;
     }
   };
@@ -197,16 +197,16 @@ export default function ClinicalSchemata() {
         </button>
         <div id="cs_header_titles">
           <span id="cs_title">
-            AMCTOSHS Morphe
+            RabbitHole's Patient Representation
             <button
               type="button"
               id="cs_info_btn"
               className={activeMorpheView === "information" ? "cs_info_btn--active" : undefined}
               onClick={() => setActiveMorpheView((view) => (view === "information" ? "entities" : "information"))}
-              aria-label="Open AMCTOSHS Morphe information"
+              aria-label="Open RabbitHole Representation information"
               aria-expanded={activeMorpheView === "information"}
               aria-controls="mrp_information"
-              title="About AMCTOSHS Morphe Entities"
+              title="About RabbitHole Representation Entities"
             >
               <i className="bx bx-info-circle" aria-hidden="true" />
             </button>
@@ -241,9 +241,9 @@ export default function ClinicalSchemata() {
           onDelete={deleteObject}
         />
         <main id="mrp_dimension_main">
-          <div id="mrp_dimension_tabs" role="tablist" aria-label="AMCTOSHS object dimension">
-            <button type="button" role="tab" aria-selected={activeDimension === "3d"} className={`mrp_dimension_tab${activeDimension === "3d" ? " mrp_dimension_tab--active" : ""}`} onClick={() => selectDimension("3d")}>AMCTOSHS OBJECT in 3D</button>
-            <button type="button" role="tab" aria-selected={activeDimension === "4d"} className={`mrp_dimension_tab${activeDimension === "4d" ? " mrp_dimension_tab--active" : ""}`} onClick={() => selectDimension("4d")}>AMCTOSHS OBJECT in 4D</button>
+          <div id="mrp_dimension_tabs" role="tablist" aria-label="RabbitHole object dimension">
+            <button type="button" role="tab" aria-selected={activeDimension === "3d"} className={`mrp_dimension_tab${activeDimension === "3d" ? " mrp_dimension_tab--active" : ""}`} onClick={() => selectDimension("3d")}>RabbitHole OBJECT in 3D</button>
+            <button type="button" role="tab" aria-selected={activeDimension === "4d"} className={`mrp_dimension_tab${activeDimension === "4d" ? " mrp_dimension_tab--active" : ""}`} onClick={() => selectDimension("4d")}>RabbitHole OBJECT in 4D</button>
           </div>
           <div id="mrp_dimension_subtabs" role="tablist" aria-label={`${activeDimension.toUpperCase()} modes`}>
             {activeDimensionGroup?.children.map(([key, label, description]) => (
@@ -258,7 +258,7 @@ export default function ClinicalSchemata() {
                 <Morphe3DTraceCreator traceSchemas={morpheData.traceSchemas} selectedObject={selectedObjectId ? index.schemasById?.get(selectedObjectId) : null} creating={traceCreating} error={traceCreateError} onCreate={create3DTrace} />
               )}
               {morpheLoading ? (
-                <div id="cs_no_selection"><i className="bx bx-loader-circle mrp_icon_spin" /><p>Loading AMCTOSHS Morphe…</p></div>
+                <div id="cs_no_selection"><i className="bx bx-loader-circle mrp_icon_spin" /><p>Loading RabbitHole Representation…</p></div>
               ) : (
                 <MorpheEntityNav index={index} activeEntityType={activeEntityType} onSelectEntityType={selectEntityType} selectedItemId={selectedItemId} onSelectItem={selectItem} textRelations={morpheData.textRelations} showTabs={false} />
               )}

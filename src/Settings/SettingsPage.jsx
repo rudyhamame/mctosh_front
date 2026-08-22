@@ -9,6 +9,7 @@ import objectivesAr from "../MCC/mccqeObjectivesArabicData.json";
 import AvatarProviderSelector from "../Avatar/AvatarProviderSelector";
 import CameraPresetTab from "./CameraPresetTab";
 import ContextSettingsTab from "./ContextSettingsTab";
+import CorpusSanitizerPanel from "./CorpusSanitizerPanel";
 import { readDevAiSettings, writeDevAiSettings } from "../App/devAiSettings";
 import {
   readVoiceSettings, writeVoiceSettings,
@@ -26,6 +27,7 @@ import { applyTheme, readStoredTheme } from "../utils/theme";
 import { MEDICAL_DICTIONARY_API_URL, OTHER_DICTIONARY_API_URL } from "../utils/dictionarySettings";
 import { listSavedVocabulary } from "../utils/vocabApi";
 import { readUmlsLanguage, UMLS_LANGUAGE_OPTIONS, writeUmlsLanguage } from "../Vocabs/umlsSettings";
+import { cssColorValues, DEFAULT_GRAPHICS_COLOR, graphicsAuthHeaders, GRAPHICS_PAGES } from "./graphicsSettings";
 import "./settingsPage.css";
 
 const TTS_PROVIDER_OPTIONS = [
@@ -37,17 +39,37 @@ const TTS_PROVIDER_OPTIONS = [
 
 const stripHtml = (html) => String(html || "").replace(/<[^>]+>/g, " ");
 
+const opaqueCssColor = (value) => {
+  const color = String(value || "").trim();
+  if (/^rgba\(/i.test(color)) {
+    const channels = color.slice(color.indexOf("(") + 1, -1).split(",").map((part) => part.trim());
+    return channels.length >= 3 ? `rgb(${channels.slice(0, 3).join(", ")})` : color;
+  }
+  if (/^hsla\(/i.test(color)) {
+    const channels = color.slice(color.indexOf("(") + 1, -1).split(",").map((part) => part.trim());
+    return channels.length >= 3 ? `hsl(${channels.slice(0, 3).join(", ")})` : color;
+  }
+  if (/^#[\da-f]{4}$/i.test(color)) return color.slice(0, 4);
+  if (/^#[\da-f]{8}$/i.test(color)) return color.slice(0, 7);
+  return color;
+};
+
+const uniqueOpaqueCssColors = [...new Set(cssColorValues.map(opaqueCssColor))];
+
 const CORPUS_INPUTS = [
   { id: "hyle_text", label: "Hyle Text extraction Text" },
   { id: "hyle_ocr", label: "Hyle OCR Text" },
   { id: "notebook", label: "Notebook Typing Text" },
-  { id: "vocabs", label: "AMCTOSHS Vocabs text" },
+  { id: "vocabs", label: "RabbitHole Morphemes text" },
 ];
+const CORPUS_CACHE_VERSION = 2;
 
-const corpusTokens = (value) => String(value || "")
+const corpusTokens = (value) => (String(value || "")
   .normalize("NFKC")
-  .toLocaleLowerCase()
-  .match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) || [];
+  .match(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu) || [])
+  // Corpus is word-only by construction. Numbers and mixed letter/number
+  // tokens never enter its counts, cache, sanitizer, or prediction source.
+  .filter((token) => /^\p{L}+(?:['’]\p{L}+)*$/u.test(token));
 
 const corpusDataType = (string) => /[\p{L}]/u.test(string) && /[\p{N}]/u.test(string)
   ? "alphanumeric"
@@ -56,23 +78,33 @@ const corpusDataType = (string) => /[\p{L}]/u.test(string) && /[\p{N}]/u.test(st
 const countCorpusWords = (sourceTexts) => {
   const counts = new Map();
   sourceTexts.forEach(({ source, texts }) => texts.forEach((text) => corpusTokens(text).forEach((word) => {
-    const current = counts.get(word) || { occurrence: 0, sources: new Set(), sourceCounts: {} };
+    const normalized = word.replaceAll("’", "'").toLocaleLowerCase();
+    const current = counts.get(normalized) || { string: word, occurrence: 0, sources: new Set(), sourceCounts: {} };
+    if (current.string === current.string.toLocaleLowerCase() && word !== word.toLocaleLowerCase()) current.string = word;
     current.occurrence += 1;
     current.sources.add(source);
     current.sourceCounts[source] = (current.sourceCounts[source] || 0) + 1;
-    counts.set(word, current);
+    counts.set(normalized, current);
   })));
   return [...counts.entries()]
     .sort(([a], [b]) => a.localeCompare(b, undefined, { sensitivity: "base" }))
-    .map(([string, details], index) => ({
+    .map(([normalized, details], index) => ({
       id: `corpus#${index + 1}`,
-      string,
+      string: details.string,
+      normalized,
       occurrence: details.occurrence,
+      originalOccurrence: details.occurrence,
       sources: [...details.sources].join(", "),
       sourceCounts: details.sourceCounts,
-      dataType: corpusDataType(string),
+      dataType: corpusDataType(details.string),
     }));
 };
+
+const compactCorpusRows = (rows) => rows.map((row) => ({
+  string: row.string,
+  normalized: row.normalized,
+  occurrence: Number(row.originalOccurrence ?? row.occurrence) || 1,
+}));
 
 const DEFAULT_SEMANTIC_DETECTION_SETTINGS = {
   enabled: true,
@@ -106,19 +138,28 @@ const authHeader = () => {
 const THEMES = [
   { id: "original", label: "Original", desc: "Deep blue-navy classic theme",          bg: "#0d0d1a", surface: "#1e1e3a", text: "#ffffff", border: "#2a2a4a" },
   { id: "light",    label: "Light",    desc: "Clean white default with soft contrast", bg: "#f8f8fc", surface: "#ffffff",  text: "#111122", border: "#d0d0e0" },
-  { id: "dark",     label: "Dark",     desc: "Pure black — minimal ink",             bg: "#000000", surface: "#0f0f0f",  text: "#f0f0f0", border: "#222222" },
 ];
+
+const GRAPHICS_DEFAULT_PREVIEWS = {
+  home: { background: "url('/login%20pattern.png') center / cover", toolbar: "var(--color-primary)", surface: "var(--color-surface)" },
+  sources: { background: "var(--color-bg)", toolbar: "var(--color-primary)", surface: "var(--color-surface)" },
+  "pdf-reader": { background: "var(--color-bg)", toolbar: "var(--color-primary)", surface: "var(--color-surface)" },
+  "social-media": { background: "var(--color-bg)", toolbar: "var(--color-primary)", surface: "var(--color-surface)" },
+  "social-media-designer": { background: "var(--color-bg)", toolbar: "var(--color-primary)", surface: "var(--color-surface)" },
+  settings: { background: "var(--color-bg)", toolbar: "var(--color-primary)", surface: "var(--color-surface)" },
+};
 
 const SECTIONS = [
   { id: "personal",   label: "Personal Information", icon: "fi fi-rr-user" },
   { id: "prompts",    label: "Prompts",         icon: "fi fi-rr-document" },
   { id: "ai",         label: "AI Providers",    icon: "fi fi-rr-microchip-ai" },
-  { id: "vocabs",     label: "AMCTOSHS Vocabs", icon: "fi fi-rr-book-alt" },
+  { id: "vocabs",     label: "RabbitHole Morphemes", icon: "fi fi-rr-book-alt" },
   { id: "ai_access",  label: "AI Access",       icon: "fi fi-rr-shield-check" },
   { id: "social",     label: "Social Publish",  icon: "fi fi-rr-megaphone" },
   { id: "prediction", label: "Corpus", icon: "fi fi-rr-keyboard" },
   { id: "context",    label: "Context", icon: "fi fi-rr-brain-circuit" },
   { id: "pdf_reader", label: "PDF Reader",      icon: "fi fi-rr-file-pdf" },
+  { id: "graphics",   label: "Graphics",        icon: "fi fi-rr-picture" },
   { id: "theme",      label: "Theme",           icon: "fi fi-rr-palette" },
 ];
 
@@ -203,6 +244,89 @@ const PromptEditor = ({ label, desc, fetchUrl, saveUrl, method = "PATCH", field 
   );
 };
 
+const GraphicsSettingsPanel = () => {
+  const [pageId, setPageId] = useState(GRAPHICS_PAGES[0].id);
+  const [settings, setSettings] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState("");
+  const selectedColor = settings[pageId] || DEFAULT_GRAPHICS_COLOR;
+  const defaultPreview = GRAPHICS_DEFAULT_PREVIEWS[pageId] || { background: "var(--color-bg)", toolbar: "var(--color-primary)", surface: "var(--color-surface)" };
+  const previewBackground = selectedColor || defaultPreview.background;
+
+  useEffect(() => {
+    fetch(apiUrl("/api/user/me/graphics-settings"), { headers: graphicsAuthHeaders() })
+      .then((response) => response.json())
+      .then((data) => setSettings(data.graphicsSettings || {}))
+      .catch(() => setStatus("Could not load saved graphics."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("rh:graphics-settings-changed", {
+      detail: { settings, pageId },
+    }));
+  }, [pageId, selectedColor, settings]);
+
+  const chooseColor = (color) => setSettings((current) => {
+    const next = { ...current };
+    if (color === DEFAULT_GRAPHICS_COLOR) delete next[pageId];
+    else next[pageId] = color;
+    return next;
+  });
+  const save = async () => {
+    setSaving(true);
+    try {
+      const response = await fetch(apiUrl("/api/user/me/graphics-settings"), {
+        method: "PATCH",
+        headers: graphicsAuthHeaders(),
+        body: JSON.stringify({ graphicsSettings: settings }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || `Save failed (${response.status})`);
+      setSettings(data.graphicsSettings || settings);
+      window.dispatchEvent(new CustomEvent("rh:graphics-settings-changed", { detail: { settings: data.graphicsSettings || settings, pageId } }));
+      setStatus("Saved");
+    } catch (error) { setStatus(error.message || "Save failed"); }
+    finally { setSaving(false); setTimeout(() => setStatus(""), 1800); }
+  };
+
+  return (
+    <div className="sett_section">
+      <h2 className="sett_section_title">Graphics</h2>
+      <p className="sett_section_desc">Choose a page by title and customize only its Safari toolbar color. The preview updates immediately; save to sync the choice to your account.</p>
+      <div className="sett_graphics_layout">
+        <div className="sett_graphics_controls">
+          <label className="sett_field_label" htmlFor="sett_graphics_page">Page</label>
+          <select id="sett_graphics_page" value={pageId} onChange={(event) => setPageId(event.target.value)} disabled={loading}>
+            {GRAPHICS_PAGES.map((page) => <option key={page.id} value={page.id}>{page.title}</option>)}
+          </select>
+          <label className="sett_field_label" htmlFor="sett_graphics_color">Safari toolbar color</label>
+          <div className="sett_graphics_picker_row">
+            <input id="sett_graphics_color" type="color" value={/^#[\da-f]{6}$/i.test(selectedColor) ? selectedColor : "#f2f0e8"} onChange={(event) => chooseColor(event.target.value)} />
+            <code>{selectedColor || "Default"}</code>
+          </div>
+          <div className="sett_graphics_palette" aria-label="Colors used by the application stylesheets">
+            <button type="button" className={`sett_graphics_default${!selectedColor ? " is-selected" : ""}`} onClick={() => chooseColor(DEFAULT_GRAPHICS_COLOR)} aria-label="Default graphics settings" title="Default graphics settings">/</button>
+            {uniqueOpaqueCssColors.map((swatchColor) => {
+              return <button key={swatchColor} type="button" className={`sett_graphics_swatch${swatchColor === selectedColor ? " is-selected" : ""}`} style={{ background: swatchColor, opacity: 1 }} title={swatchColor} aria-label={`Use ${swatchColor}`} onClick={() => chooseColor(swatchColor)} />;
+            })}
+          </div>
+          <div className="sett_graphics_actions">
+            {status && <span className={`sett_save_status${status.includes("failed") || status.includes("Could") ? " sett_save_status--err" : ""}`}>{status}</span>}
+            <button className="sett_btn sett_btn--primary" type="button" onClick={save} disabled={loading || saving}>{saving ? "Saving…" : "Save graphics"}</button>
+          </div>
+        </div>
+        <div className="sett_graphics_preview" style={{ background: defaultPreview.background }} aria-label={`${GRAPHICS_PAGES.find((page) => page.id === pageId)?.title} preview`}>
+          <div className="sett_graphics_preview_toolbar" style={{ background: previewBackground }}>
+            <span>☰</span><span>{GRAPHICS_PAGES.find((page) => page.id === pageId)?.title}</span><span>•••</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 const SettingsPage = () => {
   const navigate = useNavigate();
@@ -248,12 +372,19 @@ const SettingsPage = () => {
   const [corpusRows, setCorpusRows] = useState([]);
   const [corpusInputCounts, setCorpusInputCounts] = useState(() => Object.fromEntries(CORPUS_INPUTS.map(({ id }) => [id, 0])));
   const [selectedCorpusSource, setSelectedCorpusSource] = useState("all");
+  const [corpusSort, setCorpusSort] = useState({ column: "string", direction: "asc" });
   const [corpusSettingsOpen, setCorpusSettingsOpen] = useState(false);
-  const [corpusDataTypes, setCorpusDataTypes] = useState({ word: true, number: true, alphanumeric: true });
+  const [excludeSingleOccurrenceCorpusStrings, setExcludeSingleOccurrenceCorpusStrings] = useState(() => (
+    localStorage.getItem("mctosh_corpus_exclude_single_occurrence") === "true"
+  ));
   const [corpusRefreshTick, setCorpusRefreshTick] = useState(0);
   const [corpusLoading, setCorpusLoading] = useState(false);
   const [corpusProgress, setCorpusProgress] = useState(0);
   const [corpusError, setCorpusError] = useState("");
+  const [corpusSanitizerRecords, setCorpusSanitizerRecords] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("mctosh_corpus_sanitizer_records") || "[]"); }
+    catch { return []; }
+  });
   const corpusTextsRef = useRef(Object.fromEntries(CORPUS_INPUTS.map(({ id }) => [id, []])));
   const [socialConfig, setSocialConfig] = useState({
     metaAppId: "",
@@ -600,8 +731,9 @@ const SettingsPage = () => {
     // the background while the user visits another settings tab.
     if (corpusRefreshTick === 0) {
       try {
+        const cacheVersion = Number(localStorage.getItem("mctosh_corpus_cache_version") || 0);
         const snapshot = JSON.parse(localStorage.getItem("mctosh_corpus_snapshot") || "null");
-        if (snapshot?.rows && snapshot?.inputCounts) {
+        if (cacheVersion === CORPUS_CACHE_VERSION && snapshot?.version === CORPUS_CACHE_VERSION && snapshot?.rows && snapshot?.inputCounts) {
           setCorpusRows(snapshot.rows);
           setCorpusInputCounts(snapshot.inputCounts);
           setCorpusProgress(100);
@@ -609,15 +741,20 @@ const SettingsPage = () => {
           return undefined;
         }
         const cachedWords = JSON.parse(localStorage.getItem("mctosh_corpus_words") || "[]");
-        if (Array.isArray(cachedWords) && cachedWords.length > 0) {
-          const cachedRows = cachedWords.map((string, index) => ({
+        // Legacy caches contained strings only and therefore lost their raw
+        // frequencies. Rebuild those instead of pretending every word was
+        // observed once.
+        if (cacheVersion === CORPUS_CACHE_VERSION && Array.isArray(cachedWords) && cachedWords.length > 0 && cachedWords.every((entry) => entry && typeof entry === "object")) {
+          const cachedRows = cachedWords.map((entry, index) => ({
             id: `corpus#${index + 1}`,
-            string: String(string),
-            occurrence: 1,
+            string: String(entry.string || ""),
+            normalized: String(entry.normalized || entry.string || "").replaceAll("’", "'").toLocaleLowerCase(),
+            occurrence: Number(entry.occurrence) || 1,
+            originalOccurrence: Number(entry.occurrence) || 1,
             sources: "—",
             sourceCounts: {},
-            dataType: corpusDataType(String(string)),
-          }));
+            dataType: corpusDataType(String(entry.string || "")),
+          })).filter((row) => row.string && row.dataType === "word");
           setCorpusRows(cachedRows);
           setCorpusProgress(100);
           setCorpusLoading(false);
@@ -668,7 +805,7 @@ const SettingsPage = () => {
                 source: String(index + 1).padStart(2, "0"),
                 texts: corpusTextsRef.current[id],
               })));
-              localStorage.setItem("mctosh_corpus_words", JSON.stringify(liveRows.map((row) => row.string)));
+              localStorage.setItem("mctosh_corpus_words", JSON.stringify(compactCorpusRows(liveRows)));
               window.dispatchEvent(new Event("amctoshs:corpus-words"));
               setCorpusRows(liveRows);
             }
@@ -718,9 +855,10 @@ const SettingsPage = () => {
           source: String(index + 1).padStart(2, "0"),
           texts: inputTexts[id],
         })));
-        localStorage.setItem("mctosh_corpus_words", JSON.stringify(completedRows.map((row) => row.string)));
+        localStorage.setItem("mctosh_corpus_words", JSON.stringify(compactCorpusRows(completedRows)));
+        localStorage.setItem("mctosh_corpus_cache_version", String(CORPUS_CACHE_VERSION));
         try {
-          localStorage.setItem("mctosh_corpus_snapshot", JSON.stringify({ rows: completedRows, inputCounts }));
+          localStorage.setItem("mctosh_corpus_snapshot", JSON.stringify({ version: CORPUS_CACHE_VERSION, rows: completedRows, inputCounts }));
         } catch {
           // Large corpora may exceed localStorage; the word-list cache still
           // lets the next visit avoid an automatic rebuild.
@@ -745,16 +883,20 @@ const SettingsPage = () => {
   }, [corpusRefreshTick]);
 
   useEffect(() => {
+    const sanitizerByToken = new Map(corpusSanitizerRecords.map((record) => [record.normalized, record]));
     const deduplicatedWords = corpusRows
-      .filter((row) => corpusDataTypes[row.dataType])
-      .map((row) => row.string);
+      .filter((row) => !excludeSingleOccurrenceCorpusStrings || Number(row.originalOccurrence ?? row.occurrence) > 1)
+      .filter((row) => sanitizerByToken.get(row.normalized || row.string.toLocaleLowerCase())?.status !== "NONSENSE")
+      .map((row) => sanitizerByToken.get(row.normalized || row.string.toLocaleLowerCase())?.correction || row.string);
     try {
       localStorage.setItem("mctosh_corpus_unit_words", JSON.stringify(deduplicatedWords));
+      localStorage.setItem("mctosh_corpus_exclude_single_occurrence", String(excludeSingleOccurrenceCorpusStrings));
+      localStorage.setItem("mctosh_corpus_sanitizer_records", JSON.stringify(corpusSanitizerRecords));
       window.dispatchEvent(new Event("amctoshs:corpus-words"));
     } catch {
       // Prediction can fall back to the server if browser storage is unavailable.
     }
-  }, [corpusDataTypes, corpusRows]);
+  }, [corpusRows, corpusSanitizerRecords, excludeSingleOccurrenceCorpusStrings]);
 
   useEffect(() => {
     void loadSocialConfig();
@@ -1165,19 +1307,41 @@ const SettingsPage = () => {
   const canTestSocialConnection = socialMeta.hasAccessToken || Boolean(socialConfig.accessToken.trim());
 
   const mctoshDefaultText = localStorage.getItem("mctosh_prompt_mctosh") || MCTOSH_PROMPT_TEXT;
-  const datatypeCorpusRows = corpusRows.filter((row) => corpusDataTypes[row.dataType]);
-  const visibleCorpusRows = selectedCorpusSource === "all"
-    ? corpusRows
-    : selectedCorpusSource === "unique"
-      ? datatypeCorpusRows.map((row) => ({ ...row, occurrence: 1 }))
-      : datatypeCorpusRows
-      .filter((row) => row.sourceCounts[selectedCorpusSource])
-      .map((row) => ({
-        ...row,
-        sources: selectedCorpusSource,
-        occurrence: row.sourceCounts[selectedCorpusSource],
-      }));
-  const corpusTotalOccurrences = corpusRows.reduce((total, row) => total + row.occurrence, 0);
+  const datatypeCorpusRows = corpusRows.filter((row) => (
+    !excludeSingleOccurrenceCorpusStrings || Number(row.originalOccurrence ?? row.occurrence) > 1
+  ));
+  const visibleCorpusRows = (selectedCorpusSource === "all" || selectedCorpusSource === "unique"
+    ? datatypeCorpusRows
+    : datatypeCorpusRows.filter((row) => row.sourceCounts[selectedCorpusSource]))
+    .map((row) => ({
+      ...row,
+      occurrence: Number(row.originalOccurrence ?? row.occurrence) || 1,
+    }));
+  const sortedVisibleCorpusRows = [...visibleCorpusRows].sort((left, right) => {
+    const direction = corpusSort.direction === "asc" ? 1 : -1;
+    if (corpusSort.column === "occurrence") return direction * (left.occurrence - right.occurrence);
+    const leftValue = corpusSort.column === "source" ? left.sources : left[corpusSort.column];
+    const rightValue = corpusSort.column === "source" ? right.sources : right[corpusSort.column];
+    return direction * String(leftValue || "").localeCompare(String(rightValue || ""), undefined, {
+      sensitivity: "base",
+      numeric: true,
+    });
+  });
+  const changeCorpusSort = (column) => setCorpusSort((current) => ({
+    column,
+    direction: current.column === column && current.direction === "asc" ? "desc" : "asc",
+  }));
+  const corpusSortHeader = (column, label) => (
+    <th aria-sort={corpusSort.column === column ? (corpusSort.direction === "asc" ? "ascending" : "descending") : "none"}>
+      <button type="button" onClick={() => changeCorpusSort(column)}>
+        <span>{label}</span>
+        <i aria-hidden="true" className={corpusSort.column === column
+          ? `bx bx-sort-${corpusSort.direction === "asc" ? "up" : "down"}`
+          : "bx bx-sort"} />
+      </button>
+    </th>
+  );
+  const corpusTotalOccurrences = datatypeCorpusRows.reduce((total, row) => total + row.occurrence, 0);
 
   return (
     <div id="sett_page">
@@ -1209,7 +1373,7 @@ const SettingsPage = () => {
           {section === "personal" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Personal Information</h2>
-              <p className="sett_section_desc">Your account's basic identity — shown across AMCTOSHS wherever your name appears.</p>
+              <p className="sett_section_desc">Your account's basic identity — shown across RabbitHole wherever your name appears.</p>
 
               {personalLoading ? (
                 <div className="sett_prompt_loading">Loading…</div>
@@ -1370,11 +1534,11 @@ const SettingsPage = () => {
           {section === "prompts" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Prompts</h2>
-              <p className="sett_section_desc">Edit the AI prompts used across AMCTOSHS. Changes take effect immediately on the server for backend prompts.</p>
+              <p className="sett_section_desc">Edit the AI prompts used across RabbitHole. Changes take effect immediately on the server for backend prompts.</p>
 
               <PromptEditor
                 label="Hyle Extraction"
-                desc="Used when extracting hyles from PDF, Word, or image sources — the core AMCTOSHS classification engine."
+                desc="Used when extracting hyles from PDF, Word, or image sources — the core RabbitHole classification engine."
                 fetchUrl="/api/pdf/system-message"
                 saveUrl="/api/pdf/system-message"
                 method="PATCH"
@@ -1389,7 +1553,7 @@ const SettingsPage = () => {
                 field="prompt"
               />
               <PromptEditor
-                label="AMCTOSHS Classification Prompt"
+                label="RabbitHole Classification Prompt"
                 desc="The formal 12-section classification prompt accessible from the Hyle-to-Meaning page. Stored locally in your browser."
                 fetchUrl={null}
                 saveUrl={null}
@@ -1406,7 +1570,7 @@ const SettingsPage = () => {
                 <div>
                   <h2 className="sett_section_title">AI Providers</h2>
                   <p className="sett_section_desc">
-                    Select the default AI provider used across AMCTOSHS. The provider is sent with every extraction and classification request.
+                    Select the default AI provider used across RabbitHole. The provider is sent with every extraction and classification request.
                     Configure API keys in your backend environment variables.
                   </p>
                 </div>
@@ -1793,12 +1957,12 @@ const SettingsPage = () => {
             </div>
           )}
 
-          {/* ═══ AMCTOSHS VOCABS ═══ */}
+          {/* ═══ RabbitHole VOCABS ═══ */}
           {section === "vocabs" && (
             <div className="sett_section">
-              <h2 className="sett_section_title">AMCTOSHS Vocabs</h2>
+              <h2 className="sett_section_title">RabbitHole Morphemes</h2>
               <p className="sett_section_desc">
-                Configure the three terminology layers used by AMCTOSHS: dictionary definitions, translation, and UMLS medical concept mapping.
+                Configure the three terminology layers used by RabbitHole: dictionary definitions, translation, and UMLS medical concept mapping.
               </p>
 
               <div className="sett_usage_card sett_translator_provider_card sett_translator_provider_card--first">
@@ -1912,7 +2076,7 @@ const SettingsPage = () => {
                   <span className="sett_provider_badge sett_provider_badge--off">Backend integration</span>
                 </div>
                 <p className="sett_section_desc" style={{ margin: "0.7rem 0 0" }}>
-                  UMLS is the terminology layer for AMCTOSHS Vocabs. Add your UTS API key to <code>back/.env</code>; it should be called through the backend, never directly from the browser.
+                  UMLS is the terminology layer for RabbitHole Morphemes. Add your UTS API key to <code>back/.env</code>; it should be called through the backend, never directly from the browser.
                 </p>
                 <div className="sett_translator_language_row">
                   <label htmlFor="sett_umls_language_select">UMLS result language</label>
@@ -2077,7 +2241,7 @@ const SettingsPage = () => {
             <div className="sett_section">
               <h2 className="sett_section_title">AI Access</h2>
               <p className="sett_section_desc">
-                A complete breakdown of what AMCTOSHS AI can and cannot access during a conversation.
+                A complete breakdown of what RabbitHole AI can and cannot access during a conversation.
               </p>
 
               <div className="sett_access_group">
@@ -2085,7 +2249,7 @@ const SettingsPage = () => {
                   <i className="fi fi-rr-check-circle" /> Always available
                 </div>
                 <ul className="sett_access_list">
-                  <li><strong>AMCTOSHS domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
+                  <li><strong>RabbitHole domain model</strong> — Clinical Presentation 6-step pipeline (Patient Reality → Patient Access → Patient Interpretation → Clinician Access → Clinician Interpretation → Clinical Intervention) and Clinical Representation theory injected into every system prompt.</li>
                   <li><strong>Conversation history</strong> — all messages exchanged in the current session are included with each request, giving the AI full context of the ongoing conversation.</li>
                   <li><strong>Selected AI provider &amp; model</strong> — the provider you choose in the chat dropdown determines which backend inference engine processes the request.</li>
                 </ul>
@@ -2160,22 +2324,20 @@ const SettingsPage = () => {
                 </div>
               </div>
               {corpusSettingsOpen && (
-                <div className="sett_corpus_settings_menu" role="group" aria-label="Corpus datatype settings">
-                  <div className="sett_corpus_settings_menu_title">Datatypes included in prediction text</div>
-                  {Object.keys(corpusDataTypes).map((dataType) => (
-                    <label className="sett_corpus_datatype_option" key={dataType}>
-                      <input
-                        type="checkbox"
-                        checked={corpusDataTypes[dataType]}
-                        onChange={(event) => setCorpusDataTypes((current) => ({ ...current, [dataType]: event.target.checked }))}
-                      />
-                      <span>{dataType}</span>
-                    </label>
-                  ))}
+                <div className="sett_corpus_settings_menu" role="group" aria-label="Corpus settings">
+                  <div className="sett_corpus_settings_menu_title">Exclude from prediction corpus</div>
+                  <label className="sett_corpus_datatype_option">
+                    <input
+                      type="checkbox"
+                      checked={excludeSingleOccurrenceCorpusStrings}
+                      onChange={(event) => setExcludeSingleOccurrenceCorpusStrings(event.target.checked)}
+                    />
+                    <span>Strings with only 1 original occurrence</span>
+                  </label>
                 </div>
               )}
               <p className="sett_section_desc">
-                Corpus is assembled from the text that AMCTOSHS can access. Every word is normalized, counted across
+                Corpus is assembled from the text that RabbitHole can access. Every word is normalized, counted across
                 all four inputs, and listed alphabetically.
               </p>
 
@@ -2244,14 +2406,21 @@ const SettingsPage = () => {
 
               <div className="sett_corpus_table_wrap">
                 <table className="sett_corpus_table">
-                  <thead><tr><th>Source</th><th>Corpus ID</th><th>String</th><th>Occurrence</th><th>Data type</th></tr></thead>
+                  <thead><tr>
+                    {corpusSortHeader("source", "Source")}
+                    {corpusSortHeader("id", "Corpus ID")}
+                    {corpusSortHeader("string", "String")}
+                    {corpusSortHeader("occurrence", "Occurrence")}
+                    {corpusSortHeader("dataType", "Data type")}
+                  </tr></thead>
                   <tbody>
-                    {visibleCorpusRows.length > 0 ? visibleCorpusRows.map((row) => (
+                    {sortedVisibleCorpusRows.length > 0 ? sortedVisibleCorpusRows.map((row) => (
                       <tr key={row.id}><td><code>{row.sources}</code></td><td><code>{row.id}</code></td><td>{row.string}</td><td>{row.occurrence.toLocaleString()}</td><td>{row.dataType}</td></tr>
                     )) : <tr><td colSpan="5" className="sett_corpus_empty">{corpusLoading ? "Waiting for the first source…" : "No words found in the available inputs."}</td></tr>}
                   </tbody>
                 </table>
               </div>
+              <CorpusSanitizerPanel rows={corpusRows} records={corpusSanitizerRecords} onRecords={setCorpusSanitizerRecords} />
             </div>
           )}
 
@@ -2284,11 +2453,13 @@ const SettingsPage = () => {
             </div>
           )}
 
+          {section === "graphics" && <GraphicsSettingsPanel />}
+
           {/* ═══ THEME ═══ */}
           {section === "theme" && (
             <div className="sett_section">
               <h2 className="sett_section_title">Theme</h2>
-              <p className="sett_section_desc">Choose the visual style for AMCTOSHS. Applied immediately and remembered across sessions.</p>
+              <p className="sett_section_desc">Choose the visual style for RabbitHole. Applied immediately and remembered across sessions.</p>
 
               <div id="sett_theme_grid">
                 {THEMES.map(t => (

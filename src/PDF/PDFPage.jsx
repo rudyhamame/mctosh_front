@@ -6,8 +6,9 @@ import * as pdfjsLib from "pdfjs-dist";
 import "./pdfPage.css";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
-import { normalizeOpenAiSttModel, readSttSettings, STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
-import { startConfiguredStt } from "../Shared/configuredStt";
+import { STT_PROVIDERS } from "../Avatar/local3d/sttProviderSettings";
+import { getConfiguredStt, startConfiguredStt } from "../Shared/configuredStt";
+import { createCorpusSttResolver } from "../Shared/corpusSttResolver";
 import { useLongPressSelect } from "../utils/longPressSelect";
 import DraftTextViewer, { cleanMarkdownToPlainText } from "../components/DraftTextViewer";
 import HyleCards from "./HyleCards";
@@ -16,11 +17,15 @@ import SmartVideoPanel from "./SmartVideoPanel";
 import EntityBuilderPanel from "./EntityBuilderPanel";
 import AbbreviationPanel from "./AbbreviationPanel";
 import PDFDocumentNavigator from "./PDFDocumentNavigator";
-import { drawAnnotation, drawMaskedHighlightText } from "./annotationDraw";
+import PDFForensicPanel from "./PDFForensicPanel";
+import PagePatinaOverlay from "./PagePatinaOverlay";
+import { emptyPagePatina, emptyPatinaState, getPagePatina, normalizePatinaState, patinaStorageKey, updatePagePatina } from "./pagePatina";
+import { drawAnnotation, getPenAnnotationSvgPath } from "./annotationDraw";
 import { PDF_TYPE_ICON } from "./pdfTypeIcon";
 import { createPageIndexCache } from "./pdfSearchIndex.js";
-import { normalizeQuery, searchPageForQuery } from "./pdfFuzzySearch.js";
+import { searchPageForWordform } from "./pdfWordformSearch.js";
 import { correctSelectedPdfText } from "./pdfTextCorrection.js";
+import { readUmlsLanguage } from "../Vocabs/umlsSettings";
 import { BBOX_TEXT_CORRECTION_VERSION, correctBBoxText } from "./bboxTextCorrection.js";
 import { analyzePageLayout } from "./pdfPageLayout.js";
 import { buildParagraphMergePlan } from "./pdfParagraphMerge.js";
@@ -28,10 +33,72 @@ import { removeParagraphTitleFromText, removeParagraphTitleLine } from "./pdfPar
 import { normalizePagePartitionHierarchy } from "./pdfBBoxHierarchy.js";
 import { computeHighlightRectsForItemIndexes } from "./pdfHighlightRects.js";
 import { buildPdfSelectionTextRepairs } from "./pdfSelectionTextRepair.js";
+import {
+  getSafeCanvasOutputScale,
+  IS_WEBKIT_SAFARI,
+  MAX_RENDER_CANVAS_DIMENSION,
+  MAX_RENDER_CANVAS_PIXELS,
+  releaseCanvasBackingStore,
+} from "./canvasBudget.js";
 
 const PortalWhenReady = ({ host, children }) => (
   host ? createPortal(children, host) : children
 );
+
+const MEANING_INSPECTOR_TABS = ["source", "visual", "semantic", "result"];
+const MeaningAnalysisInspector = ({ analysis, tab, onTab, onSelect, onModify, onBoundary, onRerunSemantic, busy }) => {
+  if (!analysis) return null;
+  const hasManualEdits = (analysis.manualEdits || []).length > 0 || (analysis.meaningBlocks || []).some((block) => ["user-confirmed", "user-modified"].includes(block.status));
+  const sourceById = new Map((analysis.sourceItems || []).map((item) => [item.id, item]));
+  const visualLineById = new Map((analysis.visualAnalysis?.visualLines || []).map((line) => [line.id, line]));
+  const selectUnits = (unitIds) => onSelect(unitIds.flatMap((id) => visualLineById.get(id)?.textItemIds || []));
+  return (
+    <section className="pdf_meaning_analysis" aria-label="AI MeaningBlock analysis">
+      <div className="pdf_meaning_analysis_summary">
+        <strong>MeaningBlock analysis</strong>
+        <span>{analysis.status} · {analysis.provider}/{analysis.semanticModel}</span>
+        <small>PDF.js source is immutable. Visual and semantic outputs are inferred evidence.</small>
+        <button type="button" disabled={busy || hasManualEdits} title={hasManualEdits ? "Duplicate this analysis before rerunning so manual decisions are not overwritten." : "Reuse saved visual evidence and rerun only semantic analysis."} onClick={onRerunSemantic}>Rerun semantics only</button>
+      </div>
+      <div className="pdf_meaning_analysis_tabs" role="tablist" aria-label="MeaningBlock evidence layers">
+        {MEANING_INSPECTOR_TABS.map((name) => <button key={name} type="button" role="tab" aria-selected={tab === name} className={tab === name ? "is-active" : ""} onClick={() => onTab(name)}>{name}</button>)}
+      </div>
+      <div className="pdf_meaning_analysis_panel" role="tabpanel">
+        {tab === "source" && <ol className="pdf_meaning_evidence_list">
+          {(analysis.sourceItems || []).map((item) => <li key={item.id}><button type="button" onClick={() => onSelect([item.id])}><b>{item.id}</b><span>{item.str || "␠"}</span><small>source {item.sourceIndex} · {item.fontName || "unknown font"} · bbox {item.bbox ? `${Number(item.bbox.x).toFixed(1)}, ${Number(item.bbox.y).toFixed(1)}, ${Number(item.bbox.width).toFixed(1)} × ${Number(item.bbox.height).toFixed(1)}` : "unresolved"}</small></button></li>)}
+        </ol>}
+        {tab === "visual" && <>
+          <h4>VisualLineCandidates</h4>
+          <ol className="pdf_meaning_evidence_list">{(analysis.visualAnalysis?.visualLines || []).map((line) => <li key={line.id}><button type="button" onClick={() => onSelect(line.textItemIds || [])}><b>{line.id} · {line.role}</b><span>{(line.textItemIds || []).map((id) => sourceById.get(id)?.str || "").join("")}</span><small>{Math.round(Number(line.confidence || 0) * 100)} model score · {(line.evidence || []).join(" · ") || "no evidence labels"}</small></button></li>)}</ol>
+          <h4>VisualRegionCandidates</h4>
+          <ol className="pdf_meaning_evidence_list">{(analysis.visualAnalysis?.visualRegions || []).map((region) => <li key={region.id}><button type="button" onClick={() => onSelect(region.textItemIds || [])}><b>{region.id} · {region.type}</b><span>{region.textItemIds?.length || 0} source items</span><small>{(region.evidence || []).join(" · ")}</small></button></li>)}</ol>
+        </>}
+        {tab === "semantic" && <ol className="pdf_meaning_boundary_list">
+          {(analysis.semanticAnalysis?.boundaries || []).map((boundary) => <li key={`${boundary.previousUnitId}-${boundary.nextUnitId}`}><button type="button" onClick={() => selectUnits([boundary.previousUnitId, boundary.nextUnitId])}><b>{boundary.previousUnitId} → {boundary.nextUnitId}</b><strong>{boundary.decision} · {boundary.confidenceSource || "model-reported"}</strong><span>{(boundary.evidenceLabels || []).join(" · ")}</span><small>{Object.entries(boundary.evidence || {}).map(([key, value]) => `${key.replace(/Continuity$/, "")}: ${Math.round(Number(value || 0) * 100)}`).join(" · ")}</small></button><select value={boundary.decision} disabled={busy} onChange={(event) => onBoundary(boundary.previousUnitId, boundary.nextUnitId, event.target.value)} aria-label={`Boundary ${boundary.previousUnitId} to ${boundary.nextUnitId}`}><option value="continue">continue</option><option value="new-block">new block</option><option value="uncertain">uncertain</option></select></li>)}
+        </ol>}
+        {tab === "result" && <ol className="pdf_meaning_result_list">
+          {(analysis.meaningBlocks || []).map((block, index, blocks) => <li key={block.id} className={`is-${block.status}`}>
+            <button type="button" className="pdf_meaning_result_main" onClick={() => onSelect(block.textItemIds || [])}><b>MeaningBlock {index + 1} · {block.blockType}</b><span>{block.canonicalText || "No source-derived text."}</span><small>{block.status} · {block.textItemIds?.length || 0} source items · {Math.round(Number(block.confidence || 0) * 100)} model score</small><small>{(block.evidence || []).join(" · ")}</small></button>
+            <div className="pdf_meaning_result_actions">
+              <button type="button" disabled={busy} onClick={() => onModify(block.id, { status: "user-confirmed" })}>Accept</button>
+              <button type="button" disabled={busy} onClick={() => onModify(block.id, { status: "rejected" })}>Reject</button>
+              {index > 0 && <button type="button" disabled={busy} onClick={() => onModify(block.id, { action: "merge", withBlockId: blocks[index - 1].id })}>Merge ↑</button>}
+              <select value={block.blockType} disabled={busy} onChange={(event) => onModify(block.id, { status: "user-modified", blockType: event.target.value })} aria-label={`MeaningBlock ${index + 1} type`}>
+                {["heading", "subheading", "body", "list", "list-item", "table", "caption", "reference", "header", "footer", "formula", "other", "unknown"].map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+              {(block.textItemIds || []).length > 1 && <select defaultValue="" disabled={busy} onChange={(event) => { if (event.target.value) onModify(block.id, { action: "split", beforeTextItemId: event.target.value }); }} aria-label={`Split MeaningBlock ${index + 1}`}><option value="">Split before…</option>{block.textItemIds.slice(1).map((id) => <option key={id} value={id}>{id}</option>)}</select>}
+            </div>
+          </li>)}
+        </ol>}
+      </div>
+      <details className="pdf_meaning_procedure_log">
+        <summary>Runtime procedure log · {analysis.procedures?.length || 0} steps</summary>
+        <ol>{(analysis.procedures || []).map((entry) => <li key={`${entry.step}-${entry.name}`} className={`is-${entry.status}`}><b>STEP {String(entry.step).padStart(2, "0")} · {entry.name}</b><span>{entry.status} · {Number(entry.durationMs || 0).toLocaleString()} ms · validation {entry.validation || "n/a"}</span><small>{Object.entries(entry.counts || {}).map(([key, value]) => `${key}: ${value}`).join(" · ")}</small>{entry.failure && <em>{entry.failure}</em>}</li>)}</ol>
+      </details>
+      {(analysis.warnings || []).length > 0 && <details className="pdf_meaning_warnings"><summary>Warnings · {analysis.warnings.length}</summary>{analysis.warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>}
+    </section>
+  );
+};
 import {
   bboxTextMatchesSpan as bboxTextMatchesSpanUtil,
   buildPartitionOrderedTextLines,
@@ -47,6 +114,24 @@ import { segmentPageIntoParagraphBBoxes } from "./pdfSmartSegment.js";
 import { extractPlacedImageRects } from "./pdfImageGeometry.js";
 import InfoPopupButton from "./InfoPopupButton";
 import { getPageExtractionEvidence, getPdfNavigation, resolveDocumentId, savePdfNavigation } from "./pdfPageStructureClient.js";
+import { buildPdfForensicReport, collectPdfJsForensicEvidence } from "./pdfForensics.js";
+import {
+  DOCUMENT_RECONSTRUCTION_VERSION,
+  compareSourceAndResolved,
+  applyManualResolution,
+  deterministicHash,
+  explainResolution,
+  getChildren as getDocumentTreeChildren,
+  getEvidenceForEntity,
+  getEffectiveEntity,
+  getEffectiveBoundary,
+  getLogicalRootPath,
+  getLogicalEntitiesAtPdfLocation,
+  getMissingSpaceCandidates,
+  getPhysicalEvidence,
+  reconstructDocument,
+  toTreeNodeView,
+} from "./documentReconstruction.js";
 import {
   listMorpheSchemaNames,
   upsertSmartPenSchema,
@@ -91,7 +176,6 @@ import {
   HYLE_TYPE_TREE,
   InsertPageIcon,
   LabeledPercentKnob,
-  MODE_TOOL_ORDER,
   OPACITY_MAX_PCT,
   OPACITY_MIN_PCT,
   OpacityKnob,
@@ -100,13 +184,25 @@ import {
   SHAPE_TOOL_KEYS,
   ShapesToolIcon,
   SizeKnob,
-  SmartVideoIcon,
   TEXT_FONT_FAMILIES,
 } from "./pdfPageToolbarConfig.jsx";
 import { lookupDictionaryWord } from "../utils/dictionarySettings";
 import { queueVocabularyForUmls } from "../Vocabs/umlsQueue";
 import { extractDocumentAbbreviations } from "../linguistics/abbreviations/extractAbbreviations.js";
+import { createLexicalEvidenceProvider } from "./lexicalEvidenceProvider.js";
+import { deleteDocumentReconstruction, getDocumentReconstructionChildren, getDocumentReconstructionPhysicalLines, getDocumentReconstructionRoot, getDocumentReconstructionStatus, getLatestDocumentReconstruction, persistDocumentReconstruction, persistForensicEvidence, persistManualResolution } from "./documentReconstructionClient.js";
+import { prepareMeaningBlockPage } from "./meaningBlockAnalysis.js";
+import { deleteMeaningAnalysis, getLatestMeaningAnalysis, runSemanticMeaningAnalysis, runVisualMeaningAnalysis, updateMeaningBlock, updateMeaningBoundary } from "./meaningBlockAnalysisClient.js";
+import { backendRunToRabbitHoleStatus, calculateRabbitHoleOverallProgress, formatRabbitHoleDuration, isRabbitHoleBusy, rabbitHoleStatusTitle } from "./documentRabbitHoleState.js";
+import {
+  attachGlyphForensicEvidence,
+  createGlyphForensicsService,
+  getAutomaticGlyphEscalationTargets,
+} from "./glyphForensics.js";
 import { readCachedPdf, writeCachedPdf } from "../utils/pdfBrowserCache";
+import GlyphCharAside from "./glyphChar/GlyphCharAside.jsx";
+import GlyphSelectionOverlay from "./glyphChar/GlyphSelectionOverlay.jsx";
+import { useGlyphCharAnalysis } from "./glyphChar/useGlyphCharAnalysis.js";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -126,6 +222,27 @@ const PdfLoadingIndicator = ({ progress = 0, label = "Loading PDF" }) => {
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 5;
+// Leave a small breathing room between a fitted page and the reader chrome.
+// The matching preview padding is applied in pdfPage.css; reserve both edges
+// here so the fit calculation still keeps the whole page visible.
+const PDF_FIT_EDGE_ALLOWANCE = 20;
+
+// `zoom === 1` means "fit" in this reader; fitScale is the physical PDF.js
+// scale underneath that user-facing zoom. Keep this calculation independent
+// of the current canvas size so a shrinking/expanding viewer (for example,
+// when either aside mounts) can always derive the new scale from the actual
+// viewport and the PDF page's unscaled dimensions.
+const calculatePdfFitScale = (preview, baseViewport, pageColumns = 1) => {
+  if (!preview || !baseViewport?.width || !baseViewport?.height) return 1;
+  const columns = Math.max(1, Number(pageColumns) || 1);
+  const availableWidth = Math.max(1, preview.clientWidth - PDF_FIT_EDGE_ALLOWANCE);
+  const availableHeight = Math.max(1, preview.clientHeight - PDF_FIT_EDGE_ALLOWANCE);
+  const contentWidth = baseViewport.width * columns;
+  return Math.min(
+    MAX_ZOOM,
+    Math.max(0.05, Math.min(availableWidth / contentWidth, availableHeight / baseViewport.height)),
+  );
+};
 const PDF_SELECTION_OBJECT_MODES = [
   { key: "SOCIETY", label: "Societies" },
   { key: "HUMAN", label: "Humans" },
@@ -141,9 +258,54 @@ const NOTEBOOK_ANNOTATION_TOOLS = new Set([
   "pen", "smartPen", "highlight", "underline", "strikethrough", "line", "arrow",
   "rect", "circle", "freeshape", "bbox", "eraser", "text",
 ]);
-const SpeechRecognition = typeof window !== "undefined"
-  ? (window.SpeechRecognition || window.webkitSpeechRecognition)
-  : null;
+const HIGHLIGHT_TOOL_KEYS = ["highlight", "underline", "strikethrough"];
+const flattenPdfOutline = (items = [], parentPath = "") => items.flatMap((item, index) => {
+  const path = parentPath ? `${parentPath}.${index}` : String(index);
+  return [
+    { item, path },
+    ...flattenPdfOutline(item?.items, path),
+  ];
+});
+
+const resolvePdfOutlinePage = async (pdfDoc, item, pageCount) => {
+  let destination = item?.dest;
+  if (typeof destination === "string") destination = await pdfDoc.getDestination(destination);
+  const pageReference = Array.isArray(destination) ? destination[0] : null;
+  if (typeof pageReference === "number") return Math.min(pageCount, Math.max(1, pageReference + 1));
+  if (!pageReference) return null;
+  const pageIndex = await pdfDoc.getPageIndex(pageReference);
+  return Math.min(pageCount, Math.max(1, pageIndex + 1));
+};
+
+// Embedded PDF outlines are import material, not UI-ready Reader records.
+// Resolve their PDF destinations, flatten the hierarchy into non-overlapping
+// page ranges, and emit the same persisted model created by the Reader's + UI.
+const importPdfOutlineRecords = async (pdfDoc, outline, pageCount) => {
+  const resolved = await Promise.all(flattenPdfOutline(outline).map(async ({ item, path }, order) => {
+    try {
+      const startPage = await resolvePdfOutlinePage(pdfDoc, item, pageCount);
+      const title = String(item?.title || "").trim();
+      return startPage && title ? { path, order, title, startPage } : null;
+    } catch {
+      return null;
+    }
+  }));
+  const ordered = resolved.filter(Boolean).sort((a, b) => a.startPage - b.startPage || a.order - b.order);
+  // A PDF may place a chapter and its first subsection at the same
+  // destination. The Reader's section model allows one owner per start page;
+  // retain the first (normally the parent) instead of creating overlaps.
+  const unique = [...ordered.reduce((byPage, item) => {
+    if (!byPage.has(item.startPage)) byPage.set(item.startPage, item);
+    return byPage;
+  }, new Map()).values()];
+  return unique.map((item, index) => ({
+    id: `pdf_${item.path.replaceAll(".", "_")}`,
+    type: "section",
+    title: item.title,
+    startPage: item.startPage,
+    endPage: index + 1 < unique.length ? Math.max(item.startPage, unique[index + 1].startPage - 1) : pageCount,
+  }));
+};
 const NOTEBOOK_VOICE_COMMANDS = [
   "Delete <line number> from <word number>",
   "Edit <word number> from <line number> to <new value>",
@@ -592,13 +754,180 @@ const RawColumnHeader = ({ label, notes }) => (
   </span>
 );
 
+const SentenceHierarchyNode = ({ reconstruction, entity, selectedId, selectedPathIds, onSelect, depth = 0 }) => {
+  const children = useMemo(() => getDocumentTreeChildren(reconstruction, entity.id), [entity.id, reconstruction]);
+  const view = useMemo(() => toTreeNodeView(reconstruction, entity), [entity, reconstruction]);
+  const hasChildren = children.length > 0;
+  const [open, setOpen] = useState(depth === 0);
+  const [visibleChildCount, setVisibleChildCount] = useState(80);
+  const visibleChildren = useMemo(() => {
+    const initial = children.slice(0, visibleChildCount);
+    const revealed = children.find((child) => selectedPathIds?.has(child.id));
+    return revealed && !initial.some((child) => child.id === revealed.id) ? [...initial, revealed] : initial;
+  }, [children, selectedPathIds, visibleChildCount]);
+  useEffect(() => {
+    if (selectedPathIds?.has(entity.id)) setOpen(true);
+  }, [entity.id, selectedPathIds]);
+  return (
+    <li
+      className={`pdf_sentence_hierarchy_node pdf_sentence_hierarchy_node--${view.type}${selectedId === entity.id ? " pdf_sentence_hierarchy_node--selected" : ""}`}
+      role="treeitem"
+      aria-expanded={hasChildren ? open : undefined}
+    >
+      <button
+        type="button"
+        className="pdf_sentence_hierarchy_row"
+        onClick={() => {
+          onSelect(entity.id);
+          if (hasChildren) setOpen((value) => !value);
+        }}
+      >
+        <i className={`bx ${hasChildren ? (open ? "bx-chevron-down" : "bx-chevron-right") : "bx-minus"}`} aria-hidden="true" />
+        <span className="pdf_sentence_hierarchy_kind">{view.type}</span>
+        <span className="pdf_sentence_hierarchy_label">{view.label}</span>
+        <span className={`pdf_sentence_hierarchy_status pdf_sentence_hierarchy_status--${view.status}`} title={view.qualityState}>{view.status}</span>
+        {hasChildren && <small>{view.childCount}</small>}
+      </button>
+      {hasChildren && open && (
+        <ul role="group">
+          {visibleChildren.map((child) => <SentenceHierarchyNode key={child.id} reconstruction={reconstruction} entity={child} selectedId={selectedId} selectedPathIds={selectedPathIds} onSelect={onSelect} depth={depth + 1} />)}
+          {visibleChildCount < children.length && <li className="pdf_sentence_hierarchy_more"><button type="button" onClick={() => setVisibleChildCount((count) => Math.min(children.length, count + 80))}>Load 80 more <small>{children.length - visibleChildCount} remaining</small></button></li>}
+        </ul>
+      )}
+    </li>
+  );
+};
+
+const cleanBackendTreeText = (value) => String(value || "").replace(/\s+/gu, " ").trim();
+
+const getBackendTreeNodeView = (node) => {
+  const payload = node?.payload || {};
+  const type = String(node?.entityType || "entity");
+  const displayIndex = Number(node?.displayIndex);
+  const ordinal = Number.isFinite(displayIndex) && displayIndex > 0 ? ` ${displayIndex}` : "";
+  const descriptor = `${type}${ordinal}`;
+  const resolvedText = cleanBackendTreeText(
+    payload.resolvedTextPreview
+    || payload.resolvedText
+    || payload.value
+    || payload.text
+    || payload.surface,
+  );
+  const namedValue = cleanBackendTreeText(
+    type === "document"
+      ? payload.title || payload.fileName || payload.name
+      : type === "division"
+        ? payload.label || payload.title || payload.name
+        : "",
+  );
+  const primary = namedValue || resolvedText || `${type[0]?.toUpperCase() || "E"}${type.slice(1)}${ordinal}`;
+  const pages = [...new Set((node?.pageIndexes || []).map(Number).filter(Number.isInteger))].sort((a, b) => a - b);
+  const pageLabel = pages.length === 0
+    ? ""
+    : pages.length === 1 || pages[0] === pages.at(-1)
+      ? `page ${pages[0] + 1}`
+      : `pages ${pages[0] + 1}–${pages.at(-1) + 1}`;
+  const metrics = [
+    Number(payload.lineCount) > 0 ? `${payload.lineCount} lines` : "",
+    Number(payload.sentenceCount) > 0 ? `${payload.sentenceCount} sentences` : "",
+    Number(payload.wordCount) > 0 ? `${payload.wordCount} words` : "",
+    Number(payload.totalCharacters) > 0 ? `${payload.totalCharacters} characters` : "",
+    cleanBackendTreeText(payload.boundaryReason) ? `boundary: ${cleanBackendTreeText(payload.boundaryReason)}` : "",
+    payload.crossPage ? "cross-page" : "",
+    cleanBackendTreeText(node?.lifecycle || payload.lifecycle),
+  ].filter(Boolean);
+  return {
+    descriptor,
+    primary,
+    resolvedText,
+    pageLabel,
+    metadata: [pageLabel, ...metrics].filter(Boolean),
+    title: resolvedText || namedValue || primary,
+  };
+};
+
+const BackendSentenceHierarchyNode = ({ runId, node, revision = 0, depth = 0 }) => {
+  const [open, setOpen] = useState(depth === 0);
+  const [children, setChildren] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState("");
+  const [hasMore, setHasMore] = useState(false);
+  const [nextCursor, setNextCursor] = useState("");
+  const [childTotal, setChildTotal] = useState(Math.max(0, Number(node.childCount) || 0));
+  const view = useMemo(() => getBackendTreeNodeView(node), [node]);
+  const structuralType = !["word", "morpheme", "character"].includes(node.entityType);
+  const canHaveChildren = structuralType && (childTotal > 0 || !loaded);
+  useEffect(() => {
+    setChildTotal(Math.max(0, Number(node.childCount) || 0));
+  }, [node.childCount]);
+  useEffect(() => {
+    setChildren([]);
+    setLoaded(false);
+    setHasMore(false);
+    setNextCursor("");
+    setLoadError("");
+  }, [revision]);
+  useEffect(() => {
+    if (!open || loaded || !runId || !structuralType) return undefined;
+    let cancelled = false; setBusy(true); setLoadError("");
+    void getDocumentReconstructionChildren(runId, node.entityId, 100).then((result) => {
+      if (cancelled) return;
+      setChildren(result.nodes || []);
+      setChildTotal(Math.max(0, Number(result.total) || (result.nodes || []).length));
+      setHasMore(Boolean(result.hasMore));
+      setNextCursor(result.nextCursor || "");
+      setLoaded(true);
+    }).catch((error) => { if (!cancelled) { setLoadError(error?.message || "Could not load this branch."); setLoaded(true); } }).finally(() => { if (!cancelled) setBusy(false); });
+    return () => { cancelled = true; };
+  }, [loaded, node.entityId, open, runId, structuralType]);
+  const loadMoreChildren = async (event) => {
+    event.stopPropagation();
+    if (busy || !hasMore || !nextCursor) return;
+    setBusy(true);
+    setLoadError("");
+    try {
+      const result = await getDocumentReconstructionChildren(runId, node.entityId, 100, nextCursor);
+      setChildren((current) => {
+        const byId = new Map(current.map((child) => [child.entityId, child]));
+        (result.nodes || []).forEach((child) => byId.set(child.entityId, child));
+        return [...byId.values()];
+      });
+      setChildTotal(Math.max(0, Number(result.total) || childTotal));
+      setHasMore(Boolean(result.hasMore));
+      setNextCursor(result.nextCursor || "");
+    } catch (error) {
+      setLoadError(error?.message || "Could not load more children.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <li className={`pdf_sentence_hierarchy_node pdf_sentence_hierarchy_node--backend pdf_sentence_hierarchy_node--${node.entityType}${open ? " pdf_sentence_hierarchy_node--open" : ""}`} role="treeitem" aria-expanded={canHaveChildren ? open : undefined}>
+    <button type="button" className="pdf_sentence_hierarchy_row pdf_sentence_hierarchy_row--backend" title={view.title} disabled={!structuralType} onClick={() => setOpen((value) => !value)}>
+      <i className={`bx ${busy ? "bx-loader-alt bx-spin" : canHaveChildren ? (open ? "bx-chevron-down" : "bx-chevron-right") : "bx-minus"}`} aria-hidden="true" />
+      <span className="pdf_sentence_hierarchy_kind">{view.descriptor}</span>
+      <span className="pdf_sentence_hierarchy_content">
+        <strong className="pdf_sentence_hierarchy_value">{view.primary}</strong>
+        {view.metadata.length > 0 && <small className="pdf_sentence_hierarchy_metadata">{view.metadata.join(" · ")}</small>}
+      </span>
+      {structuralType && <small className="pdf_sentence_hierarchy_child_count">{busy && !loaded ? "loading" : `${childTotal} ${childTotal === 1 ? "child" : "children"}`}</small>}
+    </button>
+    {open && loadError && <div className="pdf_sentence_hierarchy_error">{loadError}</div>}
+    {open && loaded && children.length === 0 && <div className="pdf_sentence_hierarchy_empty">No reconstructed children</div>}
+    {open && children.length > 0 && <ul role="group">
+      {children.map((child) => <BackendSentenceHierarchyNode key={child.entityId} runId={runId} node={child} revision={revision} depth={depth + 1} />)}
+      {hasMore && <li className="pdf_sentence_hierarchy_more"><button type="button" disabled={busy} onClick={loadMoreChildren}>{busy ? "Loading…" : `Load 100 more (${Math.max(0, childTotal - children.length)} remaining)`}</button></li>}
+    </ul>}
+  </li>;
+};
+
 const formatSignedRotation = (value) => {
   if (!Number.isFinite(value)) return "-";
   const rounded = Number(value.toFixed(2));
   return `${rounded > 0 ? "+" : ""}${rounded.toFixed(2)}°`;
 };
 
-const VALID_MARKDOWN_ASIDE_MODES = new Set(["raw", "visual-only", "visual-raw", "tree-lines"]);
+const VALID_MARKDOWN_ASIDE_MODES = new Set(["raw", "visual-only", "visual-raw", "ocr", "forensics"]);
 const VALID_MARKDOWN_VISUAL_MODES = new Set(["visual-only", "visual-raw"]);
 const VALID_MARKDOWN_COLUMN_GROUPS = new Set(["text", "position", "font", "transform", "blocks"]);
 const VALID_MARKDOWN_SPACING_TARGETS = new Set(["str", "line", "paragraph"]);
@@ -650,19 +979,6 @@ const getUnicodeOmissionLabel = (value) => {
   return `${categories.join(", ")}${names.length ? ` (${names.join(", ")})` : ""}`;
 };
 
-const SegmentBuilderClosedEyeIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="m21.95 12.32-1.9-.64C19.98 11.9 18.16 17 12 17s-7.98-5.1-8.05-5.32l-1.9.63s.28.8.93 1.81L.7 15.85l1.21 1.6 2.3-1.74c.58.62 1.29 1.24 2.16 1.77l-1.51 2.48L6.57 21l1.62-2.65c.83.3 1.78.5 2.82.59v3.05h2v-3.05c1.05-.08 1.99-.29 2.82-.59L17.45 21l1.71-1.04-1.51-2.48c.87-.53 1.58-1.15 2.16-1.77l2.3 1.74 1.21-1.6-2.28-1.73c.65-1.01.92-1.79.93-1.81Z" />
-  </svg>
-);
-
-const SegmentBuilderOpenEyeIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-    <path d="M12 8a4 4 0 1 0 0 8 4 4 0 1 0 0-8" />
-    <path d="M12 4c-7.67 0-9.94 7.65-9.96 7.73-.05.18-.05.37 0 .55.02.08 2.3 7.73 9.96 7.73s9.94-7.65 9.96-7.73c.05-.18.05-.37 0-.55C21.94 11.65 19.66 4 12 4m0 14c-5.47 0-7.51-4.77-7.95-6 .44-1.23 2.48-6 7.95-6s7.51 4.78 7.95 6c-.44 1.23-2.48 6-7.95 6" />
-  </svg>
-);
-
 const OCR_COMPANION_SERVICES = "Tesseract · pdftoppm";
 const TESSERACT_COMPANION_SERVICES = "Tesseract · pdftoppm";
 const RAW_COMPANION_SERVICES = "PDF.js Native Text";
@@ -671,10 +987,9 @@ const VISUAL_RAW_COMPANION_SERVICES = "PDF.js Visual Text";
 // truncated client-side too so an overly ambitious multi-screenshot capture
 // fails softly (a shorter search) instead of a 400 from the API.
 const SMART_VIDEO_MAX_SURFACE_TEXT = 2000;
-// Pinch-to-zoom (touch, and trackpad pinch which browsers deliver as ctrl+wheel)
-// is intentionally unbounded above MIN_ZOOM/MAX_ZOOM — this floor only exists so
-// the zoom value can never hit 0 or go negative, which would divide-by-zero the
-// viewport/scale math elsewhere.
+// Keep a non-zero floor for gesture ratio calculations. Every committed zoom,
+// including touch and trackpad pinch, is constrained to the reader's supported
+// range so a gesture cannot allocate browser-killing canvas dimensions.
 const PINCH_ZOOM_FLOOR = 0.02;
 const RAW_Y_COLOR_PALETTE = [
   "#fee2e2", "#dbeafe", "#dcfce7", "#fef3c7", "#ede9fe", "#fce7f3",
@@ -703,7 +1018,7 @@ const EMPTY_AREA_MIN_HEIGHT = 18;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 const roundZoom = (value) => Math.round(value * 100) / 100;
 const normalizeZoom = (value) => clamp(roundZoom(value), MIN_ZOOM, MAX_ZOOM);
-const normalizePinchZoom = (value) => Math.max(PINCH_ZOOM_FLOOR, roundZoom(value));
+const normalizePinchZoom = (value) => normalizeZoom(value);
 const classifyPdfJsTextItem = ({ value, x = 0, y = 0, width = 0, height = 0, pageWidth = 1, pageHeight = 1, medianHeight = 0 }) => {
   const text = String(value || "");
   const trimmed = text.trim();
@@ -1014,11 +1329,9 @@ const describeApiError = (data, fallback) => {
 };
 // A 16M-pixel canvas consumes about 64MB before PDF.js' own temporary
 // surfaces are counted. Safari/iPad can keep the previous canvas alive during
-// a resize, which made a zoom or page flip briefly require hundreds of MB and
+// a resize, which made a zoom or page change briefly require hundreds of MB and
 // freeze the reader. Eight megapixels is still sharper than the CSS display
 // size on normal reader viewports while keeping that transient memory bounded.
-const MAX_RENDER_CANVAS_DIMENSION = 6144;
-const MAX_RENDER_CANVAS_PIXELS = 8388608;
 const yieldToBrowser = () => new Promise((resolve) => {
   if (typeof window.requestIdleCallback === "function") {
     window.requestIdleCallback(resolve, { timeout: 120 });
@@ -1026,22 +1339,18 @@ const yieldToBrowser = () => new Promise((resolve) => {
   }
   window.setTimeout(resolve, 16);
 });
-const getSafeCanvasOutputScale = (width, height, deviceScale = window.devicePixelRatio || 1) => {
-  const dimLimitedScale = Math.min(
-    deviceScale,
-    MAX_RENDER_CANVAS_DIMENSION / Math.max(1, width),
-    MAX_RENDER_CANVAS_DIMENSION / Math.max(1, height),
-  );
-  const areaLimitedScale = Math.min(
-    deviceScale,
-    Math.sqrt(MAX_RENDER_CANVAS_PIXELS / Math.max(1, width * height)),
-  );
-  return Math.max(0.1, Math.min(deviceScale, dimLimitedScale, areaLimitedScale));
-};
-
+const isSafariBrowser = () => typeof navigator !== "undefined" && /^((?!chrome|android).)*safari/i.test(navigator.userAgent || "");
+// A canonical character currently has several provenance/evidence records.
+// Crossing this source-character budget can exceed Safari's tab memory even
+// though the compact PDF.js items themselves appear small. Remaining pages
+// stay explicitly deferred and can be reconstructed by the backend phase.
+const BROWSER_TREE_CHARACTER_BUDGET = isSafariBrowser() ? 75_000 : 180_000;
+const BROWSER_TREE_ITEM_BUDGET = isSafariBrowser() ? 14_000 : 36_000;
+const AUTOMATIC_GLYPH_ANALYSIS_BUDGET = 24;
 const prepareOverlayCanvas = (canvas, width, height, backingScale = window.devicePixelRatio || 1) => {
-  const pixelWidth = Math.max(1, Math.round(width * backingScale));
-  const pixelHeight = Math.max(1, Math.round(height * backingScale));
+  const safeBackingScale = getSafeCanvasOutputScale(width, height, backingScale);
+  const pixelWidth = Math.max(1, Math.round(width * safeBackingScale));
+  const pixelHeight = Math.max(1, Math.round(height * safeBackingScale));
   // Assigning canvas.width/height clears the bitmap and reallocates its backing
   // store. Doing that for every pointermove was the largest MD/NB drawing stall.
   if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
@@ -1054,7 +1363,7 @@ const prepareOverlayCanvas = (canvas, width, height, backingScale = window.devic
   if (canvas.style.height !== cssHeight) canvas.style.height = cssHeight;
   const context = canvas.getContext("2d");
   if (!context) return null;
-  context.setTransform(backingScale, 0, 0, backingScale, 0, 0);
+  context.setTransform(safeBackingScale, 0, 0, safeBackingScale, 0, 0);
   context.clearRect(0, 0, width, height);
   return context;
 };
@@ -1179,18 +1488,13 @@ const DEFAULT_PDF_TOOLBAR_SETTINGS = {
   eraserSize: 18,
   eraserMode: "standard",
   highlightMode: "freehand",
-  // Off by default so a plain drag isn't unexpectedly word-snapped; when
-  // turned on, "line" mode's onMove continuously re-snaps to whichever
-  // word is under the cursor and grows from the starting word out to it
-  // (see autoWidthLocked's onMove branch) — not a per-word stepped stroke.
+  // Text / Straight mode starts in text-aware mode. If no text row is
+  // detected, the same mode falls back to a clean straight vector stroke.
+  // Straight Highlight follows the stylus continuously by default. Word-edge
+  // locking remains an explicit Auto Width option instead of the default.
   highlightAutoWidth: false,
   highlightTaperEnds: true,
-  // Opt-in: clamps the highlight's rendered color to a legible lightness
-  // and masks/repaints the original PDF text underneath in a contrasting
-  // color (see findSpansOverlappingHighlight below and
-  // drawMaskedHighlightText in annotationDraw.js). Off by default — only
-  // applies to highlights drawn while this is on.
-  highlightAutoContrast: false,
+  highlightStabilization: "medium",
   annotOpacity: 35,
   textFontFamily: "Georgia",
   textFontSize: 16,
@@ -1290,7 +1594,7 @@ const normalizePdfToolbarSettings = (parsed) => {
     highlightMode: ["freehand", "line"].includes(parsed.highlightMode) ? parsed.highlightMode : DEFAULT_PDF_TOOLBAR_SETTINGS.highlightMode,
     highlightAutoWidth: readBooleanSetting(parsed.highlightAutoWidth, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoWidth),
     highlightTaperEnds: readBooleanSetting(parsed.highlightTaperEnds, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightTaperEnds),
-    highlightAutoContrast: readBooleanSetting(parsed.highlightAutoContrast, DEFAULT_PDF_TOOLBAR_SETTINGS.highlightAutoContrast),
+    highlightStabilization: ["low", "medium", "high"].includes(parsed.highlightStabilization) ? parsed.highlightStabilization : DEFAULT_PDF_TOOLBAR_SETTINGS.highlightStabilization,
     annotOpacity: readNumberSetting(parsed.annotOpacity, DEFAULT_PDF_TOOLBAR_SETTINGS.annotOpacity, OPACITY_MIN_PCT, OPACITY_MAX_PCT),
     textFontFamily: TEXT_FONT_FAMILIES.some(({ key }) => key === parsed.textFontFamily) ? parsed.textFontFamily : DEFAULT_PDF_TOOLBAR_SETTINGS.textFontFamily,
     textFontSize: readNumberSetting(parsed.textFontSize, DEFAULT_PDF_TOOLBAR_SETTINGS.textFontSize, 10, 48),
@@ -1343,16 +1647,46 @@ const smoothStrokePoint = (points, nextPoint, stabilization, scale = 1) => {
   if (!points.length) return nextPoint;
   const previous = points[points.length - 1];
   const normalized = Math.min(1, Math.max(0, stabilization / 100));
-  const blend = 0.12 + (normalized * normalized) * 0.84;
+  const dt = Math.max(1, Math.abs((nextPoint.t ?? 0) - (previous.t ?? 0)));
+  const movement = Math.hypot(nextPoint.x - previous.x, nextPoint.y - previous.y);
+  const speed = (movement * Math.max(1, scale)) / dt;
+  // Slow movement receives more filtering to remove hand tremor. Fast
+  // movement becomes more responsive so stabilization never feels like a
+  // rubber band dragging behind the stylus.
+  const baseResponse = 0.84 - normalized * 0.42;
+  const speedResponse = Math.min(1, speed / 1.25);
+  let response = baseResponse + (0.94 - baseResponse) * speedResponse;
+  // Preserve deliberate corners instead of rounding letter joins and shape
+  // vertices. Only the tiny, nearly-collinear oscillations are beautified.
+  if (points.length > 1) {
+    const before = points[points.length - 2];
+    const ax = previous.x - before.x;
+    const ay = previous.y - before.y;
+    const bx = nextPoint.x - previous.x;
+    const by = nextPoint.y - previous.y;
+    const denominator = Math.hypot(ax, ay) * Math.hypot(bx, by);
+    if (denominator > 0.0001) {
+      const direction = Math.max(-1, Math.min(1, (ax * bx + ay * by) / denominator));
+      const corner = Math.max(0, Math.min(1, (0.72 - direction) / 1.35));
+      response += (0.96 - response) * corner;
+    }
+  }
   const smoothed = {
-    x: previous.x + (nextPoint.x - previous.x) * (1 - blend),
-    y: previous.y + (nextPoint.y - previous.y) * (1 - blend),
+    x: previous.x + (nextPoint.x - previous.x) * response,
+    y: previous.y + (nextPoint.y - previous.y) * response,
     t: nextPoint.t,
-    pressure: previous.pressure + (nextPoint.pressure - previous.pressure) * (1 - blend * 0.55),
+    pressure: previous.pressure + (nextPoint.pressure - previous.pressure) * (0.42 + speedResponse * 0.4),
   };
-  const minDocMovement = Math.max(0.003, 0.7 / Math.max(1, scale));
+  const minDocMovement = Math.max(0.002, (0.22 + normalized * 0.22) / Math.max(1, scale));
   if (Math.hypot(smoothed.x - previous.x, smoothed.y - previous.y) < minDocMovement) return null;
   return smoothed;
+};
+
+const updateHighlightOrientation = (annotation) => {
+  if (!annotation || annotation.mode === "line" || !Array.isArray(annotation.points) || !annotation.points.length) return;
+  // The marker face is intentionally rotation-locked. The centerline remains
+  // fully freeform, but the broad highlighter body always stays horizontal.
+  annotation.highlightOrientation = 0;
 };
 
 const pointsToBounds = (points) => {
@@ -1870,6 +2204,40 @@ const applySyntheticStrokePressure = (points, penType, pressureAssist = DEFAULT_
   });
 };
 
+const beautifyCompletedStroke = (points, stabilization, scale = 1) => {
+  if (!Array.isArray(points) || points.length < 4) return points || [];
+  const normalized = clamp(stabilization / 100, 0, 1);
+  const scaleFactor = Math.max(1, scale);
+  const spacing = (0.48 + normalized * 0.42) / scaleFactor;
+  const resampled = resampleStrokePoints(points, spacing);
+  if (resampled.length < 4) return resampled;
+
+  return resampled.map((point, index, array) => {
+    if (index === 0 || index === array.length - 1) return { ...point };
+    const previous = array[index - 1];
+    const next = array[index + 1];
+    const ax = point.x - previous.x;
+    const ay = point.y - previous.y;
+    const bx = next.x - point.x;
+    const by = next.y - point.y;
+    const denominator = Math.hypot(ax, ay) * Math.hypot(bx, by);
+    const direction = denominator > 0.0001
+      ? clamp((ax * bx + ay * by) / denominator, -1, 1)
+      : 1;
+    const corner = clamp((0.68 - direction) / 1.3, 0, 1);
+    const smoothingWeight = (0.16 + normalized * 0.3) * (1 - corner * 0.9);
+    const averageX = (previous.x + point.x * 2 + next.x) / 4;
+    const averageY = (previous.y + point.y * 2 + next.y) / 4;
+    const averagePressure = ((previous.pressure ?? 0.5) + (point.pressure ?? 0.5) * 2 + (next.pressure ?? 0.5)) / 4;
+    return {
+      ...point,
+      x: point.x + (averageX - point.x) * smoothingWeight,
+      y: point.y + (averageY - point.y) * smoothingWeight,
+      pressure: clamp((point.pressure ?? 0.5) + (averagePressure - (point.pressure ?? 0.5)) * smoothingWeight, 0.02, 1),
+    };
+  });
+};
+
 const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType = "ball", scale = 1) => {
   if (!Array.isArray(points) || points.length < 2) return points || [];
   const dynamic = penSettings?.dynamic === true;
@@ -1879,11 +2247,9 @@ const finalizePenStroke = (points, penSettings = DEFAULT_PEN_SETTINGS, penType =
   const scaleFactor = Math.max(1, scale);
   const deduped = dedupeStrokePoints(points, Math.max(0.002, (0.015 + normalized * 0.05) / scaleFactor));
   if (deduped.length < 2) return deduped;
-  // Keep the released stroke visually close to the live preview: the live
-  // path is already smoothed incrementally while drawing, so an extra
-  // resample/smoothing pass here can reintroduce harder turns at lift-off.
   if (!dynamic) return deduped.map((point) => ({ ...point, pressure: 0.5 }));
-  return applySyntheticStrokePressure(deduped, penType, pressureAssist, scaleFactor);
+  const beautified = beautifyCompletedStroke(deduped, stabilization, scaleFactor);
+  return applySyntheticStrokePressure(beautified, penType, pressureAssist, scaleFactor);
 };
 
 // Compact draggable "knob" that replaces a native <input type="range"> for
@@ -2089,13 +2455,78 @@ const PDFPage = forwardRef(({
   disableZoom = false,             // disable all zoom controls/gestures for fixed-size reader views like /pdf-reader
   toolbarHost = null,              // optional external DOM mount for this instance's real toolbar
   toolbarOptionsHost = null,       // optional external DOM mount for the active tool's subtoolbar
-  entityBuilderHost = null,        // optional external DOM mount for AMCTOSHS Illumination
+  textToolbarOptionsHost = null,   // optional lower mount dedicated to the compact Text subtoolbar
+  entityBuilderHost = null,        // optional external DOM mount for RabbitHole Illumination
   markdownHost = null,             // optional external DOM mount for the current page's Markdown aside
+  layer1Only = false,
+  onLayer1OnlyChange = null,
 }, ref) => {
+  const navigate = useNavigate();
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
   const [pageNum, setPageNum]       = useState(1);
   const [pageCount, setPageCount]   = useState(0);
+  const patinaDocumentKey = embeddedSourceId || embeddedPdfName || filename || "local";
+  const [pagePatina, setPagePatina] = useState(emptyPatinaState);
+  const previousPatinaPageRef = useRef(null);
+  const patinaSaveTimerRef = useRef(null);
+  const canvasWrapRef = useRef(null);
+  const navigatePage = useCallback((targetPage) => {
+    const turnDirection = targetPage >= pageNum ? 1 : -1;
+    setPageNum(targetPage);
+    navigator.vibrate?.(18);
+    const prefetchPage = targetPage + turnDirection;
+    if (pdfDoc && prefetchPage >= 1 && prefetchPage <= pageCount) {
+      void pdfDoc.getPage(prefetchPage).then((page) => page.getOperatorList()).catch(() => {});
+    }
+  }, [pageCount, pageNum, pdfDoc]);
+
+  const recordPagePatina = useCallback((page, action, point = null, amount = 1) => {
+    if (!page) return;
+    setPagePatina((current) => updatePagePatina(current, page, action, point, amount));
+  }, []);
+
+  const makePageNew = useCallback(() => {
+    setPagePatina((current) => ({
+      ...current,
+      pages: { ...(current.pages || {}), [String(pageNum)]: emptyPagePatina() },
+    }));
+  }, [pageNum]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(patinaStorageKey(patinaDocumentKey)) || "null");
+      setPagePatina(normalizePatinaState(saved));
+    } catch {
+      setPagePatina(emptyPatinaState());
+    }
+  }, [patinaDocumentKey]);
+
+  useEffect(() => {
+    window.clearTimeout(patinaSaveTimerRef.current);
+    patinaSaveTimerRef.current = window.setTimeout(() => {
+      try { localStorage.setItem(patinaStorageKey(patinaDocumentKey), JSON.stringify(pagePatina)); } catch {}
+    }, 240);
+    return () => window.clearTimeout(patinaSaveTimerRef.current);
+  }, [pagePatina, patinaDocumentKey]);
+
+  useEffect(() => {
+    const onPatinaEvent = (event) => {
+      const detail = event.detail || {};
+      if (!detail.page || detail.sourceId && embeddedSourceId && detail.sourceId !== embeddedSourceId) return;
+      recordPagePatina(detail.page, detail.action || "contact", detail.point, detail.amount || 1);
+    };
+    window.addEventListener("amctoshs:pdf-patina", onPatinaEvent);
+    return () => window.removeEventListener("amctoshs:pdf-patina", onPatinaEvent);
+  }, [embeddedSourceId, recordPagePatina]);
+
+  useEffect(() => {
+    if (!pageNum || !pdfDoc) return;
+    const previous = previousPatinaPageRef.current;
+    recordPagePatina(pageNum, previous == null ? "open" : "turn");
+    if (previous != null && previous !== pageNum) recordPagePatina(previous, "turn");
+    previousPatinaPageRef.current = pageNum;
+  }, [pageNum, pdfDoc, recordPagePatina]);
   // Booklet mode shows pageNum alongside a second, independently-picked
   // companion page (not fixed to pageNum+1 — e.g. {1,7} is a valid pair).
   // Read-only: full annotation editing stays on pageNum only, the
@@ -2121,11 +2552,9 @@ const PDFPage = forwardRef(({
   // ── Document text search ────────────────────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  // [{page, itemIndexes, matchType, confidence, originalMatchedText}],
-  // sorted by page then position — matchType/confidence come from the
-  // tolerant search pipeline (pdfFuzzySearch.js): "exact" for a literal
-  // substring match down through "fuzzy" for a distorted-text match found
-  // only via edit-distance, see pdfSearchIndexCacheRef below.
+  const [searchRunQuery, setSearchRunQuery] = useState("");
+  // [{page, itemIndexes, matchType, originalMatchedText}], produced solely
+  // by the Space-Tolerant Wordform Trace engine.
   const [searchMatches, setSearchMatches] = useState([]);
   const [searchActiveIndex, setSearchActiveIndex] = useState(-1);
   const [searchScanning, setSearchScanning] = useState(false);
@@ -2138,6 +2567,7 @@ const PDFPage = forwardRef(({
   const searchCanvasRef = useRef(null);
   const hyleCanvasRef = useRef(null);
   const hyleFabRef = useRef(null);
+  const [hyleToolbarHost, setHyleToolbarHost] = useState(null);
   const hyleIconsLayerRef = useRef(null);
   const searchRunIdRef = useRef(0);
   const hyleRunIdRef = useRef(0);
@@ -2148,8 +2578,14 @@ const PDFPage = forwardRef(({
   const [pdfLoadProgress, setPdfLoadProgress] = useState(0);
   const [loadError, setLoadError]   = useState("");
   const [pdfOutline, setPdfOutline] = useState([]);
+  const [pdfOutlineReady, setPdfOutlineReady] = useState(false);
   const [pdfCustomOutlines, setPdfCustomOutlines] = useState([]);
+  const [pdfOutlineImported, setPdfOutlineImported] = useState(false);
+  const [pdfNavigationLoaded, setPdfNavigationLoaded] = useState(false);
+  const pdfOutlineImportingRef = useRef(false);
   const [outlineOpen, setOutlineOpen] = useState(false);
+  const [documentNavigatorView, setDocumentNavigatorView] = useState("outlines");
+  const [documentNavigatorOpen, setDocumentNavigatorOpen] = useState(false);
   const [bookmarks, setBookmarks] = useState([]);
   const [bookmarkLabels, setBookmarkLabels] = useState({});
   const [dragOver, setDragOver]     = useState(false);
@@ -2160,9 +2596,10 @@ const PDFPage = forwardRef(({
   // lock out everything else a stray second/third contact point could
   // otherwise trigger while the user's fingers are still down, especially
   // text selection (touchInteractionActive below already checks it).
-  const [pinchActive, setPinchActive] = useState(false);
+  const pinchGestureActiveRef = useRef(false);
   const [splitRatio,     setSplitRatio]    = useState(1);
   const [mdPanelWidth,   setMdPanelWidth]  = useState(340); // resizable width of the Markdown/Actions left column
+  const [rabbitHolePanelWidth, setRabbitHolePanelWidth] = useState(720);
   const [annotHistoryPanelWidth, setAnnotHistoryPanelWidth] = useState(300);
   const [smartVideoPanelWidth, setSmartVideoPanelWidth] = useState(380);
   const [entityBuilderPanelWidth, setEntityBuilderPanelWidth] = useState(360);
@@ -2248,6 +2685,7 @@ const PDFPage = forwardRef(({
   const navigationBlocked = Boolean(annotTool && !["shapes", "mdController"].includes(annotTool)); // true only when a real drawing tool is selected
   const toolActive = navigationBlocked;
   const annotToolRef = useRef(null); // mirrors navigationBlocked ? annotTool : null — read inside the pan-gesture effect, whose deps are just [pdfDoc], so annotTool itself would be stale there
+  const textToolWasActiveRef = useRef(false);
 
   // AI vs Manual toggle
   const extractMode = selectionOnly ? "manual" : (provider === "manual" ? "manual" : "ai");
@@ -2298,7 +2736,7 @@ const PDFPage = forwardRef(({
   const [selectionObjectMenuOpen, setSelectionObjectMenuOpen] = useState(false);
   const [selectionAudioPlaying, setSelectionAudioPlaying] = useState(false);
   const selectionAudioRef = useRef(null);
-  const [selectionVerifyBusy, setSelectionVerifyBusy] = useState(false); // AMCTOSHS builder source verification
+  const [selectionVerifyBusy, setSelectionVerifyBusy] = useState(false); // RabbitHole builder source verification
   // Local/free/deterministic "Correct text" action result (pdfTextCorrection.js)
   // — a full correctSelectedPdfText() return value, distinct from the AI-backed
   // translate/dictionary/linguistic-check tools' simpler { label, text } shape.
@@ -2376,16 +2814,21 @@ const PDFPage = forwardRef(({
     setPageNum(page);
   }, []);
 
-  const persistPdfNavigation = useCallback((nextBookmarks, nextOutlines, nextBookmarkLabels = bookmarkLabels) => {
+  const persistPdfNavigation = useCallback((nextBookmarks, nextOutlines, nextBookmarkLabels = bookmarkLabels, nextPdfOutlineImported = pdfOutlineImported) => {
     const documentId = pdfNavigationDocumentIdRef.current;
     if (!documentId) return;
     pdfNavigationSaveQueueRef.current = pdfNavigationSaveQueueRef.current
       .catch(() => {})
-      .then(() => savePdfNavigation(documentId, { bookmarks: nextBookmarks, bookmarkLabels: nextBookmarkLabels, outlines: nextOutlines }))
+      .then(() => savePdfNavigation(documentId, {
+        bookmarks: nextBookmarks,
+        bookmarkLabels: nextBookmarkLabels,
+        pdfOutlineImported: nextPdfOutlineImported,
+        outlines: nextOutlines,
+      }))
       .catch((error) => {
         console.error("[PDF] Failed to save navigation state", error);
       });
-  }, [bookmarkLabels]);
+  }, [bookmarkLabels, pdfOutlineImported]);
 
   const toggleBookmarkForPage = useCallback((targetPage) => {
     const removing = bookmarks.includes(targetPage);
@@ -2412,7 +2855,8 @@ const PDFPage = forwardRef(({
     toggleBookmarkForPage(pageNum);
   }, [pageNum, toggleBookmarkForPage]);
 
-  const addPdfOutlineForRange = useCallback(({ title: requestedTitle, startPage: requestedStartPage, endPage: requestedEndPage }) => {
+  const addPdfOutlineForRange = useCallback(({ type: requestedType, title: requestedTitle, startPage: requestedStartPage, endPage: requestedEndPage }) => {
+    const type = ["part", "chapter", "section", "subsection", "appendix"].includes(requestedType) ? requestedType : "section";
     const title = String(requestedTitle || "").trim();
     const startPage = Number(requestedStartPage);
     const endPage = Number(requestedEndPage);
@@ -2432,7 +2876,7 @@ const PDFPage = forwardRef(({
     }
     const next = [
       ...pdfCustomOutlines.filter((item) => item.startPage !== startPage),
-      { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, title, startPage, endPage },
+      { id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, type, title, startPage, endPage },
     ].sort((a, b) => a.startPage - b.startPage);
     setPdfCustomOutlines(next);
     persistPdfNavigation(bookmarks, next);
@@ -2454,23 +2898,37 @@ const PDFPage = forwardRef(({
     return true;
   }, [bookmarks, pdfCustomOutlines, persistPdfNavigation]);
 
-  const resolveOutlinePage = useCallback(async (item) => {
-    if (!pdfDoc || !item) return;
-    try {
-      let destination = item.dest;
-      if (typeof destination === "string") destination = await pdfDoc.getDestination(destination);
-      const pageReference = Array.isArray(destination) ? destination[0] : null;
-      if (typeof pageReference === "number") {
-        setPageNum(Math.min(pageCount, Math.max(1, pageReference + 1)));
-      } else if (pageReference) {
-        const pageIndex = await pdfDoc.getPageIndex(pageReference);
-        setPageNum(Math.min(pageCount, Math.max(1, pageIndex + 1)));
-      }
-      setOutlineOpen(false);
-    } catch {
-      // Some PDFs contain outline destinations that point to removed objects.
+  useEffect(() => {
+    if (!pdfDoc || !pageCount || !pdfOutlineReady || !pdfNavigationLoaded || pdfOutlineImported || pdfOutlineImportingRef.current) return undefined;
+    let cancelled = false;
+
+    // Existing Reader sections take precedence over an automatic import;
+    // marking the migration complete prevents embedded entries from being
+    // unexpectedly added over a document the user has already organized.
+    if (pdfCustomOutlines.length) {
+      setPdfOutlineImported(true);
+      persistPdfNavigation(bookmarks, pdfCustomOutlines, bookmarkLabels, true);
+      return undefined;
     }
-  }, [pageCount, pdfDoc]);
+
+    pdfOutlineImportingRef.current = true;
+    void importPdfOutlineRecords(pdfDoc, pdfOutline, pageCount).then((importedOutlines) => {
+      if (cancelled) return;
+      pdfOutlineImportingRef.current = false;
+      setPdfOutlineImported(true);
+      setPdfCustomOutlines(importedOutlines);
+      persistPdfNavigation(bookmarks, importedOutlines, bookmarkLabels, true);
+    }).catch((error) => {
+      if (cancelled) return;
+      pdfOutlineImportingRef.current = false;
+      setPdfOutlineImported(false);
+      console.error("[PDF] Failed to import embedded outline", error);
+    });
+    return () => {
+      cancelled = true;
+      pdfOutlineImportingRef.current = false;
+    };
+  }, [bookmarkLabels, bookmarks, pageCount, pdfCustomOutlines, pdfDoc, pdfNavigationLoaded, pdfOutline, pdfOutlineImported, pdfOutlineReady, persistPdfNavigation]);
 
   const showMarkdownPageInPdf = useCallback((mode) => {
     const targetPage = mdCurrentPage.page;
@@ -2479,6 +2937,7 @@ const PDFPage = forwardRef(({
       if (!next) return null;
       if (splitRatio === 0) setSplitRatio(savedRatioRef.current || 0.42);
       setPageNum(targetPage);
+      zoomRef.current = 1;
       setZoom(1);
       scrollReaderToPage(targetPage);
       return next;
@@ -2496,9 +2955,8 @@ const PDFPage = forwardRef(({
     setColorMenuOpen(false);
   }, [annotTool]);
 
-  // Shared button renderer for both DRAWING_TOOL_ORDER (.annot_tool_strip)
-  // and MODE_TOOL_ORDER (.annot_mode_strip) — every plain annotTool button
-  // (everything except the "shapes" group-opener, which has its own
+  // Shared button renderer for the drawing toolbar's plain annotTool buttons.
+  // Everything except the "shapes" group-opener (which has its own
   // active-state logic across all four SHAPE_TOOL_KEYS) follows the exact
   // same select/toggle pattern regardless of which group it
   // renders in.
@@ -2524,13 +2982,16 @@ const PDFPage = forwardRef(({
     }
     const tool = ANNOT_TOOLS.find((item) => item.key === key);
     if (!tool) return null;
+    const isActive = key === "highlight"
+      ? HIGHLIGHT_TOOL_KEYS.includes(annotTool)
+      : annotTool === key;
     return (
       <React.Fragment key={key}>
         {key === "highlight" && <span className="annot_tool_separator" aria-hidden="true" />}
         <button
           ref={(el) => { toolButtonRefs.current[key] = el; }}
           type="button"
-          className={`annot_trigger annot_tool_btn${annotTool === key ? " annot_trigger--active" : ""}${pdfToolbarSettingsSaving && annotTool === key ? " annot_tool_btn--saving" : ""}`}
+          className={`annot_trigger annot_tool_btn${isActive ? " annot_trigger--active" : ""}${pdfToolbarSettingsSaving && isActive ? " annot_tool_btn--saving" : ""}`}
           onClick={() => toggleAnnotTool(key)}
           title={tool.label}
           aria-label={tool.label}
@@ -2625,7 +3086,7 @@ const PDFPage = forwardRef(({
   // else its own defaultModel — one source of truth, instead of yet another
   // hardcoded provider->model map going stale here the way aiClient.js's did).
   // Shared by every "you are using: <provider>" footer in this page (Smart
-  // Video Search, the AMCTOSHS Clinical Vignette Generator) — one fetch,
+  // Video Search, the RabbitHole Clinical Vignette Generator) — one fetch,
   // cached, not a per-tool copy.
   const [aiProviderModels, setAiProviderModels] = useState({});
   const fetchAiProviderModelsOnce = useCallback(() => {
@@ -2751,12 +3212,39 @@ const PDFPage = forwardRef(({
     }
   }, [smartVideoSavedId, fetchSmartVideoSaved]);
 
-  // ── AMCTOSHS Illumination (formerly "AMCTOSHS Entity Builder") ─────────
+  // ── RabbitHole Illumination (formerly "RabbitHole Entity Builder") ─────────
   // It only builds from explicit user-provided text: the latest manual
   // text selection or text typed into the panel. It intentionally does not
   // read the current page text.
   const [entityBuilderSelectedText, setEntityBuilderSelectedText] = useState("");
   const [markdownAsideOpen, setMarkdownAsideOpen] = useState(false);
+  // Layer 1 is opt-in from the Functions menu. Mounting it does not affect
+  // the durable analysis job state.
+  const [glyphCharAsideOpen, setGlyphCharAsideOpen] = useState(false);
+  const [sentenceTreeOpen, setSentenceTreeOpen] = useState(false);
+  const [wholeDocumentReconstruction, setWholeDocumentReconstruction] = useState(null);
+  const [backendReconstructionState, setBackendReconstructionState] = useState({ status: "idle", mode: null, run: null, root: null, error: "" });
+  const [rabbitHoleSaveState, setRabbitHoleSaveState] = useState({ status: "idle", message: "", runId: null });
+  const [savedPageLookupState, setSavedPageLookupState] = useState({ pageIndex: null, status: "idle", error: "" });
+  const [documentExtractionState, setDocumentExtractionState] = useState({ pageCount: 0, extractedPages: 0, failedPages: [], complete: false, status: "idle", error: "" });
+  const documentReconstructionRunRef = useRef(null);
+  const glyphForensicsServiceRef = useRef(null);
+  const glyphForensicsRunRef = useRef(null);
+  const documentPersistencePromiseRef = useRef(null);
+  const [documentTreeSelectedId, setDocumentTreeSelectedId] = useState(null);
+  const [selectedPhysicalBlockIds, setSelectedPhysicalBlockIds] = useState([]);
+  const [physicalBlockToolActive, setPhysicalBlockToolActive] = useState(false);
+  const [aiPhysicalBlockBusy, setAiPhysicalBlockBusy] = useState(false);
+  const [aiPhysicalBlockProgress, setAiPhysicalBlockProgress] = useState({ status: "idle", step: 0, candidateCount: 0, persistenceProgress: 0, message: "", error: "" });
+  const [meaningAnalysis, setMeaningAnalysis] = useState(null);
+  const [meaningAnalysisTab, setMeaningAnalysisTab] = useState("result");
+  const [physicalBlockSelectionDrag, setPhysicalBlockSelectionDrag] = useState(null);
+  const documentFormType = "PARAGRAPH";
+  const [manualDocumentFormAssignments, setManualDocumentFormAssignments] = useState([]);
+  const [persistedPhysicalPage, setPersistedPhysicalPage] = useState(null);
+  const [documentTreeInspectorTab, setDocumentTreeInspectorTab] = useState("overview");
+  const [documentTreeRasterEvidence, setDocumentTreeRasterEvidence] = useState(null);
+  const [manualCharacterCandidate, setManualCharacterCandidate] = useState("");
   const [markdownModeMenuOpen, setMarkdownModeMenuOpen] = useState(false);
   const [markdownModeMenuPosition, setMarkdownModeMenuPosition] = useState(null);
   const [markdownAsideMode, setMarkdownAsideMode] = useState("raw");
@@ -2764,9 +3252,24 @@ const PDFPage = forwardRef(({
   const [persistedOcrStatus, setPersistedOcrStatus] = useState("not_started");
   const [persistedOcrBusy, setPersistedOcrBusy] = useState(false);
   const [persistedOcrError, setPersistedOcrError] = useState("");
+  const persistedOcrBlocks = useMemo(() => {
+    const currentPage = persistedOcrPages.find((page) => {
+      const oneBasedPage = Number(page?.pageIndex) + 1;
+      return oneBasedPage === pageNum || Number(page?.pageNumber) === pageNum;
+    });
+    return Array.isArray(currentPage?.blocks) ? currentPage.blocks : [];
+  }, [persistedOcrPages, pageNum]);
+  const [forensicReport, setForensicReport] = useState(null);
+  const [forensicBusy, setForensicBusy] = useState(false);
+  const [forensicError, setForensicError] = useState("");
+  const [forensicRun, setForensicRun] = useState(0);
   const [markdownRetainedVisualMode, setMarkdownRetainedVisualMode] = useState(null);
   const [notebookMode, setNotebookMode] = useState(null);
   const [notebookPages, setNotebookPagesState] = useState({});
+  const [pageConceptBusy, setPageConceptBusy] = useState(false);
+  const [pageConceptError, setPageConceptError] = useState("");
+  const pageConceptAbortRef = useRef(null);
+  useEffect(() => () => pageConceptAbortRef.current?.abort(), []);
   const notebookPagesRef = useRef({});
   const notebookPagesLoadedSourceRef = useRef(null);
   const commitNotebookPagePatch = useCallback((targetPage, patch) => {
@@ -2790,7 +3293,9 @@ const PDFPage = forwardRef(({
     nextPage.text = typeof nextPage.text === "string" ? nextPage.text : "";
     nextPage.textStyles = Array.isArray(nextPage.textStyles) ? nextPage.textStyles : [];
     nextPage.annotations = Array.isArray(nextPage.annotations) ? nextPage.annotations : [];
-    const hasContent = Boolean(nextPage.text.trim()) || nextPage.annotations.length > 0;
+    const hasUmlsContent = Boolean(nextPage.umlsConceptAnalysis)
+      || (Array.isArray(nextPage.umlsConcepts) && nextPage.umlsConcepts.length > 0);
+    const hasContent = Boolean(nextPage.text.trim()) || nextPage.annotations.length > 0 || hasUmlsContent;
     const nextPages = { ...currentPages };
     if (hasContent) nextPages[key] = nextPage;
     else delete nextPages[key];
@@ -2802,6 +3307,19 @@ const PDFPage = forwardRef(({
   const notebookText = currentNotebookPage?.text || "";
   const notebookAnnotations = Array.isArray(currentNotebookPage?.annotations) ? currentNotebookPage.annotations : [];
   const notebookTextStyles = Array.isArray(currentNotebookPage?.textStyles) ? currentNotebookPage.textStyles : [];
+  const notebookUmlsAnalysis = currentNotebookPage?.umlsConceptAnalysis || null;
+  const notebookUmlsConcepts = Array.isArray(currentNotebookPage?.umlsConcepts) ? currentNotebookPage.umlsConcepts : [];
+  const notebookUmlsRows = ["running", "cancelled"].includes(notebookUmlsAnalysis?.state)
+    ? (Array.isArray(notebookUmlsAnalysis.liveConcepts) ? notebookUmlsAnalysis.liveConcepts : [])
+    : notebookUmlsConcepts;
+  useEffect(() => {
+    const generated = String(currentNotebookPage?.umlsConceptText || "");
+    if (!notebookUmlsAnalysis || !generated || !notebookText.includes(generated)) return;
+    commitNotebookPagePatch(pageNum, (current) => ({
+      text: String(current.text || "").replace(generated, "").replace(/\n{3,}/g, "\n\n").trim(),
+      umlsConceptText: "",
+    }));
+  }, [commitNotebookPagePatch, currentNotebookPage?.umlsConceptText, notebookText, notebookUmlsAnalysis, pageNum]);
   const setNotebookText = useCallback((value) => {
     commitNotebookPagePatch(pageNum, (current) => ({
       text: typeof value === "function" ? value(current.text || "") : value,
@@ -2823,6 +3341,7 @@ const PDFPage = forwardRef(({
   const [notebookRuleCount, setNotebookRuleCount] = useState(40);
   const [notebookSttStatus, setNotebookSttStatus] = useState("idle");
   const [notebookSttError, setNotebookSttError] = useState("");
+  const [notebookSttTranscript, setNotebookSttTranscript] = useState("");
   const [notebookControlMode, setNotebookControlMode] = useState(false);
   const [notebookActiveTab, setNotebookActiveTab] = useState("typing");
   const [notebookVoiceCommands, setNotebookVoiceCommands] = useState(NOTEBOOK_VOICE_COMMANDS);
@@ -3052,14 +3571,10 @@ const PDFPage = forwardRef(({
       });
     }
     setNotebookSttError("");
+    setNotebookSttTranscript("");
     return true;
   }, [notebookControlLines, notebookText, notebookVoiceCommands, spokenNumber]);
   handleNotebookVoiceCommandRef.current = handleNotebookVoiceCommand;
-  const appendNotebookSpeech = useCallback((spokenText) => {
-    const text = String(spokenText || "").trim();
-    if (!text) return;
-    setNotebookText((current) => `${current}${current && !/\s$/.test(current) ? " " : ""}${text}`);
-  }, []);
   const pasteNotebookText = useCallback(async () => {
     const editor = notebookEditorRef.current;
     if (!editor) return;
@@ -3082,41 +3597,18 @@ const PDFPage = forwardRef(({
     }
   }, [notebookText]);
   const stopNotebookStt = useCallback(() => {
-    notebookSttStartIdRef.current += 1;
     const session = notebookSttRef.current;
     if (!session) {
       setNotebookSttStatus("idle");
       return;
     }
-    session.stopped = true;
-    session.abortController?.abort();
-    if (session.kind === "browser") {
-      session.recognition.onresult = null;
-      session.recognition.onend = null;
-      session.recognition.onerror = null;
-      try { session.recognition.abort?.(); } catch {}
-      try { session.recognition.stop?.(); } catch {}
-    } else if (session.kind === "local-whisper") {
-      window.clearTimeout(session.chunkTimer);
-      if (session.recorder) {
-        session.recorder.ondataavailable = null;
-        session.recorder.onstop = null;
-        session.recorder.onerror = null;
-        try { if (session.recorder.state !== "inactive") session.recorder.stop(); } catch {}
-      }
-    } else {
-      session.dataChannel?.close?.();
-      session.peerConnection?.close?.();
-      if (session.recorder?.state !== "inactive") session.recorder.stop();
-    }
-    session.stream?.getTracks().forEach((track) => {
-      track.enabled = false;
-      track.stop();
-    });
-    notebookSttRef.current = null;
-    setNotebookSttStatus("idle");
+    if (session.stopping) return;
+    session.stopping = true;
+    if (session.provider !== STT_PROVIDERS.BROWSER) setNotebookSttStatus("processing");
+    session.controller?.stop?.();
   }, []);
-  const toggleNotebookStt = useCallback(async (requestedProvider = null) => {
+
+  const toggleNotebookStt = useCallback(async () => {
     if (notebookSttRef.current) {
       stopNotebookStt();
       return;
@@ -3124,220 +3616,108 @@ const PDFPage = forwardRef(({
     setNotebookSttError("");
     const startId = notebookSttStartIdRef.current + 1;
     notebookSttStartIdRef.current = startId;
-    const settings = readSttSettings();
-    const provider = Object.values(STT_PROVIDERS).includes(requestedProvider)
-      ? requestedProvider
-      : settings.provider;
-    if (provider === STT_PROVIDERS.LOCAL_WHISPER) {
-      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-        setNotebookSttError("Local Whisper needs microphone and MediaRecorder support.");
-        return;
-      }
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (notebookSttStartIdRef.current !== startId) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
-          .find((candidate) => MediaRecorder.isTypeSupported?.(candidate)) || "";
-        const session = {
-          kind: "local-whisper",
-          recorder: null,
-          chunkTimer: 0,
-          stream,
-          uploadChain: Promise.resolve(),
-          abortController: new AbortController(),
-          stopped: false,
-        };
-        notebookSttRef.current = session;
-        setNotebookSttStatus("listening");
+    const settings = getConfiguredStt();
+    const resolveCorpusTranscript = createCorpusSttResolver();
+    const appSelection = manualSelection?.surface === "nb" ? manualSelection : null;
+    const appSelectionStart = Number(appSelection?.startIdx);
+    const appSelectionEnd = Number(appSelection?.endIdx);
+    const appCaret = Number.isFinite(notebookCaretOffset) ? notebookCaretOffset : null;
+    const editor = notebookEditorRef.current;
+    const fallbackCaret = editor?.selectionStart ?? notebookText.length;
+    const selectionStart = Number.isFinite(appSelectionStart)
+      ? Math.max(0, Math.min(notebookText.length, appSelectionStart))
+      : Number.isFinite(appCaret)
+        ? Math.max(0, Math.min(notebookText.length, appCaret))
+        : fallbackCaret;
+    const selectionEnd = Number.isFinite(appSelectionEnd) && appSelectionEnd >= selectionStart
+      ? Math.min(notebookText.length, appSelectionEnd)
+      : selectionStart;
+    const before = notebookText.slice(0, selectionStart);
+    const after = notebookText.slice(selectionEnd);
+    const needsSpace = Boolean(before && !/\s$/.test(before));
+    const session = {
+      startId,
+      provider: settings.provider,
+      controller: null,
+      stopping: false,
+      processing: false,
+      speechActive: false,
+      committedTranscript: "",
+      cycleTranscript: "",
+    };
+    notebookSttRef.current = session;
+    setNotebookSttStatus("starting");
 
-        const queueChunkUpload = (audioBlob, extension) => {
-          session.uploadChain = session.uploadChain.then(async () => {
-            if (session.stopped || notebookSttRef.current !== session) return;
-            const body = new FormData();
-            body.append("audio", audioBlob, `notebook-${Date.now()}.${extension}`);
-            const response = await authFetch(apiUrl("/api/ai/transcribe-local"), {
-              method: "POST",
-              body,
-              signal: session.abortController.signal,
-            });
-            const data = await response.json().catch(() => ({}));
-            if (!response.ok) throw new Error(data.error?.message || "Local Whisper transcription failed.");
-            const transcript = String(data.text || "").trim();
-            if (!transcript || session.stopped || notebookSttRef.current !== session) return;
-            if (notebookControlModeRef.current) handleNotebookVoiceCommandRef.current?.(transcript);
-            else appendNotebookSpeech(transcript);
-          }).catch((error) => {
-            if (notebookSttRef.current === session && !session.stopped && error.name !== "AbortError") {
-              stopNotebookStt();
-              setNotebookSttError(error.message || "Local Whisper transcription failed.");
-            }
-          });
-        };
+    const updateNotebookDictation = (transcript) => {
+      const inserted = `${needsSpace && transcript ? " " : ""}${transcript}`;
+      setNotebookText(`${before}${inserted}${after}`);
+      setNotebookSttTranscript(transcript);
+      setNotebookCaretOffset(before.length + inserted.length);
+      window.requestAnimationFrame(() => {
+        if (notebookSttRef.current !== session) return;
+        const nextEditor = notebookEditorRef.current;
+        const caret = before.length + inserted.length;
+        nextEditor?.focus({ preventScroll: true });
+        nextEditor?.setSelectionRange(caret, caret);
+      });
+    };
 
-        const startCompleteChunk = () => {
-          if (session.stopped || notebookSttRef.current !== session) return;
-          const chunks = [];
-          const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
-          session.recorder = recorder;
-          recorder.ondataavailable = (event) => {
-            if (event.data?.size) chunks.push(event.data);
-          };
-          recorder.onerror = () => {
-            if (notebookSttRef.current !== session || session.stopped) return;
-            stopNotebookStt();
-            setNotebookSttError("Local microphone recording failed.");
-          };
-          recorder.onstop = () => {
-            window.clearTimeout(session.chunkTimer);
-            if (session.stopped || notebookSttRef.current !== session) return;
-            const audioBlob = new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" });
-            const extension = audioBlob.type.includes("mp4") ? "m4a" : audioBlob.type.includes("ogg") ? "ogg" : "webm";
-            if (audioBlob.size) queueChunkUpload(audioBlob, extension);
-            startCompleteChunk();
-          };
-          recorder.start();
-          session.chunkTimer = window.setTimeout(() => {
-            if (!session.stopped && recorder.state === "recording") recorder.stop();
-          }, 3500);
-        };
-        startCompleteChunk();
-      } catch (error) {
-        setNotebookSttStatus("idle");
-        setNotebookSttError(error.name === "NotAllowedError" ? "Microphone access was denied." : error.message || "Could not start local Whisper.");
-      }
-      return;
-    }
-    if (provider === STT_PROVIDERS.BROWSER) {
-      if (!SpeechRecognition) {
-        setNotebookSttError("Browser speech recognition is unavailable.");
-        return;
-      }
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = false;
-      recognition.lang = "en-US";
-      recognition.onresult = (event) => {
-        for (let index = event.resultIndex; index < event.results.length; index += 1) {
-          if (event.results[index].isFinal) {
-            const transcript = event.results[index][0].transcript;
-            if (notebookControlModeRef.current) handleNotebookVoiceCommandRef.current?.(transcript);
-            else appendNotebookSpeech(transcript);
+    try {
+      session.controller = await startConfiguredStt({
+        continuous: true,
+        interimResults: true,
+        language: document.documentElement.lang || navigator.language || "en-US",
+        recordedChunkMs: 3500,
+        requireDetectedSpeech: false,
+        onStart: () => {
+          if (notebookSttRef.current === session) setNotebookSttStatus("waiting");
+        },
+        onSpeechActivityChange: (active) => {
+          if (notebookSttRef.current !== session) return;
+          session.speechActive = active;
+          if (!session.stopping && !session.processing) setNotebookSttStatus(active ? "listening" : "waiting");
+        },
+        onProcessingChange: (processing) => {
+          if (notebookSttRef.current !== session) return;
+          session.processing = processing;
+          if (processing) setNotebookSttStatus("processing");
+          else if (!session.stopping) setNotebookSttStatus(session.speechActive ? "listening" : "waiting");
+        },
+        onText: (transcript, { final }) => {
+          if (notebookSttRef.current !== session) return;
+          const resolvedTranscript = resolveCorpusTranscript(transcript);
+          if (notebookControlModeRef.current) {
+            if (final) handleNotebookVoiceCommandRef.current?.(resolvedTranscript);
+            return;
           }
-        }
-      };
-      recognition.onerror = (event) => {
-        setNotebookSttError(event.error === "not-allowed" ? "Microphone access was denied." : "Speech recognition failed.");
-        notebookSttRef.current = null;
-        setNotebookSttStatus("idle");
-      };
-      recognition.onend = () => {
-        if (notebookSttRef.current?.recognition === recognition) {
+          if (final) {
+            session.committedTranscript = `${session.committedTranscript}${session.committedTranscript ? " " : ""}${resolvedTranscript.trim()}`;
+            session.cycleTranscript = "";
+          } else {
+            session.cycleTranscript = resolvedTranscript.trimStart();
+          }
+          const separator = session.committedTranscript && session.cycleTranscript ? " " : "";
+          updateNotebookDictation(`${session.committedTranscript}${separator}${session.cycleTranscript}`);
+        },
+        onError: (error) => {
+          if (notebookSttRef.current === session) setNotebookSttError(error.message || "Speech recognition failed.");
+        },
+        onEnd: () => {
+          if (notebookSttRef.current !== session) return;
           notebookSttRef.current = null;
           setNotebookSttStatus("idle");
-        }
-      };
-      notebookSttRef.current = { kind: "browser", recognition };
-      setNotebookSttStatus("listening");
-      try { recognition.start(); } catch (error) {
-        notebookSttRef.current = null;
-        setNotebookSttStatus("idle");
-        setNotebookSttError(error.message || "Could not start speech recognition.");
-      }
-      return;
-    }
-
-    if (!navigator.mediaDevices?.getUserMedia || !window.RTCPeerConnection) {
-      setNotebookSttError("OpenAI speech input is unavailable on this device.");
-      return;
-    }
-    try {
-      notebookSttRef.current = { kind: "starting", startId };
-      setNotebookSttStatus("listening");
-      const tokenResponse = await authFetch(apiUrl("/api/ai/realtime-token"), { method: "POST" });
-      const tokenData = await tokenResponse.json().catch(() => ({}));
-      if (!tokenResponse.ok || !tokenData.value) {
-        throw new Error(tokenData?.error?.message || tokenData?.error || "Could not start realtime speech input.");
-      }
-      if (notebookSttStartIdRef.current !== startId) return;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (notebookSttStartIdRef.current !== startId) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      const peerConnection = new RTCPeerConnection();
-      stream.getTracks().forEach((track) => peerConnection.addTrack(track, stream));
-      const dataChannel = peerConnection.createDataChannel("oai-events");
-      const session = { kind: "openai-realtime", startId, peerConnection, dataChannel, stream, insertedText: false };
-      notebookSttRef.current = session;
-      dataChannel.addEventListener("open", () => {
-        dataChannel.send(JSON.stringify({
-          type: "session.update",
-          session: {
-            type: "transcription",
-            audio: {
-              input: {
-                format: { type: "audio/pcm", rate: 24000 },
-                transcription: { model: normalizeOpenAiSttModel(settings.model) },
-                turn_detection: { type: "server_vad" },
-              },
-            },
-          },
-        }));
+        },
       });
-      dataChannel.addEventListener("message", (event) => {
-        let message;
-        try { message = JSON.parse(event.data); } catch { return; }
-        if (message.type === "conversation.item.input_audio_transcription.delta") {
-          const delta = String(message.delta || "");
-          if (!delta) return;
-          setNotebookText((current) => {
-            const separator = !session.insertedText && current && !/\s$/.test(current) ? " " : "";
-            session.insertedText = true;
-            return `${current}${separator}${delta}`;
-          });
-        } else if (message.type === "conversation.item.input_audio_transcription.completed" && !session.insertedText) {
-          appendNotebookSpeech(message.transcript);
-        } else if (message.type === "error") {
-          setNotebookSttError(message.error?.message || "Realtime speech recognition failed.");
-        }
-      });
-      const offer = await peerConnection.createOffer();
-      await peerConnection.setLocalDescription(offer);
-      if (notebookSttStartIdRef.current !== startId) {
-        dataChannel.close();
-        peerConnection.close();
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      const sdpResponse = await fetch("https://api.openai.com/v1/realtime/calls", {
-        method: "POST",
-        body: offer.sdp,
-        headers: { Authorization: `Bearer ${tokenData.value}`, "Content-Type": "application/sdp" },
-      });
-      if (!sdpResponse.ok) throw new Error("Could not connect to realtime speech input.");
-      await peerConnection.setRemoteDescription({ type: "answer", sdp: await sdpResponse.text() });
-      if (notebookSttStartIdRef.current !== startId || notebookSttRef.current !== session) {
-        dataChannel.close();
-        peerConnection.close();
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      setNotebookSttStatus("listening");
+      if (notebookSttRef.current !== session) session.controller.abort?.();
+      else if (session.stopping) session.controller.stop?.();
     } catch (error) {
-      const session = notebookSttRef.current;
-      session?.dataChannel?.close?.();
-      session?.peerConnection?.close?.();
-      session?.stream?.getTracks().forEach((track) => track.stop());
-      notebookSttRef.current = null;
+      if (notebookSttRef.current === session) notebookSttRef.current = null;
       setNotebookSttStatus("idle");
       if (notebookSttStartIdRef.current === startId) {
-        setNotebookSttError(error.name === "NotAllowedError" ? "Microphone access was denied." : error.message || "Could not start speech input.");
+        setNotebookSttError(error.message || "Could not start speech recognition.");
       }
     }
-  }, [appendNotebookSpeech, stopNotebookStt]);
+  }, [manualSelection, notebookCaretOffset, notebookText, stopNotebookStt]);
   useEffect(() => () => stopNotebookStt(), [stopNotebookStt]);
   const [mdLineSpacing, setMdLineSpacing] = useState(0);
   const [mdSpacingTarget, setMdSpacingTarget] = useState("str");
@@ -3369,8 +3749,10 @@ const PDFPage = forwardRef(({
   const [pymupdfExtractionBusy, setPymupdfExtractionBusy] = useState(false);
   const pymupdfPendingExtractionRef = useRef(null);
   const pymupdfDocumentIdRef = useRef(null);
+  const [pymupdfDocumentId, setPymupdfDocumentId] = useState("");
   const pymupdfSourceIdRef = useRef(null);
   const pymupdfPageCacheRef = useRef(new Map());
+  const forensicPageCacheRef = useRef(new Map());
   const [entityBuilderOmittedRawCategories, setEntityBuilderOmittedRawCategories] = useState(() => new Set());
   const [entityBuilderVisualFocusId, setEntityBuilderVisualFocusId] = useState(null);
   const [entityBuilderRawBlankPageMeta, setEntityBuilderRawBlankPageMeta] = useState({ pageWidth: 0, pageHeight: 0, viewportScale: 0, pageRotation: 0, mediaBox: [] });
@@ -3409,19 +3791,33 @@ const PDFPage = forwardRef(({
             throw new Error("The PDF document identity could not be resolved.");
           }
           pymupdfDocumentIdRef.current = resolvedDocumentId;
+          setPymupdfDocumentId(resolvedDocumentId);
           pymupdfSourceIdRef.current = sourceId;
           pymupdfPageCacheRef.current = new Map();
+          forensicPageCacheRef.current = new Map();
         }
         if (!/^[a-f\d]{24}$/i.test(String(pymupdfDocumentIdRef.current || "").trim())) {
           throw new Error("The PDF document identity is unavailable.");
         }
-        const cached = pymupdfPageCacheRef.current.get(pageNum);
-        const cachedSpans = Array.isArray(cached?.native?.spans) ? cached.native.spans : [];
-        const cachedHasGlyphGeometry = cachedSpans.some((span) => Array.isArray(span?.chars));
-        const extraction = cachedHasGlyphGeometry
-          ? cached
+        const cachedEntry = pymupdfPageCacheRef.current.get(pageNum);
+        const cacheIsFresh = cachedEntry
+          && (!cachedEntry.retryAfter || Date.now() < cachedEntry.retryAfter);
+        const extraction = cacheIsFresh
+          ? cachedEntry.data
           : await getPageExtractionEvidence(pymupdfDocumentIdRef.current, pageNum, { nativeOnly: true });
-        if (!cachedHasGlyphGeometry) pymupdfPageCacheRef.current.set(pageNum, extraction);
+        if (!cacheIsFresh) {
+          // The backend intentionally returns { ok:false } with HTTP 200 when
+          // the optional native service is unavailable. Cache that fallback
+          // briefly too; otherwise every harmless component/effect restart
+          // immediately retries the same failed extraction.
+          pymupdfPageCacheRef.current.set(pageNum, {
+            data: extraction,
+            retryAfter: extraction?.ok === false ? Date.now() + 30000 : 0,
+          });
+          while (pymupdfPageCacheRef.current.size > 12) {
+            pymupdfPageCacheRef.current.delete(pymupdfPageCacheRef.current.keys().next().value);
+          }
+        }
         if (!cancelled) {
           // Never rebuild token text under a finger. Hold a late native
           // response until the selection handle is released, then create a
@@ -3437,7 +3833,7 @@ const PDFPage = forwardRef(({
     };
     void loadPyMuPDF();
     return () => { cancelled = true; };
-  }, [filename, hasSourceId, pageCount, pageNum, pdfType]);
+  }, [filename, hasSourceId, pageCount, pageNum]);
 
   const entityBuilderFilteredRawRows = useMemo(() => {
     const query = entityBuilderRawValueQuery.trim().toLocaleLowerCase();
@@ -3914,6 +4310,399 @@ const PDFPage = forwardRef(({
     }).filter(Boolean);
   }, [entityBuilderRawBlankPageRows, entityBuilderVisualRawRows, entityBuilderOmittedRawCategories, entityBuilderRawSpatialMetadata]);
 
+  const activePageReconstruction = useMemo(() => reconstructDocument({
+    documentId: embeddedSourceId || undefined,
+    fileName: filename || embeddedPdfName || "PDF document",
+    pages: entityBuilderRawBlankPageRows.length ? [{
+      pageIndex: Math.max(0, pageNum - 1),
+      width: Number(entityBuilderRawBlankPageMeta.pageWidth) || 0,
+      height: Number(entityBuilderRawBlankPageMeta.pageHeight) || 0,
+      items: entityBuilderRawBlankPageRows.map((row) => ({
+        str: String(row.value || ""),
+        dir: row.direction || "ltr",
+        width: Number(row.rawWidth) || Number(row.width) || 0,
+        height: Number(row.rawHeight) || Number(row.height) || Number(row.fontSize) || 0,
+        transform: [row.matrixA, row.matrixB, row.matrixC, row.matrixD, row.matrixE, row.matrixF].map((value) => Number(value) || 0),
+        fontName: row.fontName || "unknown",
+        hasEOL: Boolean(row.eol),
+      })),
+    }] : [],
+    outlines: pdfCustomOutlines,
+    documentFormAssignments: manualDocumentFormAssignments,
+    config: { linguisticScope: "manual-physical-blocks" },
+  }), [embeddedPdfName, embeddedSourceId, entityBuilderRawBlankPageMeta.pageHeight, entityBuilderRawBlankPageMeta.pageWidth, entityBuilderRawBlankPageRows, filename, manualDocumentFormAssignments, pageNum, pdfCustomOutlines]);
+  const documentReconstruction = wholeDocumentReconstruction || activePageReconstruction;
+  const effectiveDocumentTreeSelectedId = documentTreeSelectedId || documentReconstruction.source.id;
+  useEffect(() => { setDocumentTreeRasterEvidence(null); }, [effectiveDocumentTreeSelectedId]);
+  const documentTreeExplanation = useMemo(
+    () => explainResolution(documentReconstruction, effectiveDocumentTreeSelectedId),
+    [documentReconstruction, effectiveDocumentTreeSelectedId],
+  );
+  const documentTreeRootPath = useMemo(
+    () => getLogicalRootPath(documentReconstruction, effectiveDocumentTreeSelectedId),
+    [documentReconstruction, effectiveDocumentTreeSelectedId],
+  );
+  const documentTreeSelectedPathIds = useMemo(() => new Set(documentTreeRootPath.map((entry) => entry.id)), [documentTreeRootPath]);
+  const documentTreePhysicalEvidence = useMemo(
+    () => getPhysicalEvidence(documentReconstruction, effectiveDocumentTreeSelectedId),
+    [documentReconstruction, effectiveDocumentTreeSelectedId],
+  );
+  const documentTreeComparison = useMemo(
+    () => compareSourceAndResolved(documentReconstruction, effectiveDocumentTreeSelectedId),
+    [documentReconstruction, effectiveDocumentTreeSelectedId],
+  );
+  const documentTreeEvidence = useMemo(
+    () => getEvidenceForEntity(documentReconstruction, effectiveDocumentTreeSelectedId),
+    [documentReconstruction, effectiveDocumentTreeSelectedId],
+  );
+  const documentTreeEffectiveEntity = useMemo(
+    () => getEffectiveEntity(documentReconstruction, effectiveDocumentTreeSelectedId),
+    [documentReconstruction, effectiveDocumentTreeSelectedId],
+  );
+  useEffect(() => { setManualCharacterCandidate(""); }, [effectiveDocumentTreeSelectedId]);
+  const reviewCharacterAmbiguity = useCallback((action, selectedValue = null) => {
+    if (!wholeDocumentReconstruction || !documentTreeEvidence?.character) return;
+    const character = documentTreeEvidence.character;
+    const conflict = documentTreeEvidence.conflicts?.find((entry) => entry.type === "CHARACTER_IDENTITY_CONFLICT");
+    const nextValue = action === "leave-unresolved" ? character.value : selectedValue ?? character.value;
+    const updated = applyManualResolution(wholeDocumentReconstruction, {
+      targetId: character.id,
+      action,
+      previousState: { deterministicValue: character.value, conflictStatus: conflict?.status || null },
+      newState: { value: nextValue, candidateSelected: selectedValue, conflictId: conflict?.id || null },
+      note: "Character ambiguity review",
+    });
+    const resolution = updated.manualResolutions.at(-1);
+    setWholeDocumentReconstruction(updated);
+    void (async () => {
+      try {
+        const persisted = await documentPersistencePromiseRef.current;
+        if (persisted?.run?._id) await persistManualResolution({ runId: persisted.run._id, resolution });
+      } catch {
+        setDocumentExtractionState((state) => ({ ...state, manualPersistenceStatus: "error" }));
+      }
+    })();
+  }, [documentTreeEvidence, wholeDocumentReconstruction]);
+  const reviewDocumentBoundary = useCallback((boundary, action, decision) => {
+    if (!wholeDocumentReconstruction || !boundary) return;
+    const updated = applyManualResolution(wholeDocumentReconstruction, {
+      targetId: boundary.id, action,
+      previousState: { decision: boundary.decision, status: boundary.status },
+      newState: { decision, boundaryType: boundary.boundaryType },
+      note: `${boundary.boundaryType} boundary review`,
+    });
+    const resolution = updated.manualResolutions.at(-1);
+    setWholeDocumentReconstruction(updated);
+    void (async () => {
+      try {
+        const persisted = await documentPersistencePromiseRef.current;
+        if (persisted?.run?._id) await persistManualResolution({ runId: persisted.run._id, resolution });
+      } catch {
+        setDocumentExtractionState((state) => ({ ...state, manualPersistenceStatus: "error" }));
+      }
+    })();
+  }, [wholeDocumentReconstruction]);
+  const documentTreeEvidenceRects = useMemo(() => {
+    const physicalPage = documentReconstruction.physical.pages.find((page) => page.pageIndex === pageNum - 1);
+    const sourcePageWidth = Number(physicalPage?.width || entityBuilderRawBlankPageMeta.pageWidth);
+    const sourcePageHeight = Number(physicalPage?.height || entityBuilderRawBlankPageMeta.pageHeight);
+    if (!sentenceTreeOpen || !pageViewport || !sourcePageWidth) return [];
+    const scale = pageViewport.width / Math.max(1, sourcePageWidth);
+    return documentTreePhysicalEvidence
+      .filter((ref) => ref.pageIndex === pageNum - 1 && Number.isFinite(Number(ref.x)) && Number.isFinite(Number(ref.y)))
+      .map((ref, index) => {
+        const sourceY = Number(ref.y);
+        const sourceHeight = Number(ref.height || 0);
+        const top = sourceY + sourceHeight <= 0 && sourcePageHeight ? sourceY + sourcePageHeight : sourceY;
+        return {
+          id: `${ref.textItemId || "source"}-${ref.charOffsetStart ?? index}-${index}`,
+          left: Number(ref.x) * scale,
+          top: top * scale,
+          width: Math.max(1, Number(ref.width || 0) * scale),
+          height: Math.max(1, sourceHeight * scale),
+        };
+      });
+  }, [documentReconstruction.physical.pages, documentTreePhysicalEvidence, entityBuilderRawBlankPageMeta.pageHeight, entityBuilderRawBlankPageMeta.pageWidth, pageNum, pageViewport, sentenceTreeOpen]);
+  const documentTreeParagraphBoundaryRects = useMemo(() => {
+    const physicalPage = documentReconstruction.physical.pages.find((page) => page.pageIndex === pageNum - 1);
+    const sourcePageWidth = Number(physicalPage?.width || entityBuilderRawBlankPageMeta.pageWidth);
+    const sourcePageHeight = Number(physicalPage?.height || entityBuilderRawBlankPageMeta.pageHeight);
+    if (!sentenceTreeOpen || !pageViewport || !sourcePageWidth || !documentTreeEvidence?.entity?.lineIds) return [];
+    const scale = pageViewport.width / Math.max(1, sourcePageWidth);
+    const lines = new Map((physicalPage?.regions || []).flatMap((region) => region.lines.map((line) => [line.id, line])));
+    return (documentTreeEvidence.boundaries || []).filter((boundary) => boundary.boundaryType === "paragraph" && boundary.decision === "new-paragraph").map((boundary) => {
+      const nextLine = lines.get(boundary.nextLineId); if (!nextLine) return null;
+      const sourceTop = Number(nextLine.yTop);
+      const sourceLineHeight = Number(nextLine.yBottom) - sourceTop;
+      const top = sourceTop + sourceLineHeight <= 0 && sourcePageHeight ? sourceTop + sourcePageHeight : sourceTop;
+      return { id: boundary.id, ruleId: boundary.ruleId, left: Number(nextLine.xStart) * scale, top: Math.max(0, top * scale - 2), width: Math.max(12, (Number(nextLine.xEnd) - Number(nextLine.xStart)) * scale), height: 4 };
+    }).filter(Boolean);
+  }, [documentReconstruction.physical.pages, documentTreeEvidence, entityBuilderRawBlankPageMeta.pageHeight, entityBuilderRawBlankPageMeta.pageWidth, pageNum, pageViewport, sentenceTreeOpen]);
+  useEffect(() => {
+    const runId = backendReconstructionState.run?._id;
+    if (!sentenceTreeOpen || !runId || !["saved", "backend"].includes(backendReconstructionState.mode)) { setPersistedPhysicalPage(null); return undefined; }
+    let cancelled = false;
+    void getDocumentReconstructionPhysicalLines(runId, pageNum - 1).then(({ page }) => {
+      if (!cancelled) setPersistedPhysicalPage({ runId: String(runId), page });
+    }).catch(() => { if (!cancelled) setPersistedPhysicalPage(null); });
+    return () => { cancelled = true; };
+  }, [backendReconstructionState.mode, backendReconstructionState.run?._id, backendReconstructionState.run?.updatedAt, pageNum, sentenceTreeOpen]);
+  const currentPhysicalLines = useMemo(() => {
+    const runId = String(backendReconstructionState.run?._id || "");
+    if (persistedPhysicalPage?.runId === runId && persistedPhysicalPage.page?.pageIndex === pageNum - 1) return persistedPhysicalPage.page.physicalLines?.length ? persistedPhysicalPage.page.physicalLines : persistedPhysicalPage.page.lines || [];
+    return (documentReconstruction.physical?.lines || []).filter((line) => line.pageIndex === pageNum - 1);
+  }, [backendReconstructionState.run?._id, documentReconstruction.physical, pageNum, persistedPhysicalPage]);
+  const physicalLineRects = useMemo(() => {
+    const physicalPage = documentReconstruction.physical.pages.find((page) => page.pageIndex === pageNum - 1);
+    const persistedPage = persistedPhysicalPage?.page?.pageIndex === pageNum - 1 ? persistedPhysicalPage.page : null;
+    const sourcePageWidth = Number(physicalPage?.width || persistedPage?.width || entityBuilderRawBlankPageMeta.pageWidth);
+    const sourcePageHeight = Number(physicalPage?.height || persistedPage?.height || entityBuilderRawBlankPageMeta.pageHeight);
+    if (!sentenceTreeOpen || !pageViewport || !sourcePageWidth) return [];
+    const scale = pageViewport.width / Math.max(1, sourcePageWidth);
+    return currentPhysicalLines.map((line) => {
+      const sourceY = Number(line.bbox?.y || 0);
+      const sourceHeight = Number(line.bbox?.height || 0);
+      // Browser reconstructions saved before the viewport-transform fix use
+      // Y-up-derived negative coordinates. Repair those records at display
+      // time so users do not need to reconstruct the page again.
+      const top = sourceY + sourceHeight <= 0 && sourcePageHeight ? sourceY + sourcePageHeight : sourceY;
+      return {
+        ...line,
+        left: Number(line.bbox?.x || 0) * scale,
+        top: top * scale,
+        width: Math.max(2, Number(line.bbox?.width || 0) * scale),
+        height: Math.max(2, sourceHeight * scale),
+      };
+    });
+  }, [currentPhysicalLines, documentReconstruction.physical.pages, entityBuilderRawBlankPageMeta.pageHeight, entityBuilderRawBlankPageMeta.pageWidth, pageNum, pageViewport, persistedPhysicalPage, sentenceTreeOpen]);
+  const meaningSourceItemRects = useMemo(() => {
+    if (!sentenceTreeOpen || !pageViewport || meaningAnalysis?.pageIndex !== pageNum - 1) return [];
+    const pageWidth = Number(meaningAnalysis.coordinateMap?.pageWidth) || pageViewport.width;
+    const pageHeight = Number(meaningAnalysis.coordinateMap?.pageHeight) || pageViewport.height;
+    const scaleX = pageViewport.width / Math.max(1, pageWidth);
+    const scaleY = pageViewport.height / Math.max(1, pageHeight);
+    return (meaningAnalysis.sourceItems || []).flatMap((item) => item?.bbox ? [{ id: item.id, left: Number(item.bbox.x) * scaleX, top: Number(item.bbox.y) * scaleY, width: Math.max(2, Number(item.bbox.width) * scaleX), height: Math.max(2, Number(item.bbox.height) * scaleY) }] : []);
+  }, [meaningAnalysis, pageNum, pageViewport, sentenceTreeOpen]);
+  const assignedPhysicalLineIds = useMemo(() => new Set(manualDocumentFormAssignments.flatMap((assignment) => assignment.lineIds || [])), [manualDocumentFormAssignments]);
+  const manualPhysicalBlockRects = useMemo(() => {
+    const lineRectById = new Map(physicalLineRects.map((line) => [line.id, line]));
+    const pending = manualDocumentFormAssignments.filter((assignment) => (
+      assignment.kind === "manual-physical-block"
+      || assignment.kind === "ai-physical-block"
+      || assignment.source === "ai"
+    ));
+    const saved = (persistedPhysicalPage?.page?.physicalBlocks || []).filter((block) => block.createdBy === "user" || block.source === "manual" || block.createdBy === "ai" || block.source === "ai");
+    const byId = new Map([...saved.map((block) => [block.id, { ...block, persisted: true }]), ...pending.map((block) => [block.manualPhysicalBlockId || block.id, { ...block, persisted: false }])]);
+    return [...byId.values()].map((block) => {
+      const members = (block.lineIds || []).map((id) => lineRectById.get(id)).filter(Boolean);
+      if (!members.length) return null;
+      const left = Math.min(...members.map((line) => line.left));
+      const top = Math.min(...members.map((line) => line.top));
+      const right = Math.max(...members.map((line) => line.left + line.width));
+      const bottom = Math.max(...members.map((line) => line.top + line.height));
+      return { ...block, left, top, width: right - left, height: bottom - top };
+    }).filter(Boolean);
+  }, [manualDocumentFormAssignments, persistedPhysicalPage, physicalLineRects]);
+  const togglePhysicalBlockSelection = useCallback((blockId, additive = false) => {
+    setSelectedPhysicalBlockIds((current) => {
+      if (!additive) return current.length === 1 && current[0] === blockId ? [] : [blockId];
+      return current.includes(blockId) ? current.filter((id) => id !== blockId) : [...current, blockId];
+    });
+  }, []);
+  const createManualPhysicalBlock = useCallback((lineIds) => {
+    const selectedIds = new Set(lineIds);
+    const orderedLines = currentPhysicalLines.filter((line) => selectedIds.has(line.id));
+    if (!orderedLines.length) return;
+    const orderedLineIds = orderedLines.map((line) => line.id);
+    const id = `manual-physical-block-selection-${deterministicHash([pageNum - 1, orderedLineIds])}`;
+    const assignment = {
+        id,
+        manualPhysicalBlockId: id,
+        kind: "manual-physical-block",
+        type: "PHYSICAL_BLOCK",
+        label: "Unified discourse",
+        purpose: "unified-discourse-meaning",
+        createDocumentForm: false,
+        lineIds: orderedLineIds,
+        bboxes: orderedLines.map((line) => ({ pageIndex: line.pageIndex, ...line.bbox })),
+        source: "manual",
+      };
+    if (documentReconstructionRunRef.current) documentReconstructionRunRef.current.cancelled = true;
+    documentReconstructionRunRef.current = null;
+    documentPersistencePromiseRef.current = null;
+    setManualDocumentFormAssignments([assignment]);
+    setWholeDocumentReconstruction(null);
+    setRabbitHoleSaveState({ status: "idle", message: "", runId: null });
+    setSavedPageLookupState({ pageIndex: pageNum - 1, status: "missing", error: "" });
+    setDocumentExtractionState((state) => ({ ...state, status: "idle", error: "" }));
+    setBackendReconstructionState({
+      status: "browser-ready",
+      mode: "browser",
+      run: null,
+      root: null,
+      error: "",
+      estimate: { pageCount: 1, pageIndexes: [Math.max(0, pageNum - 1)] },
+      reason: "manual-physical-block-created",
+    });
+    setSelectedPhysicalBlockIds(orderedLineIds);
+    setPhysicalBlockToolActive(false);
+  }, [currentPhysicalLines, pageNum]);
+
+  const analyzePhysicalBlocksWithAI = useCallback(async () => {
+    if (aiPhysicalBlockBusy || !pdfDoc) return;
+    setAiPhysicalBlockBusy(true);
+    setAiPhysicalBlockProgress({ status: "running", step: 1, candidateCount: 0, persistenceProgress: 0, message: "Loading immutable PDF.js textItems…", error: "" });
+    setRabbitHoleSaveState({ status: "saving", message: "Preparing visual and semantic MeaningBlock analysis…", runId: null });
+    try {
+      setMeaningAnalysis(null);
+      setMeaningAnalysisTab("source");
+      const preparation = await prepareMeaningBlockPage({ pdfDoc, pageNumber: pageNum });
+      setAiPhysicalBlockProgress((state) => ({ ...state, step: 4, message: `Prepared clean and source-ID overlay images for ${preparation.sourceItems.length} textItems.` }));
+      let documentId = pymupdfDocumentIdRef.current;
+      if (!/^[a-f\d]{24}$/i.test(String(documentId || ""))) {
+        documentId = await resolveDocumentId({ filename: filename || embeddedPdfName || "PDF document", pageCount: Number(pdfDoc.numPages) || 1, type: pdfType || "text-based", sourceId: currentSourceIdRef.current || embeddedSourceId || undefined });
+        pymupdfDocumentIdRef.current = documentId;
+      }
+      setAiPhysicalBlockProgress((state) => ({ ...state, step: 5, message: `Running whole-page visual analysis with ${provider}…` }));
+      const visualResult = await runVisualMeaningAnalysis({
+        documentId, pageIndex: pageNum - 1, provider, model: aiProviderModels[provider] || "", preparation,
+      });
+      setMeaningAnalysis(visualResult.analysis);
+      setMeaningAnalysisTab("visual");
+      setAiPhysicalBlockProgress((state) => ({ ...state, step: 8, message: `Visual evidence validated: ${visualResult.analysis.visualAnalysis?.visualLines?.length || 0} visual lines. Running semantic boundary analysis…` }));
+      const semanticResult = await runSemanticMeaningAnalysis(visualResult.analysis.id, { provider, model: aiProviderModels[provider] || "" });
+      const analysis = semanticResult.analysis;
+      setMeaningAnalysis(analysis);
+      setMeaningAnalysisTab("result");
+      const sourceIds = analysis.meaningBlocks?.flatMap((block) => block.textItemIds || []) || [];
+      setSelectedPhysicalBlockIds(sourceIds);
+      setAiPhysicalBlockProgress({ status: "complete", step: 11, candidateCount: analysis.meaningBlocks?.length || 0, persistenceProgress: 100, message: "MeaningBlockCandidates and all intermediate evidence are saved.", error: "" });
+      setRabbitHoleSaveState({ status: "saved", message: "AI meaning analysis saved · source, visual, semantic, and result evidence verified", runId: analysis.id });
+    } catch (error) {
+      setAiPhysicalBlockProgress((state) => ({ ...state, status: "failed", message: "AI MeaningBlock analysis failed.", error: error?.message || "Unknown error" }));
+      setRabbitHoleSaveState({ status: "error", message: error?.message || "AI MeaningBlock analysis failed.", runId: null });
+    } finally {
+      setAiPhysicalBlockBusy(false);
+    }
+  }, [aiPhysicalBlockBusy, aiProviderModels, embeddedPdfName, embeddedSourceId, filename, pageNum, pdfDoc, pdfType, provider]);
+
+  const modifyMeaningBlock = useCallback(async (blockId, update) => {
+    if (!meaningAnalysis?.id || aiPhysicalBlockBusy) return;
+    setAiPhysicalBlockBusy(true);
+    try {
+      const { analysis } = await updateMeaningBlock(meaningAnalysis.id, blockId, update);
+      setMeaningAnalysis(analysis);
+    } catch (error) {
+      setAiPhysicalBlockProgress((state) => ({ ...state, status: "failed", message: "MeaningBlock update failed.", error: error?.message || "Could not update MeaningBlock." }));
+    } finally {
+      setAiPhysicalBlockBusy(false);
+    }
+  }, [aiPhysicalBlockBusy, meaningAnalysis?.id]);
+
+  const modifyMeaningBoundary = useCallback(async (previousUnitId, nextUnitId, decision) => {
+    if (!meaningAnalysis?.id || aiPhysicalBlockBusy) return;
+    setAiPhysicalBlockBusy(true);
+    try {
+      const { analysis } = await updateMeaningBoundary(meaningAnalysis.id, previousUnitId, nextUnitId, decision);
+      setMeaningAnalysis(analysis);
+      setMeaningAnalysisTab("result");
+    } catch (error) {
+      setAiPhysicalBlockProgress((state) => ({ ...state, status: "failed", message: "Meaning boundary update failed.", error: error?.message || "Could not update meaning boundary." }));
+    } finally {
+      setAiPhysicalBlockBusy(false);
+    }
+  }, [aiPhysicalBlockBusy, meaningAnalysis?.id]);
+
+  const rerunMeaningSemantics = useCallback(async () => {
+    if (!meaningAnalysis?.id || aiPhysicalBlockBusy) return;
+    setAiPhysicalBlockBusy(true);
+    setAiPhysicalBlockProgress({ status: "running", step: 7, candidateCount: 0, persistenceProgress: 0, message: "Reusing saved visual evidence and rebuilding the semantic payload…", error: "" });
+    try {
+      setAiPhysicalBlockProgress((state) => ({ ...state, step: 8, message: `Rerunning semantic boundary analysis with ${provider}…` }));
+      const { analysis } = await runSemanticMeaningAnalysis(meaningAnalysis.id, { provider, model: aiProviderModels[provider] || "" });
+      setMeaningAnalysis(analysis);
+      setMeaningAnalysisTab("result");
+      setAiPhysicalBlockProgress({ status: "complete", step: 11, candidateCount: analysis.meaningBlocks?.length || 0, persistenceProgress: 100, message: "Semantic evidence and MeaningBlockCandidates were refreshed without rerunning visual AI.", error: "" });
+    } catch (error) {
+      setAiPhysicalBlockProgress((state) => ({ ...state, status: "failed", message: "Semantic-only rerun failed.", error: error?.message || "Could not rerun semantics." }));
+    } finally {
+      setAiPhysicalBlockBusy(false);
+    }
+  }, [aiPhysicalBlockBusy, aiProviderModels, meaningAnalysis?.id, provider]);
+
+  const deleteCurrentMeaningAnalysis = useCallback(async () => {
+    if (!meaningAnalysis?.id || !window.confirm("Delete this saved AI MeaningBlock analysis and all of its visual and semantic evidence?")) return;
+    setRabbitHoleSaveState((state) => ({ ...state, status: "deleting", message: "Deleting AI meaning analysis…" }));
+    try {
+      await deleteMeaningAnalysis(meaningAnalysis.id);
+      setMeaningAnalysis(null);
+      setSelectedPhysicalBlockIds([]);
+      setAiPhysicalBlockProgress({ status: "idle", step: 0, candidateCount: 0, persistenceProgress: 0, message: "", error: "" });
+      setRabbitHoleSaveState({ status: "idle", message: "", runId: null });
+    } catch (error) {
+      setRabbitHoleSaveState((state) => ({ ...state, status: "error", message: error?.message || "Could not delete AI meaning analysis." }));
+    }
+  }, [meaningAnalysis?.id]);
+
+  const beginPhysicalBlockSelection = useCallback((event) => {
+    if (!physicalBlockToolActive || event.button !== 0) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = clamp(event.clientX - bounds.left, 0, bounds.width);
+    const y = clamp(event.clientY - bounds.top, 0, bounds.height);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    setPhysicalBlockSelectionDrag({ pointerId: event.pointerId, startX: x, startY: y, left: x, top: y, width: 0, height: 0 });
+  }, [physicalBlockToolActive]);
+
+  const movePhysicalBlockSelection = useCallback((event) => {
+    if (!physicalBlockSelectionDrag || event.pointerId !== physicalBlockSelectionDrag.pointerId) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = clamp(event.clientX - bounds.left, 0, bounds.width);
+    const y = clamp(event.clientY - bounds.top, 0, bounds.height);
+    event.preventDefault();
+    setPhysicalBlockSelectionDrag((current) => current && current.pointerId === event.pointerId ? {
+      ...current,
+      left: Math.min(current.startX, x),
+      top: Math.min(current.startY, y),
+      width: Math.abs(x - current.startX),
+      height: Math.abs(y - current.startY),
+    } : current);
+  }, [physicalBlockSelectionDrag]);
+
+  const finishPhysicalBlockSelection = useCallback((event) => {
+    if (!physicalBlockSelectionDrag || event.pointerId !== physicalBlockSelectionDrag.pointerId) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = clamp(event.clientX - bounds.left, 0, bounds.width);
+    const y = clamp(event.clientY - bounds.top, 0, bounds.height);
+    const selection = {
+      left: Math.min(physicalBlockSelectionDrag.startX, x),
+      top: Math.min(physicalBlockSelectionDrag.startY, y),
+      width: Math.abs(x - physicalBlockSelectionDrag.startX),
+      height: Math.abs(y - physicalBlockSelectionDrag.startY),
+    };
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    event.preventDefault();
+    setPhysicalBlockSelectionDrag(null);
+    if (selection.width < 4 || selection.height < 4) return;
+    const right = selection.left + selection.width;
+    const bottom = selection.top + selection.height;
+    const lineIds = physicalLineRects.filter((line) => (
+      line.left < right && line.left + line.width > selection.left
+      && line.top < bottom && line.top + line.height > selection.top
+    )).map((line) => line.id);
+    createManualPhysicalBlock(lineIds);
+  }, [createManualPhysicalBlock, physicalBlockSelectionDrag, physicalLineRects]);
+
+  useEffect(() => {
+    if (sentenceTreeOpen) return;
+    setPhysicalBlockToolActive(false);
+    setPhysicalBlockSelectionDrag(null);
+  }, [sentenceTreeOpen]);
+
+  useEffect(() => {
+    setPhysicalBlockSelectionDrag(null);
+  }, [pageNum]);
+
   const entityBuilderVisualRawTextScale = useMemo(() => {
     if (typeof document === "undefined") return 1;
     const canvas = document.createElement("canvas");
@@ -4157,6 +4946,9 @@ const PDFPage = forwardRef(({
       return nextOpen;
     });
   }, []);
+  const toggleGlyphCharAside = useCallback(() => {
+    setGlyphCharAsideOpen((open) => !open);
+  }, []);
   const toggleOcrBlankPage = useCallback(() => {
     setEntityBuilderOcrBlankPageOpen((open) => !open);
     setEntityBuilderOcrBlankPageError("");
@@ -4184,7 +4976,12 @@ const PDFPage = forwardRef(({
     setMarkdownModeMenuOpen(true);
   }, [markdownAsideOpen, markdownModeMenuOpen]);
   const setMarkdownMode = useCallback((mode) => {
+    if (mode === "forensics" && markdownAsideOpen && markdownAsideMode === mode) {
+      setMarkdownAsideOpen(false);
+      return;
+    }
     setReadingMode("single");
+    setSentenceTreeOpen(false);
     if (mode === "md-only") {
       setMarkdownRetainedVisualMode(null);
       setMarkdownAsideMode("visual-only");
@@ -4194,10 +4991,25 @@ const PDFPage = forwardRef(({
     } else if (mode === "md-analyser") {
       setMarkdownRetainedVisualMode((current) => markdownAsideMode.includes("visual") ? markdownAsideMode : current);
       setMarkdownAsideMode("raw");
+    } else if (mode === "forensics") {
+      setMarkdownRetainedVisualMode(null);
+      setMarkdownAsideMode("forensics");
     }
     setMarkdownModeMenuOpen(false);
     setMarkdownAsideOpen(true);
-  }, [markdownAsideMode]);
+  }, [markdownAsideMode, markdownAsideOpen]);
+  const toggleSentenceTree = useCallback(() => {
+    setSentenceTreeOpen((open) => {
+      const nextOpen = !open;
+      if (nextOpen) {
+        setReadingMode("single");
+        setMarkdownAsideOpen(false);
+        setMarkdownModeMenuOpen(false);
+        setMarkdownRetainedVisualMode(null);
+      }
+      return nextOpen;
+    });
+  }, []);
   const setNotebookView = useCallback((mode) => {
     setReadingMode("single");
     setNotebookMode(mode);
@@ -4216,6 +5028,7 @@ const PDFPage = forwardRef(({
   const closeNotebook = useCallback(() => setNotebookMode(null), []);
   const setReaderReadingMode = useCallback((mode) => {
     setReadingMode(mode);
+    setSentenceTreeOpen(false);
     setMarkdownAsideOpen(false);
     setMarkdownModeMenuOpen(false);
     setMarkdownRetainedVisualMode(null);
@@ -4273,8 +5086,8 @@ const PDFPage = forwardRef(({
     [entityBuilderRawBlankPageMeta, entityBuilderRawBlankPageRows],
   );
 
-  // ── AMCTOSHS Hyle layers (floating button, bottom-left of the canvas) ───
-  // Per this app's own AMCTOSHS vocabulary — a word/page is Hyle
+  // ── RabbitHole Hyle layers (floating button, bottom-left of the canvas) ───
+  // Per this app's own RabbitHole vocabulary — a word/page is Hyle
   // (undifferentiated matter) until form is imposed on it. Two views onto
   // the CURRENT page's own text, computed purely client-side from PDF.js's
   // text items (pdfHyleStats.js) — no AI call, no backend round-trip,
@@ -4290,12 +5103,11 @@ const PDFPage = forwardRef(({
   //                 drawn as boxes + numbered markers (form actually
   //                 imposed on the page).
   const [hyleFabOpen, setHyleFabOpen] = useState(false);
-  const [annotationLayerTab, setAnnotationLayerTab] = useState("pdf");
+  const [visualModeName, setVisualModeName] = useState("");
   const activateAnnotationSurface = useCallback((surface) => {
     if (!surface) return;
     setActiveAnnotationSurface(surface);
     if (surface === "pdf" || surface === "md") {
-      setAnnotationLayerTab(surface);
       setAnnotHistorySource(surface);
     }
   }, []);
@@ -4334,10 +5146,44 @@ const PDFPage = forwardRef(({
   const [highlightMode,  setHighlightMode]  = useState(savedToolbarSettings.highlightMode); // "freehand" | "line"
   const [highlightAutoWidth, setHighlightAutoWidth] = useState(savedToolbarSettings.highlightAutoWidth);
   const [highlightTaperEnds, setHighlightTaperEnds] = useState(savedToolbarSettings.highlightTaperEnds);
-  const [highlightAutoContrast, setHighlightAutoContrast] = useState(savedToolbarSettings.highlightAutoContrast);
+  const [highlightStabilization, setHighlightStabilization] = useState(savedToolbarSettings.highlightStabilization);
   const [annotOpacity,      setAnnotOpacity]      = useState(savedToolbarSettings.annotOpacity);    // % — highlight fill opacity
   const [textFontFamily, setTextFontFamily] = useState(savedToolbarSettings.textFontFamily);
   const [textFontSize, setTextFontSize] = useState(savedToolbarSettings.textFontSize);
+
+  const lastPatinaPointerRef = useRef(0);
+  useEffect(() => {
+    const surface = canvasWrapRef.current;
+    if (!surface) return undefined;
+    const actionForTool = () => {
+      if (annotTool === "antiAgingEraser") return "antiAge";
+      if (annotTool === "eraser") return "erase";
+      if (["highlight", "underline", "strikethrough"].includes(annotTool)) return "highlight";
+      if (["pen", "smartPen", "freeshape", "line", "arrow", "rect", "circle"].includes(annotTool)) return "draw";
+      return "contact";
+    };
+    const recordPointer = (event, continuous = false) => {
+      const page = event.target?.closest?.(".pdf_page_container[data-page]");
+      if (!page) return;
+      const rect = page.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const now = performance.now();
+      if (continuous && now - lastPatinaPointerRef.current < 120) return;
+      lastPatinaPointerRef.current = now;
+      recordPagePatina(Number(page.dataset.page), actionForTool(), {
+        x: (event.clientX - rect.left) / rect.width,
+        y: (event.clientY - rect.top) / rect.height,
+      }, continuous ? 0.35 : 1);
+    };
+    const onDown = (event) => recordPointer(event);
+    const onMove = (event) => { if (event.buttons || event.pressure > 0) recordPointer(event, true); };
+    surface.addEventListener("pointerdown", onDown, true);
+    surface.addEventListener("pointermove", onMove, true);
+    return () => {
+      surface.removeEventListener("pointerdown", onDown, true);
+      surface.removeEventListener("pointermove", onMove, true);
+    };
+  }, [annotTool, recordPagePatina]);
 
   useLayoutEffect(() => {
     if (!notebookMode || notebookActiveTab !== "typing" || notebookControlMode) return;
@@ -4552,6 +5398,16 @@ const PDFPage = forwardRef(({
     return merged;
   }, [annotationLayersForView]);
   const visiblePageAnnotations = visibleAnnotations[pageNum] || [];
+  const vectorPenAnnotations = useMemo(() => (
+    visiblePageAnnotations
+      .filter((annotation) => annotation?.type === "pen")
+      .map((annotation, index) => ({
+        id: annotation.id || `pen-${index}`,
+        color: annotation.color || "#212529",
+        path: getPenAnnotationSvgPath(annotation),
+      }))
+      .filter((annotation) => annotation.path)
+  ), [visiblePageAnnotations]);
   const displayPageDescriptors = useMemo(() => {
     if (!pageNum) return [];
     const descriptors = (
@@ -4930,15 +5786,23 @@ const PDFPage = forwardRef(({
   const activateAnnotationLayer = useCallback((layerId) => {
     const nextLayer = annotationLayers.find((layer) => layer.id === layerId);
     if (!nextLayer || nextLayer.id === activeAnnotationLayerId) return;
+    setActiveAnnotationSurface("pdf");
+    setAnnotHistorySource("pdf");
     setActiveAnnotationLayerId(nextLayer.id);
     setAnnotations(nextLayer.annotations || {});
     setRedoStacks({});
   }, [annotationLayers, activeAnnotationLayerId]);
-  const addAnnotationLayer = useCallback(() => {
+  const addVisualMode = useCallback((requestedName = "") => {
     setAnnotationLayers((prev) => {
-      const nextLayer = createAnnotationLayer(prev.length + 1, {});
+      const fallbackName = `Visual Mode ${prev.length + 1}`;
+      const nextLayer = {
+        ...createAnnotationLayer(prev.length + 1, {}),
+        name: requestedName.trim() || fallbackName,
+      };
       const next = [...prev, nextLayer];
       setActiveAnnotationLayerId(nextLayer.id);
+      setActiveAnnotationSurface("pdf");
+      setAnnotHistorySource("pdf");
       setAnnotations(nextLayer.annotations);
       setRedoStacks({});
       setHyleFabOpen(true);
@@ -5096,27 +5960,36 @@ const PDFPage = forwardRef(({
       .filter((bbox) => bboxMatchesSpan(bbox, span))
       .sort((a, b) => (a.w * a.h) - (b.w * b.h))[0] || null;
   }, [bboxMatchesSpan, selectionBboxes]);
-  const annotColor = annotTool && DEFAULT_ANNOT_TOOL_COLORS[annotTool]
-    ? (annotToolColors[annotTool] || DEFAULT_ANNOT_TOOL_COLORS[annotTool])
+  // Keep the Shapes group usable before a concrete shape is selected by
+  // using the rectangle as its neutral settings target.
+  const shapeSettingsKey = SHAPE_TOOL_KEYS.includes(annotTool)
+    ? annotTool
+    : annotTool === "shapes"
+      ? "rect"
+      : null;
+  const annotSettingsKey = shapeSettingsKey || annotTool;
+  const annotColor = annotSettingsKey && DEFAULT_ANNOT_TOOL_COLORS[annotSettingsKey]
+    ? (annotToolColors[annotSettingsKey] || DEFAULT_ANNOT_TOOL_COLORS[annotSettingsKey])
     : "#ffff00";
   const textToolColor = annotToolColors.text || DEFAULT_ANNOT_TOOL_COLORS.text;
-  const activeToolColorPresets = annotTool && annotToolColorPresets[annotTool]
-    ? annotToolColorPresets[annotTool]
+  const activeToolColorPresets = annotSettingsKey && annotToolColorPresets[annotSettingsKey]
+    ? annotToolColorPresets[annotSettingsKey]
     : [];
   const activeToolColorPresetIndex = activeToolColorPresets.findIndex((color) => color === annotColor);
-  const activeShapeSettings = SHAPE_TOOL_KEYS.includes(annotTool)
-    ? (shapeToolSettings[annotTool] || DEFAULT_SHAPE_TOOL_SETTINGS[annotTool])
+  const activeShapeSettings = shapeSettingsKey
+    ? (shapeToolSettings[shapeSettingsKey] || DEFAULT_SHAPE_TOOL_SETTINGS[shapeSettingsKey])
     : null;
   const shapeStrokeWidth = activeShapeSettings?.strokeWidth || 2;
   const shapeBorderStyle = activeShapeSettings?.borderStyle || "solid";
   const shapeBorderRadius = activeShapeSettings?.borderRadius || 0;
   const shapeBackground = Boolean(activeShapeSettings?.background);
   const updateActiveShapeSetting = useCallback((patch) => {
-    if (!SHAPE_TOOL_KEYS.includes(annotTool)) return;
+    const targetKey = SHAPE_TOOL_KEYS.includes(annotTool) ? annotTool : annotTool === "shapes" ? "rect" : null;
+    if (!targetKey) return;
     setShapeToolSettings((previous) => ({
       ...previous,
-      [annotTool]: {
-        ...(previous[annotTool] || DEFAULT_SHAPE_TOOL_SETTINGS[annotTool]),
+      [targetKey]: {
+        ...(previous[targetKey] || DEFAULT_SHAPE_TOOL_SETTINGS[targetKey]),
         ...patch,
       },
     }));
@@ -5135,36 +6008,82 @@ const PDFPage = forwardRef(({
   }, [activeShapeSettings?.background, updateActiveShapeSetting]);
   const setAnnotColor = useCallback((nextColor) => {
     setAnnotToolColors((prev) => {
-      if (!annotTool || !DEFAULT_ANNOT_TOOL_COLORS[annotTool]) return prev;
-      return { ...prev, [annotTool]: nextColor };
+      const targetKey = SHAPE_TOOL_KEYS.includes(annotTool) ? annotTool : annotTool === "shapes" ? "rect" : annotTool;
+      if (!targetKey || !DEFAULT_ANNOT_TOOL_COLORS[targetKey]) return prev;
+      return { ...prev, [targetKey]: nextColor };
     });
   }, [annotTool]);
+  // Open the native color picker via a temporary input element. This
+  // avoids portal / compositing issues on iOS/Safari where an embedded
+  // `input[type=color]` inside a portalled dropdown can fail to open.
+  const openNativeColorPicker = useCallback((initial = annotColor, onChoose = (c) => setAnnotColor(c)) => {
+    try {
+      const input = document.createElement("input");
+      input.type = "color";
+      input.value = (initial || "#ffff00").toLowerCase();
+      input.style.position = "fixed";
+      input.style.left = "-9999px";
+      document.body.appendChild(input);
+      const cleanup = () => { setTimeout(() => { try { document.body.removeChild(input); } catch (e) {} }, 0); };
+      input.addEventListener("input", (ev) => {
+        try { const v = ev.target.value; onChoose(v); } catch (e) {}
+      }, { once: true });
+      input.addEventListener("change", (ev) => { try { const v = ev.target.value; onChoose(v); } catch (e) {} cleanup(); }, { once: true });
+      // Programmatic click must happen inside a user gesture; callers should
+      // invoke this from a pointer/touch handler. This reliably opens the
+      // native color UI on Safari/iPad.
+      input.click();
+      return input;
+    } catch (err) {
+      return null;
+    }
+  }, [annotColor, setAnnotColor]);
   const setAnnotToolColorPreset = useCallback((presetIndex, nextColor) => {
-    if (!annotTool || !DEFAULT_ANNOT_TOOL_COLORS[annotTool]) return;
+    const targetKey = SHAPE_TOOL_KEYS.includes(annotTool) ? annotTool : annotTool === "shapes" ? "rect" : annotTool;
+    if (!targetKey || !DEFAULT_ANNOT_TOOL_COLORS[targetKey]) return;
     setAnnotToolColorPresets((prev) => {
-      const current = Array.isArray(prev[annotTool]) ? prev[annotTool] : buildDefaultAnnotToolColorPresets()[annotTool];
+      const current = Array.isArray(prev[targetKey]) ? prev[targetKey] : buildDefaultAnnotToolColorPresets()[targetKey];
       const nextSlots = Array.from({ length: COLOR_PRESET_SLOT_COUNT }, (_, index) => current[index] ?? null);
       nextSlots[presetIndex] = nextColor;
-      return { ...prev, [annotTool]: nextSlots };
+      return { ...prev, [targetKey]: nextSlots };
     });
     if (nextColor) setAnnotColor(nextColor);
   }, [annotTool, setAnnotColor]);
   const openColorMenuFromRect = useCallback((rect, target) => {
+    const sameTarget = colorMenuOpen
+      && colorMenuTarget.type === target.type
+      && colorMenuTarget.presetIndex === (target.presetIndex ?? null);
     setColorMenuTarget(target);
-    setColorMenuOpen((wasOpen) => {
-      if (
-        wasOpen
-        && colorMenuTarget.type === target.type
-        && colorMenuTarget.presetIndex === (target.presetIndex ?? null)
-      ) return false;
-      if (effectiveToolbarEdge === "bottom") {
-        setColorMenuPos({ position: "fixed", bottom: window.innerHeight - rect.top + 6, left: rect.left });
-      } else {
-        setColorMenuPos({ position: "fixed", top: rect.bottom + 6, left: rect.left });
-      }
-      return true;
-    });
-  }, [colorMenuTarget, effectiveToolbarEdge]);
+    if (sameTarget) {
+      setColorMenuOpen(false);
+      return;
+    }
+
+    const viewportMargin = 8;
+    const menuWidth = 252;
+    const menuMaxHeight = 320;
+    const gap = 6;
+    const textToolbarHostRect = textToolbarOptionsHost?.getBoundingClientRect?.() || null;
+    const anchorRect = textToolbarHostRect || rect;
+    const left = Math.max(
+      viewportMargin,
+      Math.min(rect.left, window.innerWidth - menuWidth - viewportMargin),
+    );
+    const spaceAbove = Math.max(0, anchorRect.top - gap - viewportMargin);
+    const openAbove = true;
+    const availableHeight = Math.max(120, Math.min(menuMaxHeight, spaceAbove));
+    const top = Math.max(
+      viewportMargin,
+      anchorRect.top - availableHeight - gap,
+    );
+
+    setColorMenuPos(
+      openAbove
+        ? { position: "fixed", top, left, maxHeight: availableHeight }
+        : { position: "fixed", top: anchorRect.bottom + gap, left, maxHeight: availableHeight },
+    );
+    setColorMenuOpen(true);
+  }, [colorMenuOpen, colorMenuTarget]);
   const startColorPresetLongPress = useCallback((presetIndex, event) => {
     const state = colorPresetPressRef.current;
     if (state.timer) clearTimeout(state.timer);
@@ -5232,7 +6151,7 @@ const PDFPage = forwardRef(({
       highlightMode,
       highlightAutoWidth,
       highlightTaperEnds,
-      highlightAutoContrast,
+      highlightStabilization,
       annotOpacity,
       textFontFamily,
       textFontSize,
@@ -5331,7 +6250,7 @@ const PDFPage = forwardRef(({
     highlightMode,
     highlightAutoWidth,
     highlightTaperEnds,
-    highlightAutoContrast,
+    highlightStabilization,
     annotOpacity,
     textFontFamily,
     textFontSize,
@@ -5414,7 +6333,7 @@ const PDFPage = forwardRef(({
         setHighlightMode(s.highlightMode);
         setHighlightAutoWidth(s.highlightAutoWidth);
         setHighlightTaperEnds(s.highlightTaperEnds);
-        setHighlightAutoContrast(s.highlightAutoContrast);
+        setHighlightStabilization(s.highlightStabilization || DEFAULT_PDF_TOOLBAR_SETTINGS.highlightStabilization);
         setAnnotOpacity(s.annotOpacity);
         setTextFontFamily(s.textFontFamily);
         setTextFontSize(s.textFontSize);
@@ -5776,12 +6695,6 @@ const PDFPage = forwardRef(({
       window.removeEventListener("resize", refresh);
     };
   }, [pageViewport]);
-  // Separate, non-multiply-blended layer stacked above #pdf_annot_canvas —
-  // see drawMaskedHighlightText's own comment in annotationDraw.js for why
-  // masked/recolored highlight text can't just draw on the (CSS
-  // mix-blend-mode:multiply) annotation canvas itself: multiply can never
-  // fully replace/hide what's underneath with a new opaque color.
-  const maskCanvasRef = useRef(null);
   const activeAnnotRef  = useRef(null);  // in-progress shape
   // What the LAST eraser gesture actually did to pageNum's array — before
   // (the full pre-erase snapshot) and after (the exact resulting array
@@ -5858,13 +6771,37 @@ const PDFPage = forwardRef(({
     }
   }, [annotTool]);
 
+  useEffect(() => {
+    const textToolActive = annotTool === "text";
+    document.body.classList.toggle("pdf-text-tool-active", textToolActive);
+    if (textToolActive && !textToolWasActiveRef.current) {
+      window.dispatchEvent(new CustomEvent("virtual-keyboard:open", { detail: { source: "pdf-text-tool" } }));
+    } else if (!textToolActive && textToolWasActiveRef.current) {
+      window.dispatchEvent(new CustomEvent("virtual-keyboard:close", { detail: { source: "pdf-text-tool" } }));
+    }
+    textToolWasActiveRef.current = textToolActive;
+    return () => {
+      if (textToolActive) document.body.classList.remove("pdf-text-tool-active");
+    };
+  }, [annotTool]);
+
+  useEffect(() => () => {
+    if (textToolWasActiveRef.current) {
+      window.dispatchEvent(new CustomEvent("virtual-keyboard:close", { detail: { source: "pdf-text-tool" } }));
+    }
+  }, []);
+
   // .annot_tool_options (the sub-toolbar dropdown) opens from the active
   // tool's OWN button position, not the toolbar's fixed corner — any of
   // the 4 SHAPE_TOOL_KEYS still anchor to the single "Shapes" button in
   // the main strip (there's no separate button per shape), everything
   // else anchors to its own like-named button directly.
   useEffect(() => {
-    const anchorKey = SHAPE_TOOL_KEYS.includes(annotTool) ? "shapes" : annotTool;
+    const anchorKey = SHAPE_TOOL_KEYS.includes(annotTool)
+      ? "shapes"
+      : HIGHLIGHT_TOOL_KEYS.includes(annotTool)
+        ? "highlight"
+        : annotTool;
     const btn = anchorKey ? toolButtonRefs.current[anchorKey] : null;
     const toolbarEl = toolbarRef.current;
     if (!btn || !toolbarEl) { setToolOptionsOffset(0); return; }
@@ -5956,6 +6893,20 @@ const PDFPage = forwardRef(({
     setRedoStacks((prev) => (prev[pageNum]?.length ? { ...prev, [pageNum]: [] } : prev));
     logAnnotHistory({ action: "edit", type: "text", page: pageNum });
   }, [manualSelection, notebookActiveTab, notebookCaretOffset, notebookMode, notebookText, textStyleTargetId, pageNum, logAnnotHistory]);
+
+  useEffect(() => {
+    const onFormatSelection = (event) => {
+      const detail = event.detail;
+      if (detail?.target !== notebookEditorRef.current || detail.format !== "bold") return;
+      const start = Math.max(0, Math.min(notebookText.length, Number(detail.start) || 0));
+      const end = Math.max(start, Math.min(notebookText.length, Number(detail.end) || start));
+      if (end <= start || manualSelection?.surface !== "nb") return;
+      updateStyledTextTarget({ fontBold: true });
+      detail.handled = true;
+    };
+    window.addEventListener("amctoshs:format-selection", onFormatSelection);
+    return () => window.removeEventListener("amctoshs:format-selection", onFormatSelection);
+  }, [manualSelection, notebookText.length, updateStyledTextTarget]);
 
   const applyTextListStyle = useCallback((listStyle) => {
     setTextListStyle(listStyle);
@@ -7080,7 +8031,7 @@ const PDFPage = forwardRef(({
     const canvas = markdownAnnotationCanvasRef.current;
     const supportedTools = new Set([
       "pen", "smartPen", "highlight", "underline", "strikethrough", "line", "arrow",
-      "rect", "circle", "freeshape", "bbox", "eraser", "text",
+      "rect", "circle", "freeshape", "bbox", "eraser", "antiAgingEraser", "text",
     ]);
     if (!page || !canvas || !markdownVisualActive || !supportedTools.has(annotTool)) return undefined;
 
@@ -7133,7 +8084,7 @@ const PDFPage = forwardRef(({
     };
     const updateEraserCursor = (event, visible = true) => {
       const cursor = eraserCursorRef.current;
-      if (!cursor || annotTool !== "eraser") return;
+      if (!cursor || !["eraser", "antiAgingEraser"].includes(annotTool)) return;
       cursor.style.display = visible ? "block" : "none";
       if (!visible) return;
       cursor.style.width = `${eraserSize * 2}px`;
@@ -7216,22 +8167,26 @@ const PDFPage = forwardRef(({
       } else if (annotTool === "highlight") {
         const span = highlightMode === "line" ? findMarkdownSpan(event) : null;
         const y = span ? (span.top + span.bottom) / 2 : point.y;
-        const start = span && highlightAutoWidth ? { ...point, x: span.left, y } : { ...point, y };
-        const end = span && highlightAutoWidth ? { ...point, x: span.right, y } : { ...start };
+        // Auto width controls marker thickness from text height; it does not
+        // snap the initial stroke to a whole word.
+        const start = { ...point, y };
+        const end = { ...point, y };
         active = {
           type: "highlight",
           color: annotColor,
-          lineWidth: span && highlightMode === "line" ? Math.max(annotSize, span.bottom - span.top) : annotSize,
+          lineWidth: span && highlightMode === "line" && highlightAutoWidth
+            ? Math.max(1, span.bottom - span.top)
+            : annotSize,
           mode: highlightMode,
           opacity: annotOpacity / 100,
           highlightSettings: DEFAULT_HIGHLIGHT_SETTINGS,
           taperEnds: highlightTaperEnds,
-          autoContrast: highlightAutoContrast,
-          autoWidthLocked: Boolean(span && highlightAutoWidth),
-          _autoWidthAnchorLeft: span?.left ?? null,
-          _autoWidthAnchorRight: span?.right ?? null,
+          autoWidthLocked: false,
           points: highlightMode === "line" ? [start, end] : [point],
         };
+        if (highlightMode === "line" && highlightAutoWidth && span) {
+          setAnnotSize(Math.round(Math.max(1, span.bottom - span.top)));
+        }
       } else if (["underline", "strikethrough"].includes(annotTool)) {
         const span = findMarkdownSpan(event);
         active = span
@@ -7283,14 +8238,10 @@ const PDFPage = forwardRef(({
           const span = highlightAutoWidth ? findMarkdownSpan(sample) : null;
           const y = active.points[0].y;
           if (span) {
-            active.points = [
-              { ...active.points[0], x: Math.min(active._autoWidthAnchorLeft, span.left), y },
-              { ...point, x: Math.max(active._autoWidthAnchorRight, span.right), y },
-            ];
-            active.lineWidth = Math.max(annotSize, span.bottom - span.top);
-          } else {
-            active.points[1] = { ...point, y };
+            active.lineWidth = Math.max(1, span.bottom - span.top);
+            setAnnotSize(Math.round(active.lineWidth));
           }
+          active.points[1] = { ...point, y };
         }
       });
       if (active?.type !== "eraser") drawSurface(active);
@@ -7347,7 +8298,7 @@ const PDFPage = forwardRef(({
       page.removeEventListener("pointercancel", onCancel);
       page.removeEventListener("pointerleave", onLeave);
     };
-  }, [activateAnnotationSurface, activeBBoxCreationType, annotColor, annotOpacity, annotSize, annotTool, bboxBorderSize, commitMarkdownAnnotations, drawAnnotationWithOwnerClip, eraserMode, eraserSize, getMarkdownAnnotationSurface, highlightAutoContrast, highlightAutoWidth, highlightMode, highlightTaperEnds, markdownVisualActive, pageNum, penFlow, penNibAngle, penNibSpread, penPressureAssist, penSize, penStabilization, penTaper, penType, shapeBackground, shapeBorderRadius, shapeBorderStyle, shapeStrokeWidth]);
+  }, [activateAnnotationSurface, activeBBoxCreationType, annotColor, annotOpacity, annotSize, annotTool, bboxBorderSize, commitMarkdownAnnotations, drawAnnotationWithOwnerClip, eraserMode, eraserSize, getMarkdownAnnotationSurface, highlightAutoWidth, highlightMode, highlightTaperEnds, markdownVisualActive, pageNum, penFlow, penNibAngle, penNibSpread, penPressureAssist, penSize, penStabilization, penTaper, penType, shapeBackground, shapeBorderRadius, shapeBorderStyle, shapeStrokeWidth]);
 
   useEffect(() => {
     const surface = notebookDrawingSurfaceRef.current;
@@ -7482,8 +8433,14 @@ const PDFPage = forwardRef(({
         active.points[1] = point;
         drawSurface(active);
       } else {
-        const nextPoint = smoothStrokePoint(active.points, point, penStabilization, scale);
-        if (nextPoint) active.points.push(nextPoint);
+        const samples = active.type === "pen"
+          ? (event.getCoalescedEvents?.() || [event])
+          : [event];
+        samples.forEach((sample) => {
+          const samplePoint = sample === event ? point : pointFromEvent(sample);
+          const nextPoint = smoothStrokePoint(active.points, samplePoint, penStabilization, scale);
+          if (nextPoint) active.points.push(nextPoint);
+        });
         drawSurface(active);
       }
     };
@@ -7697,7 +8654,6 @@ const PDFPage = forwardRef(({
     setNotebookDrawingTextInput(null);
   }, [notebookAnnotations, notebookDrawingTextInput, saveNotebookAnnotations, textAlign, textBackground, textBackgroundColor, textBold, textFontFamily, textFontSize, textItalic, textPadding, textToolColor, textUnderline]);
   const previewRef    = useRef(null);
-  const canvasWrapRef = useRef(null);
 
   // Match the PDF text layer's touch-selection model: native selection is
   // disabled on coarse pointers and a double-touch draws app-owned selection
@@ -8003,8 +8959,209 @@ const PDFPage = forwardRef(({
   const pageImageRectsRef  = useRef([]);
   const pageOperatorListCacheRef = useRef(new Map());
   const currentSourceIdRef = useRef(""); // the Source _id backing pdfDoc, if any (empty for local file uploads)
+  const glyphCharEvidenceCacheRef = useRef(new Map());
+  const glyphCharSourceId = embeddedSourceId || currentSourceIdRef.current || "";
+  const loadGlyphCharNativeEvidence = useCallback(async (targetPage) => {
+    if (!glyphCharSourceId || !filename || !pageCount) return null;
+    const cacheKey = `${glyphCharSourceId}:${targetPage}`;
+    if (glyphCharEvidenceCacheRef.current.has(cacheKey)) return glyphCharEvidenceCacheRef.current.get(cacheKey);
+    const request = (async () => {
+      let documentId = pymupdfDocumentIdRef.current;
+      if (!/^[a-f\d]{24}$/i.test(String(documentId || ""))) {
+        documentId = await resolveDocumentId({ filename, pageCount, type: pdfType || "text-based", sourceId: glyphCharSourceId });
+        pymupdfDocumentIdRef.current = documentId;
+      }
+      return getPageExtractionEvidence(documentId, targetPage, { nativeOnly: true, forensics: true });
+    })();
+    glyphCharEvidenceCacheRef.current.set(cacheKey, request);
+    try {
+      const result = await request;
+      glyphCharEvidenceCacheRef.current.set(cacheKey, result);
+      return result;
+    } catch (error) {
+      glyphCharEvidenceCacheRef.current.delete(cacheKey);
+      throw error;
+    }
+  }, [filename, glyphCharSourceId, pageCount, pdfType]);
+  const glyphCharDocumentId = hasSourceId
+    ? pymupdfDocumentId
+    : pdfDoc?.fingerprints?.[0] || filename || "local";
+  const [glyphCharAnalysisRequest, setGlyphCharAnalysisRequest] = useState(null);
+  const glyphCharAnalysis = useGlyphCharAnalysis({
+    // The resolved PyMuPDF/Mongo identity can arrive after the user opens
+    // Layer 1. Keep the request as intent and let the hook begin as soon as
+    // the current PDF identity is ready; comparing against the identity that
+    // existed when the button was clicked could strand saved-PDF analyses.
+    enabled: Boolean(glyphCharDocumentId) && Boolean(glyphCharAnalysisRequest),
+    requestedPage: glyphCharAnalysisRequest?.pageNumber || null,
+    forceReanalysis: Boolean(glyphCharAnalysisRequest?.force),
+    requestNonce: glyphCharAnalysisRequest?.requestNonce || 0,
+    // Saved PDFs must wait for their stable PDFDocument identity. Starting
+    // with the Source id made the persistence endpoint 404 and silently
+    // restarted the old browser-only pass after every reload.
+    pdfDoc: hasSourceId && !pymupdfDocumentId ? null : pdfDoc,
+    pdfjsUtil: pdfjsLib.Util,
+    documentId: glyphCharDocumentId,
+    pageCount,
+    initialPage: pageNum,
+    loadNativeEvidence: loadGlyphCharNativeEvidence,
+  });
+  const currentPageGlyphs = useMemo(
+    () => glyphCharAnalysis.glyphs.filter((glyph) => glyph.pageNumber === pageNum),
+    [glyphCharAnalysis.glyphs, pageNum],
+  );
+  const selectGlyphAndNavigate = useCallback((glyph) => {
+    if (!glyph) return;
+    glyphCharAnalysis.selectGlyph(glyph);
+    if (glyph.pageNumber !== pageNumRef.current) setPageNum(glyph.pageNumber);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      pageContainerRefs.current[glyph.pageNumber - 1]?.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "center" });
+    }));
+  }, [glyphCharAnalysis.selectGlyph]);
+  const selectGlyphFromPageClick = useCallback((event, targetPage) => {
+    if (toolActive || targetPage !== pageNumRef.current || event.target.closest?.("button, input, select, textarea, [role='button'], [role='dialog']")) return;
+    const container = pageContainerRefs.current[targetPage - 1];
+    if (!container || !pageViewport) return;
+    const rect = container.getBoundingClientRect();
+    const documentWidth = pageViewport.width / Math.max(0.0001, pageViewport.scale || 1);
+    const documentHeight = pageViewport.height / Math.max(0.0001, pageViewport.scale || 1);
+    const x = ((event.clientX - rect.left) / Math.max(1, rect.width)) * documentWidth;
+    const y = ((event.clientY - rect.top) / Math.max(1, rect.height)) * documentHeight;
+    const hit = currentPageGlyphs
+      .filter((glyph) => glyph.visible && x >= glyph.bbox.x && x <= glyph.bbox.x + glyph.bbox.width && y >= glyph.bbox.y && y <= glyph.bbox.y + glyph.bbox.height)
+      .sort((left, right) => left.bbox.width * left.bbox.height - right.bbox.width * right.bbox.height)[0];
+    if (hit) glyphCharAnalysis.selectGlyph(hit);
+  }, [currentPageGlyphs, glyphCharAnalysis.selectGlyph, pageViewport, toolActive]);
+  const buildCurrentPageUmlsConcepts = useCallback(async () => {
+    const sourceId = currentSourceIdRef.current || embeddedSourceId || "";
+    const targetPage = pageNumRef.current;
+    if (pageConceptAbortRef.current) {
+      pageConceptAbortRef.current.abort();
+      return;
+    }
+    if (!sourceId || !targetPage || pageConceptBusy) return;
+    const controller = new AbortController();
+    pageConceptAbortRef.current = controller;
+    setPageConceptBusy(true);
+    setPageConceptError("");
+    setNotebookActiveTab("typing");
+    setNotebookView("notebook-pdf");
+    const writeNotebookBlock = (generatedText, concepts, analysis) => commitNotebookPagePatch(targetPage, (current) => {
+      const previousGenerated = String(current.umlsConceptText || "");
+      const baseText = previousGenerated && String(current.text || "").includes(previousGenerated)
+        ? String(current.text || "").replace(previousGenerated, "").trimEnd()
+        : String(current.text || "").trimEnd();
+      return {
+        text: generatedText ? `${baseText}${baseText ? "\n\n" : ""}${generatedText}` : baseText,
+        umlsConceptText: generatedText,
+        ...(Array.isArray(concepts) ? { umlsConcepts: concepts } : {}),
+        ...(analysis ? { umlsConceptAnalysis: analysis } : {}),
+      };
+    });
+    writeNotebookBlock("", undefined, {
+      state: "running", progress: 0, status: "Reading the current PDF page…", liveConcepts: [],
+    });
+    let latestProgress = 0;
+    let latestLiveConcepts = [];
+    try {
+      const pageResponse = await authFetch(apiUrl(`/api/sources/${sourceId}/text?pageFrom=${targetPage}&pageTo=${targetPage}`), { signal: controller.signal });
+      const pageData = await pageResponse.json().catch(() => ({}));
+      if (!pageResponse.ok) throw new Error(pageData.error || "Could not read the current PDF page text.");
+      const pageText = String(pageData.text || "").trim();
+      if (!pageText) throw new Error("The current PDF page has no extractable text.");
+      latestProgress = 1;
+      writeNotebookBlock("", undefined, {
+        state: "running", progress: 1, status: "Page text loaded. Connecting to local UMLS…", liveConcepts: [],
+      });
+
+      const terminologyResponse = await authFetch(apiUrl("/api/terminology/extract-page-concepts"), {
+        method: "POST",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: pageText, language: readUmlsLanguage(), limit: 100, stream: true }),
+      });
+      if (!terminologyResponse.ok) {
+        const failure = await terminologyResponse.json().catch(() => ({}));
+        throw new Error(failure.error || "UMLS could not analyze the current page.");
+      }
+      if (!terminologyResponse.body) throw new Error("The browser could not open the live UMLS analysis stream.");
+
+      const reader = terminologyResponse.body.getReader();
+      const decoder = new TextDecoder();
+      const discoveredConcepts = [];
+      const discoveredCuis = new Set();
+      let buffer = "";
+      let terminologyData = null;
+      let lastLiveRender = 0;
+      const consumeEvent = (event) => {
+        if (event.type === "error") throw new Error(event.error || "UMLS page analysis failed.");
+        if (event.type === "concept" && event.concept?.cui && !discoveredCuis.has(event.concept.cui)) {
+          discoveredCuis.add(event.concept.cui);
+          discoveredConcepts.push(event.concept);
+        }
+        latestProgress = Math.max(latestProgress, Math.max(0, Math.min(100, Math.round(Number(event.progress) || 0))));
+        latestLiveConcepts = [...discoveredConcepts];
+        if (event.type === "complete") terminologyData = event;
+        const now = performance.now();
+        const shouldRender = event.type !== "concept" || now - lastLiveRender >= 90 || discoveredConcepts.length % 5 === 0;
+        if (shouldRender && event.type !== "complete") {
+          lastLiveRender = now;
+          const status = event.status || "Analyzing page terminology…";
+          writeNotebookBlock("", undefined, {
+            state: "running",
+            progress: Math.max(0, Math.min(100, Math.round(Number(event.progress) || 0))),
+            status,
+            liveConcepts: [...discoveredConcepts],
+          });
+        }
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        lines.filter(Boolean).forEach((line) => consumeEvent(JSON.parse(line)));
+        if (done) break;
+      }
+      if (buffer.trim()) consumeEvent(JSON.parse(buffer));
+      if (!terminologyData) throw new Error("The UMLS analysis ended before producing a final result.");
+      const concepts = Array.isArray(terminologyData.concepts) ? terminologyData.concepts : [];
+      const nextPages = writeNotebookBlock("", concepts, {
+        state: "complete", progress: 100, status: "UMLS page analysis complete.", liveConcepts: [],
+      });
+      await authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notebookPages: nextPages }),
+      }).then(async (response) => {
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || "Concepts were built but could not be saved to the Notebook.");
+        }
+      });
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setPageConceptError("");
+        writeNotebookBlock("", undefined, {
+          state: "cancelled",
+          progress: latestProgress,
+          status: "UMLS page analysis cancelled.",
+          liveConcepts: latestLiveConcepts,
+        });
+        return;
+      }
+      const message = error.message || "Could not build page concepts.";
+      setPageConceptError(message);
+      writeNotebookBlock("", undefined, {
+        state: "error", progress: 0, status: message, liveConcepts: [],
+      });
+    } finally {
+      if (pageConceptAbortRef.current === controller) pageConceptAbortRef.current = null;
+      setPageConceptBusy(false);
+    }
+  }, [commitNotebookPagePatch, embeddedSourceId, pageConceptBusy, setNotebookView]);
   useEffect(() => {
-    if (markdownAsideMode !== "ocr") return undefined;
+    if (!["ocr", "forensics"].includes(markdownAsideMode)) return undefined;
     const sourceId = currentSourceIdRef.current || embeddedSourceId || "";
     if (!sourceId || !pageCount) {
       setPersistedOcrPages([]);
@@ -8012,10 +9169,14 @@ const PDFPage = forwardRef(({
       setPersistedOcrError(sourceId ? "OCR is not available until the PDF has loaded." : "OCR is available for saved PDF sources.");
       return undefined;
     }
+    const controller = new AbortController();
     let cancelled = false;
     setPersistedOcrBusy(true);
+    setPersistedOcrPages([]);
     setPersistedOcrError("");
-    authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?from=1&to=${pageCount}`))
+    authFetch(apiUrl(`/api/sources/${sourceId}/ocr/pages?page=${pageNum}`), {
+      signal: controller.signal,
+    })
       .then(async (response) => {
         const data = await response.json().catch(() => ({}));
         if (cancelled) return;
@@ -8028,7 +9189,7 @@ const PDFPage = forwardRef(({
         setPersistedOcrPages(Array.isArray(data.pages) ? data.pages : []);
       })
       .catch((error) => {
-        if (!cancelled) {
+        if (!cancelled && error?.name !== "AbortError") {
           setPersistedOcrPages([]);
           setPersistedOcrStatus("failed");
           setPersistedOcrError(error.message || "Could not load persisted OCR.");
@@ -8037,19 +9198,85 @@ const PDFPage = forwardRef(({
       .finally(() => {
         if (!cancelled) setPersistedOcrBusy(false);
       });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [markdownAsideMode, hasSourceId, embeddedSourceId, filename, pageCount, pageNum]);
+
+  useEffect(() => {
+    if (!markdownAsideOpen || markdownAsideMode !== "forensics" || !pdfDoc || !pageNum) return undefined;
+    let cancelled = false;
+    setForensicBusy(true);
+    setForensicError("");
+    setForensicReport(null);
+    const analyze = async () => {
+      try {
+        const loadNativeForensics = async () => {
+          const cached = forensicPageCacheRef.current.get(pageNum);
+          if (cached) return cached;
+          const sourceId = currentSourceIdRef.current || embeddedSourceId || "";
+          if (!sourceId) return pymupdfPageExtraction;
+          try {
+            let documentId = pymupdfDocumentIdRef.current;
+            if (!/^[a-f\d]{24}$/i.test(String(documentId || "").trim())) {
+              documentId = await resolveDocumentId({ filename, pageCount, type: pdfType || "text-based", sourceId });
+              pymupdfDocumentIdRef.current = documentId;
+            }
+            const pendingAfterResolution = forensicPageCacheRef.current.get(pageNum);
+            if (pendingAfterResolution) return pendingAfterResolution;
+            // Cache the in-flight Promise immediately. Native extraction and
+            // persisted OCR can resolve in either order and both update this
+            // effect; waiting to cache until completion allowed those updates
+            // to launch duplicate 1-2 MB forensic requests concurrently.
+            const request = getPageExtractionEvidence(documentId, pageNum, { nativeOnly: true, forensics: true });
+            forensicPageCacheRef.current.set(pageNum, request);
+            const extraction = await request;
+            forensicPageCacheRef.current.set(pageNum, extraction);
+            while (forensicPageCacheRef.current.size > 6) {
+              forensicPageCacheRef.current.delete(forensicPageCacheRef.current.keys().next().value);
+            }
+            return extraction;
+          } catch {
+            forensicPageCacheRef.current.delete(pageNum);
+            return pymupdfPageExtraction;
+          }
+        };
+        const [pdfJsEvidence, nativeExtraction] = await Promise.all([
+          collectPdfJsForensicEvidence(pdfDoc, pageNum, pdfjsLib.OPS),
+          loadNativeForensics(),
+        ]);
+        const ocrPage = persistedOcrPages.find((page) => (
+          Number(page?.pageNumber) === pageNum || Number(page?.pageIndex) + 1 === pageNum
+        )) || null;
+        const report = buildPdfForensicReport({
+          pageNumber: pageNum,
+          nativeExtraction,
+          pdfJsEvidence,
+          ocrPage,
+        });
+        if (!cancelled) setForensicReport(report);
+      } catch (error) {
+        if (!cancelled) setForensicError(error.message || "Could not collect PDF forensic evidence.");
+      } finally {
+        if (!cancelled) setForensicBusy(false);
+      }
+    };
+    void analyze();
     return () => { cancelled = true; };
-  }, [markdownAsideMode, hasSourceId, embeddedSourceId, filename, pageCount]);
+  }, [embeddedSourceId, filename, forensicRun, markdownAsideMode, markdownAsideOpen, pageCount, pageNum, pdfDoc, pdfType, persistedOcrPages, pymupdfPageExtraction]);
   const pdfNavigationDocumentIdRef = useRef("");
   const pdfNavigationLoadKeyRef = useRef("");
   const pdfNavigationSaveQueueRef = useRef(Promise.resolve());
   useEffect(() => {
     if (!pdfDoc || !pageCount || !filename) return undefined;
-    const sourceId = currentSourceIdRef.current || null;
+    const sourceId = currentSourceIdRef.current || embeddedSourceId || null;
     const navigationKey = `${sourceId || "local"}:${filename}:${pageCount}`;
     if (pdfNavigationLoadKeyRef.current === navigationKey) return undefined;
     pdfNavigationLoadKeyRef.current = navigationKey;
     let cancelled = false;
     pdfNavigationDocumentIdRef.current = "";
+    setPdfNavigationLoaded(false);
     void resolveDocumentId({
       filename,
       pageCount,
@@ -8080,11 +9307,13 @@ const PDFPage = forwardRef(({
       setBookmarks(loadedBookmarks);
       setBookmarkLabels(loadedBookmarkLabels);
       setPdfCustomOutlines(loadedOutlines);
+      setPdfOutlineImported(Boolean(navigation.pdfOutlineImported));
+      setPdfNavigationLoaded(true);
     }).catch((error) => {
       if (!cancelled) console.error("[PDF] Failed to load navigation state", error);
     });
     return () => { cancelled = true; };
-  }, [filename, pageCount, pdfDoc]);
+  }, [embeddedSourceId, filename, pageCount, pdfDoc]);
   const [schemaWordKeys, setSchemaWordKeys] = useState(() => new Set());
   const schemaWordKeysRef = useRef(schemaWordKeys);
   const schemaRecordsRef = useRef(new Map());
@@ -8448,6 +9677,9 @@ const PDFPage = forwardRef(({
         if (cached) return cached;
         const operatorList = await page.getOperatorList();
         pageOperatorListCacheRef.current.set(pageNum, operatorList);
+        while (pageOperatorListCacheRef.current.size > 4) {
+          pageOperatorListCacheRef.current.delete(pageOperatorListCacheRef.current.keys().next().value);
+        }
         return operatorList;
       })
       .then((operatorList) => {
@@ -8484,7 +9716,47 @@ const PDFPage = forwardRef(({
     startST: 0,
     timer: null,
     frame: 0,
+    target: null,
   });
+  const zoomRenderTimerRef = useRef(null);
+
+  const getLiveZoomTarget = useCallback(() => {
+    const wrap = canvasWrapRef.current;
+    if (!wrap) return null;
+    const hasCompositeLayout = wrap.classList.contains("pdf_canvas_wrap--booklet")
+      || wrap.classList.contains("pdf_canvas_wrap--md-visual")
+      || wrap.classList.contains("pdf_canvas_wrap--md-only");
+    return hasCompositeLayout
+      ? wrap
+      : (pageContainerRefs.current[pageNumRef.current - 1] || wrap);
+  }, []);
+
+  const getLiveZoomTargetOffset = useCallback((target) => {
+    const wrap = canvasWrapRef.current;
+    if (!target || !wrap) return { left: 0, top: 0 };
+    if (target === wrap) return { left: wrap.offsetLeft, top: wrap.offsetTop };
+    return {
+      left: wrap.offsetLeft + target.offsetLeft,
+      top: wrap.offsetTop + target.offsetTop,
+    };
+  }, []);
+
+  const clearLiveZoomTransform = useCallback((target = null) => {
+    const candidates = new Set([
+      target,
+      wheelZoomStateRef.current.target,
+      canvasWrapRef.current,
+      pageContainerRefs.current[pageNumRef.current - 1],
+    ]);
+    candidates.forEach((node) => {
+      if (!node) return;
+      node.style.transform = "";
+      node.style.transformOrigin = "";
+      node.style.willChange = "";
+      node.style.removeProperty("--pdf-live-zoom-inverse");
+    });
+    wheelZoomStateRef.current.target = null;
+  }, []);
 
   const captureZoomAnchor = useCallback((clientX, clientY) => {
     const previewEl = previewRef.current;
@@ -8517,7 +9789,6 @@ const PDFPage = forwardRef(({
     };
   }, []);
 
-  const navigate = useNavigate();
   const location = useLocation();
   const { card: urlCard } = useParams();
   const embedded = Boolean(embeddedSourceId) || Boolean(embeddedFile); // true when mounted inside another page (e.g. Units Extraction) rather than routed directly
@@ -8569,7 +9840,7 @@ const PDFPage = forwardRef(({
     if (!pdfDoc) return;
     const canvas = pageCanvasRefs.current[n - 1];
     if (!canvas) return;
-    const displayScale = fitScaleRef.current * zoom;
+    const displayScale = fitScaleRef.current * zoomRef.current;
     if (renderedScaleRef.current[n - 1] === displayScale) return;
     const renderGeneration = (pageRenderGenerationRef.current[n - 1] || 0) + 1;
     pageRenderGenerationRef.current[n - 1] = renderGeneration;
@@ -8580,7 +9851,11 @@ const PDFPage = forwardRef(({
     const displayViewport = page.getViewport({ scale: displayScale });
     pageViewportsRef.current[n - 1] = displayViewport;
     renderTasksRef.current[n - 1]?.cancel();
-    const deviceScale = window.devicePixelRatio || 1;
+    // Render at a 2x quality target even on standard-density displays. CSS
+    // dimensions stay unchanged; only the backing raster becomes denser, so
+    // text and thin strokes look substantially sharper while canvasBudget.js
+    // still caps dimensions and total pixels for memory safety.
+    const deviceScale = Math.max(2, window.devicePixelRatio || 1);
     const renderScaleFactor = Math.min(
       1,
       MAX_RENDER_CANVAS_DIMENSION / Math.max(1, displayViewport.width * deviceScale),
@@ -8625,7 +9900,7 @@ const PDFPage = forwardRef(({
       ));
       currentBackingScaleRef.current = c.width / Math.max(1, displayViewport.width);
     }
-  }, [pdfDoc, zoom]);
+  }, [pdfDoc]);
 
   // Full reset + initial render whenever a new document (or page count) loads.
   // Deliberately does NOT run on zoom changes (see the effect below) — this
@@ -8656,16 +9931,8 @@ const PDFPage = forwardRef(({
       if (embedded && !fitToContainer) {
         fitScaleRef.current = 1;
       } else {
-        const previewWidth = previewRef.current?.clientWidth || 480;
-        const previewHeight = previewRef.current?.clientHeight || 720;
         const baseViewport = page1.getViewport({ scale: 1 });
-        const horizontalFit = (previewWidth - 24) / baseViewport.width;
-        const verticalFit = (previewHeight - 24) / baseViewport.height;
-        fitScaleRef.current = Math.min(
-          1,
-          horizontalFit,
-          verticalFit,
-        );
+        fitScaleRef.current = calculatePdfFitScale(previewRef.current, baseViewport);
       }
       if (cancelled) return;
       renderPage(pageNumRef.current);
@@ -8674,6 +9941,95 @@ const PDFPage = forwardRef(({
     return () => { cancelled = true; renderTasksRef.current.forEach(t => t?.cancel()); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- renderPage intentionally excluded, only pdfDoc/pageCount should reset the per-page render bookkeeping
   }, [pdfDoc, pageCount]);
+
+  // The PDF workspace is fluid: mounting a left/right aside, resizing one,
+  // splitting panes, rotating the device, or changing the browser size all
+  // alter the preview without reloading the document. ResizeObserver makes
+  // those layout changes reapply the same whole-page fit rule used at load.
+  // The user's zoom remains a multiplier over the fit scale, so a manually
+  // selected 150% stays 150%; at 100% the complete page always remains in
+  // the viewer viewport.
+  useEffect(() => {
+    const preview = previewRef.current;
+    if (!preview || !pdfDoc || pageCount === 0 || (embedded && !fitToContainer)) return undefined;
+
+    let disposed = false;
+    let fitFrame = 0;
+    let renderTimer = 0;
+    let requestGeneration = 0;
+
+    const pageColumns = (
+      readingMode === "booklet" && bookletRightPage && bookletRightPage !== pageNum
+    ) || (entityBuilderOcrBlankPageOpen && readingMode === "single")
+      ? 2
+      : 1;
+
+    const renderFittedPages = () => {
+      renderTimer = 0;
+      void renderPage(pageNumRef.current);
+      if (readingMode === "booklet" && bookletRightPage && bookletRightPage !== pageNumRef.current) {
+        void renderPage(bookletRightPage);
+      }
+    };
+
+    const applyFit = async () => {
+      fitFrame = 0;
+      const generation = ++requestGeneration;
+      try {
+        const page = await pdfDoc.getPage(pageNumRef.current);
+        if (disposed || generation !== requestGeneration) return;
+        const nextFitScale = calculatePdfFitScale(
+          preview,
+          page.getViewport({ scale: 1 }),
+          pageColumns,
+        );
+        const previousFitScale = fitScaleRef.current;
+        if (Math.abs(nextFitScale - previousFitScale) < 0.0005) return;
+
+        fitScaleRef.current = nextFitScale;
+        const nextDisplayScale = nextFitScale * zoomRef.current;
+
+        // Resize every mounted raster immediately so the page tracks a
+        // dragged aside smoothly. PDF.js replaces this temporary CSS scale
+        // with a sharp raster once the layout has settled briefly.
+        pageCanvasRefs.current.forEach((canvas, index) => {
+          if (!canvas) return;
+          const renderedScale = renderedScaleRef.current[index];
+          const renderedSize = renderedCssSizeRef.current[index];
+          if (!renderedScale || !renderedSize) return;
+          const ratio = nextDisplayScale / renderedScale;
+          canvas.style.width = `${renderedSize.width * ratio}px`;
+          canvas.style.height = `${renderedSize.height * ratio}px`;
+        });
+
+        if (renderTimer) window.clearTimeout(renderTimer);
+        renderTimer = window.setTimeout(renderFittedPages, 90);
+      } catch (error) {
+        if (!disposed) console.error("Unable to fit PDF page to viewer", error);
+      }
+    };
+
+    const scheduleFit = () => {
+      if (fitFrame) cancelAnimationFrame(fitFrame);
+      fitFrame = requestAnimationFrame(applyFit);
+    };
+
+    const observer = typeof ResizeObserver === "function"
+      ? new ResizeObserver(scheduleFit)
+      : null;
+    observer?.observe(preview);
+    window.addEventListener("resize", scheduleFit, { passive: true });
+    scheduleFit();
+
+    return () => {
+      disposed = true;
+      requestGeneration += 1;
+      observer?.disconnect();
+      window.removeEventListener("resize", scheduleFit);
+      if (fitFrame) cancelAnimationFrame(fitFrame);
+      if (renderTimer) window.clearTimeout(renderTimer);
+    };
+  }, [bookletRightPage, embedded, entityBuilderOcrBlankPageOpen, fitToContainer, glyphCharAsideOpen, pageCount, pageNum, pdfDoc, readingMode, renderPage]);
 
   // Only the current page re-renders eagerly on zoom change; every other page
   // is instantly CSS-rescaled (approximate, no re-rasterization — cheap) and
@@ -8696,7 +10052,20 @@ const PDFPage = forwardRef(({
       canvas.style.width  = `${prevCssSize.width * ratio}px`;
       canvas.style.height = `${prevCssSize.height * ratio}px`;
     });
-    renderPage(pageNumRef.current);
+    if (zoomRenderTimerRef.current) clearTimeout(zoomRenderTimerRef.current);
+    // Give WebKit a short quiet window after finger-up. A following pinch can
+    // then reuse the CSS-scaled raster instead of competing with PDF.js for
+    // the main thread. Only the final zoom in a sequence is rerasterized.
+    zoomRenderTimerRef.current = setTimeout(() => {
+      zoomRenderTimerRef.current = null;
+      renderPage(pageNumRef.current);
+    }, IS_WEBKIT_SAFARI ? 180 : 0);
+    return () => {
+      if (zoomRenderTimerRef.current) {
+        clearTimeout(zoomRenderTimerRef.current);
+        zoomRenderTimerRef.current = null;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only zoom should trigger this; renderPage/pdfDoc/pageCount changing here would re-run the doc-load effect above instead
   }, [zoom]);
 
@@ -8777,19 +10146,15 @@ const PDFPage = forwardRef(({
   useEffect(() => {
     const pending = scrollAfterZoomRef.current;
     if (!pending || !previewRef.current) return;
+    if (pinchGestureActiveRef.current) return;
     if (renderedScaleRef.current[pageNumRef.current - 1] !== fitScaleRef.current * zoom) return;
     scrollAfterZoomRef.current = null;
     const el   = previewRef.current;
-    const wrap = canvasWrapRef.current;
     requestAnimationFrame(() => {
+      if (pinchGestureActiveRef.current) return;
       // Remove the CSS transform and set the real scroll in the same frame
       // so the canvas never flashes back to the pre-zoom position.
-      if (wrap && wrap.style.transform) {
-        wrap.style.transform       = "";
-        wrap.style.transformOrigin = "";
-        wrap.style.willChange      = "";
-        wrap.style.removeProperty("--pdf-live-zoom-inverse");
-      }
+      clearLiveZoomTransform();
       if (pending.kind === "canvas-anchor") {
         const canvas = canvasWrapRef.current;
         if (canvas) {
@@ -8805,7 +10170,7 @@ const PDFPage = forwardRef(({
       el.scrollLeft = Math.max(0, pending.left);
       el.scrollTop  = Math.max(0, pending.top);
     });
-  }, [zoom, pageViewport]);
+  }, [zoom, pageViewport, clearLiveZoomTransform]);
 
   // A zoom gesture uses a temporary wrapper transform until the committed
   // PDF raster reaches the new scale. The anchor effect above clears it when
@@ -8813,17 +10178,14 @@ const PDFPage = forwardRef(({
   // the rendered scale matches the committed zoom, no transform is allowed
   // to remain because it would resize the BBox DOM chrome as well.
   useEffect(() => {
-    const wrap = canvasWrapRef.current;
-    if (!wrap || renderedScaleRef.current[pageNumRef.current - 1] !== fitScaleRef.current * zoom) return undefined;
+    if (pinchGestureActiveRef.current) return undefined;
+    if (!canvasWrapRef.current || renderedScaleRef.current[pageNumRef.current - 1] !== fitScaleRef.current * zoom) return undefined;
     const frame = requestAnimationFrame(() => {
-      if (!wrap.style.transform) return;
-      wrap.style.transform = "";
-      wrap.style.transformOrigin = "";
-      wrap.style.willChange = "";
-      wrap.style.removeProperty("--pdf-live-zoom-inverse");
+      if (pinchGestureActiveRef.current) return;
+      clearLiveZoomTransform();
     });
     return () => cancelAnimationFrame(frame);
-  }, [pageViewport, zoom]);
+  }, [pageViewport, zoom, clearLiveZoomTransform]);
 
   // Single-page view: only pageNum is ever mounted, so (re)render it
   // directly on every page switch instead of watching scroll position.
@@ -8897,7 +10259,66 @@ const PDFPage = forwardRef(({
     });
   }, [pageNum, pageViewport, zoom]);
 
-  const [readerStateSaveTick, setReaderStateSaveTick] = useState(0);
+  const readerStateSaveTimerRef = useRef(null);
+  const readerStateSaveInFlightRef = useRef(false);
+  const readerStateSaveQueuedRef = useRef(false);
+  const readerStateLastSavedSignatureRef = useRef("");
+  const readerStateInFlightSignatureRef = useRef("");
+  const scheduleReaderStateSaveRef = useRef(null);
+  const saveReaderStateRef = useRef(null);
+
+  // Keep viewport persistence completely off the interaction path. Scroll and
+  // zoom can produce a lot of updates; coalesce them into one background PUT
+  // and never allow an older request to pile up behind a newer one.
+  saveReaderStateRef.current = () => {
+    const sourceId = currentSourceIdRef.current;
+    if (!sourceId) return;
+    const payload = buildReaderStatePayloadRef.current();
+    const signature = JSON.stringify(payload);
+    if (
+      signature === readerStateLastSavedSignatureRef.current
+      || signature === readerStateInFlightSignatureRef.current
+    ) return;
+    if (readerStateSaveInFlightRef.current) {
+      readerStateSaveQueuedRef.current = true;
+      return;
+    }
+    readerStateSaveInFlightRef.current = true;
+    readerStateInFlightSignatureRef.current = signature;
+    readerStateSaveQueuedRef.current = false;
+    void authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ readerState: payload }),
+    })
+      .then((response) => {
+        if (response.ok) readerStateLastSavedSignatureRef.current = signature;
+      })
+      .catch(() => {})
+      .finally(() => {
+        readerStateSaveInFlightRef.current = false;
+        readerStateInFlightSignatureRef.current = "";
+        if (readerStateSaveQueuedRef.current) {
+          readerStateSaveQueuedRef.current = false;
+          scheduleReaderStateSaveRef.current?.();
+        }
+      });
+  };
+  scheduleReaderStateSaveRef.current = () => {
+    if (readerStateSaveTimerRef.current) clearTimeout(readerStateSaveTimerRef.current);
+    readerStateSaveTimerRef.current = window.setTimeout(() => {
+      readerStateSaveTimerRef.current = null;
+      // Give the browser a chance to finish the current gesture/frame before
+      // doing even the small JSON serialization needed for the request.
+      const run = () => saveReaderStateRef.current?.();
+      if (typeof window.requestIdleCallback === "function") {
+        window.requestIdleCallback(run, { timeout: 250 });
+      } else {
+        window.setTimeout(run, 0);
+      }
+    }, 700);
+  };
+
   useEffect(() => {
     const el = previewRef.current;
     if (!el) return undefined;
@@ -8907,7 +10328,7 @@ const PDFPage = forwardRef(({
       timer = window.setTimeout(() => {
         const rect = el.getBoundingClientRect();
         captureZoomAnchor(rect.left + el.clientWidth / 2, rect.top + el.clientHeight / 2);
-        setReaderStateSaveTick((n) => n + 1);
+        scheduleReaderStateSaveRef.current?.();
       }, 220);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
@@ -8918,20 +10339,8 @@ const PDFPage = forwardRef(({
   }, [captureZoomAnchor, pageViewport, pageNum, readingMode]);
 
   useEffect(() => {
-    const sourceId = currentSourceIdRef.current;
-    if (!sourceId) return undefined;
-    const timer = setTimeout(() => {
-      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        // Zoom and scroll changes only modify readerState. Avoid rebuilding
-        // and serializing every annotation layer during high-frequency
-        // viewport interaction.
-        body: JSON.stringify({ readerState: buildReaderStatePayloadRef.current() }),
-      }).catch(() => {});
-    }, 900);
-    return () => clearTimeout(timer);
-  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, notebookMode, notebookActiveTab, notebookText, notebookVoiceCommands, readerStateSaveTick, buildReaderStatePayload]);
+    scheduleReaderStateSaveRef.current?.();
+  }, [pageNum, zoom, readingMode, bookletRightPage, searchOpen, searchQuery, notebookMode, notebookActiveTab, notebookText, notebookVoiceCommands]);
 
   // buildAnnotationSavePayload is read through a ref, and this effect's own
   // deps are deliberately [] (mount/unmount only) — NOT [buildAnnotationSavePayload].
@@ -8946,14 +10355,11 @@ const PDFPage = forwardRef(({
   buildAnnotationSavePayloadRef.current = buildAnnotationSavePayload;
   useEffect(() => {
     const persistReaderStateNow = () => {
-      const sourceId = currentSourceIdRef.current;
-      if (!sourceId) return;
-      authFetch(apiUrl(`/api/source-annotations/${sourceId}`), {
-        method: "PUT",
-        keepalive: true,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ readerState: buildReaderStatePayloadRef.current() }),
-      }).catch(() => {});
+      if (readerStateSaveTimerRef.current) {
+        clearTimeout(readerStateSaveTimerRef.current);
+        readerStateSaveTimerRef.current = null;
+      }
+      saveReaderStateRef.current?.();
     };
     window.addEventListener("pagehide", persistReaderStateNow);
     return () => {
@@ -8995,6 +10401,13 @@ const PDFPage = forwardRef(({
     if (activeAnnotRef.current) return;
     const ac = annotCanvasRef.current;
     if (!ac || !pageViewport) return;
+    const pageAnnotations = visiblePageAnnotations;
+    // An empty, inactive annotation layer does not need an 8 MP transparent
+    // backing store. Reallocate it when a tool is armed or content exists.
+    if (!pageAnnotations.length && !annotTool) {
+      releaseCanvasBackingStore(ac, pageViewport.width, pageViewport.height);
+      return;
+    }
     // Backing buffer at the SAME device-pixel density (and safety cap) as
     // the page canvas underneath — see currentBackingScaleRef. Sizing this
     // 1:1 with CSS pixels (the old behaviour) made every stroke look soft
@@ -9009,7 +10422,7 @@ const PDFPage = forwardRef(({
     // Use the exact viewport that sized the PDF and overlay canvases. Re-
     // deriving this from fitScale/zoom can differ by a fractional amount;
     // that turns into a visible vertical drift farther down the page.
-    const scale = pageViewport.scale || (fitScaleRef.current * zoom);
+    const scale = pageViewport.scale || (fitScaleRef.current * zoomRef.current);
     const ctx = ac.getContext("2d");
     // Setting width/height above reset the transform to identity — redraw()
     // (in the pointer-handling effect below) relies on this same transform
@@ -9017,7 +10430,6 @@ const PDFPage = forwardRef(({
     // the canvas itself.
     ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
     ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-    const pageAnnotations = visiblePageAnnotations;
     // One malformed annotation throwing here used to abort this whole loop
     // silently (a canvas 2D context call throwing mid-draw doesn't leave
     // any trace outside the console) — every annotation on the page went
@@ -9033,25 +10445,7 @@ const PDFPage = forwardRef(({
       }
     }
 
-    const mc = maskCanvasRef.current;
-    if (mc) {
-      mc.width  = ac.width;
-      mc.height = ac.height;
-      mc.style.width = ac.style.width;
-      mc.style.height = ac.style.height;
-      const maskCtx = mc.getContext("2d");
-      maskCtx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
-      maskCtx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-      for (const ann of visiblePageAnnotations) {
-        if (ann.type !== "highlight") continue;
-        try {
-          drawMaskedHighlightText(maskCtx, ann, scale);
-        } catch (err) {
-          console.error("Failed to draw masked highlight text", ann, err);
-        }
-      }
-    }
-  }, [drawAnnotationWithOwnerClip, pageViewport, visiblePageAnnotations, zoom]);
+  }, [annotTool, drawAnnotationWithOwnerClip, pageViewport, visiblePageAnnotations]);
 
   useEffect(() => {
     paintCurrentAnnotationLayers();
@@ -9097,8 +10491,8 @@ const PDFPage = forwardRef(({
   // instant a canvas node actually mounts, independent of those deps.
   //
   // paintCurrentAnnotationLayersRef (rather than closing over
-  // paintCurrentAnnotationLayers directly) is what keeps setAnnotCanvasNode/
-  // setMaskCanvasNode themselves stable ([] deps) across renders. If they
+  // paintCurrentAnnotationLayers directly) is what keeps setAnnotCanvasNode
+  // stable ([] deps) across renders. If it
   // depended on paintCurrentAnnotationLayers directly, their own identity
   // would change on every annotation added/erased (it's in that callback's
   // deps) — and since a *changed* ref-callback identity makes React detach
@@ -9112,12 +10506,6 @@ const PDFPage = forwardRef(({
 
   const setAnnotCanvasNode = useCallback((node) => {
     annotCanvasRef.current = node;
-    if (!node) return;
-    requestAnimationFrame(() => { paintCurrentAnnotationLayersRef.current(); });
-  }, []);
-
-  const setMaskCanvasNode = useCallback((node) => {
-    maskCanvasRef.current = node;
     if (!node) return;
     requestAnimationFrame(() => { paintCurrentAnnotationLayersRef.current(); });
   }, []);
@@ -9161,6 +10549,8 @@ const PDFPage = forwardRef(({
               transform: [renderedHeight, 0, 0, renderedHeight, x * scaleX, viewport.height - ((y + height) * scaleY)],
               hasEOL: true,
               fontName: "ocr-cache",
+              sourceType: "ocr-observation",
+              ocr: { pageNumber: n, bbox: { x, y, width, height }, pageWidth: ocrPage.width, pageHeight: ocrPage.height, confidence: Number(block.confidence ?? block.conf) || null, engine: ocrPage.engine || "tesseract", engineVersion: ocrPage.engineVersion || null, coordinateSpace: "ocr-page-pixels" },
             };
           }).filter(Boolean);
         }
@@ -9171,6 +10561,514 @@ const PDFPage = forwardRef(({
     pageTextItemsCacheRef.current[n] = items;
     return items;
   }, [pdfDoc]);
+
+  // The logical document tree is built once for the entire PDF. Pages are
+  // extracted sequentially as compact PDF.js text/layout records; rendered
+  // canvases and page bitmaps are never retained by this pipeline. Progress
+  // publication is throttled so long textbooks do not make the reader churn.
+  useEffect(() => {
+    documentReconstructionRunRef.current = null;
+    glyphForensicsRunRef.current = null;
+    documentPersistencePromiseRef.current = null;
+    glyphForensicsServiceRef.current?.clear?.();
+    glyphForensicsServiceRef.current = pdfDoc ? createGlyphForensicsService({ pdfDoc, rendererVersion: pdfjsLib.version }) : null;
+    setWholeDocumentReconstruction(null);
+    setBackendReconstructionState({ status: "idle", mode: null, run: null, root: null, error: "" });
+    setRabbitHoleSaveState({ status: "idle", message: "", runId: null });
+    setSavedPageLookupState({ pageIndex: null, status: "idle", error: "" });
+    setDocumentExtractionState({ pageCount: Math.max(0, Number(pdfDoc?.numPages) || 0), extractedPages: 0, failedPages: [], complete: false, status: "idle", error: "" });
+  }, [pdfDoc]);
+
+  // A missing result belongs only to one open-panel lookup session. Clear it
+  // when the aside closes so reopening Document RabbitHole always checks the
+  // database again instead of preserving a stale negative result.
+  useEffect(() => {
+    if (!sentenceTreeOpen) setSavedPageLookupState({ pageIndex: null, status: "idle", error: "" });
+  }, [sentenceTreeOpen]);
+
+  // Establish the database-check gate before the browser paints the aside.
+  // This prevents a one-frame reconstruction button from mounting while a
+  // saved tree for the visible page is still being resolved.
+  useLayoutEffect(() => {
+    if (!sentenceTreeOpen || !pdfDoc) return;
+    const currentPageIndex = Number(pageNum) - 1;
+    const savedRunPages = backendReconstructionState.run?.reconstructionPageIndexes || [];
+    const hasSavedRun = backendReconstructionState.mode === "saved"
+      && backendReconstructionState.run?.reconstructionScope === "page"
+      && savedRunPages.includes(currentPageIndex)
+      && Boolean(backendReconstructionState.root);
+    const hasCurrentMemoryTree = documentExtractionState.scope === "page"
+      && (documentExtractionState.requestedPageIndexes || []).includes(currentPageIndex)
+      && Boolean(wholeDocumentReconstruction);
+    if (hasSavedRun) {
+      setSavedPageLookupState({ pageIndex: currentPageIndex, status: "found", error: "" });
+      return;
+    }
+    if (hasCurrentMemoryTree) return;
+    setSavedPageLookupState((state) => state.pageIndex === currentPageIndex && ["checking", "missing", "error"].includes(state.status)
+      ? state
+      : { pageIndex: currentPageIndex, status: "checking", error: "" });
+  }, [backendReconstructionState.mode, backendReconstructionState.root, backendReconstructionState.run, documentExtractionState.requestedPageIndexes, documentExtractionState.scope, pageNum, pdfDoc, sentenceTreeOpen, wholeDocumentReconstruction]);
+
+  // Mount an already-saved page reconstruction when the reader is reopened or
+  // the user navigates back to that page. This is read-only hydration; it
+  // never queues a new reconstruction.
+  useEffect(() => {
+    if (!sentenceTreeOpen || !pdfDoc || isRabbitHoleBusy(backendReconstructionState.status)) return undefined;
+    const currentPageIndex = Number(pageNum) - 1;
+    if (backendReconstructionState.run) {
+      const existingPages = backendReconstructionState.run.reconstructionPageIndexes || [];
+      if (backendReconstructionState.run.reconstructionScope !== "page" || existingPages.includes(currentPageIndex)) return undefined;
+      setWholeDocumentReconstruction(null);
+      setBackendReconstructionState({ status: "idle", mode: null, run: null, root: null, error: "" });
+      setRabbitHoleSaveState({ status: "idle", message: "", runId: null });
+      return undefined;
+    }
+    if (wholeDocumentReconstruction) {
+      const reconstructedPages = documentExtractionState.requestedPageIndexes || [];
+      if (documentExtractionState.scope !== "page" || reconstructedPages.includes(currentPageIndex)) return undefined;
+      setWholeDocumentReconstruction(null);
+      setRabbitHoleSaveState({ status: "idle", message: "", runId: null });
+      return undefined;
+    }
+    if (savedPageLookupState.pageIndex !== currentPageIndex || savedPageLookupState.status !== "checking") return undefined;
+    let cancelled = false;
+    void (async () => {
+      let documentId = pymupdfDocumentIdRef.current;
+      if (!/^[a-f\d]{24}$/i.test(String(documentId || ""))) {
+        documentId = await resolveDocumentId({
+          filename: filename || embeddedPdfName || "PDF document",
+          pageCount: Number(pdfDoc.numPages) || pageCount || 1,
+          type: pdfType || "text-based",
+          sourceId: currentSourceIdRef.current || embeddedSourceId || undefined,
+        });
+        if (cancelled) return;
+        pymupdfDocumentIdRef.current = documentId;
+      }
+      const { run } = await getLatestDocumentReconstruction(documentId, "page", currentPageIndex, "", true);
+      if (cancelled) return;
+      if (!run) {
+        setSavedPageLookupState({ pageIndex: currentPageIndex, status: "missing", error: "" });
+        return;
+      }
+      const pageIndexes = run.reconstructionPageIndexes || run.extractionState?.requestedPageIndexes || [];
+      if (run.reconstructionScope === "page" && !pageIndexes.includes(currentPageIndex)) {
+        setSavedPageLookupState({ pageIndex: currentPageIndex, status: "missing", error: "" });
+        return;
+      }
+      const [{ node }, { page: savedPhysicalPage }] = await Promise.all([
+        getDocumentReconstructionRoot(run._id),
+        getDocumentReconstructionPhysicalLines(run._id, currentPageIndex),
+      ]);
+      if (cancelled) return;
+      const savedManualBlocks = (savedPhysicalPage?.physicalBlocks || []).filter((block) => block.createdBy === "user" || block.source === "manual" || block.createdBy === "ai" || block.source === "ai");
+      if (!savedManualBlocks.length) {
+        setSavedPageLookupState({ pageIndex: currentPageIndex, status: "missing", error: "" });
+        return;
+      }
+      if (!node) {
+        setSavedPageLookupState({ pageIndex: currentPageIndex, status: "error", error: "A saved run exists, but its tree root is unavailable." });
+        return;
+      }
+      const normalizedRun = { ...run, reconstructionPageIndexes: pageIndexes };
+      setPersistedPhysicalPage({ runId: String(run._id), page: savedPhysicalPage });
+      setRabbitHoleSaveState({ status: "saved", message: "Saved to database · tree verified", runId: String(run._id) });
+      setSavedPageLookupState({ pageIndex: currentPageIndex, status: "found", error: "" });
+      setBackendReconstructionState({ status: backendRunToRabbitHoleStatus(normalizedRun), mode: "saved", run: normalizedRun, root: node || null, error: "" });
+    })().catch((error) => {
+      if (cancelled) return;
+      if (Number(error?.status) === 404) {
+        setSavedPageLookupState({ pageIndex: currentPageIndex, status: "missing", error: "" });
+        return;
+      }
+      setSavedPageLookupState({ pageIndex: currentPageIndex, status: "error", error: error?.message || "Could not check for a saved PhysicalBlock tree." });
+    });
+    return () => { cancelled = true; };
+  }, [backendReconstructionState.run, backendReconstructionState.status, documentExtractionState.requestedPageIndexes, documentExtractionState.scope, embeddedPdfName, embeddedSourceId, filename, pageCount, pageNum, pdfDoc, pdfType, savedPageLookupState.pageIndex, savedPageLookupState.status, sentenceTreeOpen, wholeDocumentReconstruction]);
+
+  useEffect(() => {
+    if (!sentenceTreeOpen || !pdfDoc || aiPhysicalBlockBusy) return undefined;
+    const pageIndex = pageNum - 1;
+    if (meaningAnalysis?.pageIndex === pageIndex) return undefined;
+    let cancelled = false;
+    setMeaningAnalysis(null);
+    void (async () => {
+      let documentId = pymupdfDocumentIdRef.current;
+      if (!/^[a-f\d]{24}$/i.test(String(documentId || ""))) {
+        documentId = await resolveDocumentId({ filename: filename || embeddedPdfName || "PDF document", pageCount: Number(pdfDoc.numPages) || 1, type: pdfType || "text-based", sourceId: currentSourceIdRef.current || embeddedSourceId || undefined });
+        pymupdfDocumentIdRef.current = documentId;
+      }
+      const { analysis } = await getLatestMeaningAnalysis(documentId, pageIndex);
+      if (!cancelled && analysis) {
+        setMeaningAnalysis(analysis);
+        setRabbitHoleSaveState({ status: "saved", message: "Saved AI meaning analysis loaded from database", runId: analysis.id });
+      }
+    })().catch(() => {});
+    return () => { cancelled = true; };
+  }, [aiPhysicalBlockBusy, embeddedPdfName, embeddedSourceId, filename, meaningAnalysis?.pageIndex, pageNum, pdfDoc, pdfType, sentenceTreeOpen]);
+
+  const deleteSavedDocumentRabbitHole = useCallback(async () => {
+    const runId = rabbitHoleSaveState.runId || (backendReconstructionState.run?.capabilities?.canDelete ? backendReconstructionState.run?._id : null);
+    if (!runId || !window.confirm("Delete this saved Document RabbitHole and all of its persisted evidence?")) return;
+    setRabbitHoleSaveState((state) => ({ ...state, status: "deleting", message: "Deleting…" }));
+    try {
+      await deleteDocumentReconstruction(runId);
+      if (documentReconstructionRunRef.current) documentReconstructionRunRef.current.cancelled = true;
+      if (glyphForensicsRunRef.current) glyphForensicsRunRef.current.cancelled = true;
+      documentReconstructionRunRef.current = null;
+      documentPersistencePromiseRef.current = null;
+      setSentenceTreeOpen(false);
+      setWholeDocumentReconstruction(null);
+      setBackendReconstructionState({ status: "idle", mode: null, run: null, root: null, error: "" });
+      setRabbitHoleSaveState({ status: "idle", message: "", runId: null });
+      setSavedPageLookupState({ pageIndex: Number(pageNum) - 1, status: "missing", error: "" });
+      setDocumentExtractionState({ pageCount: Math.max(0, Number(pdfDoc?.numPages) || 0), extractedPages: 0, failedPages: [], complete: false, status: "idle", error: "" });
+    } catch (error) {
+      setRabbitHoleSaveState((state) => ({ ...state, status: "error", message: error?.message || "Could not delete Document RabbitHole." }));
+    }
+  }, [backendReconstructionState.run?._id, backendReconstructionState.run?.capabilities?.canDelete, pageNum, pdfDoc?.numPages, rabbitHoleSaveState.runId]);
+
+  useEffect(() => {
+    const runId = backendReconstructionState.run?._id;
+    if (!sentenceTreeOpen || backendReconstructionState.mode !== "backend" || !runId) return undefined;
+    let cancelled = false; let timer = null;
+    const refresh = async () => {
+      try {
+        const [{ run }, rootResult] = await Promise.all([getDocumentReconstructionStatus(runId), getDocumentReconstructionRoot(runId)]);
+        if (cancelled) return;
+        const nextStatus = backendRunToRabbitHoleStatus(run);
+        const statusError = ["failed", "interrupted"].includes(run.status) ? run?.diagnostics?.lastError || `Backend reconstruction ${run.status}.` : "";
+        setBackendReconstructionState((state) => ({ ...state, status: nextStatus, run, root: rootResult.node || state.root, error: statusError }));
+        if (!["complete", "complete-with-unresolved", "failed", "paused", "cancelled", "interrupted"].includes(run.status)) timer = window.setTimeout(refresh, 750);
+      } catch (error) {
+        if (!cancelled) setBackendReconstructionState((state) => ({ ...state, error: error?.message || "Could not refresh backend reconstruction." }));
+      }
+    };
+    void refresh();
+    return () => { cancelled = true; if (timer) window.clearTimeout(timer); };
+  }, [backendReconstructionState.mode, backendReconstructionState.run?._id, sentenceTreeOpen]);
+
+  // Escalate only evidence-backed character conflicts and geometric glyph
+  // outliers. Raster pages are rendered lazily, two at most are retained,
+  // and this pass never changes canonical text or blocks the reader.
+  useEffect(() => {
+    if (!sentenceTreeOpen || !wholeDocumentReconstruction || !glyphForensicsServiceRef.current) return undefined;
+    const analyzedTargets = new Set((wholeDocumentReconstruction.evidence.glyphAssessments || []).map((entry) => entry.targetId));
+    const allTargets = getAutomaticGlyphEscalationTargets(wholeDocumentReconstruction).filter((characterId) => !analyzedTargets.has(characterId));
+    const targets = allTargets.slice(0, AUTOMATIC_GLYPH_ANALYSIS_BUDGET);
+    if (allTargets.length > targets.length) wholeDocumentReconstruction.diagnostics.deferredGlyphAssessments = allTargets.length - targets.length;
+    if (!targets.length) return undefined;
+    const run = { cancelled: false };
+    glyphForensicsRunRef.current = run;
+    setDocumentExtractionState((state) => ({ ...state, forensicStatus: "analyzing", forensicCompleted: 0, forensicTotal: targets.length }));
+    void (async () => {
+      let completed = 0;
+      const failures = [];
+      for (const characterId of targets) {
+        if (run.cancelled || glyphForensicsRunRef.current !== run) return;
+        await yieldToBrowser();
+        try {
+          const analysis = await glyphForensicsServiceRef.current.analyzeCharacter(wholeDocumentReconstruction, characterId);
+          attachGlyphForensicEvidence(wholeDocumentReconstruction, analysis);
+          const alternatives = [...new Set(wholeDocumentReconstruction.evidence.conflicts
+            .filter((conflict) => conflict.targetId === characterId)
+            .flatMap((conflict) => conflict.candidates || [])
+            .map((candidate) => candidate.value)
+            .filter((value) => value && value !== analysis.assessment.candidateValue))];
+          for (const alternative of alternatives) {
+            const candidateAnalysis = await glyphForensicsServiceRef.current.analyzeCharacter(wholeDocumentReconstruction, characterId, undefined, alternative);
+            attachGlyphForensicEvidence(wholeDocumentReconstruction, candidateAnalysis);
+          }
+        } catch (error) {
+          failures.push({ characterId, error: error?.message || "Glyph comparison failed." });
+        }
+        completed += 1;
+        setDocumentExtractionState((state) => ({ ...state, forensicStatus: "analyzing", forensicCompleted: completed, forensicTotal: targets.length }));
+      }
+      if (run.cancelled || glyphForensicsRunRef.current !== run) return;
+      if (failures.length) wholeDocumentReconstruction.diagnostics.glyphForensicFailures = failures;
+      setWholeDocumentReconstruction({
+        ...wholeDocumentReconstruction,
+        evidence: { ...wholeDocumentReconstruction.evidence },
+        diagnostics: { ...wholeDocumentReconstruction.diagnostics },
+      });
+      setDocumentExtractionState((state) => ({ ...state, forensicStatus: failures.length === targets.length ? "error" : "complete", forensicCompleted: completed, forensicTotal: targets.length, forensicFailures: failures.length }));
+      try {
+        const persisted = await documentPersistencePromiseRef.current;
+        if (persisted?.run?._id) await persistForensicEvidence({ runId: persisted.run._id, result: wholeDocumentReconstruction });
+      } catch {
+        // Initial persistence reports its own error; forensic analysis remains
+        // valid in memory and can be retried on the next reconstruction run.
+      }
+    })();
+    return () => { run.cancelled = true; };
+  }, [sentenceTreeOpen, wholeDocumentReconstruction]);
+
+  useEffect(() => {
+    if (!sentenceTreeOpen || !pdfDoc || wholeDocumentReconstruction || !["browser", "browser-partial"].includes(backendReconstructionState.mode) || backendReconstructionState.status !== "browser-ready") return undefined;
+    const pageTotal = Math.max(0, Number(pdfDoc.numPages) || 0);
+    const reconstructionScope = "page";
+    const requestedPageNumbers = [Math.min(pageTotal, Math.max(1, Number(pageNum) || 1))];
+    const requestedPageIndexes = requestedPageNumbers.map((pageNumber) => pageNumber - 1);
+    const workflowPageCount = requestedPageNumbers.length;
+    const run = { pdfDoc, cancelled: false };
+    documentReconstructionRunRef.current = run;
+    setRabbitHoleSaveState({ status: "idle", message: "", runId: null });
+    setDocumentExtractionState({ pageCount: workflowPageCount, documentPageCount: pageTotal, extractedPages: 0, failedPages: [], complete: false, scope: reconstructionScope, requestedPageIndexes, status: "extracting", error: "" });
+
+    const execute = async () => {
+      const pages = [];
+      const abbreviationPages = [];
+      const ocrObservations = [];
+      const failedPages = [];
+      let sourceCharacterCount = 0;
+      let sourceItemCount = 0;
+      let deferredFromPage = null;
+      let lastPublish = 0;
+      for (const pageNumber of requestedPageNumbers) {
+        if (run.cancelled || documentReconstructionRunRef.current !== run) return;
+        if (pageNumber === 1 || pageNumber % 2 === 0) await yieldToBrowser();
+        try {
+          const [page, items] = await Promise.all([pdfDoc.getPage(pageNumber), getPageTextItems(pageNumber)]);
+          const viewport = page.getViewport({ scale: 1 });
+          const pageOcrStart = ocrObservations.length;
+          items.filter((item) => item?.sourceType === "ocr-observation").forEach((item, observationIndex) => {
+            ocrObservations.push({ id: `ocr-${pageNumber}-${observationIndex}`, documentId: embeddedSourceId || null, pageIndex: pageNumber - 1, text: String(item.str || ""), confidence: item.ocr?.confidence ?? null, engine: item.ocr?.engine || "unknown", engineVersion: item.ocr?.engineVersion || null, bbox: item.ocr?.bbox || null, coordinateSpace: item.ocr?.coordinateSpace || "ocr-page-pixels", pageWidth: item.ocr?.pageWidth || null, pageHeight: item.ocr?.pageHeight || null, canonical: false });
+          });
+          const compactItems = items.filter((item) => item?.sourceType !== "ocr-observation").map((item) => ({
+            str: String(item?.str || ""),
+            dir: item?.dir || "ltr",
+            width: Number(item?.width) || 0,
+            height: Number(item?.height) || 0,
+            transform: Array.isArray(item?.transform) ? item.transform.slice(0, 6).map((value) => Number(value) || 0) : [1, 0, 0, 1, 0, 0],
+            fontName: item?.fontName || "unknown",
+            hasEOL: Boolean(item?.hasEOL),
+          }));
+          const nextCharacterCount = compactItems.reduce((count, item) => count + Array.from(item.str).length, 0);
+          if (pages.length && (sourceCharacterCount + nextCharacterCount > BROWSER_TREE_CHARACTER_BUDGET || sourceItemCount + compactItems.length > BROWSER_TREE_ITEM_BUDGET)) {
+            ocrObservations.splice(pageOcrStart);
+            deferredFromPage = pageNumber;
+            break;
+          }
+          sourceCharacterCount += nextCharacterCount;
+          sourceItemCount += compactItems.length;
+          pages.push({ pageIndex: pageNumber - 1, width: viewport.width, height: viewport.height, viewportTransform: [...viewport.transform], items: compactItems });
+          abbreviationPages.push({ pageNumber, items: compactItems });
+          if (pageNumber !== pageNumRef.current) delete pageTextItemsCacheRef.current[pageNumber];
+        } catch {
+          failedPages.push(pageNumber - 1);
+        }
+        const now = performance.now();
+        if (pages.length + failedPages.length === workflowPageCount || now - lastPublish >= 160) {
+          lastPublish = now;
+          setDocumentExtractionState({ pageCount: workflowPageCount, documentPageCount: pageTotal, extractedPages: pages.length, failedPages: [...failedPages], deferredFromPage, complete: false, scope: reconstructionScope, requestedPageIndexes, status: "extracting", error: "" });
+        }
+      }
+      if (run.cancelled || documentReconstructionRunRef.current !== run) return;
+      if (!pages.length) throw new Error(reconstructionScope === "page" ? `Page ${requestedPageNumbers[0]} could not be extracted. No reconstruction was saved.` : "No PDF pages could be extracted.");
+      if (reconstructionScope === "page" && sourceCharacterCount < 1) throw new Error(`Page ${requestedPageNumbers[0]} contains no readable text evidence. No empty tree was saved.`);
+      setDocumentExtractionState({ pageCount: workflowPageCount, documentPageCount: pageTotal, extractedPages: pages.length, failedPages: [...failedPages], complete: false, scope: reconstructionScope, requestedPageIndexes, status: "reconstructing", error: "" });
+      await yieldToBrowser();
+      const abbreviations = extractDocumentAbbreviations(abbreviationPages);
+      const lexicalProvider = createLexicalEvidenceProvider({ abbreviations, allowUmls: true });
+      const complete = true;
+      const deferredPages = [];
+      const reconstructionInput = {
+        documentId: embeddedSourceId || undefined,
+        fileName: filename || embeddedPdfName || "PDF document",
+        pageCount: pageTotal,
+        pages,
+        outlines: pdfCustomOutlines,
+        ocrObservations,
+        documentFormAssignments: manualDocumentFormAssignments,
+        config: { linguisticScope: "manual-physical-blocks" },
+        evidenceVersions: lexicalProvider.evidenceVersions,
+        extractionState: {
+          documentId: embeddedSourceId || filename || embeddedPdfName || "local-pdf",
+          pageCount: pageTotal,
+          scope: reconstructionScope,
+          requestedPageIndexes,
+          extractedPages: pages.map((page) => page.pageIndex),
+          failedPages,
+          deferredPages,
+          deferredReason: deferredPages.length ? "browser-memory-budget" : null,
+          complete,
+          sourceHash: "calculated-by-reconstruction",
+          extractionVersion: "pdfjs-compact-v1",
+        },
+      };
+      let reconstruction = reconstructDocument(reconstructionInput);
+      const missingSpaceCandidates = getMissingSpaceCandidates(reconstruction, (candidate) => lexicalProvider.lookupLocal(candidate))
+        .filter((candidate) => candidate.localSupportsSplit || candidate.geometry.normalizedVisualGap >= 0.28)
+        .slice(0, 30);
+      if (missingSpaceCandidates.length) {
+        setDocumentExtractionState((state) => ({ ...state, status: "enriching" }));
+        const candidateSurfaces = missingSpaceCandidates.flatMap((candidate) => [candidate.surface, ...candidate.segmentation, candidate.segmentation.join(" ")]);
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 4000);
+        try {
+          const evidence = await lexicalProvider.lookupMany(candidateSurfaces, () => ({ signal: controller.signal }));
+          const decisions = missingSpaceCandidates.flatMap((candidate) => {
+            const joined = evidence.get(candidate.surface.normalize("NFKC").toLocaleLowerCase());
+            const segments = candidate.segmentation.map((surface) => evidence.get(surface.normalize("NFKC").toLocaleLowerCase()));
+            const phrase = evidence.get(candidate.segmentation.join(" ").normalize("NFKC").toLocaleLowerCase());
+            const splitLexicallySupported = segments.every((entry) => entry?.dictionary?.recognized || entry?.corpus?.recognized);
+            const joinedLexicallySupported = Boolean(joined?.dictionary?.recognized || joined?.corpus?.recognized);
+            const phraseSupported = Boolean(phrase?.corpus?.recognized || phrase?.umls?.recognized);
+            if (!splitLexicallySupported || joinedLexicallySupported && !candidate.localSupportsSplit || !candidate.localSupportsSplit && !phraseSupported && candidate.geometry.normalizedVisualGap < 0.62) return [];
+            return [{ ...candidate, evidence: { geometry: candidate.geometry, joined, segments, phrase }, ruleId: "WORD_MISSING_SPACE_MULTI_EVIDENCE" }];
+          });
+          if (decisions.length) reconstruction = reconstructDocument({ ...reconstructionInput, wordSplitDecisions: decisions });
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+      const suspiciousWords = reconstruction.words.filter((word) => word.transformationIds.some((id) => {
+        const transformation = reconstruction.transformations.find((entry) => entry.id === id);
+        return ["REMOVE_EXTRACTION_SPACE", "LINE_HYPHEN_JOIN", "INSERT_WORD_BOUNDARY"].includes(transformation?.type);
+      }));
+      if (suspiciousWords.length) {
+        setDocumentExtractionState((state) => ({ ...state, status: "enriching" }));
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 4000);
+        try {
+          const lexicalEvidence = await lexicalProvider.lookupMany(suspiciousWords.map((word) => word.resolvedText), () => ({ signal: controller.signal }));
+          suspiciousWords.forEach((word) => { word.lexicalEvidence = lexicalEvidence.get(word.resolvedText.normalize("NFKC").toLocaleLowerCase()) || null; });
+          reconstruction.diagnostics.dictionaryLookups = suspiciousWords.length;
+          reconstruction.diagnostics.corpusLookups = suspiciousWords.length;
+          reconstruction.diagnostics.umlsLookups = suspiciousWords.filter((word) => word.lexicalEvidence?.umls?.status !== "not-requested").length;
+          reconstruction.diagnostics.umlsUnavailableLookups = suspiciousWords.filter((word) => word.lexicalEvidence?.umls?.status === "unavailable").length;
+        } finally {
+          window.clearTimeout(timeout);
+        }
+      }
+      reconstruction.run.evidenceVersions = Object.freeze({ ...lexicalProvider.evidenceVersions });
+      // Scope and page indexes are part of identity. Without them, every
+      // one-page run for a document collides with every other page/full run.
+      reconstruction.run.reconstructionHash = deterministicHash([reconstruction.source.fileHash, reconstruction.run.algorithmVersion, reconstruction.run.configHash, reconstruction.run.evidenceVersions, reconstructionScope, requestedPageIndexes, reconstruction.documentForms.map((form) => [form.id, form.type, form.physicalBlockIds]), (reconstruction.physical?.blocks || []).map((block) => [block.id, block.lineIds, block.source, block.status, block.reconstruction?.provider, block.reconstruction?.model])]);
+      reconstruction.run.id = `run_${deterministicHash([reconstruction.run.reconstructionHash, reconstruction.source.id])}`;
+      if (run.cancelled || documentReconstructionRunRef.current !== run) return;
+      setWholeDocumentReconstruction(reconstruction);
+      setDocumentTreeSelectedId(reconstruction.source.id);
+      setDocumentExtractionState({ pageCount: workflowPageCount, documentPageCount: pageTotal, extractedPages: pages.length, failedPages, deferredPages, deferredFromPage, complete, scope: reconstructionScope, requestedPageIndexes, status: complete && !failedPages.length ? "complete" : "partial", error: "", persistenceStatus: "saving", persistenceProgress: 0 });
+      setRabbitHoleSaveState({ status: "saving", message: "Saving and verifying tree…", runId: null });
+      // Search can refill any page on demand. Keeping every raw PDF.js item
+      // after the normalized evidence graph exists only doubles memory.
+      const visiblePage = pageNumRef.current;
+      const currentPageItems = pageTextItemsCacheRef.current[visiblePage];
+      pageTextItemsCacheRef.current = currentPageItems ? { [visiblePage]: currentPageItems } : {};
+
+      // Persistence is intentionally detached from opening/using the tree.
+      // The normalized API writes pages and logical entities in bounded
+      // batches; a storage outage cannot invalidate the in-memory result.
+      documentPersistencePromiseRef.current = (async () => {
+        try {
+          // Re-resolve the identity at save time. The cached ref can belong
+          // to an older reader/source session and still look like a valid
+          // ObjectId, which makes POST /runs return a misleading 404.
+          const persistenceDocumentId = await resolveDocumentId({
+            filename: filename || embeddedPdfName || "PDF document",
+            pageCount: pageTotal,
+            type: pdfType || "text-based",
+            sourceId: currentSourceIdRef.current || undefined,
+          });
+          pymupdfDocumentIdRef.current = persistenceDocumentId;
+          const persisted = await persistDocumentReconstruction({
+            documentId: persistenceDocumentId,
+            result: reconstruction,
+            pages,
+            onProgress: (done, total) => {
+              const persistenceProgress = total ? Math.round(done / total * 100) : 0;
+              setDocumentExtractionState((state) => ({ ...state, persistenceStatus: "saving", persistenceProgress }));
+            },
+          });
+          const persistedRun = {
+            ...persisted.run,
+            reconstructionScope,
+            reconstructionPageIndexes: requestedPageIndexes,
+          };
+          setDocumentExtractionState((state) => ({ ...state, persistenceStatus: "saved", persistenceProgress: 100 }));
+          setRabbitHoleSaveState({ status: "saved", message: "Saved to database · tree verified", runId: String(persisted.run._id) });
+          setSavedPageLookupState({ pageIndex: requestedPageIndexes[0] ?? null, status: reconstructionScope === "page" ? "found" : "idle", error: "" });
+          if (reconstructionScope === "page") {
+            setBackendReconstructionState({ status: "complete", mode: "saved", run: persistedRun, root: persisted.root, error: "" });
+          } else {
+            setBackendReconstructionState((state) => ({ ...state, status: "complete", run: persistedRun, root: persisted.root, error: "" }));
+          }
+          return { ...persisted, run: persistedRun };
+        } catch (error) {
+          setDocumentExtractionState((state) => ({ ...state, persistenceStatus: "error", persistenceError: error?.message || "Could not persist reconstruction." }));
+          setRabbitHoleSaveState({ status: "error", message: error?.message || "Could not persist reconstruction.", runId: null });
+          throw error;
+        }
+      })();
+      void documentPersistencePromiseRef.current.catch(() => {});
+    };
+
+    execute().catch((error) => {
+      if (run.cancelled || documentReconstructionRunRef.current !== run) return;
+      setDocumentExtractionState((state) => ({ ...state, status: "error", error: error?.message || "Whole-document reconstruction failed." }));
+      setRabbitHoleSaveState({ status: "error", message: error?.message || "Could not reconstruct the AI candidate blocks.", runId: null });
+    });
+    return () => { run.cancelled = true; };
+  }, [backendReconstructionState.mode, backendReconstructionState.status, embeddedPdfName, embeddedSourceId, filename, getPageTextItems, manualDocumentFormAssignments, pageNum, pdfCustomOutlines, pdfDoc, pdfType, sentenceTreeOpen, wholeDocumentReconstruction]);
+
+  // PDF -> Tree navigation. A click or completed native text selection is
+  // resolved against canonical character source rectangles, then the tree
+  // opens that character's ancestry and the evidence inspector.
+  useEffect(() => {
+    if (!sentenceTreeOpen || !wholeDocumentReconstruction || !pageViewport) return undefined;
+    const pageElement = pageContainerRefs.current[pageNum - 1];
+    const physicalPage = wholeDocumentReconstruction.physical.pages.find((page) => page.pageIndex === pageNum - 1);
+    if (!pageElement || !physicalPage?.width || !physicalPage?.height) return undefined;
+    const revealAtPointer = (event) => {
+      if (event.button != null && event.button !== 0) return;
+      const rect = pageElement.getBoundingClientRect();
+      const scale = rect.width / physicalPage.width;
+      if (!scale) return;
+      let clientX = event.clientX;
+      let clientY = event.clientY;
+      const selection = window.getSelection?.();
+      if (selection && !selection.isCollapsed && selection.rangeCount) {
+        const selectionRect = selection.getRangeAt(0).getBoundingClientRect();
+        if (selectionRect.width || selectionRect.height) {
+          clientX = selectionRect.left + selectionRect.width / 2;
+          clientY = selectionRect.top + selectionRect.height / 2;
+        }
+      }
+      const x = (clientX - rect.left) / scale;
+      const y = (clientY - rect.top) / scale;
+      const entities = getLogicalEntitiesAtPdfLocation(wholeDocumentReconstruction, { pageIndex: pageNum - 1, x, y, width: 0.5 / scale, height: 0.5 / scale });
+      if (!entities.length) return;
+      setDocumentTreeSelectedId(entities[0].id);
+      setDocumentTreeInspectorTab("evidence");
+    };
+    pageElement.addEventListener("pointerup", revealAtPointer);
+    return () => pageElement.removeEventListener("pointerup", revealAtPointer);
+  }, [pageNum, pageViewport, sentenceTreeOpen, wholeDocumentReconstruction]);
+
+  const captureDocumentTreeRasterEvidence = useCallback(() => {
+    const refs = documentTreePhysicalEvidence;
+    if (!refs.length) return;
+    const targetPageIndex = refs[0].pageIndex;
+    if (targetPageIndex !== pageNum - 1) { navigatePage(targetPageIndex + 1); return; }
+    const page = documentReconstruction.physical.pages.find((entry) => entry.pageIndex === targetPageIndex);
+    const canvas = pageCanvasRefs.current[targetPageIndex];
+    const pageRefs = refs.filter((ref) => ref.pageIndex === targetPageIndex);
+    if (!page || !canvas || !pageRefs.length) return;
+    const scaleX = canvas.width / page.width;
+    const scaleY = canvas.height / page.height;
+    const left = Math.max(0, Math.floor(Math.min(...pageRefs.map((ref) => ref.x)) * scaleX) - 8);
+    const top = Math.max(0, Math.floor(Math.min(...pageRefs.map((ref) => ref.y)) * scaleY) - 8);
+    const right = Math.min(canvas.width, Math.ceil(Math.max(...pageRefs.map((ref) => ref.x + ref.width)) * scaleX) + 8);
+    const bottom = Math.min(canvas.height, Math.ceil(Math.max(...pageRefs.map((ref) => ref.y + ref.height)) * scaleY) + 8);
+    if (right <= left || bottom <= top) return;
+    const crop = document.createElement("canvas");
+    crop.width = right - left; crop.height = bottom - top;
+    crop.getContext("2d")?.drawImage(canvas, left, top, crop.width, crop.height, 0, 0, crop.width, crop.height);
+    setDocumentTreeRasterEvidence({ targetId: effectiveDocumentTreeSelectedId, pageIndex: targetPageIndex, bbox: { x: left / scaleX, y: top / scaleY, width: crop.width / scaleX, height: crop.height / scaleY }, renderScale: Math.max(scaleX, scaleY), renderer: "pdfjs", rendererVersion: pdfjsLib.version, sourceHash: documentReconstruction.source.fileHash, imageUrl: crop.toDataURL("image/webp", 0.9) });
+  }, [documentReconstruction, documentTreePhysicalEvidence, effectiveDocumentTreeSelectedId, navigatePage, pageNum]);
+
   // The abbreviation index used to scan the entire PDF with four concurrent
   // text-extraction workers as soon as a document opened. On long documents
   // that starved the visible page renderer and published one full component
@@ -9509,7 +11407,7 @@ const PDFPage = forwardRef(({
   // instant the query changes again instead of racing a stale one to
   // completion and overwriting fresher results.
   useEffect(() => {
-    if (!searchOpen || !pdfDoc || !pageCount || !searchQuery.trim()) {
+    if (!searchOpen || !pdfDoc || !pageCount || !searchRunQuery.trim()) {
       setSearchMatches([]);
       setSearchActiveIndex(-1);
       setSearchScanning(false);
@@ -9518,33 +11416,21 @@ const PDFPage = forwardRef(({
     const runId = ++searchRunIdRef.current;
     const timer = setTimeout(async () => {
       setSearchScanning(true);
-      // Tolerant multi-stage search (pdfTextNormalizer/pdfSearchIndex/
-      // pdfFuzzySearch) — normalize the query once, then per page: build
-      // (or reuse the cached) page index and try exact -> case-insensitive
-      // -> compact/whitespace-and-hyphen-insensitive -> scientific-alias ->
-      // token-aware -> fuzzy, safest first. Every result already carries
-      // its exact originalText range mapped back through those stages, so
-      // this still resolves to the same {page, itemIndexes, itemRanges}
-      // shape the highlight-drawing effect below expects, plus matchType/
-      // confidence for the "Likely match" indicator in the search bar
-      // (spec: search the normalized/compact representation, but always
-      // highlight the untouched original PDF text). itemIndexes is every
-      // PDF.js item behind the match, NOT necessarily numerically
-      // contiguous — the search index is now built in true reading order
-      // (pdfPageLayout.js), so a multi-column page's item stream order can
-      // differ from reading order; see originalRangeToItemIndexes's own
-      // comment. itemRanges is that same function's per-item
-      // [localStart, localEnd) match offset, used to draw a highlight rect
-      // over just the matched substring of an item rather than its whole
-      // width.
-      const queryRepr = normalizeQuery(searchQuery);
       const results = [];
       for (let n = 1; n <= pageCount; n++) {
         if (searchRunIdRef.current !== runId) return; // superseded by a newer search
         let items;
         try { items = await getPageTextItems(n); } catch { continue; }
         const pageIndex = pageIndexCacheRef.current.get(n, items);
-        const pageResults = searchPageForQuery(pageIndex, queryRepr, { fuzzy: true });
+        const pageResults = searchPageForWordform(
+          n,
+          items,
+          searchRunQuery,
+          Array.from(new Set((pageIndex.itemOffsets || [])
+            .slice()
+            .sort((left, right) => left.start - right.start)
+            .map((entry) => entry.itemIndex))),
+        );
         for (const r of pageResults) {
           if (!r.itemIndexes?.length) continue;
           results.push({
@@ -9552,7 +11438,6 @@ const PDFPage = forwardRef(({
             itemIndexes: r.itemIndexes,
             itemRanges: r.itemRanges,
             matchType: r.matchType,
-            confidence: r.confidence,
             originalMatchedText: r.originalMatchedText,
           });
         }
@@ -9564,7 +11449,7 @@ const PDFPage = forwardRef(({
       if (results.length) setPageNum(results[0].page);
     }, 350);
     return () => clearTimeout(timer);
-  }, [searchQuery, searchOpen, pdfDoc, pageCount, getPageTextItems]);
+  }, [searchRunQuery, searchOpen, pdfDoc, pageCount, getPageTextItems]);
 
   const goToSearchMatch = useCallback((delta) => {
     setSearchActiveIndex((prev) => {
@@ -9587,16 +11472,17 @@ const PDFPage = forwardRef(({
   useEffect(() => {
     const canvas = searchCanvasRef.current;
     if (!canvas || !pageViewport) return;
-    const backingScale = currentBackingScaleRef.current || 1;
-    canvas.width  = Math.max(1, Math.floor(pageViewport.width * backingScale));
-    canvas.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
-    canvas.style.width  = `${pageViewport.width}px`;
-    canvas.style.height = `${pageViewport.height}px`;
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
-    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-    if (!searchOpen || !searchMatches.length) return;
-
+    if (!searchOpen || !searchMatches.length) {
+      releaseCanvasBackingStore(canvas, pageViewport.width, pageViewport.height);
+      return;
+    }
+    const ctx = prepareOverlayCanvas(
+      canvas,
+      pageViewport.width,
+      pageViewport.height,
+      currentBackingScaleRef.current || 1,
+    );
+    if (!ctx) return;
     const items = pageTextItemsCacheRef.current[pageNum];
     if (!items) return;
     const vt = pageViewport.transform;
@@ -9623,7 +11509,7 @@ const PDFPage = forwardRef(({
     });
   }, [searchOpen, searchMatches, searchActiveIndex, pageNum, pageViewport]);
 
-  // Computes the active AMCTOSHS Hyle layer's data (pdfHyleStats.js, pure/
+  // Computes the active RabbitHole Hyle layer's data (pdfHyleStats.js, pure/
   // client-side) for the current page and, for Segmented Hyle only, draws
   // its overlay boxes on the dedicated #pdf_hyle_canvas — same canvas-
   // sizing convention as the search/Narrative-Mode overlays above. Raw
@@ -9641,24 +11527,28 @@ const PDFPage = forwardRef(({
   useEffect(() => {
     const canvas = hyleCanvasRef.current;
     if (!canvas || !pageViewport) return;
-    const backingScale = currentBackingScaleRef.current || 1;
-    canvas.width  = Math.max(1, Math.floor(pageViewport.width * backingScale));
-    canvas.height = Math.max(1, Math.floor(pageViewport.height * backingScale));
-    canvas.style.width  = `${pageViewport.width}px`;
-    canvas.style.height = `${pageViewport.height}px`;
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(backingScale, 0, 0, backingScale, 0, 0);
-    ctx.clearRect(0, 0, pageViewport.width, pageViewport.height);
-
     const runId = ++hyleRunIdRef.current;
     const vt = pageViewport.transform;
+
+    if (hyleMode === "raw") {
+      releaseCanvasBackingStore(canvas, pageViewport.width, pageViewport.height);
+      getPageTextItems(pageNum).then((items) => {
+        if (!items || hyleRunIdRef.current !== runId) return;
+        setHyleLayerData({ mode: "raw", pageNum, ...buildRawHyle(items) });
+      }).catch(() => {});
+      return;
+    }
+
+    const ctx = prepareOverlayCanvas(
+      canvas,
+      pageViewport.width,
+      pageViewport.height,
+      currentBackingScaleRef.current || 1,
+    );
+    if (!ctx) return;
+
     getPageTextItems(pageNum).then((items) => {
       if (!items || hyleRunIdRef.current !== runId) return;
-
-      if (hyleMode === "raw") {
-        setHyleLayerData({ mode: "raw", pageNum, ...buildRawHyle(items) });
-        return; // no drawing — the page stays exactly as-is at this layer
-      }
 
       // hyleMode === "segmented"
       const segmented = buildSegmentedHyle(items, vt);
@@ -9678,7 +11568,7 @@ const PDFPage = forwardRef(({
       // is a page-wide structural feature, not tied to any one line.
       ctx.setLineDash([4, 4]);
       ctx.lineWidth = 1;
-      ctx.strokeStyle = "rgba(38,198,218,0.7)"; // cyan — matches the AMCTOSHS Morphe accent elsewhere in the app, distinct from the line boxes below
+      ctx.strokeStyle = "rgba(38,198,218,0.7)"; // cyan — matches the RabbitHole Morphe accent elsewhere in the app, distinct from the line boxes below
       for (const gx of segmented.columnGutterXs || []) {
         ctx.beginPath();
         ctx.moveTo(gx, 0);
@@ -10020,62 +11910,6 @@ const PDFPage = forwardRef(({
       };
     };
 
-    // Every text-layer word span whose box overlaps a just-drawn
-    // highlight's own bounding box (padded by half its line width) — used
-    // to bake a masked/recolored text overlay onto the highlight so the
-    // original PDF glyphs (whatever color they happen to be) don't fight
-    // the highlight color for contrast. Bbox overlap, not exact stroke-path
-    // distance — fine for "line" mode (near-exact) and close enough for
-    // "freehand" (drawn tightly over the intended text in practice).
-    // Returns canvas-space (PDF-point) geometry, matching ann.points'
-    // own storage convention, computed once at commit time while the live
-    // spans still exist (they don't for off-screen/unrendered pages).
-    const findSpansOverlappingHighlight = (points) => {
-      if (!points || !points.length) return [];
-      const canvasRect = ac.getBoundingClientRect();
-      const scale = getScale();
-      // No horizontal padding at all — the highlight's own x-range must
-      // actually intersect a word's box. Padding by the stroke's lineWidth
-      // (previous version) was generous enough to reach into whichever
-      // word sat immediately before/after the intended range, even though
-      // the ink itself never got there — reported as "two extra words
-      // highlighted, one before and one after the preview." Vertical
-      // tolerance is based on each span's own height (half of it), not
-      // lineWidth — keeps same-line words in "line" mode (whose Y is
-      // locked to a detected span's center, see getTextAlignedHighlightPoint)
-      // while still excluding adjacent lines a full line-height away.
-      const minX = Math.min(...points.map((pt) => pt.x));
-      const maxX = Math.max(...points.map((pt) => pt.x));
-      const minY = Math.min(...points.map((pt) => pt.y));
-      const maxY = Math.max(...points.map((pt) => pt.y));
-      const results = [];
-      for (const span of spansRef.current) {
-        if (!span.text || !span.text.trim()) continue;
-        const r = span.el?.getBoundingClientRect();
-        if (!r) continue;
-        const left = (r.left - canvasRect.left) / scale;
-        const top = (r.top - canvasRect.top) / scale;
-        const width = r.width / scale;
-        const height = r.height / scale;
-        if (left + width <= minX || left >= maxX) continue;
-        const spanCenterY = top + height / 2;
-        const verticalTolerance = height * 0.5;
-        if (spanCenterY < minY - verticalTolerance || spanCenterY > maxY + verticalTolerance) continue;
-        results.push({
-          text: span.text,
-          x: left,
-          y: top,
-          width,
-          height,
-          fontSize: (parseFloat(span.el.style.fontSize) || height) / scale,
-          fontFamily: span.fontFamily || "sans-serif",
-          fontWeight: span.fontWeight || "normal",
-          fontStyle: span.fontStyle || "normal",
-        });
-      }
-      return results;
-    };
-
     const getTextAlignedHighlightPoint = (e, lockedY = null) => {
       const basePoint = toCanvas(e);
       const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -10111,6 +11945,24 @@ const PDFPage = forwardRef(({
       };
     };
 
+    const snapStraightPoint = (start, point, event) => {
+      const dx = point.x - start.x;
+      const dy = point.y - start.y;
+      const distance = Math.hypot(dx, dy);
+      if (!distance) return point;
+      const forceSnap = Boolean(event.shiftKey);
+      const horizontal = Math.abs(dy) <= Math.max(8 / getScale(), Math.abs(dx) * 0.2);
+      const vertical = Math.abs(dx) <= Math.max(8 / getScale(), Math.abs(dy) * 0.2);
+      if (horizontal || (!forceSnap && Math.abs(dx) >= Math.abs(dy) * 2.5)) return { ...point, y: start.y };
+      if (vertical || (!forceSnap && Math.abs(dy) >= Math.abs(dx) * 2.5)) return { ...point, x: start.x };
+      if (forceSnap) {
+        const angle = Math.atan2(dy, dx);
+        const snappedAngle = Math.round(angle / (Math.PI / 4)) * (Math.PI / 4);
+        return { ...point, x: start.x + Math.cos(snappedAngle) * distance, y: start.y + Math.sin(snappedAngle) * distance };
+      }
+      return point;
+    };
+
     const redraw = (extra, annotationsOverride = visiblePageAnnotations) => {
       const scale = getScale();
       const ctx = ac.getContext("2d");
@@ -10124,15 +11976,6 @@ const PDFPage = forwardRef(({
       for (const ann of pageAnnotations) drawAnnotationWithOwnerClip(ctx, ann, scale, pageAnnotations);
       if (extra) drawAnnotationWithOwnerClip(ctx, extra, scale, pageAnnotations);
 
-      const mc = maskCanvasRef.current;
-      if (mc) {
-        const maskCtx = mc.getContext("2d");
-        maskCtx.clearRect(0, 0, mc.clientWidth, mc.clientHeight);
-        for (const annotation of pageAnnotations) {
-          if (annotation.type === "highlight") drawMaskedHighlightText(maskCtx, annotation, scale);
-        }
-        if (extra?.type === "highlight") drawMaskedHighlightText(maskCtx, extra, scale);
-      }
       syncLiveBBoxPreview(extra);
     };
 
@@ -10256,6 +12099,15 @@ const PDFPage = forwardRef(({
       }
       const p = toCanvas(e);
       setSmartPenMorphePreview(null);
+      if (annotTool === "antiAgingEraser") {
+        activeAnnotRef.current = { type: "antiAgingEraser" };
+        const rect = ac.getBoundingClientRect();
+        recordPagePatina(pageNum, "antiAge", {
+          x: (e.clientX - rect.left) / rect.width,
+          y: (e.clientY - rect.top) / rect.height,
+        }, 1);
+        return;
+      }
       const strokeColor = annotColor;
       const bboxColor = nextDistinctBBoxColor(annotations[pageNum] || []);
       if (annotTool === "bbox" && !activeBBoxCreationType) return;
@@ -10273,9 +12125,8 @@ const PDFPage = forwardRef(({
           });
           clearHighlightLongPress();
           const touch = e.touches?.[0];
-          const alignedRange = highlightMode === "line" && highlightAutoWidth ? getTextAlignedHighlightRange(e) : null;
           const firstPoint = highlightMode === "line"
-            ? (alignedRange || getTextAlignedHighlightPoint(e))
+            ? getTextAlignedHighlightPoint(e)
             : p;
           // Start a provisional stroke immediately. A short touch that moves
           // away from the existing highlight then continues this stroke,
@@ -10283,19 +12134,19 @@ const PDFPage = forwardRef(({
           activeAnnotRef.current = {
             type: "highlight",
             color: strokeColor,
-            lineWidth: firstPoint.lineWidth || annotSize,
+            lineWidth: (highlightMode === "line" && highlightAutoWidth && firstPoint.lineWidth) ? firstPoint.lineWidth : annotSize,
             mode: highlightMode,
+            highlightStabilization,
             opacity: annotOpacity / 100,
             highlightSettings: DEFAULT_HIGHLIGHT_SETTINGS,
             taperEnds: highlightTaperEnds,
             lineCenterY: highlightMode === "line" && firstPoint.textAligned ? firstPoint.y : null,
-            autoWidthLocked: Boolean(highlightMode === "line" && highlightAutoWidth && alignedRange),
-            _autoWidthAnchorLeft: alignedRange ? alignedRange.startX : null,
-            _autoWidthAnchorRight: alignedRange ? alignedRange.endX : null,
-            points: highlightMode === "line" && highlightAutoWidth && alignedRange
-              ? [{ x: alignedRange.startX, y: firstPoint.y }, { x: alignedRange.endX, y: firstPoint.y }]
-              : [{ x: firstPoint.x, y: firstPoint.y }],
+            autoWidthLocked: false,
+            points: [{ x: firstPoint.x, y: firstPoint.y }],
           };
+          if (highlightMode === "line" && highlightAutoWidth && firstPoint.lineWidth) {
+            setAnnotSize(Math.round(firstPoint.lineWidth));
+          }
           highlightLongPress = {
             x: touch?.clientX ?? e.clientX,
             y: touch?.clientY ?? e.clientY,
@@ -10324,9 +12175,8 @@ const PDFPage = forwardRef(({
         // centered on the text line and matches its height either way —
         // that part is "line" mode's own baseline-following behavior, not
         // the width-locking Auto Width controls.
-        const alignedRange = highlightMode === "line" && highlightAutoWidth ? getTextAlignedHighlightRange(e) : null;
         const firstPoint = highlightMode === "line"
-          ? (alignedRange || getTextAlignedHighlightPoint(e))
+          ? getTextAlignedHighlightPoint(e)
           : p;
         // Same restriction as underline/strikethrough — a highlight can
         // only start over real text, never blank margins/figures. "line"
@@ -10339,13 +12189,14 @@ const PDFPage = forwardRef(({
         activeAnnotRef.current = {
           type: "highlight",
           color: strokeColor,
-          lineWidth: (firstPoint.lineWidth || annotSize),
+          lineWidth: (highlightMode === "line" && highlightAutoWidth && firstPoint.lineWidth) ? firstPoint.lineWidth : annotSize,
           mode: highlightMode,
+          highlightStabilization,
           opacity: annotOpacity / 100,
           highlightSettings: DEFAULT_HIGHLIGHT_SETTINGS,
           taperEnds: highlightTaperEnds,
           lineCenterY: highlightMode === "line" && firstPoint.textAligned ? firstPoint.y : null,
-          autoWidthLocked: Boolean(highlightMode === "line" && highlightAutoWidth && alignedRange),
+          autoWidthLocked: false,
           // The starting word's own bounds — onMove (below) re-snaps to
           // whichever word is now under the cursor and grows/shrinks the
           // highlight to span from this fixed anchor out to that word,
@@ -10353,15 +12204,11 @@ const PDFPage = forwardRef(({
           // moves. Without an anchor, "locked" mode had nothing to extend
           // FROM and just kept redrawing the single starting word forever
           // (reported as "highlights word-by-word instead of continuous").
-          _autoWidthAnchorLeft: alignedRange ? alignedRange.startX : null,
-          _autoWidthAnchorRight: alignedRange ? alignedRange.endX : null,
-          points: highlightMode === "line" && highlightAutoWidth && alignedRange
-            ? [
-                { x: alignedRange.startX, y: firstPoint.y },
-                { x: alignedRange.endX, y: firstPoint.y },
-              ]
-            : [{ x: firstPoint.x, y: firstPoint.y }],
+          points: [{ x: firstPoint.x, y: firstPoint.y }],
         };
+        if (highlightMode === "line" && highlightAutoWidth && firstPoint.lineWidth) {
+          setAnnotSize(Math.round(firstPoint.lineWidth));
+        }
       } else if (["underline","strikethrough"].includes(annotTool)) {
         // Snaps to the word under the pointer — findNearestSpanOnRow
         // tries the exact tight bbox first, then falls back to the
@@ -10471,51 +12318,76 @@ const PDFPage = forwardRef(({
       }
       const ann = activeAnnotRef.current;
       if (!ann) return;
+      if (ann.type === "antiAgingEraser") {
+        const rect = ac.getBoundingClientRect();
+        recordPagePatina(pageNum, "antiAge", {
+          x: (e.clientX - rect.left) / rect.width,
+          y: (e.clientY - rect.top) / rect.height,
+        }, 0.35);
+        return;
+      }
       const p = isBBoxType(ann.type) ? toBBoxPagePoint(e) : toCanvas(e);
       if (ann.type === "pen" || ann.type === "highlight" || ann.type === "freeshape") {
         if (ann.mode === "line") {
-          if (ann.type === "highlight" && ann.autoWidthLocked) {
-            // Continuously re-snap to whichever word is now under the
-            // cursor, growing/shrinking from the FIXED starting-word anchor
-            // out to it — same word-span lookup underline/strikethrough's
-            // own onMove uses. Previously this branch just redrew the
-            // single word captured at mousedown on every tick and never
-            // looked at where the cursor had moved to, so a drag across a
-            // whole line only ever covered the first word touched.
-            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-            const span = findNearestSpanOnRow(clientX, clientY);
-            if (span) {
-              ann.points[0].x = Math.min(ann._autoWidthAnchorLeft, span.left);
-              ann.points[1].x = Math.max(ann._autoWidthAnchorRight, span.left + span.width);
-            }
-            redraw(ann);
-            return;
-          }
           const linePoint = ann.type === "highlight"
             ? getTextAlignedHighlightPoint(e, ann.lineCenterY)
             : p;
-          if (ann.type === "highlight" && linePoint.textAligned && ann.lineCenterY == null) ann.lineCenterY = linePoint.y;
+          const snappedLinePoint = ann.type === "highlight" && !linePoint.textAligned
+            ? snapStraightPoint(ann.points[0], linePoint, e)
+            : linePoint;
+          if (ann.type === "highlight" && snappedLinePoint.textAligned && ann.lineCenterY == null) ann.lineCenterY = snappedLinePoint.y;
           // Track the live detected text height exactly, not just grow into
           // it — Math.max here used to mean a highlight that started off
           // text (falling back to the manual annotSize thickness) could
           // never shrink back down to the real, usually-smaller detected
           // line height once the drag actually reached real text.
-          if (ann.type === "highlight" && linePoint.lineWidth) ann.lineWidth = linePoint.lineWidth;
-          const lockedY = ann.type === "highlight" && ann.lineCenterY != null ? ann.lineCenterY : linePoint.y;
+          if (ann.type === "highlight" && snappedLinePoint.lineWidth) {
+            if (highlightAutoWidth) {
+              ann.lineWidth = snappedLinePoint.lineWidth;
+              setAnnotSize(Math.round(snappedLinePoint.lineWidth));
+            }
+            // when Smart is off, do not overwrite the live annotation's
+            // lineWidth with detected text height; keep the manual size.
+          }
+          const lockedY = ann.type === "highlight" && ann.lineCenterY != null ? ann.lineCenterY : snappedLinePoint.y;
           if (ann.type === "highlight" && ann.points[0]) ann.points[0].y = lockedY;
-          ann.points[1] = { x: linePoint.x, y: lockedY };
+          ann.points[1] = { x: snappedLinePoint.x, y: lockedY };
         } else {
-          const nextPoint = (ann.type === "pen" || ann.type === "freeshape")
-            ? smoothStrokePoint(
+          if (ann.type === "pen") {
+            const samples = e.getCoalescedEvents?.() || [e];
+            samples.forEach((sample) => {
+              const samplePoint = toCanvas(sample);
+              const nextPoint = smoothStrokePoint(
                 ann.points,
-                { x: p.x, y: p.y, t: p.t, pressure: p.pressure },
+                { x: samplePoint.x, y: samplePoint.y, t: samplePoint.t, pressure: samplePoint.pressure },
                 ann.penSettings?.stabilization ?? penStabilization,
                 getScale()
-              )
-            : { x: p.x, y: p.y };
-          if (!nextPoint) return;
-          ann.points.push(nextPoint);
+              );
+              if (nextPoint) ann.points.push(nextPoint);
+            });
+          } else {
+            const highlightStabilizationStrength = ann.type === "highlight"
+              ? ({ low: 28, medium: 52, high: 72 }[ann.highlightStabilization] ?? 52)
+              : null;
+            const nextPoint = ann.type === "highlight"
+              ? smoothStrokePoint(
+                  ann.points,
+                  { x: p.x, y: p.y, t: p.t, pressure: p.pressure },
+                  highlightStabilizationStrength,
+                  getScale()
+                )
+              : ann.type === "freeshape"
+              ? smoothStrokePoint(
+                  ann.points,
+                  { x: p.x, y: p.y, t: p.t, pressure: p.pressure },
+                  ann.penSettings?.stabilization ?? penStabilization,
+                  getScale()
+                )
+              : { x: p.x, y: p.y };
+            if (!nextPoint) return;
+            if (ann.type === "highlight") updateHighlightOrientation(ann);
+            ann.points.push(nextPoint);
+          }
         }
         if (ann.type === "pen" && ann.smartPen) {
           const tracePreview = getSmartPenDirectionalTraceRecords(ann, spansRef.current, schemaRecordsRef.current);
@@ -10614,6 +12486,7 @@ const PDFPage = forwardRef(({
       const ann = activeAnnotRef.current;
       activeAnnotRef.current = null;
       if (!ann) return;
+      if (ann.type === "antiAgingEraser") return;
       if (ann.type === "eraser") {
         if (ann.changed) {
           setAnnotations((prev) => ({ ...prev, [pageNum]: ann.lastKept || [] }));
@@ -10962,10 +12835,6 @@ const PDFPage = forwardRef(({
         clean.points = normalizedPoints;
         clean.closed = ann.closed !== false;
       }
-      if (clean.type === "highlight" && highlightAutoContrast) {
-        const maskedText = findSpansOverlappingHighlight(clean.points);
-        if (maskedText.length) clean.maskedText = maskedText;
-      }
       const insideContainerTarget = bboxContainerBBoxTarget && bboxContainerBBoxTarget.pageNum === pageNum
         ? bboxContainerBBoxTarget
         : null;
@@ -11297,18 +13166,24 @@ const PDFPage = forwardRef(({
     };
 
     let activeStylusPointerId = null;
+    const acceptsAnnotationPointer = (event) => {
+      // Highlighting is intentionally stylus-only: a finger is reserved for
+      // scrolling/panning the document and must never leave a marker stroke.
+      if (annotTool === "highlight") return event.pointerType === "pen";
+      return ["pen", "touch", "mouse"].includes(event.pointerType);
+    };
     const onPointerDown = (event) => {
-      if (event.pointerType !== "pen") return;
+      if (!acceptsAnnotationPointer(event)) return;
       activeStylusPointerId = event.pointerId;
       if (!event.__pdfMarkdownProxy) ac.setPointerCapture?.(event.pointerId);
       onDown(event);
     };
     const onPointerMove = (event) => {
-      if (event.pointerType !== "pen" || event.pointerId !== activeStylusPointerId) return;
+      if (!acceptsAnnotationPointer(event) || event.pointerId !== activeStylusPointerId) return;
       onMove(event);
     };
     const finishStylusPointer = (event, cancelled = false) => {
-      if (event.pointerType !== "pen" || event.pointerId !== activeStylusPointerId) return;
+      if (!acceptsAnnotationPointer(event) || event.pointerId !== activeStylusPointerId) return;
       if (cancelled) onTouchCancel(event);
       else onUp(event);
       if (!event.__pdfMarkdownProxy && ac.hasPointerCapture?.(event.pointerId)) ac.releasePointerCapture(event.pointerId);
@@ -11331,7 +13206,7 @@ const PDFPage = forwardRef(({
       clearLiveBBoxPreview();
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotTool, annotColor, annotSize, penSize, shapeStrokeWidth, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightAutoContrast, pageNum, annotations, annotOpacity, logAnnotHistory, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, captureImageBBoxSnippet, shapeBorderStyle, shapeBorderRadius, shapeBackground, activeBBoxCreationType, bboxContainerBBoxTarget, correctBBoxAnnotationFromOcr, expandContainerToIncludeBBox, findContainingBBoxContainer, registerSmartPenStrokeSchemas, updateBBoxName]);
+  }, [annotTool, annotColor, annotSize, penSize, shapeStrokeWidth, penStabilization, penPressureAssist, penTaper, penFlow, penNibAngle, penNibSpread, penType, eraserSize, eraserMode, highlightMode, highlightAutoWidth, highlightTaperEnds, highlightStabilization, pageNum, annotations, annotOpacity, logAnnotHistory, smartVideoSelecting, smartVideoCaptureBusy, captureSmartVideoScreenshot, captureImageBBoxSnippet, shapeBorderStyle, shapeBorderRadius, shapeBackground, activeBBoxCreationType, bboxContainerBBoxTarget, correctBBoxAnnotationFromOcr, expandContainerToIncludeBBox, findContainingBBoxContainer, registerSmartPenStrokeSchemas, updateBBoxName]);
 
   // Eraser-size cursor circle — a real hit-test-radius preview, not just a
   // generic "cell" cursor. eraserSize is already in screen/CSS pixels (the
@@ -11345,7 +13220,7 @@ const PDFPage = forwardRef(({
     const ac = annotCanvasRef.current;
     const cursorEl = eraserCursorRef.current;
     if (!ac || !cursorEl) return;
-    if (annotTool !== "eraser") {
+    if (!["eraser", "antiAgingEraser"].includes(annotTool)) {
       cursorEl.style.display = "none";
       return;
     }
@@ -11450,6 +13325,37 @@ const PDFPage = forwardRef(({
   // left moves the box's own anchor point (vx/vy) by the same amount the
   // edge moved, so the OPPOSITE edge stays fixed in place — the way a real
   // resize handle behaves — instead of the whole box sliding.
+  const beginTextInputMove = useCallback((e) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (e.target.closest?.("input, button, .annot_text_input_resize_handle, .annot_text_input_actions")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const pointerId = e.pointerId;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startVx = annotTextInput?.vx || 0;
+    const startVy = annotTextInput?.vy || 0;
+    e.currentTarget?.setPointerCapture?.(pointerId);
+    const onMove = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      ev.preventDefault();
+      setAnnotTextInput((current) => current ? {
+        ...current,
+        vx: startVx + ev.clientX - startX,
+        vy: startVy + ev.clientY - startY,
+      } : current);
+    };
+    const onEnd = (ev) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onEnd);
+      window.removeEventListener("pointercancel", onEnd);
+    };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onEnd);
+    window.addEventListener("pointercancel", onEnd);
+  }, [annotTextInput?.vx, annotTextInput?.vy]);
+
   const beginTextInputResize = useCallback((dir, e) => {
     if (e.pointerType !== "pen") return;
     e.preventDefault();
@@ -11855,28 +13761,36 @@ const PDFPage = forwardRef(({
   // readingMode/bookletRightPage ride along here too so an embedding
   // parent (PDFReaderWorkspace) can hoist the Booklet toggle + companion-
   // page picker next to its own hoisted page-nav row the same way.
-  // The active match's own matchType/confidence/text — not just the count —
-  // so the search bar can show "Likely match: ... Confidence: NN%" for
-  // anything found via the tolerant (non-exact) stages, per spec section
-  // 54 ("do not show confidence unnecessarily for exact matches").
+  // The active Wordform Search match type and source text are exposed to the
+  // search bar alongside the result count.
   const searchActiveMatch = searchMatches[searchActiveIndex] || null;
 
   const pageNavState = useMemo(() => ({
     pageNum,
     pageCount,
-    disabled: pinchActive,
+    disabled: false,
     readingMode,
     bookletRightPage,
     ocrBlankPageOpen: entityBuilderOcrBlankPageOpen,
     markdownOpen: markdownAsideOpen,
     markdownMode: markdownAsideMode,
     markdownMenuOpen: markdownModeMenuOpen,
+    sentenceTreeOpen,
     notebookOpen: Boolean(notebookMode),
     notebookMode,
+    pageConceptBusy,
+    pageConceptError,
+    glyphCharAsideOpen,
     outlineOpen,
-    outlineAvailable: pdfOutline.length > 0,
+    documentNavigatorView,
+    documentNavigatorOpen,
+    outlineAvailable: pdfCustomOutlines.length > 0,
     bookmarked: bookmarks.includes(pageNum),
     bookmarkCount: bookmarks.length,
+    smartVideoActive: annotTool === "smartVideo",
+    entityBuilderOpen,
+    abbreviationPanelOpen,
+    isCurrentPageFullySegmented,
     insertingBlankPage,
     canInsertBlankPage: hasSourceId,
     searchOpen,
@@ -11885,9 +13799,8 @@ const PDFPage = forwardRef(({
     searchActiveIndex,
     searchScanning,
     searchActiveMatchType: searchActiveMatch?.matchType ?? null,
-    searchActiveConfidence: searchActiveMatch?.confidence ?? null,
     searchActiveMatchedText: searchActiveMatch?.originalMatchedText ?? null,
-  }), [pageNum, pageCount, pinchActive, readingMode, bookletRightPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, markdownAsideMode, markdownModeMenuOpen, notebookMode, outlineOpen, pdfOutline.length, bookmarks, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
+  }), [pageNum, pageCount, readingMode, bookletRightPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, markdownAsideMode, markdownModeMenuOpen, sentenceTreeOpen, notebookMode, pageConceptBusy, pageConceptError, glyphCharAsideOpen, outlineOpen, documentNavigatorView, documentNavigatorOpen, pdfCustomOutlines.length, bookmarks, annotTool, entityBuilderOpen, abbreviationPanelOpen, isCurrentPageFullySegmented, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
 
   useEffect(() => {
     onPageNavStateChange?.(pageNavState);
@@ -11911,13 +13824,12 @@ const PDFPage = forwardRef(({
   const commitLiveZoom = useCallback(() => {
     if (zoomingDisabled) return;
     const state = wheelZoomStateRef.current;
-    const wrap = canvasWrapRef.current;
     const el = previewRef.current;
     if (state.timer) {
       clearTimeout(state.timer);
       state.timer = null;
     }
-    if (!wrap || !el) return;
+    if (!getLiveZoomTarget() || !el) return;
     const finalZoom = normalizePinchZoom(state.pendingZoom);
     if (finalZoom === zoomRef.current) {
       // The gesture ended back at the zoom we're already at — setZoom would
@@ -11928,10 +13840,7 @@ const PDFPage = forwardRef(({
       // canvas (a descendant), even though the page itself looks unchanged.
       // The canvas is already the right size here, so clearing immediately
       // is a visual no-op, not a flash back to a stale size.
-      wrap.style.transform       = "";
-      wrap.style.transformOrigin = "";
-      wrap.style.willChange      = "";
-      wrap.style.removeProperty("--pdf-live-zoom-inverse");
+      clearLiveZoomTransform(state.target);
       return;
     }
     scrollAfterZoomRef.current = captureZoomAnchor(
@@ -11943,25 +13852,27 @@ const PDFPage = forwardRef(({
     };
     zoomRef.current = finalZoom;
     setZoom(finalZoom);
-  }, [captureZoomAnchor, zoomingDisabled]);
+  }, [captureZoomAnchor, clearLiveZoomTransform, getLiveZoomTarget, zoomingDisabled]);
 
   const previewLiveZoom = useCallback(() => {
     const state = wheelZoomStateRef.current;
     if (state.frame) return;
     state.frame = requestAnimationFrame(() => {
       state.frame = 0;
-      const wrap = canvasWrapRef.current;
-      if (!wrap) return;
+      const target = state.target || getLiveZoomTarget();
+      if (!target) return;
+      state.target = target;
+      const targetOffset = getLiveZoomTargetOffset(target);
       const ratio = state.pendingZoom / Math.max(PINCH_ZOOM_FLOOR, state.baseZoom);
-      const anchorX = state.startSL + state.anchorMidX - wrap.offsetLeft;
-      const anchorY = state.startST + state.anchorMidY - wrap.offsetTop;
-      const currentX = state.startSL + state.midX - wrap.offsetLeft;
-      const currentY = state.startST + state.midY - wrap.offsetTop;
-      wrap.style.transformOrigin = "0 0";
-      wrap.style.transform = `translate3d(${currentX - anchorX * ratio}px, ${currentY - anchorY * ratio}px, 0) scale(${ratio})`;
-      wrap.style.willChange = "transform";
+      const anchorX = state.startSL + state.anchorMidX - targetOffset.left;
+      const anchorY = state.startST + state.anchorMidY - targetOffset.top;
+      const currentX = state.startSL + state.midX - targetOffset.left;
+      const currentY = state.startST + state.midY - targetOffset.top;
+      target.style.transformOrigin = "0 0";
+      target.style.transform = `translate3d(${currentX - anchorX * ratio}px, ${currentY - anchorY * ratio}px, 0) scale(${ratio})`;
+      target.style.willChange = "transform";
     });
-  }, []);
+  }, [getLiveZoomTarget, getLiveZoomTargetOffset]);
 
   const scheduleLiveZoomCommit = useCallback(() => {
     const state = wheelZoomStateRef.current;
@@ -11999,6 +13910,7 @@ const PDFPage = forwardRef(({
         state.startST = el.scrollTop;
         state.anchorMidX = state.midX;
         state.anchorMidY = state.midY;
+        state.target = getLiveZoomTarget();
       }
 
       // 1.08 per tick at gain 1 — dynamicZoomGain shrinks the exponent (not
@@ -12042,14 +13954,10 @@ const PDFPage = forwardRef(({
         cancelAnimationFrame(state.frame);
         state.frame = 0;
       }
-      if (wrap.style.transform) {
-        wrap.style.transform = "";
-        wrap.style.transformOrigin = "";
-        wrap.style.willChange = "";
-      }
+      clearLiveZoomTransform(state.target);
       el.removeEventListener("wheel", onWheel);
     };
-  }, [pdfDoc, previewLiveZoom, scheduleLiveZoomCommit, zoomingDisabled]);
+  }, [clearLiveZoomTransform, getLiveZoomTarget, pdfDoc, previewLiveZoom, scheduleLiveZoomCommit, zoomingDisabled]);
 
   // Keep browser-level page zoom from resizing the reader chrome and Markdown
   // aside. The preview's own Ctrl/Cmd-wheel handler still receives the event
@@ -12159,37 +14067,54 @@ const PDFPage = forwardRef(({
     gesture.frame = 0;
     gesture.baseZoom = targetZoom;
     gesture.pendingZoom = targetZoom;
-    if (wrap) {
-      wrap.style.transform = "";
-      wrap.style.transformOrigin = "";
-      wrap.style.willChange = "";
-      wrap.style.removeProperty("--pdf-live-zoom-inverse");
-    }
+    if (wrap) clearLiveZoomTransform();
     zoomRef.current = targetZoom;
     setZoom(targetZoom);
-  }, [captureZoomAnchor, zoomingDisabled]);
+  }, [captureZoomAnchor, clearLiveZoomTransform, zoomingDisabled]);
 
   useImperativeHandle(ref, () => ({
     undo: handleAnnotUndo,
     redo: handleAnnotRedo,
     toggleHistory: () => setAnnotHistoryOpen((v) => !v),
     ...undoRedoState,
-    goToPrevPage: () => setPageNum((n) => Math.max(1, n - 1)),
-    goToNextPage: () => setPageNum((n) => Math.min(pageCount, n + 1)),
+    goToPrevPage: () => navigatePage(Math.max(1, pageNumRef.current - 1)),
+    goToNextPage: () => navigatePage(Math.min(pageCount, pageNumRef.current + 1)),
     setReadingMode: setReaderReadingMode,
     setBookletRightPage,
     toggleOcrBlankPage,
     toggleMarkdownAside,
     setMarkdownMode,
+    toggleSentenceTree,
     setNotebookView,
     closeNotebook,
     insertBlankPageAfterCurrent: () => insertBlankPageRef.current?.(),
     setSearchOpen,
     setSearchQuery,
     goToSearchMatch,
-    closeSearch: () => { setSearchOpen(false); setSearchQuery(""); },
+    runSearch: (query = searchQuery) => setSearchRunQuery(String(query || "").trim()),
+    closeSearch: () => { setSearchOpen(false); setSearchQuery(""); setSearchRunQuery(""); },
     toggleOutline: () => setOutlineOpen((open) => !open),
+    openDocumentNavigator: (view = "navigator") => {
+      const nextView = ["navigator", "outlines", "bookmarks"].includes(view) ? view : "navigator";
+      if (nextView === "navigator") {
+        const nextOpen = !(documentNavigatorOpen || outlineOpen);
+        setDocumentNavigatorOpen(nextOpen);
+        setOutlineOpen(nextOpen);
+        return;
+      }
+      if (outlineOpen && documentNavigatorView === nextView) {
+        setOutlineOpen(false);
+        return;
+      }
+      setDocumentNavigatorView(nextView);
+      setOutlineOpen(true);
+    },
+    buildPageConcepts: buildCurrentPageUmlsConcepts,
+    toggleGlyphCharAside,
     toggleBookmark,
+    toggleSmartVideo: () => toggleAnnotTool("smartVideo"),
+    toggleEntityBuilder,
+    toggleAbbreviationPanel,
     zoomIn: () => zoomFromToolbar((z) => z + 0.01),
     zoomOut: () => zoomFromToolbar((z) => z - 0.01),
     resetZoom: () => zoomFromToolbar(1),
@@ -12200,7 +14125,7 @@ const PDFPage = forwardRef(({
     setNotebookZoomLevel: (value) => zoomNotebookDrawingAt(value),
     ...zoomState,
     ...pageNavState,
-  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, pageCount, pageNavState, goToSearchMatch, toggleOcrBlankPage, toggleMarkdownAside, setMarkdownMode, setNotebookView, closeNotebook, setReaderReadingMode, zoomFromToolbar, zoomNotebookDrawingAt, zoomState]);
+  }), [handleAnnotUndo, handleAnnotRedo, undoRedoState, navigatePage, pageCount, pageNavState, goToSearchMatch, toggleOcrBlankPage, toggleMarkdownAside, setMarkdownMode, toggleSentenceTree, setNotebookView, closeNotebook, setReaderReadingMode, buildCurrentPageUmlsConcepts, toggleGlyphCharAside, toggleAnnotTool, toggleEntityBuilder, toggleAbbreviationPanel, zoomFromToolbar, zoomNotebookDrawingAt, zoomState, documentNavigatorOpen, outlineOpen, documentNavigatorView]);
 
   const stopZoomHold = useCallback(() => {
     if (zoomHoldTimerRef.current) {
@@ -12246,13 +14171,22 @@ const PDFPage = forwardRef(({
     };
   }, [stopZoomHold, zoomingDisabled]);
 
+  // The touch controller must not be torn down while fingers are on screen.
+  // Undo/redo callbacks change identity as annotation state changes, so the
+  // gesture effect reads their latest versions through refs instead of using
+  // them as listener-lifecycle dependencies.
+  const pinchUndoRef = useRef(handleAnnotUndo);
+  const pinchRedoRef = useRef(handleAnnotRedo);
+  pinchUndoRef.current = handleAnnotUndo;
+  pinchRedoRef.current = handleAnnotRedo;
+
   // ── Two-finger pinch zoom + single-finger gestures + text selection ────────
   useEffect(() => {
     const el = previewRef.current;
     if (!el || !pdfDoc) return;
 
     const MOVE_THRESHOLD = 8;
-    const THREE_FINGER_PAN_ACTIVATION_PX = 20;
+    const THREE_FINGER_PAN_ACTIVATION_PX = 6;
     const THREE_FINGER_MIN_SEPARATION_PX = 30;
     const THREE_FINGER_MAX_SEPARATION_PX = 300;
     const THREE_FINGER_MIN_DIRECTION_COSINE = 0.7;
@@ -12266,28 +14200,28 @@ const PDFPage = forwardRef(({
     const TWO_FINGER_MULTI_TAP_GAP_MS = 360;
     const TWO_FINGER_MULTI_TAP_POSITION_PX = 84;
     const PINCH_COOLDOWN_MS = 350;
-    const MIN_PINCH_START_DIST = 28;
-    const PINCH_ACTIVATION_PX = 16;
-    const PINCH_ACTIVATION_RATIO = 0.04;
-    const PINCH_JITTER_PX = 3;
-    // iPad Safari can report an ordinary fingertip radius in the mid-20s.
-    // Keep the global hard rejection above that range; individual two- and
-    // three-finger gestures apply their own stricter geometry/motion gates.
+    const PINCH_JITTER_PX = 0.5;
+    const PINCH_ACTIVATION_RATIO = 0.035;
+    // Reject broad palm/fist contacts at every finger count. Safari exposes
+    // contact size through radiusX/radiusY; ordinary fingertips remain below
+    // this cutoff while a resting palm is excluded from reader gestures.
     const PALM_CONTACT_RADIUS_PX = 42;
-    const EDGE_SWIPE_MAX_MS = 480;
-    const EDGE_SWIPE_MIN_VIEWPORT_RATIO = 0.68;
-    const EDGE_SWIPE_MAX_VERTICAL_RATIO = 0.22;
+    const PAGE_SWIPE_MAX_MS = 460;
+    const PAGE_SWIPE_MIN_DISTANCE_PX = 54;
+    const PAGE_SWIPE_MIN_WIDTH_RATIO = 0.16;
+    const PAGE_SWIPE_MIN_VELOCITY = 0.35;
+    const PAGE_SWIPE_MAX_VERTICAL_RATIO = 0.24;
     // A raw 1:1 mapping of finger-distance ratio to zoom ratio needs a huge,
     // uncomfortable finger spread to cover a wide zoom range in one gesture.
     // Amplifying it in log-space (same trick apps like GoodNotes use) lets a
     // normal, comfortable pinch motion sweep a much bigger zoom range.
     const PINCH_GAIN = 1.7;
 
-    let lastMidX = 0, lastMidY = 0;
     let startDist = null;
     let pinchPrimed = false;
     let startZoom = 1;
     let startMidX = 0, startMidY = 0, startSL = 0, startST = 0;
+    let currentMidX = 0, currentMidY = 0;
     let lastPinchZoom = 1;
     let pinchCooldownUntil = 0;
     let pinchTransformApplied = false;
@@ -12295,24 +14229,63 @@ const PDFPage = forwardRef(({
     let targetScale = 1;
     let targetX = 0;
     let targetY = 0;
+    let pinchTransformTarget = null;
+    let visualScale = 1;
+    let visualX = 0;
+    let visualY = 0;
+    let pinchRenderInvalidated = false;
+    let pinchAnchor = null;
+    let twoFingerGestureMode = "pending"; // pending | pinch
     let palmRejected = false;
     let threeFingerPan = null;
     let firstContactStart = null;
     let twoFingerTapCandidate = null;
     let twoFingerTapSeries = { count: 0, lastAt: 0, x: 0, y: 0, timer: null };
 
+    // Pinch ownership is intentionally ref-only. Publishing React state here
+    // rerendered the entire reader on the first move and again on finger-up,
+    // making every pinch after the first contend with PDF.js and React work.
+    const publishPinchActive = (active) => {
+      pinchGestureActiveRef.current = active;
+    };
+
     const animatePinch = () => {
       pinchRaf = 0;
-      const wrap = canvasWrapRef.current;
-      if (!wrap) return;
-      wrap.style.transformOrigin = "0 0";
-      wrap.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) scale(${targetScale})`;
-      wrap.style.willChange = "transform";
+      const target = pinchTransformTarget || getLiveZoomTarget();
+      if (!target) return;
+      pinchTransformTarget = target;
+      // Touch samples arrive unevenly on Safari. Follow the latest target
+      // over a few frames so zooming feels continuous instead of stepped.
+      const follow = 0.34;
+      visualScale += (targetScale - visualScale) * follow;
+      visualX += (targetX - visualX) * follow;
+      visualY += (targetY - visualY) * follow;
+      if (Math.abs(targetScale - visualScale) < 0.0005) visualScale = targetScale;
+      if (Math.abs(targetX - visualX) < 0.08) visualX = targetX;
+      if (Math.abs(targetY - visualY) < 0.08) visualY = targetY;
+      target.style.transformOrigin = "0 0";
+      target.style.transform = `translate3d(${visualX}px, ${visualY}px, 0) scale(${visualScale})`;
+      target.style.willChange = "transform";
       pinchTransformApplied = true;
+      if (visualScale !== targetScale || visualX !== targetX || visualY !== targetY) startPinchAnimation();
     };
 
     const startPinchAnimation = () => {
       if (!pinchRaf) pinchRaf = requestAnimationFrame(animatePinch);
+    };
+
+    const resetPinchPreview = () => {
+      if (pinchRaf) cancelAnimationFrame(pinchRaf);
+      pinchRaf = 0;
+      targetScale = 1;
+      targetX = 0;
+      targetY = 0;
+      visualScale = 1;
+      visualX = 0;
+      visualY = 0;
+      clearLiveZoomTransform(pinchTransformTarget);
+      pinchTransformTarget = null;
+      pinchTransformApplied = false;
     };
 
     let panX = 0, panY = 0, panSL = 0, panST = 0;
@@ -12423,13 +14396,13 @@ const PDFPage = forwardRef(({
         // gesture to Redo without first firing Undo.
         twoFingerTapSeries.timer = setTimeout(() => {
           if (twoFingerTapSeries.count !== 2) return;
-          handleAnnotUndo();
+          pinchUndoRef.current();
           navigator.vibrate?.(20);
           clearTwoFingerTapSeries();
         }, TWO_FINGER_MULTI_TAP_GAP_MS);
       } else if (count === 3) {
         clearTwoFingerTapSeries();
-        handleAnnotRedo();
+        pinchRedoRef.current();
         navigator.vibrate?.([12, 35, 12]);
       }
     };
@@ -12473,34 +14446,46 @@ const PDFPage = forwardRef(({
     // the gesture commits, while the shared canvas/page/annotation wrapper
     // follows the fingers at animation-frame cadence.
     const commitPinchZoom = () => {
-      if (!pinchPrimed || lastPinchZoom === startZoom) {
-        if (pinchRaf) cancelAnimationFrame(pinchRaf);
-        pinchRaf = 0;
-        targetScale = 1;
-        targetX = 0;
-        targetY = 0;
-        const wrap = canvasWrapRef.current;
-        if (wrap) {
-          wrap.style.transform = "";
-          wrap.style.transformOrigin = "";
-          wrap.style.willChange = "";
-        }
-        pinchTransformApplied = false;
+      if (!pinchPrimed) {
+        resetPinchPreview();
         return;
       }
-      const centerX = el.clientWidth / 2;
-      const centerY = el.clientHeight / 2;
-      scrollAfterZoomRef.current = captureZoomAnchor(
-        el.getBoundingClientRect().left + centerX,
-        el.getBoundingClientRect().top + centerY
-      ) || {
-        // The canvas normally supplies a normalized anchor. This fallback
-        // preserves the same viewport center if it is briefly unavailable.
-        left: (startSL + centerX) * (lastPinchZoom / startZoom) - centerX,
-        top: (startST + centerY) * (lastPinchZoom / startZoom) - centerY,
-      };
-      targetScale = lastPinchZoom / startZoom;
-      startPinchAnimation();
+      const centerX = startMidX;
+      const centerY = startMidY;
+      const zoomChanged = lastPinchZoom !== startZoom;
+
+      // Two-finger translation is intentionally not a pan gesture. If the
+      // finger distance did not change enough to activate zoom, discard the
+      // preview without changing scroll position or rerendering the PDF.
+      if (!zoomChanged) {
+        resetPinchPreview();
+        return;
+      }
+
+      // Preserve the content point under the INITIAL midpoint. The midpoint
+      // itself does not translate the page; only finger separation zooms.
+      scrollAfterZoomRef.current = pinchAnchor
+        ? { ...pinchAnchor, viewportX: centerX, viewportY: centerY }
+        : {
+            left: (startSL + startMidX) * (lastPinchZoom / startZoom) - centerX,
+            top: (startST + startMidY) * (lastPinchZoom / startZoom) - centerY,
+          };
+
+      // Transfer the preview scale to the real canvas before removing the
+      // wrapper transform. Keeping both active caused the committed zoom to
+      // be applied twice; the next pinch then appeared to reverse when it
+      // cleared that stale wrapper transform.
+      const pageIndex = pageNumRef.current - 1;
+      const canvas = pageCanvasRefs.current[pageIndex];
+      const renderedScale = renderedScaleRef.current[pageIndex];
+      const renderedSize = renderedCssSizeRef.current[pageIndex];
+      const committedScale = fitScaleRef.current * lastPinchZoom;
+      if (canvas && renderedScale && renderedSize) {
+        const committedRatio = committedScale / renderedScale;
+        canvas.style.width = `${renderedSize.width * committedRatio}px`;
+        canvas.style.height = `${renderedSize.height * committedRatio}px`;
+      }
+      resetPinchPreview();
       zoomRef.current = lastPinchZoom;
       setZoom(lastPinchZoom);
     };
@@ -12511,16 +14496,7 @@ const PDFPage = forwardRef(({
     // whatever zoom ratio the pinch happened to be at the instant the third
     // finger touched down must never be applied, not even the ratio itself.
     const cancelPinchZoom = () => {
-      if (pinchRaf) cancelAnimationFrame(pinchRaf);
-      pinchRaf = 0;
-      const wrap = canvasWrapRef.current;
-      if (wrap) {
-        wrap.style.transform       = "";
-        wrap.style.transformOrigin = "";
-        wrap.style.willChange      = "";
-        wrap.style.removeProperty("--pdf-live-zoom-inverse");
-      }
-      pinchTransformApplied = false;
+      resetPinchPreview();
     };
 
     // Manual hit-test against the text layer's own spans, instead of
@@ -12800,6 +14776,7 @@ const PDFPage = forwardRef(({
       // so a palm that gradually leaves cannot become a two-finger pinch.
       const hasPalmSizedContact = Array.from(e.touches).some(isLikelyPalmTouch);
       if (palmRejected || e.touches.length >= 4 || hasPalmSizedContact) {
+        publishPinchActive(false);
         palmRejected = true;
         threeFingerPan = null;
         firstContactStart = null;
@@ -12811,7 +14788,6 @@ const PDFPage = forwardRef(({
         if (startDist !== null || pinchTransformApplied) cancelPinchZoom();
         startDist = null;
         pinchPrimed = false;
-        setPinchActive(false);
         if (e.cancelable) e.preventDefault();
         return;
       }
@@ -12867,24 +14843,37 @@ const PDFPage = forwardRef(({
         // which could otherwise activate the nearby Insert Blank Page button.
         if (e.cancelable) e.preventDefault();
         touchInteractionActive = true; // wasn't being set for the 2-finger case at all — left text selection unblocked during a pinch
-        if (zoomingDisabled) {
-          hasMoved = true;
-          return;
-        }
+        // Every pinch starts from a clean visual transaction. Never inherit
+        // a CSS scale/translation or queued frame from the previous pinch;
+        // those stale values were what made alternating gestures resist or
+        // appear to reverse direction.
+        resetPinchPreview();
+        pinchTransformTarget = getLiveZoomTarget();
+        publishPinchActive(false);
         const elRect = el.getBoundingClientRect();
         startDist = touchDist(e.touches);
-        // Merely placing two contacts must not zoom. Movement has to clear
-        // the deliberate-pinch threshold in onTouchMove before activation.
-        pinchPrimed = false;
+        // Exactly two contacts prepare a pinch transaction immediately, but
+        // it remains render-free until separation crosses the activation
+        // threshold. This lets a third contact convert it into pan cleanly.
+        pinchPrimed = true;
         startZoom = zoomRef.current;
         lastPinchZoom = startZoom;
-        lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
-        lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
-        startMidX = el.clientWidth / 2;
-        startMidY = el.clientHeight / 2;
+        startMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
+        startMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
+        currentMidX = startMidX;
+        currentMidY = startMidY;
         startSL = el.scrollLeft;
         startST = el.scrollTop;
+        twoFingerGestureMode = "pending";
+        pinchAnchor = captureZoomAnchor(
+          elRect.left + startMidX,
+          elRect.top + startMidY,
+        );
+        panVelocityTracker.reset();
+        panVelocityTracker.push(startMidX, startMidY, performance.now());
+        pinchRenderInvalidated = false;
       } else if (e.touches.length === 3) {
+        publishPinchActive(false);
         edgeSwipeCandidate = null;
         // Three-finger pan — deliberately a different finger count from
         // pinch zoom (exactly 2 fingers), so this never has to share or
@@ -12909,7 +14898,6 @@ const PDFPage = forwardRef(({
           cancelPinchZoom();
           startDist = null;
           pinchPrimed = false;
-          setPinchActive(false);
         }
         const startPoints = snapshotTouches(e.touches);
         if (!hasValidThreeFingerLayout(startPoints)) {
@@ -12923,6 +14911,10 @@ const PDFPage = forwardRef(({
           if (e.cancelable) e.preventDefault();
           return;
         }
+        // Claim a valid three-finger sequence before the browser can commit
+        // it to native scrolling. Once native scrolling has started Chrome
+        // marks later touchmove events non-cancelable.
+        if (e.cancelable) e.preventDefault();
         touchInteractionActive = true;
         const c = touchCentroid(e.touches);
         threeFingerPan = {
@@ -12956,29 +14948,23 @@ const PDFPage = forwardRef(({
         touchInteractionActive = true;
         panX = e.touches[0].clientX;
         panY = e.touches[0].clientY;
-        // Page flipping is measured against the rendered PDF PAGE itself,
+        // Page swiping is measured against the rendered PDF page itself,
         // not the app, preview viewport, or raster canvas. The container is
         // the stable page boundary shared by the canvas and all overlays.
         const currentPageElement = pageContainerRefs.current[pageNumRef.current - 1];
         const pageRect = currentPageElement?.getBoundingClientRect?.() || null;
-        const startsAlongPageHeight = Boolean(pageRect
+        const startsOnPage = Boolean(pageRect
+          && panX >= pageRect.left && panX <= pageRect.right
           && panY >= pageRect.top && panY <= pageRect.bottom);
-        const edgeWidth = pageRect ? Math.min(72, Math.max(28, pageRect.width * 0.08)) : 0;
-        // The finger may begin in the reader margin outside the paper. It
-        // still belongs to the page-edge gesture as long as it begins beside
-        // the page vertically and crosses that page's opposite edge.
-        const startsAtLeft = startsAlongPageHeight && panX <= pageRect.left + edgeWidth;
-        const startsAtRight = startsAlongPageHeight && panX >= pageRect.right - edgeWidth;
-        edgeSwipeCandidate = pageRect && (startsAtLeft || startsAtRight)
+        // A quick horizontal swipe may begin at any point on the paper.
+        edgeSwipeCandidate = startsOnPage
           ? {
-              side: startsAtLeft ? "left" : "right",
               startedAt: performance.now(),
               startX: panX,
               startY: panY,
               lastX: panX,
               lastY: panY,
               rect: pageRect,
-              edgeWidth,
             }
           : null;
         hasMoved = false;
@@ -12986,7 +14972,9 @@ const PDFPage = forwardRef(({
     };
 
     const onTouchMove = (e) => {
-      if (palmRejected || e.touches.length >= 4 || Array.from(e.touches).some(isLikelyPalmTouch)) {
+      const hasPalmSizedContact = Array.from(e.touches).some(isLikelyPalmTouch);
+      if (palmRejected || e.touches.length >= 4 || hasPalmSizedContact) {
+        publishPinchActive(false);
         palmRejected = true;
         threeFingerPan = null;
         firstContactStart = null;
@@ -12996,14 +14984,13 @@ const PDFPage = forwardRef(({
         if (startDist !== null || pinchTransformApplied) cancelPinchZoom();
         startDist = null;
         pinchPrimed = false;
-        setPinchActive(false);
         if (e.cancelable) e.preventDefault();
         return;
       }
       // Track the pinch itself (`startDist !== null`, set in onTouchStart)
       // so zoom keeps updating for the whole two-finger gesture.
       if (e.touches.length === 2 && startDist !== null) {
-        e.preventDefault();
+        if (e.cancelable) e.preventDefault();
         if (twoFingerTapCandidate) {
           const points = snapshotTouches(e.touches);
           const startsById = new Map(twoFingerTapCandidate.startPoints.map((point) => [point.id, point]));
@@ -13015,42 +15002,62 @@ const PDFPage = forwardRef(({
           if (!validContacts) rejectTwoFingerTap(true);
           else twoFingerTapCandidate.lastPoints = points;
         }
-        if (zoomingDisabled) return;
         const nextDist = touchDist(e.touches);
         const elRect = el.getBoundingClientRect();
-        lastMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
-        lastMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
-        if (!pinchPrimed) {
-          if (nextDist < MIN_PINCH_START_DIST) return;
-          const activationDistance = Math.max(PINCH_ACTIVATION_PX, startDist * PINCH_ACTIVATION_RATIO);
-          if (Math.abs(nextDist - startDist) < activationDistance) return;
-          startDist = nextDist;
-          startZoom = zoomRef.current;
-          startMidX = el.clientWidth / 2;
-          startMidY = el.clientHeight / 2;
-          startSL = el.scrollLeft;
-          startST = el.scrollTop;
-          lastPinchZoom = startZoom;
-          pinchPrimed = true;
-          rejectTwoFingerTap(true);
-          setPinchActive(true);
-          return;
+        currentMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - elRect.left;
+        currentMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - elRect.top;
+        const midpointTravel = Math.hypot(currentMidX - startMidX, currentMidY - startMidY);
+        const pinchRatioTravel = Math.abs(Math.log(Math.max(0.01, nextDist / startDist)));
+
+        // Activate only after deliberate separation. Midpoint translation is
+        // ignored so two fingers cannot pan the page.
+        if (twoFingerGestureMode === "pending") {
+          if (!zoomingDisabled && pinchRatioTravel >= PINCH_ACTIVATION_RATIO) {
+            twoFingerGestureMode = "pinch";
+            publishPinchActive(true);
+          }
         }
-        if (Math.abs(nextDist - startDist) < PINCH_JITTER_PX) return;
-        const rawRatio = Math.max(0.01, nextDist / startDist);
-        const newZoom = normalizePinchZoom(startZoom * Math.pow(rawRatio, dynamicZoomGain(PINCH_GAIN, startZoom)));
-        if (newZoom === lastPinchZoom) return;
+
+        const distanceChanged = twoFingerGestureMode === "pinch"
+          && !zoomingDisabled
+          && Math.abs(nextDist - startDist) >= PINCH_JITTER_PX;
+        let newZoom = lastPinchZoom;
+        if (distanceChanged) {
+          const rawRatio = Math.max(0.01, nextDist / startDist);
+          newZoom = normalizePinchZoom(startZoom * Math.pow(rawRatio, dynamicZoomGain(PINCH_GAIN, startZoom)));
+        }
+        const zoomChanged = newZoom !== lastPinchZoom;
+        if (!zoomChanged && midpointTravel < 0.5) return;
+        if (zoomChanged && !pinchRenderInvalidated) {
+          // A render from the preceding pinch may still be resolving. If it
+          // is allowed to finish, it writes its older canvas dimensions over
+          // this gesture and makes alternating pinches appear to snap back.
+          // Invalidate both the pre-render await and any active PDF.js task;
+          // the committed zoom below starts one fresh render for this pinch.
+          const pageIndex = pageNumRef.current - 1;
+          pageRenderGenerationRef.current[pageIndex] = (pageRenderGenerationRef.current[pageIndex] || 0) + 1;
+          renderTasksRef.current[pageIndex]?.cancel();
+          renderTasksRef.current[pageIndex] = null;
+          pinchRenderInvalidated = true;
+        }
         lastPinchZoom = newZoom;
-        const wrap = canvasWrapRef.current;
-        if (wrap) {
-          const ratio = newZoom / startZoom;
-          const anchorX = startSL + startMidX - wrap.offsetLeft;
-          const anchorY = startST + startMidY - wrap.offsetTop;
-          const currentX = startSL + startMidX - wrap.offsetLeft;
-          const currentY = startST + startMidY - wrap.offsetTop;
-          targetScale = ratio;
-          targetX = currentX - anchorX * ratio;
-          targetY = currentY - anchorY * ratio;
+        if (twoFingerGestureMode !== "pending" || midpointTravel >= MOVE_THRESHOLD) {
+          hasMoved = true;
+          rejectTwoFingerTap(true);
+        }
+        panVelocityTracker.push(currentMidX, currentMidY, performance.now());
+        const target = pinchTransformTarget || getLiveZoomTarget();
+        if (target) {
+          pinchTransformTarget = target;
+          const targetOffset = getLiveZoomTargetOffset(target);
+          const gestureRatio = newZoom / startZoom;
+          const anchorX = startSL + startMidX - targetOffset.left;
+          const anchorY = startST + startMidY - targetOffset.top;
+          const centerX = startSL + startMidX - targetOffset.left;
+          const centerY = startST + startMidY - targetOffset.top;
+          targetScale = gestureRatio;
+          targetX = centerX - anchorX * gestureRatio;
+          targetY = centerY - anchorY * gestureRatio;
           startPinchAnimation();
         }
         return;
@@ -13060,6 +15067,9 @@ const PDFPage = forwardRef(({
         // drive, just anchored to the 3-touch centroid instead. See the
         // matching branch in onTouchStart for why this is a distinct
         // finger count from pinch zoom above.
+        // Keep the sequence owned by the custom reader pan, but never try to
+        // cancel an event after the browser has made it non-cancelable.
+        if (e.cancelable) e.preventDefault();
         if (Date.now() < pinchCooldownUntil) return;
         const motion = validateThreeFingerMotion(e.touches);
         if (!motion) {
@@ -13068,7 +15078,6 @@ const PDFPage = forwardRef(({
           livePanRef.current.active = false;
           stopLivePan(livePanRef);
           hasMoved = true;
-          if (e.cancelable) e.preventDefault();
           return;
         }
         if (!motion.primed) return;
@@ -13083,10 +15092,17 @@ const PDFPage = forwardRef(({
         if (!hasMoved && moved < THREE_FINGER_PAN_ACTIVATION_PX) return;
 
         hasMoved = true;
-        e.preventDefault();
-        livePanRef.current.targetL = panSL - dx;
-        livePanRef.current.targetT = panST - dy;
-        if (!livePanRef.current.frame) runLivePan(el, livePanRef);
+        const nextLeft = clamp(panSL - dx, 0, Math.max(0, el.scrollWidth - el.clientWidth));
+        const nextTop = clamp(panST - dy, 0, Math.max(0, el.scrollHeight - el.clientHeight));
+        // Three-finger pan is a DOM-only transaction. Direct writes track the
+        // touch sample without a trailing animation frame and cannot trigger
+        // React or PDF.js rasterization.
+        el.scrollLeft = nextLeft;
+        el.scrollTop = nextTop;
+        livePanRef.current.currentL = nextLeft;
+        livePanRef.current.currentT = nextTop;
+        livePanRef.current.targetL = nextLeft;
+        livePanRef.current.targetT = nextTop;
         panVelocityTracker.push(c.x, c.y, performance.now());
         return;
       }
@@ -13113,10 +15129,12 @@ const PDFPage = forwardRef(({
         const verticalTravel = Math.abs(edgeSwipeCandidate.lastY - edgeSwipeCandidate.startY);
         const horizontalTravel = Math.abs(edgeSwipeCandidate.lastX - edgeSwipeCandidate.startX);
         if (
-          verticalTravel > edgeSwipeCandidate.rect.height * EDGE_SWIPE_MAX_VERTICAL_RATIO
+          verticalTravel > edgeSwipeCandidate.rect.height * PAGE_SWIPE_MAX_VERTICAL_RATIO
           || (horizontalTravel > MOVE_THRESHOLD && verticalTravel > horizontalTravel * 0.5)
         ) {
           edgeSwipeCandidate = null;
+        } else if (horizontalTravel > MOVE_THRESHOLD && horizontalTravel > verticalTravel && e.cancelable) {
+          e.preventDefault();
         }
       }
       if (!hasMoved && moved >= MOVE_THRESHOLD) hasMoved = true;
@@ -13178,19 +15196,11 @@ const PDFPage = forwardRef(({
       touchInteractionActive = e.touches.length > 0;
 
       if (e.touches.length < 2 && startDist !== null) {
-        if (zoomingDisabled) {
-          startDist = null;
-          pinchPrimed = false;
-          pinchCooldownUntil = Date.now() + PINCH_COOLDOWN_MS;
-          setPinchActive(false);
-          pinchJustEnded = false;
-          return;
-        }
+        publishPinchActive(false);
         commitPinchZoom();
         startDist = null;
         pinchCooldownUntil = Date.now() + PINCH_COOLDOWN_MS;
         pinchPrimed = false;
-        setPinchActive(false);
         pinchJustEnded = true;
       }
 
@@ -13205,22 +15215,22 @@ const PDFPage = forwardRef(({
           const elapsed = performance.now() - candidate.startedAt;
           const endX = touch.clientX;
           const endY = touch.clientY;
-          const horizontalTravel = Math.abs(endX - candidate.startX);
+          const deltaX = endX - candidate.startX;
+          const horizontalTravel = Math.abs(deltaX);
           const verticalTravel = Math.abs(endY - candidate.startY);
-          const reachedOppositeEdge = candidate.side === "left"
-            ? endX >= candidate.rect.right - candidate.edgeWidth
-            : endX <= candidate.rect.left + candidate.edgeWidth;
-          const movedInExpectedDirection = candidate.side === "left"
-            ? endX > candidate.startX
-            : endX < candidate.startX;
+          const minimumDistance = Math.max(
+            PAGE_SWIPE_MIN_DISTANCE_PX,
+            candidate.rect.width * PAGE_SWIPE_MIN_WIDTH_RATIO,
+          );
+          const velocity = horizontalTravel / Math.max(1, elapsed);
           if (
-            elapsed > EDGE_SWIPE_MAX_MS
-            || horizontalTravel < candidate.rect.width * EDGE_SWIPE_MIN_VIEWPORT_RATIO
-            || verticalTravel > candidate.rect.height * EDGE_SWIPE_MAX_VERTICAL_RATIO
-            || !reachedOppositeEdge
-            || !movedInExpectedDirection
+            elapsed > PAGE_SWIPE_MAX_MS
+            || horizontalTravel < minimumDistance
+            || velocity < PAGE_SWIPE_MIN_VELOCITY
+            || verticalTravel > candidate.rect.height * PAGE_SWIPE_MAX_VERTICAL_RATIO
+            || verticalTravel > horizontalTravel * 0.5
           ) return null;
-          return candidate.side;
+          return deltaX < 0 ? "next" : "previous";
         })();
         edgeSwipeCandidate = null;
 
@@ -13229,12 +15239,12 @@ const PDFPage = forwardRef(({
           setManualSelection(null);
           setManualPopup(null);
           window.getSelection?.()?.removeAllRanges();
-          if (completedEdgeSwipe === "left") {
-            // Fast left-edge → right-edge swipe: page down (24 → 23).
-            setPageNum((current) => Math.max(1, current - 1));
-          } else {
-            // Fast right-edge → left-edge swipe: page up (23 → 24).
+          if (completedEdgeSwipe === "next") {
+            // Fast right-to-left swipe from anywhere on the page.
             setPageNum((current) => Math.min(pageCountRef.current, current + 1));
+          } else {
+            // Matching left-to-right gesture returns to the previous page.
+            setPageNum((current) => Math.max(1, current - 1));
           }
           navigator.vibrate?.(18);
           hasMoved = false;
@@ -13317,6 +15327,7 @@ const PDFPage = forwardRef(({
     el.addEventListener("dblclick",    onDblClick);
 
     return () => {
+      pinchGestureActiveRef.current = false;
       if (pinchRaf) cancelAnimationFrame(pinchRaf);
       clearTwoFingerTapSeries();
       twoFingerTapCandidate = null;
@@ -13324,13 +15335,7 @@ const PDFPage = forwardRef(({
       stopLivePan(livePanRef);
       stopMomentumScroll(momentumFrameRef);
       if (pinchTransformApplied) {
-        const wrap = canvasWrapRef.current;
-        if (wrap) {
-          wrap.style.transform       = "";
-          wrap.style.transformOrigin = "";
-          wrap.style.willChange      = "";
-          wrap.style.removeProperty("--pdf-live-zoom-inverse");
-        }
+        clearLiveZoomTransform(pinchTransformTarget);
       }
       el.removeEventListener("touchstart",  onTouchStart);
       el.removeEventListener("touchmove",   onTouchMove);
@@ -13340,7 +15345,7 @@ const PDFPage = forwardRef(({
       el.removeEventListener("selectstart", onSelectStart);
       el.removeEventListener("dblclick",    onDblClick);
     };
-  }, [pdfDoc, captureZoomAnchor, handleAnnotRedo, handleAnnotUndo, zoomingDisabled]);
+  }, [pdfDoc, captureZoomAnchor, clearLiveZoomTransform, getLiveZoomTarget, getLiveZoomTargetOffset, zoomingDisabled]);
 
   // ── Mouse drag to pan ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -13488,10 +15493,7 @@ const PDFPage = forwardRef(({
           const dirX = Math.cos(angle);
           const dirY = Math.sin(angle);
 
-          // Resolved once per item (not per token) — used only for the
-          // Highlight tool's masked/recolored text (drawMaskedHighlightText,
-          // annotationDraw.js) so it can clone the PDF's real font instead
-          // of a generic fallback. fallbackName is pdf.js's own generic
+          // Resolved once per item (not per token). fallbackName is pdf.js's own generic
           // CSS-safe classification (serif/sans-serif/monospace) derived
           // from the embedded font's metadata — not the exact embedded
           // typeface (that would need hooking into pdf.js's FontLoader to
@@ -14459,7 +16461,7 @@ const PDFPage = forwardRef(({
   }, [pageNum]);
 
   // ── Load PDF ───────────────────────────────────────────────────────────────
-  const loadPdfBytes = useCallback(async (arrayBuffer, name, pdfJsSource = null) => {
+  const loadPdfBytes = useCallback(async (arrayBuffer, name, pdfJsSource = null, sourceId = "") => {
     const loadGeneration = ++pdfLoadGenerationRef.current;
     // A source switch must terminate the previous worker/document. Merely
     // replacing React state leaves PDF.js parsing and render work alive.
@@ -14470,15 +16472,30 @@ const PDFPage = forwardRef(({
     }
     // PDF.js may transfer/detach the ArrayBuffer passed to getDocument().
     // Keep an independent copy for the backend semantic-analysis upload.
-    pdfBytesRef.current = arrayBuffer instanceof ArrayBuffer ? arrayBuffer.slice(0) : null;
-    currentSourceIdRef.current = ""; // caller (loadFromSource) sets this back if applicable
-    setHasSourceId(false); // mirrors currentSourceIdRef.current as real state — a plain ref mutation alone doesn't trigger the re-render canInsertBlankPage/pageNavState need to pick up the change
+    // Saved sources can be downloaded again on demand by semantic analysis;
+    // retaining a second full byte-for-byte copy alongside PDF.js only wastes
+    // memory. Local files have no server fallback, so keep their private copy.
+    pdfBytesRef.current = !sourceId && arrayBuffer instanceof ArrayBuffer ? arrayBuffer.slice(0) : null;
+    // Establish ownership before publishing pdfDoc/pageCount. Clearing this
+    // ref until loadFromSource resumed allowed mount effects to resolve a
+    // second, filename-only PDFDocument identity for a saved Source.
+    currentSourceIdRef.current = sourceId;
+    setHasSourceId(Boolean(sourceId));
+    pymupdfDocumentIdRef.current = null;
+    pymupdfSourceIdRef.current = null;
+    setPymupdfDocumentId("");
+    setGlyphCharAnalysisRequest(null);
     setLoading(true);
     setPdfLoadProgress(0);
     setLoadError("");
     setPdfOutline([]);
+    setPdfOutlineReady(false);
     setPdfCustomOutlines([]);
+    setPdfOutlineImported(false);
+    setPdfNavigationLoaded(false);
+    pdfOutlineImportingRef.current = false;
     setOutlineOpen(false);
+    setDocumentNavigatorOpen(false);
     setBookmarks([]);
     setFilename(name);
     setPdfDoc(null); setPdfType(null);
@@ -14490,20 +16507,26 @@ const PDFPage = forwardRef(({
     setMarkdownAsideOpen(false);
     setMarkdownModeMenuOpen(false);
     setMarkdownAsideMode("raw");
+    setForensicReport(null);
+    setForensicError("");
     setMarkdownRetainedVisualMode(null);
     setMarkdownAsideColumnGroup("text");
     setMdLineSpacing(0);
     setMdSpacingTarget("str");
     setMdLineTagsVisible(true);
+    zoomRef.current = 1;
     setPageNum(1); setPageViewport(null); setZoom(1);
     renderTasksRef.current.forEach(t => t?.cancel());
+    pageCanvasRefs.current.forEach((canvas) => releaseCanvasBackingStore(canvas));
+    [annotCanvasRef.current, searchCanvasRef.current, hyleCanvasRef.current]
+      .forEach((canvas) => releaseCanvasBackingStore(canvas));
     pageCanvasRefs.current = []; pageContainerRefs.current = [];
     pageViewportsRef.current = []; renderTasksRef.current = []; renderedScaleRef.current = []; renderedCssSizeRef.current = [];
     pageRenderGenerationRef.current = [];
     pageTextItemsCacheRef.current = {};
     pdfAssistantPagesCacheRef.current = { document: null, promise: null, pages: null };
     pageIndexCacheRef.current.clear();
-    setSearchQuery(""); setSearchMatches([]); setSearchActiveIndex(-1); setSearchOpen(false);
+    setSearchQuery(""); setSearchRunQuery(""); setSearchMatches([]); setSearchActiveIndex(-1); setSearchOpen(false);
     // Cached ArrayBuffers do not produce PDF.js download progress events.
     // Start with a visible preparation stage and gently advance it while the
     // worker parses the document, without pretending it is complete.
@@ -14513,7 +16536,18 @@ const PDFPage = forwardRef(({
       setPdfLoadProgress((current) => Math.min(88, Math.max(current, current + 1)));
     }, 250);
     try {
-      const loadingTask = pdfjsLib.getDocument(pdfJsSource || { data: arrayBuffer });
+      // Some PDFs contain incomplete TrueType hinting programs and PDF.js
+      // reports those recoverable font defects as warnings such as
+      // `TT: undefined function: 32`. PDF.js still renders the glyphs using
+      // its fallback path, so keep document errors visible while suppressing
+      // only its non-fatal parser/font warning channel.
+      const resolvedPdfSource = pdfJsSource || { data: arrayBuffer };
+      const pdfDocumentSource = typeof resolvedPdfSource === "string" || resolvedPdfSource instanceof URL
+        ? { url: resolvedPdfSource, verbosity: pdfjsLib.VerbosityLevel.ERRORS }
+        : resolvedPdfSource instanceof ArrayBuffer
+          ? { data: resolvedPdfSource, verbosity: pdfjsLib.VerbosityLevel.ERRORS }
+          : { ...resolvedPdfSource, verbosity: pdfjsLib.VerbosityLevel.ERRORS };
+      const loadingTask = pdfjsLib.getDocument(pdfDocumentSource);
       pdfLoadingTaskRef.current = loadingTask;
       loadingTask.onProgress = ({ loaded, total }) => {
         if (pdfLoadGenerationRef.current !== loadGeneration) return;
@@ -14540,6 +16574,8 @@ const PDFPage = forwardRef(({
         setPdfOutline(Array.isArray(outline) ? outline : []);
       } catch {
         setPdfOutline([]);
+      } finally {
+        if (pdfLoadGenerationRef.current === loadGeneration) setPdfOutlineReady(true);
       }
       // Type detection is diagnostic metadata, not a prerequisite for showing
       // the document. Sample representative pages after the first render so a
@@ -14581,6 +16617,22 @@ const PDFPage = forwardRef(({
   useEffect(() => () => {
     pdfLoadGenerationRef.current += 1;
     renderTasksRef.current.forEach((task) => task?.cancel());
+    pageCanvasRefs.current.forEach((canvas) => releaseCanvasBackingStore(canvas));
+    [
+      annotCanvasRef.current,
+      searchCanvasRef.current,
+      hyleCanvasRef.current,
+      markdownAnnotationCanvasRef.current,
+      notebookDrawingCanvasRef.current,
+    ].forEach((canvas) => releaseCanvasBackingStore(canvas));
+    pdfBytesRef.current = null;
+    pageTextItemsCacheRef.current = {};
+    pdfAssistantPagesCacheRef.current = { document: null, promise: null, pages: null };
+    pageIndexCacheRef.current.clear();
+    pageOperatorListCacheRef.current.clear();
+    pymupdfPageCacheRef.current.clear();
+    forensicPageCacheRef.current.clear();
+    abbreviationDocumentIndexRef.current = null;
     const loadingTask = pdfLoadingTaskRef.current;
     pdfLoadingTaskRef.current = null;
     if (loadingTask) Promise.resolve(loadingTask.destroy()).catch(() => {});
@@ -14617,7 +16669,6 @@ const PDFPage = forwardRef(({
       setBlankInsertedPages(new Set());
       setActiveAnnotationSurface("pdf");
       setAnnotHistorySource("pdf");
-      setAnnotationLayerTab("pdf");
       markdownAnnotationsRef.current = {};
       setMarkdownAnnotations({});
       setMarkdownUndoStack([]);
@@ -14632,18 +16683,25 @@ const PDFPage = forwardRef(({
       setNotebookRedoStack([]);
     }
     setLoading(true);
+    // Remove the previous document before fetching/parsing the next one.
+    // Otherwise the viewer keeps rendering the old pdfDoc while loading is
+    // true, so the loading indicator and its progress are never visible.
+    setPdfDoc(null);
+    setPdfType(null);
+    setPageCount(0);
+    setPdfLoadProgress(0);
     setLoadError("");
     try {
       const token = readStoredSession()?.token || "";
       const cachedPdf = await readCachedPdf(sourceId, name);
       let numPages;
       if (cachedPdf) {
-        numPages = await loadPdfBytes(cachedPdf, name);
+        numPages = await loadPdfBytes(cachedPdf, name, null, sourceId);
       } else {
         const downloadResponse = await authFetch(apiUrl(`/api/sources/${sourceId}/download`));
         if (!downloadResponse.ok) throw new Error(`PDF download failed (${downloadResponse.status}).`);
         await writeCachedPdf(sourceId, name, downloadResponse);
-        numPages = await loadPdfBytes(await downloadResponse.arrayBuffer(), name);
+        numPages = await loadPdfBytes(await downloadResponse.arrayBuffer(), name, null, sourceId);
       }
       if (!numPages) return;
       currentSourceIdRef.current = sourceId;
@@ -14727,7 +16785,9 @@ const PDFPage = forwardRef(({
               if (!Number.isInteger(storedPageNumber) || storedPageNumber < 1 || storedPageNumber > numPages) return;
               const text = typeof storedPage?.text === "string" ? storedPage.text : "";
               const annotations = Array.isArray(storedPage?.annotations) ? storedPage.annotations : [];
-              if (!text.trim() && annotations.length === 0) return;
+              const hasUmlsContent = Boolean(storedPage?.umlsConceptAnalysis)
+                || (Array.isArray(storedPage?.umlsConcepts) && storedPage.umlsConcepts.length > 0);
+              if (!text.trim() && annotations.length === 0 && !hasUmlsContent) return;
               restoredNotebookPages[String(storedPageNumber)] = {
                 ...storedPage,
                 pageNumber: storedPageNumber,
@@ -14806,8 +16866,12 @@ const PDFPage = forwardRef(({
                 ))
               : NOTEBOOK_VOICE_COMMANDS,
           );
-          setZoom(Number.isFinite(persistedReaderState?.zoom) ? normalizeZoom(persistedReaderState.zoom) : 1);
-          setSearchOpen(Boolean(persistedReaderState?.searchOpen));
+          const restoredZoom = Number.isFinite(persistedReaderState?.zoom) ? normalizeZoom(persistedReaderState.zoom) : 1;
+          zoomRef.current = restoredZoom;
+          setZoom(restoredZoom);
+          // Search is an explicit user action; never reopen it from the
+          // persisted reader snapshot when a PDF is loaded.
+          setSearchOpen(false);
           setSearchQuery(typeof persistedReaderState?.searchQuery === "string" ? persistedReaderState.searchQuery : "");
           pendingReaderRestoreRef.current = persistedReaderState
             ? {
@@ -14908,7 +16972,7 @@ const PDFPage = forwardRef(({
   }, [pageNum, pageCount, annotations, annotHistory, filename, loadFromSource, insertingBlankPage]);
   useEffect(() => {
     const sourceId = currentSourceIdRef.current;
-    const companionContentOpen = entityBuilderOcrBlankPageOpen || markdownAsideOpen;
+    const companionContentOpen = entityBuilderOcrBlankPageOpen || markdownAsideOpen || sentenceTreeOpen;
     if (!companionContentOpen) {
       setEntityBuilderRawBlankPageRows([]);
       setEntityBuilderRawBlankPageMeta({ pageWidth: 0, pageHeight: 0 });
@@ -15018,7 +17082,7 @@ const PDFPage = forwardRef(({
       });
 
     return () => { cancelled = true; };
-  }, [buildOcrTextAnnotationsForBlankPage, buildRawRowsForBlankPage, buildVisualRawTextForBlankPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, pageNum]);
+  }, [buildOcrTextAnnotationsForBlankPage, buildRawRowsForBlankPage, buildVisualRawTextForBlankPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, sentenceTreeOpen, pageNum]);
   // Ref-mirrored (same pattern as textSelectableRef/onSelectionActionRef
   // above) so useImperativeHandle — declared earlier in this component,
   // before insertBlankPageAfterCurrent even exists as a binding — can
@@ -15262,7 +17326,7 @@ const PDFPage = forwardRef(({
   useEffect(() => {
     if (!pdfDoc || selectionOnly) return;
     fetchAiProviderModelsOnce();
-    registerPdfAssistantDocument({
+    return registerPdfAssistantDocument({
       filename,
       currentPage: pageNum,
       loadDocumentPages: loadPdfAssistantPages,
@@ -15654,7 +17718,7 @@ const PDFPage = forwardRef(({
   }, [pageCount]);
 
   // Actions -> Text Extraction: instead of the inline pageMdOpen panel, spins
-  // up a real AMCTOSHS Draft document containing the WHOLE document's text
+  // up a real RabbitHole Draft document containing the WHOLE document's text
   // (every page, in order — not just the one currently open), and navigates
   // there. Each PDF page's text lands as its own run of literal-text blocks
   // (escaped, one line per <div> — not parsed into rich formatting), preceded
@@ -16093,7 +18157,7 @@ const PDFPage = forwardRef(({
       const result = await morpheSchemasApi.create({ modeOfAccess: mode.key, schemaName });
       const objectId = result.objectId || result.schema?.objectId || "Object";
       setSelectionToolResult({
-        label: "AMCTOSHS Object created",
+        label: "RabbitHole Object created",
         text: `${objectId} · ${mode.label} · Schema: ${schemaName}`,
       });
       window.dispatchEvent(new CustomEvent("amctoshs:morphe-updated", {
@@ -16107,7 +18171,7 @@ const PDFPage = forwardRef(({
         },
       }));
     } catch (error) {
-      setSelectionToolError(error.message || "Failed to create the AMCTOSHS Object and Schema.");
+      setSelectionToolError(error.message || "Failed to create the RabbitHole Object and Schema.");
     } finally {
       setSelectionToolBusy(null);
     }
@@ -16153,7 +18217,7 @@ const PDFPage = forwardRef(({
 
   // Cross-check builder source text against the current page text via AI
   // and return a corrected value. The selection bar no longer owns this
-  // action; AMCTOSHS Entity Builder does.
+  // action; RabbitHole Entity Builder does.
   const verifyEntityBuilderSource = useCallback(async (text) => {
     const word = String(text || "").trim();
     if (!word || selectionVerifyBusy) return word;
@@ -16944,6 +19008,29 @@ const PDFPage = forwardRef(({
     window.addEventListener("touchmove", onMove, { passive: true });
     window.addEventListener("touchend", onEnd);
   }, [mdPanelWidth]);
+  const handleRabbitHoleResizeStart = useCallback((e) => {
+    e.preventDefault();
+    const handleEl = e.currentTarget;
+    const startX = e.touches ? e.touches[0].clientX : e.clientX;
+    const startWidth = rabbitHolePanelWidth;
+    handleEl.classList.add("pdf_aside_resize_handle--active");
+    const onMove = (ev) => {
+      const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+      const next = Math.max(220, Math.min(720, startWidth - (clientX - startX)));
+      setRabbitHolePanelWidth(next);
+    };
+    const onEnd = () => {
+      handleEl.classList.remove("pdf_aside_resize_handle--active");
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onEnd);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onEnd);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onEnd);
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend", onEnd);
+  }, [rabbitHolePanelWidth]);
   const createAsideResizeStart = useCallback((startWidth, setWidth, min = 240, max = 720) => (e) => {
     e.preventDefault();
     const handleEl = e.currentTarget;
@@ -17025,12 +19112,22 @@ const PDFPage = forwardRef(({
   // inside either group so the two can live in separate containers.
   const activeToolMeta = ANNOT_TOOLS.find((t) => t.key === annotTool) || null;
   const shapeToolbarOpen = annotTool === "shapes";
-  const hasSize = isPenToolKey(annotTool) || annotTool === "highlight" || annotTool === "eraser" || SHAPE_TOOL_KEYS.includes(annotTool);
+  const shapeOptionsActive = shapeToolbarOpen || SHAPE_TOOL_KEYS.includes(annotTool);
+  const hasSize = isPenToolKey(annotTool) || annotTool === "highlight" || annotTool === "eraser" || annotTool === "antiAgingEraser" || shapeOptionsActive;
+  // Keep the workspace's bottom options host genuinely empty while no tool
+  // needs it. Previously an empty .annot_tool_options node was always
+  // portalled into the host, so :empty never matched and the unused row kept
+  // occupying space. Smart Video owns an aside rather than a subtoolbar.
+  const subtoolbarActive = Boolean(
+    annotTool
+    && annotTool !== "smartVideo"
+    && (annotTool !== "mdController" || markdownVisualActive)
+  );
   const sizeProps =
     isPenToolKey(annotTool)  ? { min: 1, max: 36, step: 0.5, value: penSize,    onChange: setPenSize } :
-    annotTool === "eraser"  ? { min: 6, max: 72, step: 2,   value: eraserSize, onChange: setEraserSize } :
+    ["eraser", "antiAgingEraser"].includes(annotTool) ? { min: 6, max: 72, step: 2, value: eraserSize, onChange: setEraserSize } :
     annotTool === "highlight" ? { min: 4, max: 96, step: 2, value: annotSize,  onChange: setAnnotSize } :
-    SHAPE_TOOL_KEYS.includes(annotTool) ? {
+    shapeOptionsActive ? {
       min: 1,
       max: 20,
       step: 0.5,
@@ -17045,13 +19142,13 @@ const PDFPage = forwardRef(({
   const inkColorLabel =
     annotTool === "text"     ? "Text color" :
     annotTool === "highlight" ? "Highlight color" :
-    SHAPE_TOOL_KEYS.includes(annotTool) ? "Stroke color" :
+    shapeOptionsActive ? "Stroke color" :
     `${activeToolMeta?.label || "Tool"} color`;
   const sizeKnobLabel =
     isPenToolKey(annotTool)  ? "Stroke width" :
-    annotTool === "eraser"   ? "Eraser size" :
+    ["eraser", "antiAgingEraser"].includes(annotTool) ? "Eraser size" :
     annotTool === "highlight" ? "Highlighter size" :
-    SHAPE_TOOL_KEYS.includes(annotTool) ? "Stroke width" :
+    shapeOptionsActive ? "Stroke width" :
     "Size";
   const markdownVisualPageScale = Math.max(0.0001, fitScaleRef.current * zoom);
   const liveRenderedPageSize = renderedCssSizeRef.current[pageNum - 1];
@@ -17246,6 +19343,96 @@ const PDFPage = forwardRef(({
     </div>
   );
 
+  const rabbitHoleInProgress = isRabbitHoleBusy(backendReconstructionState.status)
+    || ["extracting", "reconstructing", "enriching"].includes(documentExtractionState.status);
+  const aiPhysicalBlockProgressPercent = aiPhysicalBlockProgress.status === "complete"
+    ? 100
+    : Math.min(99, Math.round((Math.max(0, Math.min(11, Number(aiPhysicalBlockProgress.step) || 0)) / 11) * 100));
+  const savedRabbitHoleRunId = rabbitHoleSaveState.runId
+    || (backendReconstructionState.run?.capabilities?.canDelete ? backendReconstructionState.run?._id : null);
+  const backendCompletedPages = Number(backendReconstructionState.run?.progress?.completedPages) || 0;
+  const backendExtractedPages = Math.max(backendCompletedPages, Number(backendReconstructionState.run?.progress?.extractedPages) || 0);
+  const backendReconstructedPages = Math.max(backendCompletedPages, Number(backendReconstructionState.run?.progress?.reconstructedPages) || 0);
+  const backendPageCount = Number(backendReconstructionState.run?.progress?.pageCount) || pageCount;
+  const rabbitHoleMetadataBlocks = (() => {
+    const byId = new Map();
+    const addBlocks = (blocks, persisted = false) => blocks
+      .filter((block) => block.createdBy === "user" || block.source === "manual" || block.createdBy === "ai" || block.source === "ai")
+      .forEach((block) => {
+        const id = String(block.id || block.manualPhysicalBlockId || "");
+        if (!id) return;
+        const previous = byId.get(id) || {};
+        byId.set(id, { ...previous, ...block, persisted: Boolean(previous.persisted || persisted) });
+      });
+    addBlocks(persistedPhysicalPage?.page?.physicalBlocks || [], true);
+    addBlocks(documentReconstruction.physical?.blocks || [], rabbitHoleSaveState.status === "saved");
+    addBlocks(manualDocumentFormAssignments, false);
+    const lineById = new Map(currentPhysicalLines.map((line) => [String(line.id), line]));
+    return [...byId.values()].map((block) => ({
+      ...block,
+      canonicalText: String(block.canonicalText || (block.lineIds || [])
+        .map((lineId) => lineById.get(String(lineId)))
+        .map((line) => line?.canonicalText || line?.sourceText || line?.text || "")
+        .filter(Boolean)
+        .join(" ")),
+    }));
+  })();
+  const rabbitHoleCharacterCount = rabbitHoleMetadataBlocks.reduce(
+    (count, block) => count + Array.from(String(block.canonicalText || "")).length,
+    0,
+  );
+  const rabbitHolePhysicalLineCount = new Set(rabbitHoleMetadataBlocks.flatMap((block) => block.lineIds || [])).size;
+  const rabbitHolePhysicalBlockCount = rabbitHoleMetadataBlocks.length;
+  const rabbitHolePaused = backendReconstructionState.status === "paused" || documentExtractionState.status === "paused";
+  const backendOverallProgress = calculateRabbitHoleOverallProgress(backendReconstructionState.run);
+  const backendTreeCounts = {
+    paragraphs: Math.max(0, Number(backendReconstructionState.run?.checkpoint?.paragraphCount) || 0),
+    sentences: Math.max(0, Number(backendReconstructionState.run?.checkpoint?.sentenceCount) || 0),
+    words: Math.max(0, Number(backendReconstructionState.run?.checkpoint?.wordCount) || 0),
+  };
+  const backendOverallPercentLabel = `${backendOverallProgress.percent === 100 ? "100" : backendOverallProgress.percent.toFixed(1)}%`;
+  const backendOverallTimingLabel = (() => {
+    if (backendOverallProgress.finalizationComplete) {
+      const total = formatRabbitHoleDuration(backendOverallProgress.elapsedMs);
+      return `${backendOverallPercentLabel}${total ? ` · ${total} total` : ""}`;
+    }
+    if (rabbitHolePaused) {
+      const remaining = formatRabbitHoleDuration(backendOverallProgress.remainingMs);
+      return `${backendOverallPercentLabel} · paused${remaining ? ` · ~${remaining} left` : ""}`;
+    }
+    if (backendOverallProgress.completedUnits === 0) return "0% · calculating estimate…";
+    const estimatedTotal = formatRabbitHoleDuration(backendOverallProgress.estimatedTotalMs);
+    const remaining = formatRabbitHoleDuration(backendOverallProgress.remainingMs);
+    if (!estimatedTotal || !remaining) return `${backendOverallPercentLabel} · calculating estimate…`;
+    const phase = backendReconstructionState.run?.status === "finalizing" ? "finalizing · " : "";
+    return `${backendOverallPercentLabel} · ${phase}~${estimatedTotal} total · ~${remaining} left`;
+  })();
+  const backendStatusTitle = backendReconstructionState.run?.status === "finalizing"
+    ? "Finalizing document reconstruction"
+    : rabbitHoleStatusTitle(backendReconstructionState.status);
+  useEffect(() => {
+    onLayer1OnlyChange?.(Boolean(layer1Only && pdfDoc && glyphCharAsideOpen));
+    return () => onLayer1OnlyChange?.(false);
+  }, [glyphCharAsideOpen, layer1Only, onLayer1OnlyChange, pdfDoc]);
+  if (layer1Only && pdfDoc && glyphCharAsideOpen) {
+    return (
+      <div id="pdf_page" className="pdf_page pdf_page--layer1-only">
+        <GlyphCharAside
+          analysis={glyphCharAnalysis}
+          currentPage={pageNum}
+          onClose={() => setGlyphCharAsideOpen(false)}
+          onStartAnalysis={({ scope = "document", pageNumber = null, force = false } = {}) => setGlyphCharAnalysisRequest({
+            scope,
+            pageNumber: scope === "page" ? pageNumber : null,
+            force: scope === "page" && force,
+            requestNonce: Date.now(),
+          })}
+          onResultsDeleted={() => setGlyphCharAnalysisRequest(null)}
+          onSelectGlyph={selectGlyphAndNavigate}
+        />
+      </div>
+    );
+  }
   return (
     <div
       id="pdf_page"
@@ -17287,71 +19474,26 @@ const PDFPage = forwardRef(({
             <div className="annot_tool_strip" aria-label="Drawing tools">
               {DRAWING_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
             </div>
-
-            {/* Non-drawing "mode" tools — Smart Video is a real annotTool
-                (selected/drawn the same way as the drawing tools above,
-                see MODE_TOOL_ORDER) but isn't itself a drawing tool;
-                Entity Builder / Clinical Vignette / Narrative Mode are
-                each their own boolean-toggle panel, not annotTools at
-                all. Grouped together and pushed to the opposite end of
-                this row (see .annot_mode_strip in pdfPage.css) so the
-                toolbar reads as two areas: draw-on-the-page tools on the
-                left, open-a-panel tools on the right. */}
-            <div className="annot_mode_strip" aria-label="Panel tools">
-              {markdownVisualActive && (
-                <button
-                  type="button"
-                  ref={(el) => { toolButtonRefs.current.mdController = el; }}
-                  className={`annot_trigger annot_tool_btn${annotTool === "mdController" ? " annot_tool_btn--active" : ""}`}
-                  onClick={() => toggleAnnotTool("mdController")}
-                  title="MD Controller"
-                  aria-label="MD Controller"
-                >
-                  <i className="bx bx-slider" aria-hidden="true" />
-                </button>
-              )}
-              <button
-                type="button"
-                className={`annot_trigger annot_tool_btn${entityBuilderOpen ? " annot_trigger--active" : ""}`}
-                onClick={toggleEntityBuilder}
-                title="AMCTOSHS Illumination"
-                aria-label="AMCTOSHS Illumination"
-              >
-                {isCurrentPageFullySegmented ? <SegmentBuilderOpenEyeIcon /> : <SegmentBuilderClosedEyeIcon />}
-              </button>
-              <button
-                type="button"
-                className={`annot_trigger annot_tool_btn${abbreviationPanelOpen ? " annot_trigger--active" : ""}`}
-                onClick={toggleAbbreviationPanel}
-                title="Abbreviations"
-                aria-label="Open Abbreviations"
-                aria-pressed={abbreviationPanelOpen}
-              >
-                <span className="annot_abbreviation_mark" aria-hidden="true">AB</span>
-              </button>
-              {MODE_TOOL_ORDER.map((key) => renderAnnotToolButton(key))}
-            </div>
             </div>
             </>
           )}
         </div>
 
-            {/* Color/size/tool-settings for whichever tool is currently
-                active — a detached dropdown popover (see .annot_tool_options
-                in pdfPage.css), sized to its own content rather than
-                stretching/shrinking the toolbar itself: a column list
-                dropping down/up off a horizontal (top/bottom) dock, a row
-                list flying out sideways off a vertical (left/right) one.
-                Opens from the active tool's own button position (see
-                toolOptionsOffset above), not the toolbar's fixed corner. */}
-            {pdfDoc && !selectionOnly && <PortalWhenReady host={toolbarOptionsHost}><div
-              className="annot_tool_options"
+            {/* Every tool uses the same compact, single-row options strip at
+                the bottom of PDFReaderWorkspace. The older options host is
+                retained only as a fallback for embeddings that do not expose
+                the dedicated bottom mount. */}
+            {pdfDoc && !selectionOnly && subtoolbarActive && <PortalWhenReady host={textToolbarOptionsHost || toolbarOptionsHost}><div
+              className={`annot_tool_options${textToolbarOptionsHost || annotTool === "text" ? " annot_tool_options--text-thin" : ""}`}
               style={
-                (effectiveToolbarEdge === "left" || effectiveToolbarEdge === "right")
-                  ? { top: toolOptionsOffset }
-                  : { left: toolOptionsOffset }
+                (textToolbarOptionsHost || toolbarOptionsHost)
+                  ? undefined
+                  : (effectiveToolbarEdge === "left" || effectiveToolbarEdge === "right")
+                    ? { top: toolOptionsOffset }
+                    : { left: toolOptionsOffset }
               }
             >
+              <div className="annot_subtoolbar_controller_group">
               {annotTool === "mdController" && markdownVisualActive && (
                 <div className="annot_control annot_md_controller" aria-label="Markdown line spacing controller">
                   <AnnotControlHeaderInfo title="MD Controller" />
@@ -17522,45 +19664,60 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
-            {toolActive && annotTool !== "eraser" && annotTool !== "smartVideo" && annotTool !== "bbox" && (
+            {(toolActive || shapeOptionsActive) && !["eraser", "antiAgingEraser"].includes(annotTool) && annotTool !== "smartVideo" && annotTool !== "bbox" && (
               <div className="annot_control">
                 <AnnotControlHeaderInfo title={inkColorLabel} />
                 <div className="annot_dd_wrap" ref={colorMenuRef}>
                   <div className="annot_color_preset_row" role="group" aria-label={inkColorLabel}>
-                    {Array.from({ length: COLOR_PRESET_SLOT_COUNT }, (_, presetIndex) => {
-                      const presetColor = activeToolColorPresets[presetIndex] || null;
-                      const presetActive = presetColor && presetIndex === activeToolColorPresetIndex;
-                      return (
-                        <button
-                          key={presetIndex}
-                          type="button"
-                          className={`annot_color_preset_btn${presetActive ? " annot_color_preset_btn--active" : ""}${presetColor ? "" : " annot_color_preset_btn--empty"}`}
-                          onPointerDown={(event) => startColorPresetLongPress(presetIndex, event)}
-                          onPointerUp={(event) => { clearColorPresetLongPress(event.pointerId, { keepSuppressClick: true }); }}
-                          onPointerCancel={(event) => { clearColorPresetLongPress(event.pointerId); }}
-                          onPointerLeave={(event) => { clearColorPresetLongPress(event.pointerId); }}
-                          onClick={(event) => {
-                            if (clearColorPresetLongPress(null)) return;
-                            const rect = event.currentTarget.getBoundingClientRect();
-                            if (!presetColor) {
-                              openColorMenuFromRect(rect, { type: "preset", presetIndex });
-                              return;
-                            }
-                            setAnnotColor(presetColor);
-                          }}
-                          title={presetColor ? `Preset ${presetIndex + 1}: ${presetColor}` : `Set preset ${presetIndex + 1}`}
-                          aria-label={presetColor ? `Color preset ${presetIndex + 1}` : `Empty color preset ${presetIndex + 1}`}
-                        >
-                          <span
-                            className="annot_color_preset_dot"
-                            style={presetColor ? { background: presetColor } : undefined}
-                          />
-                        </button>
-                      );
-                    })}
+                        {Array.from({ length: COLOR_PRESET_SLOT_COUNT }, (_, presetIndex) => {
+                          const presetColor = activeToolColorPresets[presetIndex] || null;
+                          const presetActive = presetColor && presetIndex === activeToolColorPresetIndex;
+                          return (
+                            <button
+                              key={presetIndex}
+                              type="button"
+                              className={`annot_color_preset_btn${presetActive ? " annot_color_preset_btn--active" : ""}${presetColor ? "" : " annot_color_preset_btn--empty"}`}
+                              onPointerDown={(event) => startColorPresetLongPress(presetIndex, event)}
+                              onPointerUp={(event) => { clearColorPresetLongPress(event.pointerId, { keepSuppressClick: true }); }}
+                              onPointerCancel={(event) => { clearColorPresetLongPress(event.pointerId); }}
+                              onPointerLeave={(event) => { clearColorPresetLongPress(event.pointerId); }}
+                              onClick={(event) => {
+                                if (clearColorPresetLongPress(null)) return;
+                                const rect = event.currentTarget.getBoundingClientRect();
+                                // Desired behavior:
+                                // - If this preset is already active, open the color list.
+                                // - If this preset has a color but is not active, select it on first click.
+                                // - If this preset is empty, open the color list to set it.
+                                if (presetActive) {
+                                  openColorMenuFromRect(rect, { type: "preset", presetIndex });
+                                  return;
+                                }
+                                if (presetColor) {
+                                  // Select the preset color (this also updates annotColor)
+                                  setAnnotToolColorPreset(presetIndex, presetColor);
+                                  // Do not open the menu when selecting.
+                                  return;
+                                }
+                                // Empty slot -> open menu so user can set it.
+                                openColorMenuFromRect(rect, { type: "preset", presetIndex });
+                              }}
+                              title={presetColor ? `Preset ${presetIndex + 1}: ${presetColor}` : `Set preset ${presetIndex + 1}`}
+                              aria-label={presetColor ? `Color preset ${presetIndex + 1}` : `Empty color preset ${presetIndex + 1}`}
+                            >
+                              <span
+                                className="annot_color_preset_dot"
+                                style={presetColor ? { background: presetColor } : undefined}
+                              />
+                            </button>
+                          );
+                        })}
                   </div>
                 {colorMenuOpen && colorMenuPos && createPortal(
-                  <div ref={colorMenuPopoverRef} className="annot_dd annot_dd--colors" style={colorMenuPos}>
+                  <div
+                    ref={colorMenuPopoverRef}
+                    className={`annot_dd annot_dd--colors${textToolbarOptionsHost ? " annot_dd--text-thin" : ""}`}
+                    style={colorMenuPos}
+                  >
                     <div className="annot_color_preview">
                       <div
                         className="annot_color_preview_chip"
@@ -17591,6 +19748,27 @@ const PDFPage = forwardRef(({
                           ).toUpperCase()}
                         </span>
                       </div>
+                      {colorMenuTarget.type === "ink" && annotTool === "highlight" && (
+                        <label
+                          className="annot_color_custom_control"
+                          title="Custom highlight color"
+                          onClick={(e) => {
+                            // On iPad/Safari the input inside a portalled dropdown
+                            // may not open reliably; try the native picker fallback
+                            // from a user gesture.
+                            e.stopPropagation();
+                            openNativeColorPicker(annotColor, (v) => setAnnotColor(v));
+                          }}
+                        >
+                          <span className="sr-only">Custom highlight color</span>
+                          <input
+                            type="color"
+                            value={annotColor}
+                            onChange={(event) => setAnnotColor(event.target.value)}
+                            aria-label="Custom highlight color"
+                          />
+                        </label>
+                      )}
                     </div>
                     {colorMenuTarget.type === "background" && (
                       <button
@@ -17654,6 +19832,7 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
+            <div className="annot_subtoolbar_pill_group">
             {annotTool === "highlight" && (
               <div className="annot_control">
                 <AnnotControlHeaderInfo title="Opacity" info="Transparency of the highlight layer" />
@@ -17661,7 +19840,7 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
-            {hasSize && (
+            {hasSize && !isPenToolKey(annotTool) && (
               <div className="annot_control">
                 <AnnotControlHeaderInfo title={sizeKnobLabel} />
                 <SizeKnob
@@ -17669,13 +19848,28 @@ const PDFPage = forwardRef(({
                   value={sizeProps.value}
                   onChange={sizeProps.onChange}
                   color={annotColor}
+                  colorless={annotTool === "antiAgingEraser"}
                   dashed={annotTool === "eraser"}
                   variant={annotTool === "highlight" ? "highlight" : "dot"}
                 />
               </div>
             )}
 
-            {SHAPE_TOOL_KEYS.includes(annotTool) && (
+            {shapeOptionsActive && (
+              <div className="annot_control">
+                <AnnotControlHeaderInfo title="Corners" />
+                <SizeKnob
+                  min={0} max={60} step={1}
+                  value={shapeBorderRadius}
+                  onChange={setShapeBorderRadius}
+                  color={annotColor}
+                  variant="dot"
+                />
+              </div>
+            )}
+            </div>
+
+            {shapeOptionsActive && (
               <div className="annot_control">
                 <AnnotControlHeaderInfo title="Stroke style" />
                 <div className="annot_mode_toggle" aria-label="Border style">
@@ -17695,20 +19889,7 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
-            {annotTool === "rect" && (
-              <div className="annot_control">
-                <AnnotControlHeaderInfo title="Corners" />
-                <SizeKnob
-                  min={0} max={60} step={1}
-                  value={shapeBorderRadius}
-                  onChange={setShapeBorderRadius}
-                  color={annotColor}
-                  variant="dot"
-                />
-              </div>
-            )}
-
-            {["rect", "circle", "freeshape"].includes(annotTool) && (
+            {shapeOptionsActive && (
               <div className="annot_control">
                 <AnnotControlHeaderInfo title="Interior" />
                 <div className="annot_mode_toggle">
@@ -17741,6 +19922,17 @@ const PDFPage = forwardRef(({
                     {label}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  className="annot_mode_btn annot_mode_btn--toggle annot_clear_dirty_page_btn"
+                  onClick={makePageNew}
+                  title="Clear dirty page"
+                  aria-label="Clear dirty page"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M15 2H7.3c-.4 0-.78.12-1.11.34L4.27 3.62c-.44.3-.75.75-.85 1.27s0 1.06.3 1.5l1.25 1.88c-.06.92-.44 1.78-1.1 2.44a6.38 6.38 0 0 0-1.88 4.54v5.76c0 .55.45 1 1 1h10c.55 0 1-.45 1-1v-5.76c0-1.71-.67-3.32-1.88-4.54-.63-.63-1-1.45-1.08-2.33l.36-.36c.59 1.5 1.93 2.99 4.6 2.99v-2c-1.88 0-2.58-1.11-2.84-2h1.84c.55 0 1-.45 1-1v-3c0-.55-.45-1-1-1ZM4 20v-3.96c1.66.11 2.62.49 3.63.89 1.14.46 2.32.93 4.37 1.04V20zm8-4.04c-1.66-.11-2.62-.49-3.63-.89-1.11-.44-2.26-.89-4.19-1.03.2-.72.57-1.38 1.11-1.92.86-.86 1.42-1.94 1.62-3.12h2.17c.2 1.18.76 2.26 1.62 3.12s1.29 1.94 1.29 3.12v.72ZM14 5h-2c-.27 0-.52.11-.71.29L9.58 7H6.53L5.38 5.28 7.3 4H14zm3-2h2v2h-2zm3 0h2v2h-2zm0 3h2v2h-2z" />
+                  </svg>
+                </button>
                 </div>
               </div>
             )}
@@ -17924,7 +20116,7 @@ const PDFPage = forwardRef(({
                 </div>
                 </div>
 
-
+                <div className="annot_subtoolbar_pill_group">
                 <div className="annot_control">
                 <AnnotControlHeaderInfo title="Type size" />
                 <SizeKnob
@@ -17938,6 +20130,7 @@ const PDFPage = forwardRef(({
                   }}
                   color={annotColor}
                   dashed={false}
+                  leadingValue
                 />
                 </div>
 
@@ -17954,12 +20147,24 @@ const PDFPage = forwardRef(({
                   max={300}
                   step={10}
                   label="%"
+                  leadingValue
                 />
+                </div>
               </div>
             )}
 
             {isPenToolKey(annotTool) && (
-              <div className="annot_pen_panel">
+              <div className="annot_pen_panel annot_subtoolbar_pill_group">
+                <div className="annot_control">
+                  <AnnotControlHeaderInfo title={sizeKnobLabel} />
+                  <SizeKnob
+                    min={sizeProps.min} max={sizeProps.max} step={sizeProps.step}
+                    value={sizeProps.value}
+                    onChange={sizeProps.onChange}
+                    color={annotColor}
+                    variant="dot"
+                  />
+                </div>
                 <div className="annot_pen_controls annot_pen_controls--column">
                   <div className="annot_pen_stroke_shaping">
                     <LabeledPercentKnob
@@ -18026,53 +20231,96 @@ const PDFPage = forwardRef(({
               </div>
             )}
 
-            {annotTool === "highlight" && (
+            {HIGHLIGHT_TOOL_KEYS.includes(annotTool) && (
               <div className="annot_control annot_highlight_style_control">
                 <AnnotControlHeaderInfo title="Style" />
                 <div className="annot_mode_toggle annot_mode_toggle--pen annot_highlight_style_buttons">
+                <div className="annot_highlight_mode_group" aria-label="Highlight modes">
+                  <button
+                    type="button"
+                    className={`annot_mode_btn annot_highlight_style_btn annot_highlight_style_btn--icon${annotTool === "highlight" && highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => {
+                      setAnnotTool("highlight");
+                      setHighlightMode("freehand");
+                    }}
+                    aria-label="Freehand"
+                    title="Freehand"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M17.93 16.91c.08-.62.82-2.06 1.37-3.14.54-1.06 1.15-2.26 1.63-3.46.25-.64.85-2.14-.11-2.94-1.15-.95-2.97.2-6.27 2.29-1.38.87-2.92 1.85-4.29 2.54 1.24-1.67 2.55-3.52 2.28-5.09a2.26 2.26 0 0 0-.98-1.5c-.65-.44-1.43-.58-2.26-.4-3.35.69-7.21 6.58-7.64 7.25l1.68 1.08c1.45-2.25 4.45-5.97 6.36-6.37.39-.08.6.01.74.11.1.07.12.12.13.17.14.83-1.33 2.8-2.13 3.85-1.13 1.51-1.82 2.43-1.14 3.27.7.87 2.04.27 3.11-.22 1.66-.75 3.54-1.95 5.21-3 1.17-.74 2.66-1.69 3.57-2.1-.03.09-.07.2-.12.32-.44 1.11-1.01 2.22-1.55 3.29-1.27 2.49-2.19 4.28-1.16 5.43.37.41.88.62 1.6.62.91 0 2.15-.32 3.89-.98l-.71-1.87c-2.05.77-2.9.87-3.22.85Z" />
+                    </svg>
+                  </button>
+                  <div className="annot_highlight_straight_group">
+                  <button
+                    type="button"
+                    className={`annot_mode_btn annot_highlight_style_btn annot_highlight_style_btn--icon${annotTool === "highlight" && highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
+                    onClick={() => {
+                      setAnnotTool("highlight");
+                      setHighlightMode("line");
+                    }}
+                    aria-label="Straight line"
+                    title="Text / Straight highlight"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M17 7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h10c2.76 0 5-2.24 5-5s-2.24-5-5-5m0 8H7c-1.65 0-3-1.35-3-3s1.35-3 3-3h10c1.65 0 3 1.35 3 3s-1.35 3-3 3" />
+                    </svg>
+                  </button>
+                  {annotTool === "highlight" && highlightMode === "line" && (
+                    <div className="annot_highlight_line_options">
+                      <button
+                        type="button"
+                        className={`annot_mode_btn annot_mode_btn--toggle annot_highlight_line_option_btn${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
+                        onClick={() => setHighlightAutoWidth((value) => !value)}
+                        title={highlightAutoWidth
+                          ? "Smart: detect stroke/text height and use it for highlight width"
+                          : "Smart off: use manually set highlight width (no auto-detection)"}
+                      >
+                        Smart
+                      </button>
+                      <button
+                        type="button"
+                        className={`annot_mode_btn annot_mode_btn--toggle annot_highlight_line_option_btn${highlightTaperEnds ? " annot_mode_btn--active" : ""}`}
+                        onClick={() => setHighlightTaperEnds((value) => !value)}
+                        title="Taper ends: rounded marker caps; off uses blunt ends"
+                      >
+                        {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
+                      </button>
+                    </div>
+                  )}
+                  </div>
+                </div>
+                <div className="annot_highlight_secondary_group" aria-label="Text mark modes">
                 <button
                   type="button"
-                  className={`annot_mode_btn annot_highlight_style_btn annot_highlight_style_btn--icon${highlightMode === "freehand" ? " annot_mode_btn--active" : ""}`}
-                  onClick={() => setHighlightMode("freehand")}
-                  aria-label="Freehand"
-                  title="Freehand"
+                  className={`annot_mode_btn annot_highlight_style_btn annot_highlight_style_btn--icon${annotTool === "underline" ? " annot_mode_btn--active" : ""}`}
+                  onClick={() => {
+                    setAnnotTool("underline");
+                    setColorMenuOpen(false);
+                  }}
+                  aria-label="Underline"
+                  title="Underline"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M17.93 16.91c.08-.62.82-2.06 1.37-3.14.54-1.06 1.15-2.26 1.63-3.46.25-.64.85-2.14-.11-2.94-1.15-.95-2.97.2-6.27 2.29-1.38.87-2.92 1.85-4.29 2.54 1.24-1.67 2.55-3.52 2.28-5.09a2.26 2.26 0 0 0-.98-1.5c-.65-.44-1.43-.58-2.26-.4-3.35.69-7.21 6.58-7.64 7.25l1.68 1.08c1.45-2.25 4.45-5.97 6.36-6.37.39-.08.6.01.74.11.1.07.12.12.13.17.14.83-1.33 2.8-2.13 3.85-1.13 1.51-1.82 2.43-1.14 3.27.7.87 2.04.27 3.11-.22 1.66-.75 3.54-1.95 5.21-3 1.17-.74 2.66-1.69 3.57-2.1-.03.09-.07.2-.12.32-.44 1.11-1.01 2.22-1.55 3.29-1.27 2.49-2.19 4.28-1.16 5.43.37.41.88.62 1.6.62.91 0 2.15-.32 3.89-.98l-.71-1.87c-2.05.77-2.9.87-3.22.85Z" />
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="2 2 20 20" aria-hidden="true">
+                    <path d="M5 18h14v2H5zM17 8V4H7v4h2V6h2v8H9v2h6v-2h-2V6h2v2z" />
                   </svg>
                 </button>
                 <button
                   type="button"
-                  className={`annot_mode_btn annot_highlight_style_btn annot_highlight_style_btn--icon${highlightMode === "line" ? " annot_mode_btn--active" : ""}`}
-                  onClick={() => setHighlightMode("line")}
-                  aria-label="Straight line"
-                  title="Straight line"
+                  className={`annot_mode_btn annot_highlight_style_btn annot_highlight_style_btn--icon${annotTool === "strikethrough" ? " annot_mode_btn--active" : ""}`}
+                  onClick={() => {
+                    setAnnotTool("strikethrough");
+                    setColorMenuOpen(false);
+                  }}
+                  aria-label="Strikethrough"
+                  title="Strikethrough"
                 >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M17 7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h10c2.76 0 5-2.24 5-5s-2.24-5-5-5m0 8H7c-1.65 0-3-1.35-3-3s1.35-3 3-3h10c1.65 0 3 1.35 3 3s-1.35 3-3 3" />
-                  </svg>
+                  <i className="bx bx-strikethrough" aria-hidden="true" />
                 </button>
-                {highlightMode === "line" && <>
-                  <button
-                    type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle annot_highlight_line_option_btn${highlightAutoWidth ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setHighlightAutoWidth((value) => !value)}
-                    title="Auto width: click text to match that text span's width automatically"
-                  >
-                    Auto width
-                  </button>
-                  <button
-                    type="button"
-                    className={`annot_mode_btn annot_mode_btn--toggle annot_highlight_line_option_btn${highlightTaperEnds ? " annot_mode_btn--active" : ""}`}
-                    onClick={() => setHighlightTaperEnds((value) => !value)}
-                    title="Taper ends: rounded marker caps; off uses blunt ends"
-                  >
-                    {highlightTaperEnds ? "Taper ends" : "Untaper ends"}
-                  </button>
-                </>}
+                </div>
                 </div>
               </div>
             )}
+              </div>
             </div></PortalWhenReady>}
           {/* Hyles toggle + extraction controls */}
           {pdfDoc && !selectionOnly && !hideHyleControls && <>
@@ -18104,31 +20352,12 @@ const PDFPage = forwardRef(({
         </div>
         </div>
 
+        <div id="pdf_hyle_toolbar_slot" ref={setHyleToolbarHost} />
+
           </div>
         );
         return toolbarHost ? createPortal(toolbarNode, toolbarHost) : toolbarNode;
       })()}
-
-      {outlineOpen && pdfDoc && (
-        <PDFDocumentNavigator
-          pdfDoc={pdfDoc}
-          pageCount={pageCount}
-          currentPage={pageNum}
-          bookmarks={bookmarks}
-          bookmarkLabels={bookmarkLabels}
-          customOutlines={pdfCustomOutlines}
-          pdfOutline={pdfOutline}
-          onClose={() => setOutlineOpen(false)}
-          onSelectPage={setPageNum}
-          onToggleBookmark={toggleBookmarkForPage}
-          onUpdateBookmark={updateBookmarkTitle}
-          onAddOutline={addPdfOutlineForRange}
-          onUpdateOutline={updatePdfOutlineTitle}
-          onDeleteOutline={deletePdfOutline}
-          onSelectPdfOutline={resolveOutlinePage}
-          onInsertBlankPage={insertBlankPageAfterCurrent}
-        />
-      )}
 
       {/* Thin selection bar — appears under the toolbar for a double-clicked
           word in reading mode (hideHyleControls). The onSelectionAction
@@ -18151,7 +20380,7 @@ const PDFPage = forwardRef(({
                 aria-controls="pdf_selection_object_menu"
               >
                 <i className={selectionToolBusy === "amctoshs_object" ? "bx bx-loader-circle pdf_icon_spin" : "bx bx-cube"} />
-                Add AMCTOSHS Object
+                Add RabbitHole Object
                 <i className={`bx bx-chevron-${selectionObjectMenuOpen ? "up" : "down"}`} aria-hidden="true" />
               </button>
               </div>
@@ -18160,7 +20389,7 @@ const PDFPage = forwardRef(({
             </button>
           </div>
           {selectionObjectMenuOpen && (
-            <div id="pdf_selection_object_menu" role="menu" aria-label="Choose AMCTOSHS Object mode">
+            <div id="pdf_selection_object_menu" role="menu" aria-label="Choose RabbitHole Object mode">
               {PDF_SELECTION_OBJECT_MODES.map((mode) => (
                 <button
                   type="button"
@@ -18226,8 +20455,50 @@ const PDFPage = forwardRef(({
       <div
         id="pdf_content"
         ref={contentRef}
-        className={notebookMode ? (notebookMode === "notebook-only" ? "pdf_content--notebook-only" : "pdf_content--notebook-split") : undefined}
+        className={`${notebookMode ? (notebookMode === "notebook-only" ? "pdf_content--notebook-only" : "pdf_content--notebook-split") : ""}${outlineOpen && pdfDoc ? " pdf_content--outline-open" : ""}${documentNavigatorOpen && pdfDoc ? " pdf_content--navigator-open" : ""}`}
       >
+
+        {outlineOpen && pdfDoc && (
+          <PDFDocumentNavigator
+            pdfDoc={pdfDoc}
+            pageCount={pageCount}
+            currentPage={pageNum}
+            bookmarks={bookmarks}
+            bookmarkLabels={bookmarkLabels}
+            customOutlines={pdfCustomOutlines}
+            onClose={() => setOutlineOpen(false)}
+            onSelectPage={setPageNum}
+            onToggleBookmark={toggleBookmarkForPage}
+            onUpdateBookmark={updateBookmarkTitle}
+            onAddOutline={addPdfOutlineForRange}
+            onUpdateOutline={updatePdfOutlineTitle}
+            onDeleteOutline={deletePdfOutline}
+            onInsertBlankPage={insertBlankPageAfterCurrent}
+            onChangeView={setDocumentNavigatorView}
+            onOpenNavigator={() => setDocumentNavigatorOpen(true)}
+            activeView={documentNavigatorView}
+          />
+        )}
+
+        {documentNavigatorOpen && pdfDoc && (
+          <PDFDocumentNavigator
+            pdfDoc={pdfDoc}
+            pageCount={pageCount}
+            currentPage={pageNum}
+            bookmarks={bookmarks}
+            bookmarkLabels={bookmarkLabels}
+            customOutlines={pdfCustomOutlines}
+            onClose={() => setDocumentNavigatorOpen(false)}
+            onSelectPage={setPageNum}
+            onToggleBookmark={toggleBookmarkForPage}
+            onUpdateBookmark={updateBookmarkTitle}
+            onAddOutline={addPdfOutlineForRange}
+            onUpdateOutline={updatePdfOutlineTitle}
+            onDeleteOutline={deletePdfOutline}
+            onInsertBlankPage={insertBlankPageAfterCurrent}
+            activeView="navigator"
+          />
+        )}
 
         {notebookMode && (
           <aside
@@ -18275,21 +20546,30 @@ const PDFPage = forwardRef(({
                 <div className="pdf_freeform_notebook_stt_pill">
                   <button
                     type="button"
-                    className={`pdf_freeform_notebook_stt${notebookSttStatus === "listening" ? " pdf_freeform_notebook_stt--active" : ""}`}
-                    title={notebookSttError || (notebookSttStatus === "listening" ? "Stop speech input" : "Enter text with speech")}
-                    aria-label={notebookSttStatus === "listening" ? "Stop speech input" : "Enter text with speech"}
-                    aria-pressed={notebookSttStatus === "listening"}
+                    className={`pdf_freeform_notebook_stt${notebookSttStatus !== "idle" ? " pdf_freeform_notebook_stt--active" : ""} pdf_freeform_notebook_stt--${notebookSttStatus}`}
+                    title={notebookSttError || (notebookSttStatus === "processing" ? "Processing and transcribing recorded speech" : notebookSttStatus !== "idle" ? "Stop speech input" : "Enter text with speech")}
+                    aria-label={notebookSttStatus === "processing" ? "Transcribing recorded speech" : notebookSttStatus !== "idle" ? "Stop speech input" : "Enter text with speech"}
+                    aria-pressed={notebookSttStatus !== "idle"}
+                    disabled={notebookSttStatus === "processing"}
                     onPointerDown={(event) => event.preventDefault()}
                     onClick={() => {
-                      if (notebookSttStatus === "listening") {
+                      if (notebookSttStatus !== "idle") {
                         stopNotebookStt();
                         return;
                       }
                       void toggleNotebookStt();
                     }}
                   >
-                    <i className={`fi ${notebookSttStatus === "listening" ? "fi-rr-square" : "fi-rr-microphone"}`} aria-hidden="true" />
+                    <i className={`fi ${notebookSttStatus !== "idle" ? "fi-rr-square" : "fi-rr-microphone"}`} aria-hidden="true" />
                   </button>
+                  {notebookSttStatus !== "idle" && (
+                    <span className="pdf_freeform_notebook_stt_state" aria-live="polite">
+                      {notebookSttStatus === "starting" ? "Starting"
+                        : notebookSttStatus === "waiting" ? "Ready"
+                          : notebookSttStatus === "processing" ? "Transcribing"
+                            : "Listening"}
+                    </span>
+                  )}
                   <button
                     type="button"
                     className={`pdf_freeform_notebook_control${notebookControlMode ? " pdf_freeform_notebook_control--active" : ""}`}
@@ -18299,10 +20579,10 @@ const PDFPage = forwardRef(({
                     onPointerDown={(event) => event.preventDefault()}
                     onClick={() => {
                       const next = !notebookControlMode;
+                      notebookControlModeRef.current = next;
                       setNotebookControlMode(next);
-                      if (next) {
-                        if (notebookSttStatus === "listening") stopNotebookStt();
-                        window.setTimeout(() => toggleNotebookStt(), 0);
+                      if (next && notebookSttStatus === "idle") {
+                        window.setTimeout(() => void toggleNotebookStt(), 0);
                       }
                     }}
                   >
@@ -18323,8 +20603,8 @@ const PDFPage = forwardRef(({
                 <button
                   type="button"
                   className="pdf_freeform_notebook_keyboard"
-                  title="Open AMCTOSHS keyboard"
-                  aria-label="Open AMCTOSHS keyboard"
+                  title="Open RabbitHole keyboard"
+                  aria-label="Open RabbitHole keyboard"
                   onPointerDown={(event) => event.preventDefault()}
                   onClick={() => {
                     document.querySelector(".pdf_freeform_notebook_editor")?.focus({ preventScroll: true });
@@ -18378,6 +20658,7 @@ const PDFPage = forwardRef(({
                     value={notebookDrawingTextInput.value}
                     style={{ left: notebookDrawingTextInput.viewX, top: notebookDrawingTextInput.viewY }}
                     aria-label="Drawing text"
+                    onFocus={() => queueMicrotask(() => window.dispatchEvent(new CustomEvent("virtual-keyboard:open")))}
                     onChange={(event) => setNotebookDrawingTextInput((current) => current ? { ...current, value: event.target.value } : current)}
                     onBlur={commitNotebookDrawingText}
                     onKeyDown={(event) => {
@@ -18425,6 +20706,79 @@ const PDFPage = forwardRef(({
                 onTouchEnd={handleNotebookTouchEnd}
                 onTouchCancel={handleNotebookTouchEnd}
               >
+                {(notebookUmlsAnalysis || notebookUmlsConcepts.length > 0) && (
+                  <section
+                    className="pdf_freeform_notebook_umls"
+                    aria-label={`UMLS concepts for PDF page ${pageNum}`}
+                    style={{
+                      "--pdf-notebook-ink": textToolColor,
+                      "--pdf-notebook-table-line-space": `${notebookRuleSpacing}px`,
+                    }}
+                  >
+                    <div className="pdf_freeform_notebook_umls_header">
+                      <div>
+                        <strong>UMLS concepts</strong>
+                        <span>{notebookUmlsRows.length} concept{notebookUmlsRows.length === 1 ? "" : "s"}</span>
+                      </div>
+                      <span className={`pdf_freeform_notebook_umls_state pdf_freeform_notebook_umls_state--${notebookUmlsAnalysis?.state || "complete"}`}>
+                        {notebookUmlsAnalysis?.state === "running" ? "Searching" : notebookUmlsAnalysis?.state === "cancelled" ? "Cancelled" : notebookUmlsAnalysis?.state === "error" ? "Failed" : "Complete"}
+                      </span>
+                    </div>
+                    {notebookUmlsAnalysis?.state === "running" && (
+                      <div className="pdf_freeform_notebook_umls_progress" aria-live="polite">
+                        <div>
+                          <span style={{ width: `${Math.max(0, Math.min(100, Number(notebookUmlsAnalysis.progress) || 0))}%` }} />
+                        </div>
+                        <b>{Math.max(0, Math.min(100, Math.round(Number(notebookUmlsAnalysis.progress) || 0)))}%</b>
+                        <p>{notebookUmlsAnalysis.status}</p>
+                      </div>
+                    )}
+                    {notebookUmlsAnalysis?.state === "error" && (
+                      <p className="pdf_freeform_notebook_umls_error">{notebookUmlsAnalysis.status}</p>
+                    )}
+                    {notebookUmlsAnalysis?.state === "cancelled" && (
+                      <p className="pdf_freeform_notebook_umls_cancelled">{notebookUmlsAnalysis.status} Partial results are preserved.</p>
+                    )}
+                    <div className="pdf_freeform_notebook_umls_table_wrap">
+                      <table className="pdf_freeform_notebook_umls_table">
+                        <thead>
+                          <tr>
+                            <th scope="col">ID (CUI)</th>
+                            <th scope="col">Concept</th>
+                            <th scope="col">Term(s) found on page</th>
+                            <th scope="col">Semantic Type (STY / TUI)</th>
+                            <th scope="col">Term Type (TTY)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {notebookUmlsRows.length > 0 ? notebookUmlsRows.map((concept, index) => {
+                            const semanticTypes = Array.isArray(concept.semanticTypes) ? concept.semanticTypes : [];
+                            const matchedTerms = Array.isArray(concept.matchedTerms)
+                              ? concept.matchedTerms
+                              : concept.matchedTerm ? [concept.matchedTerm] : [];
+                            return (
+                              <tr key={`${concept.cui || "concept"}-${index}`}>
+                                <td className="pdf_freeform_notebook_umls_cui">{concept.cui || "—"}</td>
+                                <td>{concept.preferredName || concept.matchedTerm || "Resolving…"}</td>
+                                <td>{matchedTerms.length ? matchedTerms.join("; ") : "—"}</td>
+                                <td>{semanticTypes.length
+                                  ? semanticTypes.map((type) => `${type.name || "Unspecified"}${type.tui ? ` (${type.tui})` : ""}`).join("; ")
+                                  : notebookUmlsAnalysis?.state === "running" ? "Resolving…" : "—"}</td>
+                                <td>{concept.tty || (notebookUmlsAnalysis?.state === "running" ? "Resolving…" : "—")}</td>
+                              </tr>
+                            );
+                          }) : (
+                            <tr>
+                              <td colSpan={5} className="pdf_freeform_notebook_umls_empty">
+                                {notebookUmlsAnalysis?.state === "running" ? "Waiting for the first UMLS match…" : "No UMLS concepts found on this page."}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                )}
                 <div
                   ref={notebookDrawingSurfaceRef}
                   className="pdf_freeform_notebook_page"
@@ -18568,6 +20922,7 @@ const PDFPage = forwardRef(({
                     onFocus={(event) => {
                       const nextOffset = event.currentTarget.selectionStart ?? 0;
                       setNotebookCaretOffset((current) => current ?? nextOffset);
+                      queueMicrotask(() => window.dispatchEvent(new CustomEvent("virtual-keyboard:open")));
                     }}
                     onSelect={captureNotebookSelection}
                     onContextMenu={(event) => event.preventDefault()}
@@ -18590,7 +20945,11 @@ const PDFPage = forwardRef(({
                 </div>
               </div>
             )}
-            {(notebookSttError || notebookPasteError) && <div className="pdf_freeform_notebook_stt_error" role="status">{notebookSttError || notebookPasteError}</div>}
+            {(notebookSttError || notebookPasteError || notebookSttTranscript) && (
+              <div className={`pdf_freeform_notebook_stt_error${notebookSttError || notebookPasteError ? " pdf_freeform_notebook_stt_error--failed" : " pdf_freeform_notebook_stt_error--transcript"}`} role="status">
+                {notebookSttError || notebookPasteError || `STT: ${notebookSttTranscript}`}
+              </div>
+            )}
           </aside>
         )}
 
@@ -18835,12 +21194,76 @@ const PDFPage = forwardRef(({
                     data-page={descriptor.page}
                     onPointerDownCapture={descriptor.kind === "pdf" ? () => activateAnnotationSurface("pdf") : undefined}
                     onTouchStartCapture={descriptor.kind === "pdf" ? () => activateAnnotationSurface("pdf") : undefined}
+                    onClickCapture={descriptor.kind === "pdf" ? (event) => selectGlyphFromPageClick(event, descriptor.page) : undefined}
                   >
                     {descriptor.kind === "pdf" ? (
-                      <canvas
-                        className="pdf_page_canvas"
-                        ref={el => { pageCanvasRefs.current[descriptor.page - 1] = el; }}
-                      />
+                      <>
+                        <canvas
+                          className="pdf_page_canvas"
+                          ref={el => { pageCanvasRefs.current[descriptor.page - 1] = el; }}
+                        />
+                        {descriptor.page === pageNum && pageViewport && (
+                          <GlyphSelectionOverlay
+                            glyph={glyphCharAnalysis.selectedGlyph?.pageNumber === pageNum ? glyphCharAnalysis.selectedGlyph : null}
+                            scale={pageViewport.scale || (fitScaleRef.current * zoomRef.current)}
+                          />
+                        )}
+                        {pageViewport && (
+                          <PagePatinaOverlay
+                            page={getPagePatina(pagePatina, descriptor.page)}
+                            width={pageViewport.width}
+                            height={pageViewport.height}
+                          />
+                        )}
+                        {descriptor.page === pageNum && sentenceTreeOpen && physicalLineRects.length > 0 && (!meaningAnalysis || physicalBlockToolActive) && (
+                          <div className="pdf_physical_block_overlay" aria-label="PhysicalLine reconstruction overlay">
+                            {physicalLineRects.map((line) => {
+                              const selected = selectedPhysicalBlockIds.includes(line.id);
+                              return <button
+                                key={line.id}
+                                type="button"
+                                className={`pdf_physical_block_box pdf_physical_line_box${selected ? " pdf_physical_block_box--selected" : ""}${assignedPhysicalLineIds.has(line.id) ? " pdf_physical_block_box--assigned" : ""}`}
+                                style={{ left: line.left, top: line.top, width: line.width, height: line.height }}
+                                title={`PhysicalLine ${line.resolvedLineIndex + 1} · ${String(line.canonicalText || line.sourceText || "").slice(0, 120)}`}
+                                aria-pressed={selected}
+                                onClick={(event) => { event.stopPropagation(); togglePhysicalBlockSelection(line.id, event.ctrlKey || event.metaKey || event.shiftKey); }}
+                              />;
+                            })}
+                          </div>
+                        )}
+                        {descriptor.page === pageNum && sentenceTreeOpen && meaningSourceItemRects.length > 0 && !physicalBlockToolActive && (
+                          <div className="pdf_meaning_source_overlay" aria-label="Meaning analysis source textItems">
+                            {meaningSourceItemRects.map((item) => <span key={item.id} className={selectedPhysicalBlockIds.includes(item.id) ? "is-selected" : ""} style={{ left: item.left, top: item.top, width: item.width, height: item.height }} />)}
+                          </div>
+                        )}
+                        {descriptor.page === pageNum && sentenceTreeOpen && manualPhysicalBlockRects.length > 0 && (
+                          <div className="pdf_manual_physical_block_overlay" aria-label="Manual PhysicalBlocks">
+                            {manualPhysicalBlockRects.map((block) => (
+                              <div key={block.id} className={`pdf_manual_physical_block_box${block.persisted ? " pdf_manual_physical_block_box--saved" : ""}`} style={{ left: block.left, top: block.top, width: block.width, height: block.height }} />
+                            ))}
+                          </div>
+                        )}
+                        {descriptor.page === pageNum && sentenceTreeOpen && physicalBlockToolActive && (
+                          <div
+                            className="pdf_physical_block_selection_surface"
+                            aria-label="Draw a rectangle to create a manual PhysicalBlock"
+                            onPointerDown={beginPhysicalBlockSelection}
+                            onPointerMove={movePhysicalBlockSelection}
+                            onPointerUp={finishPhysicalBlockSelection}
+                            onPointerCancel={() => setPhysicalBlockSelectionDrag(null)}
+                          >
+                            {physicalBlockSelectionDrag && <span className="pdf_physical_block_selection_rect" style={{ left: physicalBlockSelectionDrag.left, top: physicalBlockSelectionDrag.top, width: physicalBlockSelectionDrag.width, height: physicalBlockSelectionDrag.height }} />}
+                          </div>
+                        )}
+                        {descriptor.page === pageNum && (documentTreeEvidenceRects.length > 0 || documentTreeParagraphBoundaryRects.length > 0) && (
+                          <div className="pdf_document_tree_evidence_overlay">
+                            {documentTreeEvidenceRects.map((rect) => (
+                              <span key={rect.id} style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }} />
+                            ))}
+                            {documentTreeParagraphBoundaryRects.map((rect) => <button key={rect.id} type="button" className="pdf_document_tree_paragraph_boundary_marker" title={`Paragraph boundary · ${rect.ruleId}`} aria-label={`Open paragraph boundary evidence for ${rect.ruleId}`} style={{ left: rect.left, top: rect.top, width: rect.width, height: rect.height }} onClick={() => setDocumentTreeInspectorTab("conflicts")} />)}
+                          </div>
+                        )}
+                      </>
                     ) : (
                       (() => {
                         const scale = pageViewport?.scale || (fitScaleRef.current * zoomRef.current);
@@ -19263,9 +21686,21 @@ const PDFPage = forwardRef(({
                       <canvas
                         id="pdf_annot_canvas"
                         ref={setAnnotCanvasNode}
-                        style={{ pointerEvents: toolActive ? "auto" : "none", cursor: annotTool === "eraser" ? "none" : toolActive ? "crosshair" : "default" }}
+                        style={{ pointerEvents: toolActive ? "auto" : "none", cursor: ["eraser", "antiAgingEraser"].includes(annotTool) ? "none" : toolActive ? "crosshair" : "default" }}
                       />
-                      <canvas id="pdf_mask_canvas" ref={setMaskCanvasNode} />
+                      {pageViewport && vectorPenAnnotations.length > 0 && (
+                        <svg
+                          id="pdf_pen_vector_layer"
+                          viewBox={`0 0 ${pageViewport.width / Math.max(0.0001, pageViewport.scale || 1)} ${pageViewport.height / Math.max(0.0001, pageViewport.scale || 1)}`}
+                          preserveAspectRatio="none"
+                          aria-hidden="true"
+                          style={{ visibility: annotTool === "eraser" ? "hidden" : "visible" }}
+                        >
+                          {vectorPenAnnotations.map((annotation) => (
+                            <path key={annotation.id} d={annotation.path} fill={annotation.color} fillOpacity="1" />
+                          ))}
+                        </svg>
+                      )}
                       <canvas id="pdf_search_canvas" ref={searchCanvasRef} />
                       <canvas id="pdf_hyle_canvas" ref={hyleCanvasRef} />
                       {hyleMode === "segmented" && hyleLayerData?.mode === "segmented" && hyleLayerData.pageNum === pageNum && pageViewport && (
@@ -19454,6 +21889,24 @@ const PDFPage = forwardRef(({
                                         >
                                     <button
                                       type="button"
+                                      className="pdf_bbox_action_btn"
+                                      style={{ width: `${actionSize}px`, height: `${actionSize}px`, minWidth: `${actionSize}px`, minHeight: `${actionSize}px`, fontSize: `${6 * uiScale}px`, transform: "none" }}
+                                      title={`Assign as ${documentFormType.replaceAll("_", " ")}`}
+                                      aria-label={`Assign this box as ${documentFormType.replaceAll("_", " ")}`}
+                                      onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                      onTouchStart={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        const assignment = { id: `manual-bbox-form-${bbox.id}-${documentFormType}`, type: documentFormType, physicalBlockIds: [], bboxes: [{ pageIndex: pageNum - 1, x: bbox.x, y: bbox.y, width: bbox.w, height: bbox.h }], source: "manual-bbox" };
+                                        setManualDocumentFormAssignments((current) => [...current.filter((item) => item.id !== assignment.id), assignment]);
+                                        setBBoxMinibarOpenId(null);
+                                      }}
+                                    >
+                                      <i className="bx bx-category" aria-hidden="true" />
+                                    </button>
+                                    <button
+                                      type="button"
                                       className={`pdf_bbox_action_btn${isEditing ? " pdf_bbox_action_btn--active" : ""}`}
                                       style={{ width: `${actionSize}px`, height: `${actionSize}px`, minWidth: `${actionSize}px`, minHeight: `${actionSize}px`, fontSize: `${6 * uiScale}px`, transform: "none" }}
                                       title="Manual resize"
@@ -19606,6 +22059,7 @@ const PDFPage = forwardRef(({
                       {annotTextInput && (
                         <div
                           className="annot_text_input_wrap"
+                          onPointerDown={beginTextInputMove}
                           style={{
                             left: annotTextInput.vx - annotCanvasRef.current?.getBoundingClientRect().left,
                             top: annotTextInput.vy - annotCanvasRef.current?.getBoundingClientRect().top,
@@ -19620,6 +22074,7 @@ const PDFPage = forwardRef(({
                             autoCorrect="on"
                             autoCapitalize="sentences"
                             inputMode="none"
+                            onFocus={() => queueMicrotask(() => window.dispatchEvent(new CustomEvent("virtual-keyboard:open")))}
                             onChange={(e) => setAnnotTextVal(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") commitAnnotText(); if (e.key === "Escape") setAnnotTextInput(null); }}
                             // Clicking elsewhere (toolbar controls, the
@@ -19844,7 +22299,7 @@ const PDFPage = forwardRef(({
                 <>
                   <span id="pdf_source_empty_icon">📂</span>
                   <p id="pdf_source_empty_msg">No sources yet.</p>
-                  <p id="pdf_source_empty_sub">Go to <strong>Hyle Source Organisation</strong> to add PDFs.</p>
+                  <p id="pdf_source_empty_sub">Go to <strong>RabbitHole Hyle</strong> to add PDFs.</p>
                 </>
               ) : (
                 <>
@@ -19888,7 +22343,6 @@ const PDFPage = forwardRef(({
           {manualSelection && !manualPopup && (
             <div
               id="pdf_selected_text_preview"
-              ref={previewRef}
               title={manualSelection.text}
               onMouseDownCapture={(e) => e.stopPropagation()}
               onTouchStartCapture={(e) => e.stopPropagation()}
@@ -19897,19 +22351,15 @@ const PDFPage = forwardRef(({
               <span id="pdf_selected_text_preview_body">{manualSelection.text}</span>
             </div>
           )}
-          {pdfDoc && (
+          {pdfDoc && (() => {
+            const hyleFabNode = (
             <div id="pdf_hyle_fab_wrap" ref={hyleFabRef}>
               {hyleFabOpen && (
-                <div id="pdf_hyle_menu" role="menu" aria-label="Annotation layers">
+                <div id="pdf_hyle_menu" role="menu" aria-label="Visual text modes">
                   <div className="pdf_hyle_menu_header">
-                    <span>Annotation layers</span>
+                    <span>Visual text modes</span>
                   </div>
-                  <div className="pdf_annotation_layer_tabs" role="tablist" aria-label="Annotation surface">
-                    <button type="button" role="tab" aria-selected={annotationLayerTab === "pdf"} className={annotationLayerTab === "pdf" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => activateAnnotationSurface("pdf")}>PDF</button>
-                    <button type="button" role="tab" aria-selected={annotationLayerTab === "md"} className={annotationLayerTab === "md" ? "pdf_annotation_layer_tab pdf_annotation_layer_tab--active" : "pdf_annotation_layer_tab"} onClick={() => activateAnnotationSurface("md")}>MD</button>
-                  </div>
-                  {annotationLayerTab === "pdf" ? (
-                    <>
+                  <div className="pdf_hyle_menu_hint">Bottom → top</div>
                     <div className="pdf_hyle_menu_layers">
                     {annotationLayersForView.map((layer) => (
                       <div
@@ -19973,21 +22423,19 @@ const PDFPage = forwardRef(({
                       </div>
                     ))}
                     </div>
-                    <button type="button" className="pdf_hyle_menu_add" onClick={addAnnotationLayer} title="Create a new empty PDF annotation layer">
-                      <i className="bx bx-plus" /> Add PDF layer
+                  <form className="pdf_hyle_menu_add_form" onSubmit={(event) => { event.preventDefault(); addVisualMode(visualModeName); setVisualModeName(""); }}>
+                    <input
+                      type="text"
+                      value={visualModeName}
+                      onChange={(event) => setVisualModeName(event.target.value)}
+                      placeholder="VM name"
+                      aria-label="Visual mode name"
+                      maxLength={48}
+                    />
+                    <button type="submit" className="pdf_hyle_menu_add" title="Add visual mode" aria-label="Add visual mode">
+                      <i className="bx bx-plus" />
                     </button>
-                    </>
-                  ) : (
-                    <div className="pdf_hyle_menu_layers">
-                      <div className="pdf_hyle_menu_item pdf_hyle_menu_item--active" aria-label="Markdown annotations">
-                        <span className="pdf_hyle_menu_item_main">
-                          <span className="pdf_hyle_menu_item_name">Markdown annotations</span>
-                          <span className="pdf_hyle_menu_item_meta">{Object.values(markdownAnnotations).reduce((sum, list) => sum + (Array.isArray(list) ? list.length : 0), 0)} annotations</span>
-                        </span>
-                        <i className="bx bx-check pdf_hyle_menu_check" />
-                      </div>
-                    </div>
-                  )}
+                  </form>
                 </div>
               )}
               <button
@@ -20000,8 +22448,26 @@ const PDFPage = forwardRef(({
                 <i className="bx bx-layers" />
               </button>
             </div>
-          )}
+            );
+            return hyleToolbarHost ? createPortal(hyleFabNode, hyleToolbarHost) : hyleFabNode;
+          })()}
         </div>
+
+        {pdfDoc && glyphCharAsideOpen && (
+          <GlyphCharAside
+            analysis={glyphCharAnalysis}
+            currentPage={pageNum}
+            onClose={() => setGlyphCharAsideOpen(false)}
+            onStartAnalysis={({ scope = "document", pageNumber = null, force = false } = {}) => setGlyphCharAnalysisRequest({
+              scope,
+              pageNumber: scope === "page" ? pageNumber : null,
+              force: scope === "page" && force,
+              requestNonce: Date.now(),
+            })}
+            onResultsDeleted={() => setGlyphCharAnalysisRequest(null)}
+            onSelectGlyph={selectGlyphAndNavigate}
+          />
+        )}
 
         {markdownModeMenuOpen && markdownModeMenuPosition && createPortal(
           <div
@@ -20024,10 +22490,6 @@ const PDFPage = forwardRef(({
               <i className="bx bx-book-open" aria-hidden="true" />
               <span>Plain-Text Document with PDF page</span>
             </button>
-            <button type="button" role="menuitem" title="Plain-Text Document Analyser" aria-label="Plain-Text Document Analyser" onClick={() => { setReadingMode("single"); setMarkdownRetainedVisualMode((current) => markdownAsideMode.includes("visual") ? markdownAsideMode : current); setMarkdownAsideMode("raw"); setMarkdownModeMenuOpen(false); setMarkdownAsideOpen(true); }}>
-              <i className="bx bx-table" aria-hidden="true" />
-              <span>Plain-Text Document Analyser</span>
-            </button>
           </div>,
           document.body,
         )}
@@ -20046,7 +22508,7 @@ const PDFPage = forwardRef(({
                 : { width: mdPanelWidth }}
             >
             <div className="pdf_markdown_aside_header">
-              <span>MARKDOWN</span>
+              <span>{markdownAsideMode === "forensics" ? "PDF FORENSICS" : "MARKDOWN"}</span>
               <span className="pdf_markdown_aside_page">Page {pageNum}</span>
               <button
                 type="button"
@@ -20061,8 +22523,8 @@ const PDFPage = forwardRef(({
             <div className="pdf_markdown_aside_tabs">
               <div className="pdf_markdown_aside_primary_tabs">
                 <button type="button" className={`pdf_markdown_aside_tab${["raw", "visual-raw"].includes(markdownAsideMode) ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideMode("raw")}>ORIGINAL TEXT</button>
-                <button type="button" className={`pdf_markdown_aside_tab${markdownAsideMode === "tree-lines" ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideMode("tree-lines")}>Tree of Lines</button>
                 <button type="button" className={`pdf_markdown_aside_tab${markdownAsideMode === "ocr" ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideMode("ocr")}>OCR</button>
+                <button type="button" className={`pdf_markdown_aside_tab${markdownAsideMode === "forensics" ? " pdf_markdown_aside_tab--active" : ""}`} onClick={() => setMarkdownAsideMode("forensics")}>FORENSICS</button>
               </div>
               {["raw", "visual-raw"].includes(markdownAsideMode) && (
                 <div className="pdf_markdown_aside_secondary_tabs">
@@ -20074,11 +22536,22 @@ const PDFPage = forwardRef(({
               className="pdf_markdown_aside_table_scroll"
               style={markdownAsideMode.includes("visual") ? { display: "contents", width: "auto", minWidth: 0 } : undefined}
             >
-              {markdownAsideMode === "ocr" ? (
+              {markdownAsideMode === "forensics" ? (
+                <PDFForensicPanel
+                  report={forensicReport}
+                  busy={forensicBusy}
+                  error={forensicError}
+                  onRetry={() => {
+                    forensicPageCacheRef.current.delete(pageNum);
+                    setForensicRun((run) => run + 1);
+                  }}
+                />
+              ) : markdownAsideMode === "ocr" ? (
                 <div className="pdf_markdown_aside_table_view pdf_markdown_aside_table_view--ocr">
                   <div className="pdf_markdown_aside_page_meta" aria-label="Persisted OCR status">
                     <span><strong>Status</strong> {persistedOcrBusy ? "loading" : persistedOcrStatus}</span>
-                    <span><strong>Pages</strong> {persistedOcrPages.length}</span>
+                    <span><strong>Page</strong> {pageNum}</span>
+                    <span><strong>Blocks</strong> {persistedOcrBlocks.length}</span>
                     <span><strong>Source</strong> {currentSourceIdRef.current ? "saved PDF" : "local PDF"}</span>
                   </div>
                   {persistedOcrError ? (
@@ -20092,10 +22565,10 @@ const PDFPage = forwardRef(({
                       <table className="pdf_markdown_aside_table pdf_markdown_aside_table--ocr">
                         <thead><tr><th>PAGE</th><th>BLOCK</th><th>TYPE</th><th>TEXT</th><th>X</th><th>Y</th><th>WIDTH</th><th>HEIGHT</th><th>CONFIDENCE</th></tr></thead>
                         <tbody>
-                          {persistedOcrPages.flatMap((page) => (Array.isArray(page.blocks) ? page.blocks : []).map((block) => ({ page, block }))).map(({ page, block }) => {
+                          {persistedOcrBlocks.map((block) => {
                             const bbox = block.bbox || {};
-                            return <tr key={`${page.pageIndex}-${block.blockId}`}>
-                              <td>{Number(page.pageIndex) + 1}</td>
+                            return <tr key={`${pageNum}-${block.blockId}`}>
+                              <td>{pageNum}</td>
                               <td>{block.blockId || "—"}</td>
                               <td>{block.type || "—"}</td>
                               <td className="pdf_ocr_wrap_cell">{block.text || block.markdown || "—"}</td>
@@ -20108,27 +22581,9 @@ const PDFPage = forwardRef(({
                           })}
                         </tbody>
                       </table>
-                      {!persistedOcrPages.some((page) => Array.isArray(page.blocks) && page.blocks.length) && <div className="pdf_markdown_aside_ocr_message">No persisted OCR blocks are available yet.</div>}
+                      {!persistedOcrBlocks.length && <div className="pdf_markdown_aside_ocr_message">No persisted OCR blocks are available for this page yet.</div>}
                     </div>
                   )}
-                </div>
-              ) : markdownAsideMode === "tree-lines" ? (
-                <div className="pdf_markdown_aside_tree_view">
-                  <EntityBuilderPanel
-                    embedded
-                    bboxCards={bboxCardsForBuilder}
-                    bboxResizePreview={bboxResizePreview}
-                    pageNum={pageNum}
-                    isPageFullySegmented={isCurrentPageFullySegmented}
-                    onUpdateBBoxName={updateBBoxName}
-                    onSetBBoxTitle={setBBoxTitleFromLine}
-                    onDeleteBBox={deleteBBox}
-                    onMoveBBoxUp={(bboxId) => moveBBoxInGroup(bboxId, -1, pageNum)}
-                    onMoveBBoxDown={(bboxId) => moveBBoxInGroup(bboxId, 1, pageNum)}
-                    onMergeParagraphs={mergeParagraphBBoxes}
-                    onArmBBoxInsideContainer={armBBoxInsideContainer}
-                    armedBBoxInsideContainer={bboxContainerBBoxTarget}
-                  />
                 </div>
               ) : markdownAsideMode === "raw" ? (
                 <div className="pdf_markdown_aside_table_view">
@@ -20190,6 +22645,330 @@ const PDFPage = forwardRef(({
             </div>
           </>,
           markdownAsideMode.includes("visual") ? canvasWrapRef.current : markdownHost,
+        )}
+        {sentenceTreeOpen && markdownHost && createPortal(
+          <>
+            <div
+              className="pdf_markdown_resize_handle"
+              onMouseDown={handleRabbitHoleResizeStart}
+              onTouchStart={handleRabbitHoleResizeStart}
+            />
+            <aside id="pdf_sentence_tree_aside" style={{ width: rabbitHolePanelWidth }} aria-label="Document RabbitHole">
+              <div className="pdf_markdown_aside_header">
+                <span>DOCUMENT RABBITHOLE</span>
+                <button
+                  type="button"
+                  className="pdf_rabbithole_action pdf_rabbithole_action--ai"
+                  onClick={analyzePhysicalBlocksWithAI}
+                  disabled={!pdfDoc || aiPhysicalBlockBusy || rabbitHoleInProgress}
+                  aria-disabled={!pdfDoc}
+                  title={aiPhysicalBlockBusy ? "AI is analyzing the page" : "Analyze the page image and immutable PDF.js source into MeaningBlockCandidates"}
+                  aria-label="Analyze page into AI MeaningBlock candidates"
+                >
+                  <i className={`bx ${aiPhysicalBlockBusy ? "bx-loader-alt bx-spin" : "bx-brain"}`} aria-hidden="true" />
+                  <span>{aiPhysicalBlockBusy ? "Analyzing" : "AI Meaning"}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`pdf_rabbithole_action pdf_rabbithole_action--physical-block${physicalBlockToolActive ? " pdf_rabbithole_action--active" : ""}`}
+                  onClick={() => {
+                    setPhysicalBlockToolActive((active) => !active);
+                    setPhysicalBlockSelectionDrag(null);
+                  }}
+                  disabled={physicalLineRects.length === 0}
+                  aria-pressed={physicalBlockToolActive}
+                  title="Create a manual PhysicalBlock by drawing a selection rectangle over its lines"
+                >
+                  <i className="bx bx-vector" aria-hidden="true" />
+                  <span>PhysicalBlock</span>
+                </button>
+                {savedRabbitHoleRunId && !rabbitHoleInProgress && (
+                  <button
+                    type="button"
+                    className="pdf_rabbithole_action pdf_rabbithole_action--delete"
+                    onClick={meaningAnalysis ? deleteCurrentMeaningAnalysis : deleteSavedDocumentRabbitHole}
+                    disabled={rabbitHoleSaveState.status === "deleting"}
+                    title="Delete saved Document RabbitHole"
+                    aria-label="Delete saved Document RabbitHole"
+                  >
+                    <i className={`bx ${rabbitHoleSaveState.status === "deleting" ? "bx-loader-alt bx-spin" : "bx-trash"}`} aria-hidden="true" />
+                    <span>{rabbitHoleSaveState.status === "deleting" ? "Deleting" : "Delete"}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="pdf_markdown_aside_close"
+                  onClick={() => setSentenceTreeOpen(false)}
+                  title="Close Document RabbitHole"
+                  aria-label="Close Document RabbitHole"
+                >
+                  <i className="bx bx-x" aria-hidden="true" />
+                </button>
+              </div>
+              {aiPhysicalBlockProgress.status !== "idle" && (
+                <section className={`pdf_ai_block_progress pdf_ai_block_progress--${aiPhysicalBlockProgress.status}`} aria-live="polite" aria-label="AI MeaningBlock analysis progress">
+                  <div className="pdf_ai_block_progress_header">
+                    <strong>AI MeaningBlock process</strong>
+                    <span>{aiPhysicalBlockProgress.status === "complete" ? "Done" : aiPhysicalBlockProgress.status === "failed" ? "Failed" : `${aiPhysicalBlockProgressPercent}%`}</span>
+                  </div>
+                  <div className="pdf_ai_block_progress_track" aria-hidden="true"><span style={{ width: `${aiPhysicalBlockProgressPercent}%` }} /></div>
+                  <ol className="pdf_ai_block_progress_steps">
+                    {["Load source textItems", "Map source geometry", "Render clean page", "Build ID overlay", "Visual AI", "Validate visual evidence", "Build semantic payload", "Semantic AI", "Validate boundaries", "Construct MeaningBlocks", "Persist and expose"].map((label, index) => (
+                      <li key={label} className={aiPhysicalBlockProgress.step > index + 1 ? "is-complete" : aiPhysicalBlockProgress.step === index + 1 && aiPhysicalBlockProgress.status === "running" ? "is-active" : ""}>
+                        <i className="bx" aria-hidden="true" />{label}
+                      </li>
+                    ))}
+                  </ol>
+                  <small>{aiPhysicalBlockProgress.error || aiPhysicalBlockProgress.message}{aiPhysicalBlockProgress.candidateCount ? ` · ${aiPhysicalBlockProgress.candidateCount} candidate blocks` : ""}</small>
+                </section>
+              )}
+              <div className="pdf_sentence_tree_view">
+                <div className="pdf_markdown_aside_page_meta" aria-label="Document RabbitHole metadata">
+                  {meaningAnalysis ? <>
+                    <span><strong>Characters</strong> {(meaningAnalysis.sourceItems || []).reduce((count, item) => count + Array.from(String(item.str || "")).length, 0).toLocaleString()}</span>
+                    <span><strong>Source items</strong> {(meaningAnalysis.sourceItems || []).length.toLocaleString()}</span>
+                    <span><strong>Visual lines</strong> {(meaningAnalysis.visualAnalysis?.visualLines || []).length.toLocaleString()}</span>
+                    <span><strong>MeaningBlocks</strong> {(meaningAnalysis.meaningBlocks || []).length.toLocaleString()}</span>
+                  </> : <>
+                    <span><strong>Characters</strong> {rabbitHoleCharacterCount.toLocaleString()}</span>
+                    <span><strong>Physical lines</strong> {rabbitHolePhysicalLineCount.toLocaleString()}</span>
+                    <span><strong>Physical blocks</strong> {rabbitHolePhysicalBlockCount.toLocaleString()}</span>
+                  </>}
+                </div>
+                <MeaningAnalysisInspector analysis={meaningAnalysis} tab={meaningAnalysisTab} onTab={setMeaningAnalysisTab} onSelect={setSelectedPhysicalBlockIds} onModify={modifyMeaningBlock} onBoundary={modifyMeaningBoundary} onRerunSemantic={rerunMeaningSemantics} busy={aiPhysicalBlockBusy} />
+                {!meaningAnalysis && rabbitHoleMetadataBlocks.length > 0 && (
+                  <section className="pdf_rabbithole_block_list" aria-label="PhysicalBlocks in Document RabbitHole">
+                    <div className="pdf_rabbithole_block_list_header">
+                      <strong>PhysicalBlocks</strong>
+                      <span>{rabbitHoleMetadataBlocks.length}</span>
+                    </div>
+                    <ol>
+                      {rabbitHoleMetadataBlocks.map((block, index) => {
+                        const source = block.createdBy === "ai" || block.source === "ai" ? "AI" : "Manual";
+                        const status = block.persisted ? "Saved" : source === "AI" ? "Candidate" : "Local";
+                        const blockType = block.blockType || block.reconstruction?.blockType || "physical block";
+                        return (
+                          <li key={block.id || block.manualPhysicalBlockId || index}>
+                            <button type="button" onClick={() => setSelectedPhysicalBlockIds(block.lineIds || [])} title="Highlight this PhysicalBlock on the PDF page">
+                              <span className="pdf_rabbithole_block_index">{index + 1}</span>
+                              <span className="pdf_rabbithole_block_content">
+                                <strong>{blockType}</strong>
+                                <small>{source} · {status} · {(block.lineIds || []).length} line{(block.lineIds || []).length === 1 ? "" : "s"}</small>
+                                <span>{block.canonicalText || "No canonical text available."}</span>
+                              </span>
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </section>
+                )}
+                {!meaningAnalysis && (backendReconstructionState.status === "idle" ? (
+                  <div className="pdf_document_tree_build_state pdf_document_tree_build_state--not-started" role="status" aria-live="polite">
+                    {savedPageLookupState.status === "checking" ? (
+                      <><strong>Checking page {pageNum}</strong><span>Looking for an existing saved RabbitHole tree…</span><progress /></>
+                    ) : (
+                      <>
+                        <strong>Create a PhysicalBlock to reconstruct meaning</strong>
+                        <span>Draw one rectangle around the physical lines whose text should be reconstructed. Reconstruction starts automatically for that block only.</span>
+                        {savedPageLookupState.status === "error" && <small>Saved blocks could not be checked: {savedPageLookupState.error}</small>}
+                      </>
+                    )}
+                  </div>
+                ) : backendReconstructionState.status === "preflighting" ? (
+                  <div className="pdf_document_tree_build_state" role="status" aria-live="polite">
+                    <strong>Checking document size</strong>
+                    <span>Sampling a few pages to choose the safe reconstruction method.</span>
+                    <progress />
+                  </div>
+                ) : backendReconstructionState.mode === "saved" ? (
+                  <div className="pdf_document_tree_workspace pdf_document_tree_workspace--backend">
+                    <div className="pdf_document_tree_build_state" role="status" aria-live="polite">
+                      <strong>PhysicalBlock reconstruction saved</strong>
+                      <span>The saved PhysicalBlock tree for page {(backendReconstructionState.run?.reconstructionPageIndexes?.[0] ?? (pageNum - 1)) + 1} is mounted and verified.</span>
+                      <small>{backendReconstructionState.run?.status === "complete-with-unresolved" ? "The tree contains reviewable unresolved evidence." : "Open a branch below to inspect its saved values."}</small>
+                    </div>
+                    {backendReconstructionState.root ? (
+                      <ul className="pdf_sentence_hierarchy" role="tree" aria-label="Saved current-page linguistic hierarchy">
+                        <BackendSentenceHierarchyNode runId={backendReconstructionState.run?._id} node={backendReconstructionState.root} revision={backendReconstructionState.run?.updatedAt || 0} />
+                      </ul>
+                    ) : (
+                      <div className="pdf_document_tree_validation_error"><strong>Saved-tree verification failed</strong><span>No persisted root node was returned.</span></div>
+                    )}
+                  </div>
+                ) : backendReconstructionState.mode === "backend" ? (
+                  <div className="pdf_document_tree_workspace pdf_document_tree_workspace--backend">
+                    <div className="pdf_document_tree_build_state" role="status" aria-live="polite">
+                      <strong>{backendStatusTitle}</strong>
+                      <div className="pdf_rabbithole_pipeline" aria-label="Reconstruction pipeline progress">
+                        <div className="pdf_rabbithole_pipeline_stage">
+                          <span><strong>1. Page extraction</strong><small>{backendExtractedPages} / {backendPageCount}</small></span>
+                          <progress value={backendExtractedPages} max={Math.max(1, backendPageCount)} />
+                        </div>
+                        <div className="pdf_rabbithole_pipeline_stage">
+                          <span><strong>2. Page reconstruction</strong><small>{backendReconstructedPages} / {backendPageCount}</small></span>
+                          <progress value={backendReconstructedPages} max={Math.max(1, backendPageCount)} />
+                        </div>
+                        <div className="pdf_rabbithole_pipeline_stage">
+                          <span><strong>3. Database checkpoint</strong><small>{backendCompletedPages} / {backendPageCount}</small></span>
+                          <progress value={backendCompletedPages} max={Math.max(1, backendPageCount)} />
+                        </div>
+                        <div className="pdf_rabbithole_pipeline_stage">
+                          <span><strong>4. Finalization · overall</strong><small>{backendOverallTimingLabel}</small></span>
+                          <progress
+                            value={backendOverallProgress.percent}
+                            max="100"
+                            aria-label={`Whole Document RabbitHole process ${backendOverallPercentLabel}`}
+                          />
+                        </div>
+                      </div>
+                      <small>{backendCompletedPages > 0 ? `Tree available through page ${Number(backendReconstructionState.run?.progress?.treeAvailableThroughPage || 0) + 1}. ` : ""}Progress is checkpointed after each chunk. The browser loads only opened branches.</small>
+                      {backendReconstructionState.error && <small>{backendReconstructionState.error}</small>}
+                    </div>
+                    {backendReconstructionState.root ? <>
+                      <div className="pdf_rabbithole_tree_summary" aria-label="RabbitHole hierarchy structure">
+                        <strong>Physical hierarchy</strong>
+                        <span><b>Document</b><i className="bx bx-right-arrow-alt" /><b>PhysicalBlock</b></span>
+                        <small>{Number(backendReconstructionState.run?.diagnostics?.totalPhysicalBlocks || 0).toLocaleString()} page-local blocks. Paragraphs and other DocumentForms appear only after an explicit assignment.</small>
+                      </div>
+                      <ul className="pdf_sentence_hierarchy" role="tree" aria-label="Backend-backed document hierarchy"><BackendSentenceHierarchyNode runId={backendReconstructionState.run?._id} node={backendReconstructionState.root} revision={backendCompletedPages} /></ul>
+                    </> : <div className="pdf_markdown_aside_ocr_message">The first stable tree branch will appear after the initial backend chunk.</div>}
+                  </div>
+                ) : ["extracting", "reconstructing", "enriching"].includes(documentExtractionState.status) ? (
+                  <div className="pdf_document_tree_build_state" role="status" aria-live="polite">
+                    <strong>{documentExtractionState.status === "extracting" ? "Reading selected PhysicalBlock" : documentExtractionState.status === "enriching" ? "Resolving the PhysicalBlock text" : "Reconstructing PhysicalBlock meaning"}</strong>
+                    <span>{rabbitHolePhysicalLineCount} selected physical line{rabbitHolePhysicalLineCount === 1 ? "" : "s"}</span>
+                    <progress value={documentExtractionState.extractedPages} max={Math.max(1, documentExtractionState.pageCount)} />
+                    <small>Only text inside the user-created PhysicalBlock enters the linguistic tree.</small>
+                  </div>
+                ) : documentExtractionState.status === "error" ? (
+                  <div className="pdf_document_tree_validation_error"><strong>PhysicalBlock reconstruction failed</strong><span>{documentExtractionState.error}</span></div>
+                ) : documentReconstruction.characters.length ? (
+                  <div className="pdf_document_tree_workspace">
+                    {!documentReconstruction.validation.valid && (
+                      <div className="pdf_document_tree_validation_error">
+                        <strong>Tree completed with unresolved evidence</strong>
+                        {documentReconstruction.validation.errors.map((error) => <span key={error}>{error}</span>)}
+                      </div>
+                    )}
+                    {documentExtractionState.deferredPages?.length > 0 && <div className="pdf_document_tree_build_state" role="status"><strong>Browser-safe partial tree</strong><span>Pages {documentExtractionState.deferredFromPage}–{documentExtractionState.pageCount} were not reconstructed locally because the browser reached its emergency memory limit.</span>{backendReconstructionState.error && <small>{backendReconstructionState.error}</small>}<small>The PDF remains readable; extracted pages and provenance are preserved.</small></div>}
+                    <ul className="pdf_sentence_hierarchy" role="tree" aria-label="Whole-document linguistic hierarchy">
+                      <SentenceHierarchyNode
+                        reconstruction={documentReconstruction}
+                        entity={documentReconstruction.source}
+                        selectedId={effectiveDocumentTreeSelectedId}
+                        selectedPathIds={documentTreeSelectedPathIds}
+                        onSelect={(entityId) => {
+                          setDocumentTreeSelectedId(entityId);
+                          setDocumentTreeInspectorTab("overview");
+                        }}
+                      />
+                    </ul>
+                    <section className="pdf_document_tree_inspector" aria-label="Selected node evidence inspector">
+                      <div className="pdf_document_tree_inspector_tabs" role="tablist">
+                        {["overview", "source", "evidence", "transformations", "conflicts", "physical-pdf"].map((tab) => (
+                          <button key={tab} type="button" role="tab" aria-selected={documentTreeInspectorTab === tab} onClick={() => setDocumentTreeInspectorTab(tab)}>{tab.replace("-", " ")}</button>
+                        ))}
+                      </div>
+                      <div className="pdf_document_tree_inspector_body">
+                        {documentTreeInspectorTab === "overview" && (
+                          <>
+                            <strong>Logical root path</strong>
+                            <div className="pdf_document_tree_path">{documentTreeRootPath.map((entry) => <span key={entry.id}>{entry.label}</span>)}</div>
+                            <dl>
+                              <dt>Status</dt><dd>{documentTreeExplanation?.status || "asserted"}</dd>
+                              <dt>Quality</dt><dd>{documentTreeExplanation?.qualityState || "SOURCE_EXACT"}</dd>
+                              <dt>Rule</dt><dd>{documentTreeExplanation?.construction?.ruleId || "source document"}</dd>
+                              {documentTreeEvidence?.entity?.lineIds && <><dt>Physical lines</dt><dd>{documentTreeEvidence.entity.lineIds.length}</dd><dt>Pages</dt><dd>{documentTreeEvidence.entity.pageIndexes.map((value) => value + 1).join("–")}</dd><dt>Start reason</dt><dd>{documentTreeEvidence.entity.startReason}</dd><dt>End reason</dt><dd>{documentTreeEvidence.entity.endReason}</dd><dt>Style profile</dt><dd>{documentTreeEvidence.entity.styleProfileId || "—"}</dd><dt>Cross-page</dt><dd>{documentTreeEvidence.entity.crossPage ? "yes" : "no"}</dd></>}
+                            </dl>
+                          </>
+                        )}
+                        {documentTreeInspectorTab === "source" && (
+                          <div className="pdf_document_tree_comparison">
+                            <div><strong>RAW</strong><pre>{documentTreeComparison?.source || "—"}</pre></div>
+                            <div><strong>NORMALIZED</strong><pre>{documentTreeComparison?.normalized || "—"}</pre></div>
+                            <div><strong>RESOLVED</strong><pre>{documentTreeComparison?.resolved || "—"}</pre></div>
+                          </div>
+                        )}
+                        {documentTreeInspectorTab === "evidence" && (
+                          <div className="pdf_document_tree_evidence_sections">
+                            {documentTreePhysicalEvidence.length > 0 && <section><strong>Physical</strong><dl><dt>Embedded text refs</dt><dd>{documentTreePhysicalEvidence.length}</dd><dt>Glyph method</dt><dd>{documentTreePhysicalEvidence.some((ref) => ref.glyphId) ? "text-item-derived" : "unavailable"}</dd></dl></section>}
+                            {documentTreeEvidence?.lexical?.dictionary && <section><strong>Dictionary</strong><pre>{JSON.stringify(documentTreeEvidence.lexical.dictionary, null, 2)}</pre></section>}
+                            {documentTreeEvidence?.lexical?.corpus && <section><strong>Corpus</strong><pre>{JSON.stringify(documentTreeEvidence.lexical.corpus, null, 2)}</pre></section>}
+                            {documentTreeEvidence?.lexical?.umls?.recognized && <section><strong>Medical concept evidence</strong><pre>{JSON.stringify(documentTreeEvidence.lexical.umls, null, 2)}</pre></section>}
+                            {documentTreeEvidence?.lexical?.context && <section><strong>Context</strong><pre>{JSON.stringify(documentTreeEvidence.lexical.context, null, 2)}</pre></section>}
+                            {documentTreeEvidence?.lexical?.abbreviation?.recognized && <section><strong>Abbreviations</strong><pre>{JSON.stringify(documentTreeEvidence.lexical.abbreviation, null, 2)}</pre></section>}
+                            {documentTreeEvidence?.raster?.length > 0 && <section><strong>Raster</strong><pre>{JSON.stringify(documentTreeEvidence.raster, null, 2)}</pre></section>}
+                            {documentTreeEvidence?.raster?.length > 0 && documentTreeEvidence?.referenceGlyphs?.length > 0 && (
+                              <section className="pdf_document_tree_glyph_comparison">
+                                <strong>Source ↔ reference glyph</strong>
+                                <div>
+                                  <figure><img src={documentTreeEvidence.raster[0].imageUrl} alt="Source glyph raster from the PDF" /><figcaption>PDF source</figcaption></figure>
+                                  <figure><img src={documentTreeEvidence.referenceGlyphs[0].imageUrl} alt="Deterministically rendered reference glyph" /><figcaption>{documentTreeEvidence.referenceGlyphs[0].referenceFontMethod === "source-font" ? "Source-font reference" : "Fallback reference"}</figcaption></figure>
+                                </div>
+                                {documentTreeEvidence.glyphAssessments?.[0] && <small>{documentTreeEvidence.glyphAssessments[0].status} · score {Number(documentTreeEvidence.glyphAssessments[0].comparisonScore || 0).toFixed(3)} · {documentTreeEvidence.glyphAssessments[0].comparisonMethod}</small>}
+                              </section>
+                            )}
+                            {documentTreePhysicalEvidence.length > 0 && <section><strong>Raster evidence on demand</strong><button type="button" onClick={captureDocumentTreeRasterEvidence}>{documentTreePhysicalEvidence[0].pageIndex === pageNum - 1 ? "Capture visible source crop" : `Open page ${documentTreePhysicalEvidence[0].pageIndex + 1} to capture`}</button>{documentTreeRasterEvidence?.targetId === effectiveDocumentTreeSelectedId && <><img src={documentTreeRasterEvidence.imageUrl} alt="Raster crop of selected PDF evidence" /><small>PDF.js {documentTreeRasterEvidence.rendererVersion} · scale {documentTreeRasterEvidence.renderScale.toFixed(2)} · page {documentTreeRasterEvidence.pageIndex + 1}</small></>}</section>}
+                            {documentTreeEvidence?.ocrObservations?.length > 0 && <section><strong>OCR observations</strong><pre>{JSON.stringify(documentTreeEvidence.ocrObservations, null, 2)}</pre></section>}
+                          </div>
+                        )}
+                        {documentTreeInspectorTab === "transformations" && (
+                          documentTreeExplanation?.transformations?.length ? documentTreeExplanation.transformations.map((transformation) => (
+                            <div key={transformation.id} className="pdf_document_tree_record"><strong>{transformation.type}</strong><span>{transformation.before} → {transformation.after}</span><small>{transformation.ruleId}</small></div>
+                          )) : <p>No transformations. Source and canonical text are identical for this node.</p>
+                        )}
+                        {documentTreeInspectorTab === "conflicts" && (
+                          documentTreeEvidence?.conflicts?.length || documentTreeEvidence?.boundaries?.length ? <div className="pdf_document_tree_conflict_review">
+                            {documentTreeEvidence.conflicts.map((conflict) => (
+                              <div key={conflict.id} className="pdf_document_tree_record"><strong>{conflict.type}</strong><span>{conflict.sourceValue ? `${conflict.sourceValue} → ${conflict.candidates?.map((candidate) => candidate.value).join(" / ")}` : conflict.severity}</span><small>{conflict.status} · evidence preserved; no OCR-only replacement</small></div>
+                            ))}
+                            {documentTreeEvidence.character && <section>
+                              <strong>Review Ambiguity</strong>
+                              <dl><dt>Deterministic</dt><dd>{documentTreeEffectiveEntity?.deterministicValue}</dd><dt>Effective</dt><dd>{documentTreeEffectiveEntity?.effectiveValue}</dd><dt>Override</dt><dd>{documentTreeEffectiveEntity?.manualOverride?.status || "none"}</dd></dl>
+                              <div className="pdf_document_tree_review_actions">
+                                <button type="button" onClick={() => reviewCharacterAmbiguity("keep-source", documentTreeEvidence.character.value)}>Keep source character</button>
+                                {[...new Set(documentTreeEvidence.conflicts.flatMap((conflict) => conflict.candidates || []).map((candidate) => candidate.value).filter((value) => value && value !== documentTreeEvidence.character.value))].map((value) => <button key={value} type="button" onClick={() => reviewCharacterAmbiguity("accept-candidate", value)}>Accept “{value}”</button>)}
+                                <label>Another character<input value={manualCharacterCandidate} maxLength={4} onChange={(event) => setManualCharacterCandidate(Array.from(event.target.value).slice(0, 1).join(""))} /></label>
+                                <button type="button" disabled={!manualCharacterCandidate} onClick={() => reviewCharacterAmbiguity("enter-character", manualCharacterCandidate)}>Use entered character</button>
+                                <button type="button" onClick={() => reviewCharacterAmbiguity("leave-unresolved")}>Leave unresolved</button>
+                              </div>
+                            </section>}
+                            {documentTreeEvidence.boundaries?.map((boundary) => {
+                              const effectiveBoundary = getEffectiveBoundary(documentReconstruction, boundary.id);
+                              return <section key={boundary.id}>
+                                <strong>Review {boundary.boundaryType} boundary</strong>
+                                <dl><dt>Rule</dt><dd>{boundary.ruleId}</dd><dt>Deterministic</dt><dd>{effectiveBoundary?.deterministicDecision}</dd><dt>Effective</dt><dd>{effectiveBoundary?.effectiveDecision}</dd><dt>Override</dt><dd>{effectiveBoundary?.manualOverride?.status || "none"}</dd></dl>
+                                {boundary.boundaryType === "paragraph" && boundary.evidence && <dl><dt>Previous line</dt><dd>{boundary.previousLineId}</dd><dt>Next line</dt><dd>{boundary.nextLineId}</dd><dt>Vertical gap</dt><dd>{Number.isFinite(boundary.evidence.verticalGap) ? Number(boundary.evidence.verticalGap).toFixed(2) : "page transition"}</dd><dt>Local median gap</dt><dd>{Number(boundary.evidence.localMedianLineGap || 0).toFixed(2)}</dd><dt>Normalized gap</dt><dd>{Number.isFinite(boundary.evidence.normalizedVerticalGap) ? Number(boundary.evidence.normalizedVerticalGap).toFixed(2) : "—"}</dd><dt>Previous left</dt><dd>{Number(boundary.evidence.previousLineXStart || 0).toFixed(2)}</dd><dt>Next left</dt><dd>{Number(boundary.evidence.nextLineXStart || 0).toFixed(2)}</dd><dt>Indent delta</dt><dd>{Number(boundary.evidence.leftIndentDelta || 0).toFixed(2)}</dd><dt>Same font/column</dt><dd>{boundary.evidence.sameFontFamily ? "font " : ""}{boundary.evidence.sameColumn ? "column" : "different column"}</dd><dt>Evidence strength</dt><dd>{boundary.strength}</dd></dl>}
+                                <div className="pdf_document_tree_review_actions">
+                                  <button type="button" onClick={() => reviewDocumentBoundary(boundary, "join", boundary.boundaryType === "paragraph" ? "same-paragraph" : "same")}>{boundary.boundaryType === "word" ? "Join" : "Join across boundary"}</button>
+                                  <button type="button" onClick={() => reviewDocumentBoundary(boundary, "split", boundary.boundaryType === "paragraph" ? "new-paragraph" : "boundary")}>Split here</button>
+                                  <button type="button" onClick={() => reviewDocumentBoundary(boundary, "keep-current", boundary.decision)}>Keep current</button>
+                                  <button type="button" onClick={() => reviewDocumentBoundary(boundary, "leave-unresolved", "unresolved")}>Leave unresolved</button>
+                                </div>
+                              </section>;
+                            })}
+                          </div> : <p>No unresolved evidence conflicts are registered for this node.</p>
+                        )}
+                        {documentTreeInspectorTab === "physical-pdf" && (
+                          documentTreePhysicalEvidence.length ? documentTreePhysicalEvidence.map((ref, index) => (
+                            <button key={`${ref.pageIndex}-${ref.textItemId}-${ref.charOffsetStart}-${index}`} type="button" className="pdf_document_tree_physical_ref" onClick={() => navigatePage(ref.pageIndex + 1)}>
+                              <strong>Page {ref.pageIndex + 1}</strong>
+                              <span>Region {ref.regionId || "—"}</span><span>Line {ref.lineId || "—"}</span><span>Run {ref.textRunId || "—"}</span>
+                              <small>x {Number(ref.x || 0).toFixed(2)} · y {Number(ref.y || 0).toFixed(2)} · w {Number(ref.width || 0).toFixed(2)} · h {Number(ref.height || 0).toFixed(2)}</small>
+                            </button>
+                          )) : <p>No direct physical spans exist for this node.</p>
+                        )}
+                      </div>
+                    </section>
+                  </div>
+                ) : (
+                  <div className="pdf_markdown_aside_ocr_message">No embedded character evidence was found for this page.</div>
+                ))}
+              </div>
+            </aside>
+          </>,
+          markdownHost,
         )}
         {markdownAsideOpen
           && markdownRetainedVisualMode

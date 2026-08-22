@@ -97,7 +97,7 @@ export const TTS_PROVIDERS = {
 };
 export const readTtsProviderId = () => {
   const stored = localStorage.getItem(TTS_PROVIDER_SETTINGS_KEY);
-  return Object.values(TTS_PROVIDERS).includes(stored) ? stored : TTS_PROVIDERS.BROWSER;
+  return Object.values(TTS_PROVIDERS).includes(stored) ? stored : TTS_PROVIDERS.SUPERTONIC;
 };
 export const writeTtsProviderId = (id) => {
   localStorage.setItem(TTS_PROVIDER_SETTINGS_KEY, id);

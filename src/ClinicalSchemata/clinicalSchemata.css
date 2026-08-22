@@ -133,7 +133,7 @@
 }
 #cs_row_error button:hover { opacity: 1; }
 
-/* ── Body split: #cs_left (AMCTOSHS Domain panel) | #mrp_middle (Schemata/
+/* ── Body split: #cs_left (RabbitHole Domain panel) | #mrp_middle (Schemata/
    Instances/Traces list, see morphePanels.css) | #cs_right (editor) ── */
 #cs_body {
   display: flex;
@@ -198,7 +198,7 @@
 #cs_no_selection i { font-size: 2.2rem; opacity: 0.2; }
 #cs_no_selection p { margin: 0; }
 
-/* ── Mobile drawer (AMCTOSHS Domain panel) ── */
+/* ── Mobile drawer (RabbitHole Domain panel) ── */
 #cs_drawer_backdrop {
   display: none;
 }

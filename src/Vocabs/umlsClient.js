@@ -3,6 +3,7 @@ import { readStoredSession } from "../utils/sessionCleanup";
 
 const resourceCache = new Map();
 const inflight = new Map();
+const MAX_RESOURCE_CACHE_ENTRIES = 48;
 
 const authHeaders = () => {
   const token = readStoredSession()?.token || "";
@@ -117,7 +118,11 @@ export const getUmlsResource = (cui, resource, options = {}) => {
       ? allItems.filter((atom) => String(atom?.language || "").toUpperCase() === language)
       : allItems;
     const value = { resource, language: language || null, items, raw: pages.map((page) => page.raw) };
+    resourceCache.delete(key);
     resourceCache.set(key, value);
+    while (resourceCache.size > MAX_RESOURCE_CACHE_ENTRIES) {
+      resourceCache.delete(resourceCache.keys().next().value);
+    }
     return value;
   })().finally(() => inflight.delete(key));
   inflight.set(key, promise);

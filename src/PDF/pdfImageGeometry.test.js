@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractPlacedImageRects } from "./pdfImageGeometry.js";
+import { extractPlacedImageRects, extractVectorRulingLines } from "./pdfImageGeometry.js";
 
 describe("extractPlacedImageRects", () => {
   it("tracks transforms and returns page-space image geometry", () => {
@@ -12,5 +12,18 @@ describe("extractPlacedImageRects", () => {
     expect(extractPlacedImageRects(operatorList, viewport, ops)).toEqual([
       { x: 200, y: 460, w: 300, h: 180 },
     ]);
+  });
+});
+
+describe("extractVectorRulingLines", () => {
+  it("extracts stroked horizontal, vertical, and rectangle rulings in viewport space", () => {
+    const ops = { constructPath: 1, moveTo: 2, lineTo: 3, rectangle: 4, stroke: 5 };
+    const operatorList = {
+      fnArray: [ops.constructPath, ops.stroke],
+      argsArray: [[[ops.moveTo, ops.lineTo, ops.rectangle], [10, 20, 100, 20, 120, 10, 40, 30]], null],
+    };
+    const lines = extractVectorRulingLines(operatorList, { scale: 1, transform: [1, 0, 0, -1, 0, 200] }, ops);
+    expect(lines).toHaveLength(5);
+    expect(lines).toEqual(expect.arrayContaining([expect.objectContaining({ x1: 10, y1: 180, x2: 100, y2: 180 })]));
   });
 });

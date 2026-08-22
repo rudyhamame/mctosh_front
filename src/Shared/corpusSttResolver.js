@@ -91,6 +91,35 @@ const corpusIndex = () => {
   return corpusIndexCache;
 };
 
+// Read-only evidence adapter used by deterministic reconstruction. It exposes
+// the existing Corpus index (including its stored occurrence counts) without
+// creating a second vocabulary or allowing reconstruction to mutate Corpus.
+export const lookupCorpusEvidence = (value) => {
+  const normalized = normalizeWord(value);
+  const { entries } = corpusIndex();
+  const entry = entries.find((candidate) => candidate.word === normalized);
+  return {
+    candidate: String(value || ""),
+    normalized,
+    recognized: Boolean(entry),
+    frequency: entry ? Number(entry.occurrence) || 1 : 0,
+    source: "application-corpus",
+  };
+};
+
+export const getCorpusEvidenceVersion = () => {
+  const { entries } = corpusIndex();
+  let hash = 2166136261;
+  entries.forEach((entry) => {
+    const value = `${entry.word}:${entry.occurrence}|`;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+  });
+  return `local-corpus-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+};
+
 if (typeof window !== "undefined") {
   const invalidateCorpusIndex = () => { corpusIndexCache = null; };
   window.addEventListener("amctoshs:corpus-words", invalidateCorpusIndex);

@@ -1,11 +1,11 @@
 // amctoshsReasoningGraph.js
 //
-// Pure client-side indexing over AMCTOSHS Reasoning's saved data
+// Pure client-side indexing over RabbitHole Reasoning's saved data
 // ({reasoningEntities, relations} — the shape GET /api/amctoshs-reasoning
 // returns). Same no-DOM/React, fully-unit-testable spirit as
 // ClinicalSchemata/amctoshsMorpheGraph.js; kept as its own small module
 // rather than importing that one, since Reasoning's index is keyed by
-// reasoningType, not AMCTOSHS Domain.
+// reasoningType, not RabbitHole Domain.
 
 export const buildReasoningIndex = ({ reasoningEntities = [], relations = [] } = {}) => {
   const byType = new Map(); // reasoningType -> entity[]

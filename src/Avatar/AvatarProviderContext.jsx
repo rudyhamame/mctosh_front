@@ -13,9 +13,10 @@ const VALID_IDS = new Set(Object.values(AVATAR_PROVIDERS));
 
 const readStoredProvider = () => {
   const stored = localStorage.getItem(STORAGE_KEY);
-  // Default stays ANAM — existing users see exactly today's behavior until
-  // they explicitly pick something else.
-  return stored && VALID_IDS.has(stored) ? stored : AVATAR_PROVIDERS.ANAM;
+  // Rabbit of Wonderland is the app's default companion. An explicit saved
+  // choice on this device still wins, but a new browser/device must render
+  // the same Rabbit chat structure as the rest of the app.
+  return stored && VALID_IDS.has(stored) ? stored : AVATAR_PROVIDERS.RABBIT_WONDERLAND;
 };
 
 const AvatarProviderContext = createContext(null);

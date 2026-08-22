@@ -30,7 +30,7 @@ const parseJsonResponse = async (res) => {
 
 // ── Stage 1: Predicate Extraction ───────────────────────────────────────
 
-/** Runs Predicate Extraction over one or more selected AMCTOSHS Segments. Never auto-saves. */
+/** Runs Predicate Extraction over one or more selected RabbitHole Segments. Never auto-saves. */
 export const createPredicateExtraction = async ({ segments, provider, model }) => {
   const res = await fetch(apiUrl("/api/amctoshs-predicates/extractions"), {
     method: "POST",

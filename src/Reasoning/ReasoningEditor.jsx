@@ -20,7 +20,7 @@ const EvidencePanel = ({ item }) => (
   </div>
 );
 
-// Right panel — the single typed editor AMCTOSHS Reasoning needs (unlike
+// Right panel — the single typed editor RabbitHole Reasoning needs (unlike
 // Morphe's 3-way split, there's only one entity kind here). Shows
 // editable fields, evidence, and dependency Relations (reusing
 // ClinicalSchemata/MorpheRelationList.jsx, which is fully generic —
@@ -68,7 +68,7 @@ const EntityForm = ({ item, relationsFor, resolveName, saving, saveError, onSave
       <div className="mrp_editor_form">
         <div className="mrp_editor_head">
           <span className="mrp_dim_badge" style={{ color: "#ab47bc", background: "color-mix(in srgb, #ab47bc 13%, transparent)", borderColor: "color-mix(in srgb, #ab47bc 32%, transparent)" }}>
-            AMCTOSHS Reasoning-dependent Entity
+            RabbitHole Reasoning-dependent Entity
           </span>
           <span className={`mrp_status_chip mrp_status_chip--${item.epistemicStatus}`}>{item.epistemicStatus}</span>
         </div>
@@ -110,7 +110,7 @@ const EntityForm = ({ item, relationsFor, resolveName, saving, saveError, onSave
       {saveError && <p className="mrp_row_error">{saveError}</p>}
 
       <div className="mrp_editor_section">
-        <div className="mrp_panel_label">AMCTOSHS Relations</div>
+        <div className="mrp_panel_label">RabbitHole Relations</div>
         <MorpheRelationList entityId={item._id} relationsFor={relationsFor} resolveName={resolveName} />
       </div>
 

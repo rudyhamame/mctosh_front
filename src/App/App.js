@@ -7,9 +7,132 @@ import { deleteStudySession, listStudySessions, startStudySession, stopStudySess
 import SpokenTracesCard from "./SpokenTracesCard";
 import UnspokenTracesCard from "./UnspokenTracesCard";
 import HomeVocabsCard from "./HomeVocabsCard";
-import "./App.css";
+import RabbitLogoBlink from "../Shared/RabbitLogoBlink";
+import "./home.css";
+import HomeChat from "./HomeChat";
 
-const AMCTOSHS_INTRO_INFO = "A composite representational entity of a patient, constituted by a collection of AMCTOSHS sub-entities, each representing a distinct aspect of that patient.";
+const AMCTOSHS_INTRO_INFO = "A composite representational entity of a patient, constituted by a collection of RabbitHole sub-entities, each representing a distinct aspect of that patient.";
+
+const HOME_COLOR_WAVE_FRAMES = Array.from({ length: 10 }, (_, index) => (
+  `/app%20background%20/colored/${index + 1}.webp`
+));
+
+const HomeColorWave = () => {
+  const canvasRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  const [active, setActive] = useState(true);
+  const [fadingOut, setFadingOut] = useState(false);
+
+  useEffect(() => {
+    const homeView = document.getElementById("app_home_view");
+    if (!homeView) return undefined;
+    if (ready && active && !fadingOut) homeView.classList.add("is-color-wave-active");
+    else homeView.classList.remove("is-color-wave-active");
+    return () => homeView.classList.remove("is-color-wave-active");
+  }, [ready, active, fadingOut]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const preloaders = HOME_COLOR_WAVE_FRAMES.map((source) => new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => {
+        const decoded = typeof image.decode === "function"
+          ? image.decode().catch(() => {})
+          : Promise.resolve();
+        decoded.then(resolve);
+      };
+      image.onerror = resolve;
+      image.src = source;
+    }));
+    Promise.all(preloaders).then(() => {
+      if (!cancelled) setReady(true);
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return undefined;
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) return undefined;
+    const images = HOME_COLOR_WAVE_FRAMES.map((source) => {
+      const image = new Image();
+      image.src = source;
+      return image;
+    });
+    let frameIndex = 0;
+    let frameStartedAt = performance.now();
+    let animationFrame = 0;
+    let fadeOutTimer = 0;
+    let resizeObserver = null;
+
+    const resize = () => {
+      const bounds = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(bounds.width * ratio));
+      canvas.height = Math.max(1, Math.round(bounds.height * ratio));
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    };
+
+    const drawCover = (image, alpha = 1) => {
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const scale = Math.max(width / image.naturalWidth, height / image.naturalHeight);
+      const drawWidth = image.naturalWidth * scale;
+      const drawHeight = image.naturalHeight * scale;
+      context.globalAlpha = alpha;
+      context.drawImage(image, (width - drawWidth) / 2, (height - drawHeight) / 2, drawWidth, drawHeight);
+    };
+
+    const render = (now) => {
+      const elapsed = now - frameStartedAt;
+      const holdDuration = 163.333;
+      const crossfadeDuration = 170;
+      const totalDuration = holdDuration + crossfadeDuration;
+      const progress = Math.min(1, Math.max(0, (elapsed - holdDuration) / crossfadeDuration));
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      context.clearRect(0, 0, width, height);
+      drawCover(images[frameIndex], 1);
+      if (progress > 0 && frameIndex < images.length - 1) {
+        drawCover(images[frameIndex + 1], progress);
+      }
+      context.globalAlpha = 1;
+
+      if (elapsed >= totalDuration) {
+        if (frameIndex >= images.length - 1) {
+          setFadingOut(true);
+          // Keep the final colored frame over the original pattern long enough
+          // for both layers to crossfade instead of switching at the boundary.
+          fadeOutTimer = window.setTimeout(() => setActive(false), 700);
+          return;
+        }
+        frameIndex += 1;
+        frameStartedAt = now;
+      }
+      animationFrame = window.requestAnimationFrame(render);
+    };
+
+    resize();
+    if (typeof ResizeObserver === "function") {
+      resizeObserver = new ResizeObserver(resize);
+      resizeObserver.observe(canvas);
+    } else {
+      window.addEventListener("resize", resize);
+    }
+    animationFrame = window.requestAnimationFrame(render);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.clearTimeout(fadeOutTimer);
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", resize);
+    };
+  }, [ready]);
+
+  if (!active || !ready) return null;
+
+  return <canvas ref={canvasRef} className={`app_home_color_wave${fadingOut ? " is-fading-out" : ""}`} aria-hidden="true" />;
+};
 
 // The 14 navigable tools, regrouped by which of the eight AMCTOSHS
 // biological/social scales they sit closest to — Atoms (the essential
@@ -31,16 +154,23 @@ const LEVELS = [
       {
         path: "/sources",
         icon: "fi-rr-books",
-        label: "AMCTOSHS Hyle",
-        description: "Store and manage PDFs as the hyle source library for AMCTOSHS extraction and analysis",
+        label: "Meta-Patient Noumena",
+        description: "The logic about reconstructing patient noumena: representations, descriptions, records, images, measurements, or models referring to Patient Noumena.",
         color: "#4fc3f7",
       },
       {
         path: "/segmentations",
         icon: "fi-rr-shapes",
-        label: "AMCTOSHS Segmentation",
-        description: "Browse the Line Blocks (BBoxes) extracted from a PDF source and extract AMCTOSHS Medical Statements from each one",
+        label: "RabbitHole Hylomorphic Entities in 3D Mode",
+        description: "Browse the Line Blocks (BBoxes) extracted from a PDF source and extract RabbitHole medical statements from each one",
         color: "#4fc3f7",
+      },
+      {
+        path: "/hyle-entities-4d",
+        icon: "fi-rr-time-past",
+        label: "RabbitHole Hylomorphic Entities in 4D Mode",
+        description: "View Hyle entities as persistent identities across changing states and representations",
+        color: "#7e57c2",
       },
     ],
   },
@@ -67,30 +197,23 @@ const LEVELS = [
       {
         path: "/clinical-schemata",
         icon: "fi-rr-network",
-        label: "AMCTOSHS Morphe",
-        description: "The global structured view of every AMCTOSHS Sub-Entity Schema — browse by AMCTOSHS Domain and inspect each one's timestamped AMCTOSHS Traces and Trace Values",
+        label: "RabbitHole's Patient Representation",
+        description: "The global structured view of every RabbitHole Sub-Entity Schema — browse by RabbitHole Domain and inspect each one's timestamped RabbitHole Traces and Trace Values",
         color: "#26c6da",
       },
       {
-        path: "/vocabs",
+        path: "/morphemes",
         icon: "fi-rr-book-alt",
-        label: "AMCTOSHS Vocabs",
-        description: "Look up AMCTOSHS vocabulary terms with dictionary definitions and usage information",
+        label: "RabbitHole Morphemes",
+        description: "Look up RabbitHole morphemes with dictionary definitions and usage information",
         color: "#26a69a",
       },
       {
         path: "/terminology",
         icon: "fi-rr-database",
-        label: "AMCTOSHS Terminology",
+        label: "RabbitHole Terminology",
         description: "Import and search a normalized local UMLS reference of concepts, terms, definitions, semantic types, relations, and sources",
         color: "#607d8b",
-      },
-      {
-        path: "/mcc/mccqe/objectives",
-        icon: "fi-rr-document-signed",
-        label: "MCCQE Objectives",
-        description: "Browse the MCCQE objectives dataset with search, group filters, and rendered objective content",
-        color: "#d4a24c",
       },
     ],
   },
@@ -113,13 +236,6 @@ const LEVELS = [
         description: "Generate original, USMLE Step 2 CK–style clinical vignette questions with AI — review, edit, approve, and export",
         color: "#ab47bc",
       },
-      {
-        path: "/medical-exams",
-        icon: "fi-rr-graduation-cap",
-        label: "Medical Exams",
-        description: "Track exams with their sources, page spans, and reading progress — jump straight to a page in the PDF Reader",
-        color: "#4fc3f7",
-      },
     ],
   },
   {
@@ -130,14 +246,14 @@ const LEVELS = [
       {
         path: "/patient-instantiation",
         icon: "fi-rr-hospital-user",
-        label: "Patient Instantiation",
-        description: "Instantiate the Patient Instance — receive the Morphe to form the Hylomorphic Entity",
+        label: "Patient Noumena",
+        description: "The patients-in-themselves: actual, concrete patient instances as they exist independently of any observation, description, image, measurement, or model.",
         color: "#26a69a",
       },
       {
         path: "/social-media-control",
         icon: "fi-rr-megaphone",
-        label: "AMCTOSHS Social Media Control",
+        label: "RabbitHole Social Media Control",
         description: "Plan campaigns, shape captions, review post drafts, and prepare Instagram publishing workflows",
         color: "#ff8a65",
       },
@@ -168,11 +284,8 @@ const LEVELS = [
 // biological scale labels independently of the Home dashboard.
 export const LEVEL_LABELS = LEVELS.map((level) => level.label);
 
-// The one named chunk inside the AMCTOSHS Tools dropdown (see app_study_tools_*
-// below) — AMCTOSHS Hyle and AMCTOSHS Morphe are the two tools that actually
-// BUILD an AMCTOSHS entity's raw material/structure, so they're grouped
-// under their own heading; every other tool stays a flat, ungrouped list.
-const BUILDING_TOOL_PATHS = ["/sources", "/segmentations", "/clinical-schemata"];
+const ONTIC_TOOL_PATHS = ["/patient-instantiation", "/sources"];
+const NOETIC_TOOL_PATHS = ["/segmentations", "/hyle-entities-4d", "/clinical-schemata"];
 
 const readProfilePhoto = (session) => (
   session?.photoUrl
@@ -212,6 +325,18 @@ const getInitials = (label) => {
   return words.slice(0, 2).map((word) => word[0]?.toUpperCase() || "").join("") || "P";
 };
 
+const HOME_FRIENDS = [
+  { id: "maya", name: "Maya Chen", status: "Online", color: "#5eead4", messages: ["Ready to explore the next layer?"] },
+  { id: "samir", name: "Samir Patel", status: "Away", color: "#a78bfa", messages: ["I saved a note for you."] },
+  { id: "elena", name: "Elena Brooks", status: "Offline", color: "#f0a6ca", messages: [] },
+];
+
+const FRIEND_ORBIT_POSITIONS = {
+  maya: { left: "41%", top: "23%" },
+  samir: { left: "60%", top: "50%" },
+  elena: { left: "42%", top: "77%" },
+};
+
 const formatStudyTimer = (totalSeconds) => {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -224,12 +349,20 @@ const isPdfSource = (source) => (
   || /\.pdf$/i.test(String(source?.name || source?.filename || ""))
 );
 
-const App = ({ onLogout }) => {
+const App = ({ onLogout, colorWaveEnabled = true }) => {
   const navigate = useNavigate();
   const profileMenuRef = useRef(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const studyToolsRef = useRef(null);
-  const [studyToolsOpen, setStudyToolsOpen] = useState(false);
+  const [friendsOpen, setFriendsOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantOpening, setAssistantOpening] = useState(false);
+  const assistantLogoRef = useRef(null);
+  const friendsViewportRef = useRef(null);
+  const [selectedFriendId, setSelectedFriendId] = useState("");
+  const [friendMessage, setFriendMessage] = useState("");
+  const [friendMessages, setFriendMessages] = useState(() => (
+    Object.fromEntries(HOME_FRIENDS.map((friend) => [friend.id, [...friend.messages]]))
+  ));
   const [sourceData, setSourceData] = useState(null);
   const [schemataData, setSchemataData] = useState(null);
   const [studySessions, setStudySessions] = useState([]);
@@ -239,13 +372,72 @@ const App = ({ onLogout }) => {
   const session = readStoredSession();
   const profilePhoto = readProfilePhoto(session);
   const displayName = readDisplayName(session);
+  const firstName = String(displayName).trim().split(/\s+/)[0] || "Profile";
   const username = readHandle(session);
   const profileInitials = getInitials(displayName);
+  const selectedFriend = HOME_FRIENDS.find((friend) => friend.id === selectedFriendId) || null;
+
+  useEffect(() => {
+    if (!friendsOpen) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const viewport = friendsViewportRef.current;
+      const homeViewport = document.getElementById("app_home_view");
+      if (!viewport || !homeViewport) return;
+      const scrollContainer = homeViewport.scrollHeight > homeViewport.clientHeight + 1
+        ? homeViewport
+        : document.scrollingElement;
+      if (!scrollContainer) return;
+      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        const containerRect = scrollContainer.getBoundingClientRect();
+        const viewportRect = viewport.getBoundingClientRect();
+        scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop + viewportRect.top - containerRect.top);
+        return;
+      }
+
+      const start = scrollContainer.scrollTop;
+      const containerRect = scrollContainer.getBoundingClientRect();
+      const viewportRect = viewport.getBoundingClientRect();
+      const rawTarget = start + viewportRect.top - containerRect.top;
+      const maxScroll = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
+      const target = Math.min(maxScroll, Math.max(0, rawTarget));
+      const distance = target - start;
+      const duration = Math.min(2400, Math.max(1400, Math.abs(distance) * 1.15));
+      const startedAt = performance.now();
+      const easeInOut = (value) => value < 0.5
+        ? 4 * value * value * value
+        : 1 - Math.pow(-2 * value + 2, 3) / 2;
+      let animationFrame;
+      const animate = (now) => {
+        const progress = Math.min(1, (now - startedAt) / duration);
+        scrollContainer.scrollTop = start + distance * easeInOut(progress);
+        if (progress < 1) animationFrame = window.requestAnimationFrame(animate);
+      };
+      animationFrame = window.requestAnimationFrame(animate);
+      viewport.dataset.scrollAnimation = "active";
+      viewport.addEventListener("wheel", () => window.cancelAnimationFrame(animationFrame), { once: true, passive: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [friendsOpen]);
+
+  const sendFriendMessage = (event) => {
+    event.preventDefault();
+    if (!selectedFriend) return;
+    const message = friendMessage.trim();
+    if (!message) return;
+    setFriendMessages((current) => ({
+      ...current,
+      [selectedFriend.id]: [...(current[selectedFriend.id] || []), message],
+    }));
+    setFriendMessage("");
+  };
 
   const currentDateLabel = new Intl.DateTimeFormat(undefined, {
     day: "2-digit",
     month: "short",
     year: "numeric",
+  }).format(currentTime);
+  const currentDayName = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
   }).format(currentTime);
   const currentTimeLabel = new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
@@ -254,6 +446,29 @@ const App = ({ onLogout }) => {
   }).format(currentTime);
   const currentHour = currentTime.getHours();
   const greeting = currentHour < 12 ? "Good morning" : currentHour < 18 ? "Good afternoon" : "Good evening";
+  const greetingText = `${greeting}, ${displayName.split(" ")[0]}.`;
+  const [typedGreeting, setTypedGreeting] = useState("");
+
+  const openAssistantFromLogo = async () => {
+    if (assistantOpening || assistantOpen) return;
+    setAssistantOpening(true);
+    const didAppear = await assistantLogoRef.current?.playAppear();
+    if (didAppear !== false) setAssistantOpen(true);
+    setAssistantOpening(false);
+  };
+
+  useEffect(() => {
+    setTypedGreeting("");
+    let characterIndex = 0;
+    const timer = window.setInterval(() => {
+      characterIndex += 1;
+      setTypedGreeting(greetingText.slice(0, characterIndex));
+      if (characterIndex >= greetingText.length) window.clearInterval(timer);
+    }, 58);
+
+    return () => window.clearInterval(timer);
+  }, [greetingText]);
+
   useEffect(() => {
     const timer = window.setInterval(() => setCurrentTime(new Date()), 1000);
     return () => window.clearInterval(timer);
@@ -337,15 +552,11 @@ const App = ({ onLogout }) => {
       if (!profileMenuRef.current?.contains(event.target)) {
         setProfileMenuOpen(false);
       }
-      if (!studyToolsRef.current?.contains(event.target)) {
-        setStudyToolsOpen(false);
-      }
     };
 
     const handleEscape = (event) => {
       if (event.key === "Escape") {
         setProfileMenuOpen(false);
-        setStudyToolsOpen(false);
       }
     };
 
@@ -359,240 +570,190 @@ const App = ({ onLogout }) => {
 
   return (
     <div id="app_home_view">
-      <div id="app_home_grid">
-        <div id="app_scroll_track">
-          <div id="app_scroll_stage">
-            <section id="app_home_dashboard" aria-label="AMCTOSHS study dashboard">
+      {colorWaveEnabled && <HomeColorWave />}
+      <div id="app_home_left">
+      <>
+      <div id="app_dashboard_header_row">
               <div className="app_dashboard_header">
-                <div>
-                  <p className="app_dashboard_eyebrow">Study workspace / {currentDateLabel} · <time dateTime={currentTime.toISOString()}>{currentTimeLabel}</time></p>
-                  <h1>{greeting}, {displayName.split(" ")[0]}.</h1>
-                  <p>Keep the patient object in view as you move from source material to Morphe.</p>
-                </div>
-              </div>
+               
+                <div id="app_dashboard_header_profile_menu" ref={profileMenuRef}>
+                  <button
+                    id="app_dashboard_header_profile_trigger"
+                    onClick={() => setProfileMenuOpen((open) => !open)}
+                    aria-haspopup="menu"
+                    aria-expanded={profileMenuOpen}
+                    title={displayName}
+                  >
+                    <img
+                      className="app_dashboard_header_profile"
+                      src={profilePhoto || `${import.meta.env.BASE_URL}photo.jpg`}
+                      alt={`${displayName} profile`}
+                    />
+                  </button>
 
-              <div className="app_dashboard_grid">
-                <HomeVocabsCard onOpen={() => navigate("/vocabs")} />
-
-                <article className="app_dashboard_card app_about_card">
-                  <div className="app_card_heading">
-                    <div><span className="app_card_kicker">00 / THE AMCTOSHS MODEL</span><h2>What is AMCTOSHS?</h2></div>
-                    <button
-                      type="button"
-                      className="app_about_icon"
-                      onClick={() => navigate("/about/amctoshs")}
-                      aria-label="Open AMCTOSHS Model Info"
-                      title="Open AMCTOSHS Model Info"
-                    >
-                      <i className="fi fi-rr-lightbulb-on" />
-                    </button>
-                  </div>
-                  <p className="app_card_description">AMCTOSHS is a model that builds a representation, or schema, of the intangible PATIENT object through tangible instances and the traces that illuminate it.</p>
-                  <div className="app_about_sections">
-                    <div><strong>Accessible modes</strong><span>Atoms · molecules · cells · tissues · organs · organ systems · humans · societies</span></div>
-                    <div><strong>Traces and access</strong><span>Direct sensory access produces 3D traces. Indirect access uses proxies to reveal objects that doctors rely on during their processes, before the object is fully illuminated to them.</span></div>
-                    <div><strong>Time and reasoning</strong><span>Traces that come from memory rather than the senses are 4D traces. Reasoning orders 4D traces to build the logical representation of the PATIENT object.</span></div>
-                  </div>
-                </article>
-
-                <SpokenTracesCard />
-                <UnspokenTracesCard />
-
-                <article className="app_dashboard_card app_sessions_card">
-                  <div className="app_card_heading">
-                    <div><span className="app_card_kicker">02 / Your rhythm</span><h2>Study sessions</h2></div>
-                    <button className="app_card_link" type="button" onClick={() => navigate("/pdf-reader")}>View log <i className="fi fi-rr-arrow-up-right" /></button>
-                  </div>
-                  <div className="app_session_list">
-                    {studySessions.map((sessionItem) => (
-                      <div key={sessionItem.id} className="app_session_row">
-                        <span className="app_session_date"><strong>Study session</strong><small>{new Intl.DateTimeFormat(undefined, { day: "2-digit", month: "short", year: "numeric" }).format(new Date(sessionItem.startedAt))}</small></span>
-                        <span className="app_session_track"><span className="app_session_track_fill" style={{ width: `${Math.min(94, Math.max(12, (sessionItem.durationSeconds / 3600) * 100))}%` }} /></span>
-                        <span className="app_session_meta"><strong>{formatStudyTimer(sessionItem.durationSeconds || 0)}</strong><small>completed</small></span>
-                        <button className="app_session_delete" type="button" title="Delete study session" aria-label="Delete study session" onClick={() => handleDeleteStudySession(sessionItem.id)}><i className="fi fi-rr-trash" /></button>
+                  {profileMenuOpen && (
+                    <div id="app_profile_dropdown" role="menu" aria-label="Profile menu">
+                      <div id="app_profile_summary">
+                        <div id="app_profile_summary_name">{displayName}</div>
+                        {username && <div id="app_profile_summary_handle">@{username}</div>}
                       </div>
-                    ))}
-                    {!studySessions.length && !activeStudySession && <p className="app_dashboard_empty">No study sessions recorded yet.</p>}
-                    {activeStudySession && (
-                      <div className="app_active_session" role="status" aria-live="polite">
-                        <span className="app_active_session_badge"><i /> In progress</span>
-                        <strong>{formatStudyTimer(studyElapsedSeconds)}</strong>
-                        <small>Study session started now</small>
-                      </div>
-                    )}
-                  </div>
-                  <div className="app_session_empty_actions">
-                    {!activeStudySession && <p className="app_dashboard_data_note">Completed sessions are saved to your study history.</p>}
-                    {activeStudySession ? (
-                      <button className="app_session_start app_session_stop" type="button" onClick={handleStopStudySession}>
-                        <i className="fi fi-rr-stop" /> Stop study session
-                      </button>
-                    ) : (
-                      <button className="app_session_start" type="button" onClick={handleStartStudySession}>
-                        <i className="fi fi-rr-play" /> Start study session
-                      </button>
-                    )}
-                  </div>
-                </article>
 
-                <article className="app_dashboard_card app_morphe_card">
-                  <div className="app_card_heading">
-                    <div><span className="app_card_kicker">01 / AMCTOSHS HYLE</span><h2>PDF Sources</h2></div>
-                    <span className="app_morphe_status"><i /> {sourceData ? "Live" : "Unavailable"}</span>
-                  </div>
-                  <p className="app_card_description">Your PDF source library for reading, annotation, and AMCTOSHS extraction.</p>
-                  <div className="app_sources_summary" aria-label="PDF source summary">
-                    <div className="app_sources_count"><strong>{sourceData ? sourceData.length : "—"}</strong><small>PDF sources</small></div>
-                    <div className="app_sources_list">{sourceData?.slice(0, 3).map((source) => <span key={source._id}>{source.name || source.title || "Untitled source"}</span>)}{sourceData?.length === 0 && <span>No PDF sources yet.</span>}{!sourceData && <span>Loading sources…</span>}</div>
-                  </div>
-                  <button className="app_morphe_action" type="button" onClick={() => navigate("/sources")}>Open PDF Sources <i className="fi fi-rr-arrow-up-right" /></button>
-                </article>
-
-                <article className="app_dashboard_card app_schemata_card">
-                  <div className="app_card_heading">
-                    <div><span className="app_card_kicker">02 / AMCTOSHS MORPHE</span><h2>Schemata</h2></div>
-                    <span className="app_trace_card_icon"><i className="fi fi-rr-network" /></span>
-                  </div>
-                  <p className="app_card_description">Saved AMCTOSHS schemata, with their object identifiers and domains ready for inspection.</p>
-                  <div className="app_schemata_summary" aria-label="Saved schemata">
-                    <div className="app_schemata_count"><strong>{schemataData ? schemataData.length : "—"}</strong><small>saved schemata</small></div>
-                    <div className="app_schemata_list">
-                      {schemataData?.slice(0, 4).map((schema) => (
-                        <span key={schema._id}>
-                          <strong>{schema.name || schema.objectId || "Unnamed schema"}</strong>
-                          <small>{schema.domain || "Unclassified"}</small>
-                        </span>
-                      ))}
-                      {schemataData?.length === 0 && <span className="app_schemata_empty">No saved schemata yet.</span>}
-                      {!schemataData && <span className="app_schemata_empty">Loading schemata…</span>}
+                      <button className="app_profile_dropdown_item" role="menuitem" onClick={() => { setProfileMenuOpen(false); navigate("/settings?section=personal"); }}>
+                        <i className="fi fi-rr-user" />
+                        <span>Personal information</span>
+                      </button>
+                      <button className="app_profile_dropdown_item" role="menuitem" onClick={() => { setProfileMenuOpen(false); navigate("/settings"); }}>
+                        <i className="fi fi-rr-settings" />
+                        <span>Settings</span>
+                      </button>
+                      <button className="app_profile_dropdown_item app_profile_dropdown_item--danger" role="menuitem" onClick={() => { setProfileMenuOpen(false); onLogout(); }}>
+                        <i className="fi fi-rr-sign-out-alt" />
+                        <span>Logout</span>
+                      </button>
                     </div>
-                  </div>
-                  <button className="app_morphe_action" type="button" onClick={() => navigate("/clinical-schemata")}>Open Schemata <i className="fi fi-rr-arrow-up-right" /></button>
-                </article>
-              </div>
-            </section>
-
-            <div id="app_scroll_hint">
-            {/* Every level's own tool buttons, consolidated into one dropdown
-                on the intro banner's left side (the profile menu already
-                owns the right) — the per-level cards used to sit inline in
-                each level's floating panel below the object, one row per
-                level; now that panel is just the label/blurb (see
-                app_level_group below), and every tool lives here regardless
-                of which level it belongs to. */}
-            <div id="app_study_tools_menu" ref={studyToolsRef}>
-              <button
-                id="app_study_tools_trigger"
-                onClick={() => setStudyToolsOpen((open) => !open)}
-                aria-haspopup="menu"
-                aria-expanded={studyToolsOpen}
-                title="AMCTOSHS Tools"
-              >
-                <i className="fi fi-rr-apps" />
-                <span>AMCTOSHS Tools</span>
-              </button>
-
-              {studyToolsOpen && (() => {
-                const allCards = LEVELS.flatMap((level) => level.cards);
-                const buildingCards = allCards.filter((card) => BUILDING_TOOL_PATHS.includes(card.path));
-                const otherCards = allCards.filter((card) => !BUILDING_TOOL_PATHS.includes(card.path));
-                const renderCard = (card) => (
-                  <button
-                    key={card.path}
-                    className="app_home_card"
-                    role="menuitem"
-                    style={{ "--nav-color": card.color }}
-                    onClick={() => {
-                      setStudyToolsOpen(false);
-                      navigate(card.path);
-                    }}
-                  >
-                    <i className={`fi ${card.icon} app_home_card_icon`} />
-                    <span className="app_home_card_label">{card.label}</span>
-                    <span className="app_home_card_desc">{card.description}</span>
-                  </button>
-                );
-                return (
-                  <div id="app_study_tools_dropdown" role="menu" aria-label="AMCTOSHS Tools">
-                    {buildingCards.length > 0 && (
-                      <div className="app_study_tools_group">
-                        <div className="app_study_tools_group_label">AMCTOSHS Building Tools</div>
-                        {buildingCards.map(renderCard)}
-                      </div>
-                    )}
-                    {otherCards.map(renderCard)}
-                  </div>
-                );
-              })()}
-            </div>
-
-            <div id="app_profile_menu" ref={profileMenuRef}>
-              <button
-                id="app_profile_trigger"
-                onClick={() => setProfileMenuOpen((open) => !open)}
-                aria-haspopup="menu"
-                aria-expanded={profileMenuOpen}
-                title={displayName}
-              >
-                {profilePhoto ? (
-                  <img src={profilePhoto} alt={displayName} />
-                ) : (
-                  <span>{profileInitials}</span>
-                )}
-              </button>
-
-              {profileMenuOpen && (
-                <div id="app_profile_dropdown" role="menu" aria-label="Profile menu">
-                  <div id="app_profile_summary">
-                    <div id="app_profile_summary_name">{displayName}</div>
-                    {username && <div id="app_profile_summary_handle">@{username}</div>}
-                  </div>
-
-                  <button
-                    className="app_profile_dropdown_item"
-                    role="menuitem"
-                    onClick={() => {
-                      setProfileMenuOpen(false);
-                      navigate("/settings?section=personal");
-                    }}
-                  >
-                    <i className="fi fi-rr-user" />
-                    <span>Personal information</span>
-                  </button>
-                  <button
-                    className="app_profile_dropdown_item"
-                    role="menuitem"
-                    onClick={() => {
-                      setProfileMenuOpen(false);
-                      navigate("/settings");
-                    }}
-                  >
-                    <i className="fi fi-rr-settings" />
-                    <span>Settings</span>
-                  </button>
-                  <button
-                    className="app_profile_dropdown_item app_profile_dropdown_item--danger"
-                    role="menuitem"
-                    onClick={() => {
-                      setProfileMenuOpen(false);
-                      onLogout();
-                    }}
-                  >
-                    <i className="fi fi-rr-sign-out-alt" />
-                    <span>Logout</span>
-                  </button>
+                  )}
                 </div>
-              )}
-            </div>
-
-            <div id="app_scroll_hint_content">
-              <span id="app_scroll_hint_title">AMCTOSHS</span>
-              <span id="app_scroll_hint_sub">A focused view of your object, sessions, and Morphe work</span>
-            </div>
-            </div>
-          </div>
-        </div>
+                <div id="app_dashboard_header_greeting">
+                    <span
+                      key={`greeting-caret-${currentTime.getSeconds()}`}
+                      className="app_dashboard_header_greeting_text"
+                    >{typedGreeting}</span>
+                    <p className="app_dashboard_header_datetime">
+                      <span>It is {currentDayName}, {currentDateLabel}</span>
+                      <span>at {currentTimeLabel}</span>
+                    </p>
+                </div>
+              </div>
       </div>
+      {(() => {
+        const allCards = LEVELS.flatMap((level) => level.cards);
+        const onticCards = allCards.filter((card) => ONTIC_TOOL_PATHS.includes(card.path));
+        const noeticCards = allCards.filter((card) => NOETIC_TOOL_PATHS.includes(card.path));
+        const metaCards = allCards.filter((card) => !ONTIC_TOOL_PATHS.includes(card.path) && !NOETIC_TOOL_PATHS.includes(card.path));
+        const renderCard = (card) => (
+          <button
+            key={card.path}
+            className="app_home_card"
+            role="menuitem"
+            style={{ "--nav-color": card.color }}
+            onClick={() => {
+              navigate(card.path);
+            }}
+          >
+            <i className={`fi ${card.icon} app_home_card_icon`} />
+            <span className="app_home_card_copy">
+              <span className="app_home_card_label">{card.label.replace(/\bRabbitHole\b/g, firstName)}</span>
+              <span className="app_home_card_desc">{card.description}</span>
+            </span>
+          </button>
+        );
+        return (
+          <div id="app_study_tools_buttons" role="menu" aria-label="RabbitHole Tools">
+            {onticCards.length > 0 && <div className="app_study_tools_group"><div className="app_study_tools_group_label">Ontic Wonderland</div>{onticCards.map(renderCard)}</div>}
+            {noeticCards.length > 0 && <div className="app_study_tools_group"><div className="app_study_tools_group_label">Noetic Wonderland</div>{noeticCards.map(renderCard)}</div>}
+            {metaCards.length > 0 && <div className="app_study_tools_group"><div className="app_study_tools_group_label">Meta</div>{metaCards.map(renderCard)}</div>}
+          </div>
+        );
+      })()}
+      </>
+      </div>
+      {assistantOpen && (
+        <HomeChat embedded initiallyOpen onClose={() => setAssistantOpen(false)} />
+      )}
+      {!assistantOpen && (
+        <div
+          className="app_home_center_logo"
+          role="button"
+          tabIndex={0}
+          aria-label="Open Rabbit Assistant"
+          aria-busy={assistantOpening}
+          onClick={openAssistantFromLogo}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              void openAssistantFromLogo();
+            }
+          }}
+        >
+          <RabbitLogoBlink ref={assistantLogoRef} clickToAppear className="app_home_center_logo_image" alt="" />
+        </div>
+      )}
+      <div id="app_home_middle">
+      </div>
+      <aside id="app_friends_aside" aria-label="Friends and chat">
+          <button
+            type="button"
+            className="app_friends_toggle"
+            aria-expanded={friendsOpen}
+            aria-controls="app_friends_list"
+            onClick={() => {
+              setFriendsOpen((open) => {
+                const nextOpen = !open;
+                if (nextOpen) setSelectedFriendId("");
+                return nextOpen;
+              });
+            }}
+          >
+            FRIENDS
+          </button>
+          {friendsOpen && <section ref={friendsViewportRef} id="app_friends_viewport" aria-label="Friends workspace">
+            <div className="app_friends_viewport_header">
+              <div>
+                <span className="app_friends_kicker">RabbitHole network</span>
+                <h2>Friends</h2>
+              </div>
+              <button type="button" className="app_friends_viewport_close" onClick={() => setFriendsOpen(false)} aria-label="Close friends workspace">×</button>
+            </div>
+            <div className="app_friends_viewport_body">
+              <nav id="app_friends_list" className="app_friends_list" aria-label="Friend list">
+                {HOME_FRIENDS.map((friend) => (
+                  <button
+                    type="button"
+                    key={friend.id}
+                    className={`app_friend_item ${friend.id === selectedFriendId ? "is-active" : ""}`}
+                    onClick={() => setSelectedFriendId(friend.id)}
+                  >
+                    <span className="app_friend_avatar" style={{ "--friend-color": friend.color }}>{getInitials(friend.name)}</span>
+                    <span className="app_friend_copy"><strong>{friend.name}</strong><small>{friend.status}</small></span>
+                    <span className={`app_friend_presence app_friend_presence--${friend.status.toLowerCase()}`} />
+                  </button>
+                ))}
+              </nav>
+              {selectedFriend ? <section className="app_friend_chat app_friends_viewport_chat" aria-label={`Chat with ${selectedFriend.name}`}>
+                <div className="app_friend_chat_header">
+                  <strong>{selectedFriend.name}</strong>
+                  <small>{selectedFriend.status}</small>
+                </div>
+                <div className="app_friend_messages" aria-live="polite">
+                  {(friendMessages[selectedFriend.id] || []).map((message, index) => (
+                    <div className={`app_friend_message ${index % 2 ? "is-self" : ""}`} key={`${selectedFriend.id}-viewport-${index}-${message}`}>{message}</div>
+                  ))}
+                  {!friendMessages[selectedFriend.id]?.length && <p className="app_friend_chat_empty">Start a conversation.</p>}
+                </div>
+                <form className="app_friend_chat_form" onSubmit={sendFriendMessage}>
+                  <input value={friendMessage} onChange={(event) => setFriendMessage(event.target.value)} placeholder="Write a message…" aria-label="Message" />
+                  <button type="submit" aria-label="Send message">↑</button>
+                </form>
+              </section> : <p className="app_friends_viewport_empty">Select a friend to open a conversation.</p>}
+            </div>
+          </section>}
+          {selectedFriend ? <section className="app_friend_chat" aria-label={`Chat with ${selectedFriend.name}`}>
+            <div className="app_friend_chat_header">
+              <strong>{selectedFriend.name}</strong>
+              <small>{selectedFriend.status}</small>
+            </div>
+            <div className="app_friend_messages" aria-live="polite">
+              {(friendMessages[selectedFriend.id] || []).map((message, index) => (
+                <div className={`app_friend_message ${index % 2 ? "is-self" : ""}`} key={`${selectedFriend.id}-${index}-${message}`}>{message}</div>
+              ))}
+              {!friendMessages[selectedFriend.id]?.length && <p className="app_friend_chat_empty">Start a conversation.</p>}
+            </div>
+            <form className="app_friend_chat_form" onSubmit={sendFriendMessage}>
+              <input value={friendMessage} onChange={(event) => setFriendMessage(event.target.value)} placeholder="Write a message…" aria-label="Message" />
+              <button type="submit" aria-label="Send message">↑</button>
+            </form>
+          </section> : null}
+      </aside>
     </div>
   );
 };

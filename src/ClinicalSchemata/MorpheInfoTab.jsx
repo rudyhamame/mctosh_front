@@ -23,8 +23,8 @@ export default function MorpheInfoTab({ onBackToEntities }) {
     <div id="mrp_information" role="tabpanel" aria-labelledby="mrp_information_tab">
       <div className="mrp_info_intro">
         <div>
-          <div className="mrp_info_kicker">AMCTOSHS Morphe ontology</div>
-          <h1>AMCTOSHS Morphe Entities</h1>
+          <div className="mrp_info_kicker">RabbitHole Representation ontology</div>
+          <h1>RabbitHole Representation Entities</h1>
           <p>Schemas, traces, trace values, and schema instantiation</p>
         </div>
         <button type="button" className="mrp_info_return" onClick={onBackToEntities}>
@@ -34,7 +34,7 @@ export default function MorpheInfoTab({ onBackToEntities }) {
 
       <div className="mrp_info_sections">
         <ConceptSection number="01" title="Schema">
-          <p>A Schema is a noetic structural form that defines the fields, relations, constraints, and possible values through which an AMCTOSHS Morphe Entity can be represented.</p>
+          <p>A Schema is a noetic structural form that defines the fields, relations, constraints, and possible values through which a RabbitHole Representation Entity can be represented.</p>
           <p>The Schema is not the concrete entity itself. It specifies how Trace Values can be organized into an instance representing an entity or one temporal slice of it.</p>
           <Flow>
             <span>Schema</span><b>-&gt;</b><span>defines possible fields</span><b>-&gt;</b><span>receives Trace Values</span><b>-&gt;</b><span>generates an Instance</span><b>-&gt;</b><span>renders the represented entity</span>
@@ -51,7 +51,7 @@ export default function MorpheInfoTab({ onBackToEntities }) {
         </ConceptSection>
 
         <ConceptSection number="02" title="Trace">
-          <p>A Trace is what provides access to an entity. AMCTOSHS distinguishes between a 3D Trace, an ontic manifestation in one present temporal slice, and a 4D Trace, a noetic temporal construction.</p>
+          <p>A Trace is what provides access to an entity. RabbitHole distinguishes between a 3D Trace, an ontic manifestation in one present temporal slice, and a 4D Trace, a noetic temporal construction.</p>
           <div className="mrp_info_subsection">
             <h3>2.1 3D Trace</h3>
             <p>A 3D Trace is an ontic manifestation available within one present temporal slice. It occurs in reality and is accessed through perception, measurement, examination, or an instrument.</p>
@@ -228,7 +228,7 @@ const renderedEntity = renderSchemaInstance(nextInstance);`}</CodeExample>
           </div>
         </ConceptSection>
 
-        <section className="mrp_info_diagram" aria-label="AMCTOSHS Morphe conceptual model">
+        <section className="mrp_info_diagram" aria-label="RabbitHole Representation conceptual model">
           <div className="mrp_info_section_kicker">MODEL</div>
           <h2>From ontic access to rendered instance</h2>
           <div className="mrp_info_domain_diagram">

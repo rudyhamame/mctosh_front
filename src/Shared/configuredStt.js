@@ -47,6 +47,8 @@ export const startConfiguredStt = async ({
   continuous = false,
   interimResults = true,
   language = "en-US",
+  recordedChunkMs = 2500,
+  requireDetectedSpeech = true,
   onStart,
   onText,
   onSpeechActivityChange,
@@ -178,7 +180,9 @@ export const startConfiguredStt = async ({
     recorder.onerror = () => onError?.(new Error("Microphone recording failed."));
     recorder.onstop = () => {
       window.clearTimeout(chunkTimer);
-      if (chunkHasSpeech) queueUpload(new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" }));
+      if (chunkHasSpeech || !requireDetectedSpeech) {
+        queueUpload(new Blob(chunks, { type: recorder.mimeType || mimeType || "audio/webm" }));
+      }
       if (stopping || stopped) {
         stopped = true;
         uploadQueue.finally(cleanup);
@@ -191,7 +195,7 @@ export const startConfiguredStt = async ({
       // Longer chunks preserve enough context for Whisper/OpenAI punctuation.
       chunkTimer = window.setTimeout(() => {
         if (!stopped && !stopping && recorder?.state === "recording") recorder.stop();
-      }, 8000);
+      }, Math.max(1200, Number(recordedChunkMs) || 8000));
     }
   };
 
@@ -264,7 +268,7 @@ export const startConfiguredStt = async ({
         stopping = true;
         recorder.stop();
       }
-    }, 8000);
+    }, Math.max(1200, Number(recordedChunkMs) || 8000));
   }
 
   return {

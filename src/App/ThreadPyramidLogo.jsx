@@ -1073,6 +1073,7 @@ const ThreadPyramidLogo = ({ activeLevel = 0, levelLabels = [], progress = 0, sc
       renderer.domElement.removeEventListener("touchcancel", onThreeFingerTouchEnd, { capture: true });
       controls.dispose();
       renderer.dispose();
+      renderer.forceContextLoss?.();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
       sceneRef.current = null;
       cameraRef.current = null;

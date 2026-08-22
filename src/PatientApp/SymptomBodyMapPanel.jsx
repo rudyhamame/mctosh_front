@@ -100,6 +100,7 @@ export default function SymptomBodyMapPanel({ request, language = "en", onClose,
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     const touchPoints = new Map();
+    let disposed = false;
     let pinchStartDistance = null;
     let pinchStartScale = 1;
     let dragging = false;
@@ -166,6 +167,15 @@ export default function SymptomBodyMapPanel({ request, language = "en", onClose,
     };
 
     const loader = new GLTFLoader();
+    const disposeMaterial = (material) => {
+      if (!material) return;
+      Object.values(material).forEach((value) => value?.isTexture && value.dispose());
+      material.dispose?.();
+    };
+    const disposeObject = (object) => object?.traverse?.((child) => {
+      child.geometry?.dispose?.();
+      (Array.isArray(child.material) ? child.material : [child.material]).forEach(disposeMaterial);
+    });
     const loadModel = (index = 0) => {
       const url = MODEL_URLS[index];
       if (!url) {
@@ -176,8 +186,13 @@ export default function SymptomBodyMapPanel({ request, language = "en", onClose,
         url,
         (gltf) => {
           const root = gltf.scene;
+          if (disposed) {
+            disposeObject(root);
+            return;
+          }
           root.traverse((obj) => {
             if (obj.isMesh) {
+              (Array.isArray(obj.material) ? obj.material : [obj.material]).forEach(disposeMaterial);
               obj.material = new THREE.MeshStandardMaterial({
                 color: 0xf0d5cb,
                 roughness: 0.78,
@@ -199,7 +214,7 @@ export default function SymptomBodyMapPanel({ request, language = "en", onClose,
           setError("");
         },
         undefined,
-        () => loadModel(index + 1)
+        () => { if (!disposed) loadModel(index + 1); }
       );
     };
     loadModel();
@@ -311,6 +326,7 @@ export default function SymptomBodyMapPanel({ request, language = "en", onClose,
     animate();
 
     return () => {
+      disposed = true;
       window.cancelAnimationFrame(rafId);
       resizeObserver?.disconnect();
       window.removeEventListener("resize", resize);
@@ -319,8 +335,13 @@ export default function SymptomBodyMapPanel({ request, language = "en", onClose,
       mount.removeEventListener("pointermove", onPointerMove);
       mount.removeEventListener("pointerup", onPointerUp);
       mount.removeEventListener("pointercancel", onPointerUp);
+      disposeObject(scene);
+      scene.clear();
+      renderer.renderLists?.dispose?.();
       renderer.dispose();
-      mount.removeChild(renderer.domElement);
+      renderer.forceContextLoss?.();
+      markerGroupRef.current = null;
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
   }, [request]);
 

@@ -1,15 +1,25 @@
 /* ── Color variables ──────────────────────────────────────────────────────── */
 :root {
-  --color-primary:    #1a1a2e;
-  --color-secondary:  #16213e;
-  --color-accent:     #0f3460;
-  --color-highlight:  #e94560;
-  --color-text:       #ffffff;
-  --color-text-muted: #a0a0b0;
-  --color-bg:         #0d0d1a;
-  --color-surface:    #1e1e3a;
-  --color-border:     #2a2a4a;
+  --color-primary:    #e9e6dc;
+  --color-secondary:  #ddd8cb;
+  --color-accent:     #927856;
+  --color-highlight:  #11110f;
+  --color-text:       #11110f;
+  --color-text-muted: #66635b;
+  --color-bg:         #f2f0e8;
+  --color-surface:    #f8f3e8;
+  --color-border:     rgba(17, 17, 15, 0.27);
   --app-footer-height: 44px;
+  --rh-paper: #f2f0e8;
+  --rh-paper-alt: #e9e6dc;
+  --rh-ink: #11110f;
+  --rh-muted: #66635b;
+  --rh-faint: #9a968b;
+  --rh-rule: rgba(17, 17, 15, 0.27);
+  --rh-rule-soft: rgba(17, 17, 15, 0.12);
+  --rh-line-step: 2.59rem;
+  --rh-display-font: Georgia, "Times New Roman", serif;
+  --rh-mono-font: "Courier New", Courier, monospace;
   /* -apple-system/BlinkMacSystemFont resolve to San Francisco on Apple's
      own platforms (Safari/WebKit) — SF automatically swaps between its
      Text and Display optical sizes based on font-size on its own, so one
@@ -21,28 +31,15 @@
 
 /* ── Light theme ───────────────────────────────────────────────────────────── */
 html.theme-light {
-  --color-primary:    #f0f0f8;
-  --color-secondary:  #e4e4f0;
-  --color-accent:     #4a6fa5;
-  --color-highlight:  #e94560;
-  --color-text:       #111122;
-  --color-text-muted: #5a5a72;
-  --color-bg:         #f8f8fc;
-  --color-surface:    #ffffff;
-  --color-border:     #d0d0e0;
-}
-
-/* ── Dark theme ───────────────────────────────────────────────────────────── */
-html.theme-dark {
-  --color-primary:    #111111;
-  --color-secondary:  #1a1a1a;
-  --color-accent:     #333333;
-  --color-highlight:  #e94560;
-  --color-text:       #f0f0f0;
-  --color-text-muted: #888888;
-  --color-bg:         #000000;
-  --color-surface:    #0f0f0f;
-  --color-border:     #222222;
+  --color-primary:    #e9e6dc;
+  --color-secondary:  #ddd8cb;
+  --color-accent:     #927856;
+  --color-highlight:  #11110f;
+  --color-text:       #11110f;
+  --color-text-muted: #66635b;
+  --color-bg:         #f2f0e8;
+  --color-surface:    #f8f3e8;
+  --color-border:     rgba(17, 17, 15, 0.27);
 }
 
 /* ── Global reset + typography (matches native iOS/iPadOS) ───────────────────
@@ -53,7 +50,7 @@ html.theme-dark {
    button/input/textarea/select/menu/modal needs that spelled out below or
    it silently falls back to the browser's own UA font instead. */
 html, body {
-  color: var(--color-text);
+  color: var(--rh-ink);
   font-family: var(--font-family-system);
   font-weight: 400;
   line-height: 1.4;
@@ -65,9 +62,31 @@ html, body {
   overscroll-behavior-y: none;
 }
 
+/* `manipulation` keeps ordinary panning and pinch gestures available while
+   removing the browser's delayed double-tap viewport zoom. The JS guard in
+   main.jsx covers older WebKit versions that do not honor this consistently. */
+html,
+body,
+#root {
+  touch-action: manipulation;
+}
+
 #root,
 #App_viewportScale {
   overscroll-behavior-y: none;
+}
+
+/* Text interaction is handled by the app. Prevent the browser from creating
+   native text selections or showing its long-press copy/lookup callout in any
+   app view, including views that previously opted back into selection. */
+#root,
+#root *,
+#root *::before,
+#root *::after {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none;
 }
 
 button, input, textarea, select, optgroup {
@@ -84,6 +103,15 @@ h1, h2, h3, h4, h5, h6 {
 
 button {
   font-weight: 500; /* medium — matches iOS/iPadOS button label weight */
+}
+
+/* Keep visible application UI typography consistent with Home. Page-specific
+   code/pre blocks and icon elements intentionally retain their own fonts. */
+#app_route_view :where(
+  h1, h2, h3, h4, h5, h6, p, span, a, li, td, th, label, small, strong, em,
+  button, input, textarea, select, option
+) {
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace !important;
 }
 
 /* Printing a dark theme as-is would waste a full page of dark ink behind

@@ -1,0 +1,359 @@
+#glyph_char_aside {
+  order: 30;
+  flex: 0 0 clamp(360px, 34vw, 520px);
+  width: clamp(360px, 34vw, 520px);
+  min-width: 340px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 1px solid rgba(255,255,255,.11);
+  background: #17191d;
+  color: #f3f1e9;
+  box-sizing: border-box;
+  scrollbar-width: thin;
+}
+
+#glyph_char_aside button,
+#glyph_char_aside select { border-radius: 0 !important; }
+
+/* App.css assigns paper-theme ink directly to routed headings and form
+   controls. This panel is an intentionally dark reader surface, so establish
+   its own contrast boundary instead of allowing black text to leak in from
+   those global rules. The white visual specimen below remains an explicit
+   light surface and keeps its dark glyph ink. */
+#app_route_view #glyph_char_aside,
+#app_route_view #glyph_char_aside :where(h1, h2, h3, h4, h5, h6),
+#app_route_view #glyph_char_aside :where(button, input, select, textarea) {
+  color: #f3f1e9;
+}
+
+#app_route_view #glyph_char_aside :where(input, select, textarea) {
+  background-color: #22262c;
+  border-color: #454d58;
+}
+
+.glyph_char_scope_rail { display: flex; flex: 0 1 auto; align-items: stretch; gap: .25rem; max-width: min(100%, 32rem); overflow-x: auto; overflow-y: hidden; white-space: nowrap; scrollbar-width: thin; }
+.glyph_char_scope_rail button { flex: 0 0 auto; height: 1.8rem; padding: .28rem .48rem; border: 1px solid #4b5967; border-radius: 0; background: #222a33; color: #aeb8c3; font: 800 .54rem/1 var(--font-family-system); cursor: pointer; }
+.glyph_char_scope_rail button.is-active { border-color: #7293a3; background: #496777; color: #fff; }
+.glyph_char_scope_rail button:focus-visible { outline: 2px solid #79d98d; outline-offset: 2px; }
+.glyph_char_summary > .glyph_char_scope_rail { width: max-content; max-width: 100%; margin-left: auto; justify-content: flex-end; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+#pdf_content:has(#glyph_char_aside) #pdf_preview {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 0;
+}
+
+.glyph_char_header,
+.glyph_char_summary,
+.glyph_char_inspector,
+.glyph_char_list_section { padding: .9rem 1rem; border-bottom: 1px solid rgba(255,255,255,.08); }
+.glyph_char_header { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: space-between; background: rgba(23,25,29,.96); backdrop-filter: blur(14px); }
+.glyph_char_header_inner { display: flex; align-items: center; justify-content: space-between; gap: .7rem; width: 100%; min-width: 0; }
+.glyph_char_header_identity { min-width: 0; }
+.glyph_char_header small, #glyph_char_aside h3, .glyph_char_specimen figcaption, .glyph_char_observations small { letter-spacing: .11em; text-transform: uppercase; color: #9fa7b2; }
+.glyph_char_header h2 { margin: .12rem 0 0; font-size: 1rem; }
+.glyph_char_header h2 span { color: #79d98d; }
+.glyph_char_header_tags { display: flex; align-items: center; gap: .32rem; flex-wrap: wrap; justify-content: flex-end; }
+.glyph_char_header_action_stack { display: flex; flex-direction: column; align-items: flex-end; gap: .28rem; min-width: 0; }
+.glyph_char_header_status_row,
+.glyph_char_header_analysis_row { display: flex; align-items: center; justify-content: flex-end; gap: .32rem; flex-wrap: wrap; }
+.glyph_char_header_action_stack .glyph_char_scope_select_label { margin: 0; }
+.glyph_char_scope_select_label { display: inline-flex; align-items: center; margin-left: auto; }
+.glyph_char_scope_select { min-width: 8.5rem; height: 1.8rem; box-sizing: border-box; padding: .28rem .42rem; border: 1px solid #4b5967; border-radius: 0; background: #222a33; color: #e8edf2; font: 700 .58rem/1.1 var(--font-family-system); cursor: pointer; }
+.glyph_char_scope_select:focus-visible { outline: 2px solid #79d98d; outline-offset: 2px; }
+.glyph_char_close { width: 1.8rem; height: 1.8rem; padding: 0; border: 1px solid rgba(255,255,255,.18); border-radius: .45rem; background: #252a31; color: #f3f1e9; cursor: pointer; font-size: 1rem; }
+.glyph_char_close:hover { background: #343b45; border-color: rgba(255,255,255,.35); }
+.glyph_char_status { padding: .22rem .48rem; border-radius: 999px; background: #2b3037; font-size: .61rem; text-transform: uppercase; }
+.glyph_char_status--analyzing { color: #79d98d; }
+.glyph_char_status--saved { color: #9fd6ff; }
+.glyph_char_status--deleting { color: #ffb4b4; }
+.glyph_char_status--canceling { color: #ffd166; }
+.glyph_char_status--cancelled { color: #c4a7e7; }
+.glyph_char_scope { display: grid; grid-template-columns: 1fr 1fr; gap: .3rem; padding: .65rem 1rem; border-bottom: 1px solid rgba(255,255,255,.08); background: #1b1e23; }
+.glyph_char_scope button { min-width: 0; padding: .42rem .55rem; border: 1px solid #3b414a; border-radius: 7px; background: #22262c; color: #b8bec7; font-size: .62rem; font-weight: 750; cursor: pointer; transition: background-color .18s ease, border-color .18s ease, color .18s ease; }
+.glyph_char_scope button.is-active { border-color: #7293a3; background: #496777; color: #fff; }
+.glyph_char_report_trigger { display: flex; align-items: center; justify-content: center; gap: .42rem; width: 100%; padding: .5rem .7rem; border: 1px solid #4f6878; border-radius: 7px; background: #294353; color: #f2f6f8; font-size: .66rem; font-weight: 800; cursor: pointer; transition: background-color .18s ease, border-color .18s ease, transform .18s ease; }
+.glyph_char_header .glyph_char_report_trigger { width: max-content; padding: .45rem .62rem; }
+.glyph_char_report_trigger:hover:not(:disabled) { border-color: #79a2b8; background: #34576b; }
+.glyph_char_report_trigger:active:not(:disabled) { transform: scale(.985); }
+.glyph_char_report_trigger:disabled { opacity: .38; cursor: default; }
+.glyph_char_report_trigger i { font-size: .9rem; }
+.glyph_char_report_dialog { display: grid; gap: .65rem; padding: .8rem 1rem; border-bottom: 1px solid rgba(255,255,255,.1); background: #111419; box-shadow: inset 0 1px #303842, inset 0 -1px #303842; }
+.glyph_char_report_dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem; }
+.glyph_char_report_dialog > header small { color: #7e8b98; font-size: .49rem; letter-spacing: .12em; }
+#glyph_char_aside .glyph_char_report_dialog > header h3 { display: block; margin: .12rem 0 0; color: #f3f1e9; font-size: .72rem; letter-spacing: .06em; }
+.glyph_char_report_dialog > header > button { display: grid; place-items: center; width: 1.55rem; height: 1.55rem; padding: 0; border: 1px solid #424a54; border-radius: 50%; background: #20252b; color: #e2e6ea; cursor: pointer; }
+.glyph_char_report_dialog fieldset { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; min-width: 0; margin: 0; padding: .55rem .6rem; border: 1px solid #343c46; border-radius: 7px; }
+.glyph_char_report_dialog legend { padding: 0 .25rem; color: #96a2af; font-size: .52rem; letter-spacing: .08em; text-transform: uppercase; }
+.glyph_char_report_dialog label { display: flex; align-items: center; gap: .35rem; min-width: 0; color: #d9dee4; font-size: .59rem; cursor: pointer; }
+.glyph_char_report_dialog label input { flex: 0 0 auto; margin: 0; accent-color: #51cf66; }
+.glyph_char_report_dialog fieldset > small { grid-column: 1 / -1; color: #89939f; font-size: .51rem; line-height: 1.45; }
+.glyph_char_report_dialog > dl { display: grid; grid-template-columns: 1fr auto; gap: .28rem .6rem; margin: 0; font-size: .58rem; }
+.glyph_char_report_dialog > dl dt { color: #8f99a5; }
+.glyph_char_report_dialog > dl dd { margin: 0; color: #e4e8ed; text-align: right; }
+.glyph_char_report_warning { margin: 0; padding: .5rem .58rem; border-left: 2px solid #d3a844; background: #2c2619; color: #efdba8; font-size: .54rem; line-height: 1.45; }
+.glyph_char_report_generate { width: 100%; padding: .52rem .7rem; border: 1px solid #39784a; border-radius: 7px; background: #315f3d; color: #f3f1e9; font-size: .64rem; font-weight: 800; cursor: pointer; }
+.glyph_char_report_generate:disabled { opacity: .55; cursor: wait; }
+.glyph_char_report_message { margin: 0; font-size: .54rem; line-height: 1.4; }
+.glyph_char_report_message--complete { color: #8fe2a0; }
+.glyph_char_report_message--generating { color: #f0ce72; }
+.glyph_char_report_message--error { color: #ff9292; }
+.glyph_char_start_button { display: inline-flex; align-items: center; justify-content: center; gap: .32rem; justify-self: start; width: max-content; max-width: 100%; padding: .45rem .62rem; border: 1px solid #39784a; border-radius: 7px; background: #315f3d; color: #f3f1e9; font-size: .68rem; font-weight: 800; cursor: pointer; transition: background-color .18s ease, border-color .18s ease, transform .18s ease; }
+.glyph_char_start_button i { font-size: .92rem; line-height: 1; }
+.glyph_char_start_button:hover { border-color: #67b978; background: #397148; }
+.glyph_char_start_button:active { transform: scale(.985); }
+.glyph_char_cancel { display: flex; align-items: center; justify-content: space-between; gap: .65rem; padding: .55rem 1rem; border-bottom: 1px solid rgba(255,255,255,.08); background: #1b1e23; }
+.glyph_char_cancel button { flex: 0 0 auto; padding: .4rem .65rem; border: 1px solid #8d5555; border-radius: 7px; background: #4b292d; color: #ffd9d9; font-size: .61rem; font-weight: 750; cursor: pointer; transition: background-color .18s ease, border-color .18s ease, opacity .18s ease; }
+.glyph_char_cancel button:hover:not(:disabled) { border-color: #bd7474; background: #63363b; }
+.glyph_char_cancel button:disabled { opacity: .55; cursor: wait; }
+.glyph_char_cancel small { color: #8d96a2; font-size: .54rem; text-align: right; }
+#glyph_char_aside h3 { display: flex; justify-content: space-between; margin: 0 0 .7rem; font-size: .66rem; }
+.glyph_char_results_heading_actions { display: inline-flex; align-items: center; gap: .45rem; }
+.glyph_char_empty_results_btn { display: inline-grid; place-items: center; width: 1.55rem; height: 1.55rem; padding: 0; border: 1px solid #454d58; border-radius: 50%; background: #22262c; color: #d9dde3; cursor: pointer; transition: background-color .18s ease, border-color .18s ease, color .18s ease, transform .18s ease; }
+.glyph_char_empty_results_btn:hover:not(:disabled) { border-color: #a65b5b; background: #4f2d31; color: #fff; }
+.glyph_char_empty_results_btn:active:not(:disabled) { transform: scale(.92); }
+.glyph_char_empty_results_btn:disabled { opacity: .35; cursor: default; }
+.glyph_char_empty_results_btn i { font-size: .82rem; line-height: 1; }
+.glyph_char_summary dl, .glyph_char_metadata, .glyph_char_debug dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .28rem .75rem; margin: 0; font-size: .68rem; }
+.glyph_char_summary dd, .glyph_char_metadata dd, .glyph_char_debug dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+.glyph_char_progress { display: grid; gap: .3rem; margin-top: .7rem; font-size: .66rem; }
+.glyph_char_progress progress { width: 100%; accent-color: #51cf66; }
+.glyph_char_progress--page { padding: .55rem .6rem; border: 1px solid #38434f; border-radius: 7px; background: #1c2025; }
+.glyph_char_progress--page strong { color: #c5ccd4; font-size: .6rem; font-weight: 650; }
+.glyph_char_page_state { padding: .18rem .4rem; border: 1px solid #4a535f; border-radius: 999px; color: #b8c0ca; font-size: .48rem; letter-spacing: .06em; text-transform: uppercase; }
+.glyph_char_page_state--ready { border-color: #39784a; color: #8fe2a0; }
+.glyph_char_page_state--processing,
+.glyph_char_page_state--waiting { border-color: #836e37; color: #f0ce72; }
+.glyph_char_page_state--empty { border-color: #555f6d; color: #9ca5b0; }
+.glyph_char_page_notice { margin-top: .65rem; padding: .48rem .58rem; border-left: 2px solid #596572; background: #20242a; color: #b7c0ca; font-size: .59rem; line-height: 1.4; }
+.glyph_char_page_notice--ready { border-left-color: #51cf66; }
+.glyph_char_page_notice--processing,
+.glyph_char_page_notice--waiting { border-left-color: #d1a83c; }
+.glyph_char_summary > small { display: block; margin-top: .55rem; color: #8d96a2; font-size: .6rem; }
+.glyph_metric_cards { display: flex; flex-wrap: nowrap; gap: .65rem; width: 100%; min-width: 0; padding: .1rem .05rem .45rem; overflow-x: auto; overflow-y: hidden; scroll-snap-type: x proximity; scrollbar-width: thin; }
+.glyph_metric_card { flex: 0 0 clamp(15rem, 22vw, 19rem); min-width: 0; padding: .72rem; border: 1px solid #3a414b; border-radius: .7rem; background: #1a1e24; box-shadow: 0 8px 22px rgba(0,0,0,.14); scroll-snap-align: start; }
+.glyph_metric_card h4 { margin: 0 0 .55rem; color: #c8d0da; font-size: .58rem; letter-spacing: .1em; }
+.glyph_metric_card dl { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .3rem .55rem; margin: 0; font-size: .65rem; }
+.glyph_metric_card dt { color: #99a4b0; }
+.glyph_metric_card dd { margin: 0; color: #f0f3f6; font-variant-numeric: tabular-nums; text-align: right; }
+.glyph_metric_card--blue { border-color: #426077; background: linear-gradient(145deg, rgba(50,76,96,.3), #1a1e24 70%); }
+.glyph_metric_card--green { border-color: #466d52; background: linear-gradient(145deg, rgba(52,88,60,.28), #1a1e24 70%); }
+.glyph_metric_card--purple { border-color: #66527b; background: linear-gradient(145deg, rgba(79,58,102,.24), #1a1e24 70%); }
+.glyph_metric_card--amber { border-color: #75623e; background: linear-gradient(145deg, rgba(93,78,43,.22), #1a1e24 70%); }
+.glyph_char_error { color: #ff7676; font-size: .66rem; }
+.glyph_visual_evidence { display: grid; gap: .65rem; margin-bottom: .8rem; }
+.glyph_visual_evidence > h4 { margin: 0; color: #c8ced7; font-size: .61rem; letter-spacing: .12em; }
+.glyph_visual_card { display: grid; gap: .55rem; padding: .72rem; border: 1px solid #3a414b; border-radius: 9px; background: #20242a; }
+.glyph_visual_card--vector { border-color: #426077; background: linear-gradient(145deg, rgba(50,76,96,.28), #20242a 62%); }
+.glyph_visual_card--raster { border-color: #4a674f; background: linear-gradient(145deg, rgba(52,88,60,.25), #20242a 62%); }
+.glyph_visual_card--given { border-color: #665d45; background: rgba(93,78,43,.14); }
+.glyph_visual_card--human { border-color: #6c5b82; background: rgba(79,58,102,.18); }
+.glyph_visual_card--comparison { border-color: #555f6d; background: #292e35; text-align: center; }
+.glyph_visual_card--comparison > strong { color: #f3f1e9; font-size: .69rem; letter-spacing: .07em; overflow-wrap: anywhere; }
+.glyph_visual_card > header { display: flex; align-items: flex-start; justify-content: space-between; gap: .5rem; }
+.glyph_visual_card > header small { color: #8f9aa8; font-size: .5rem; letter-spacing: .1em; text-transform: uppercase; }
+.glyph_visual_card > header h4 { margin: .12rem 0 0; color: #f3f1e9; font-size: .72rem; }
+.glyph_visual_state { flex: 0 0 auto; padding: .17rem .35rem; border: 1px solid #56616e; border-radius: 999px; color: #c5ccd4; font-size: .46rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.glyph_visual_state--predicted { border-color: #39784a; color: #8fe2a0; }
+.glyph_visual_state--ambiguous { border-color: #8b7335; color: #f0ce72; }
+.glyph_visual_state--unpredictable,
+.glyph_visual_state--unavailable { border-color: #78464b; color: #e69a9f; }
+.glyph_vector_preview { display: grid; place-items: center; min-height: 126px; margin: 0; border: 1px solid #414a56; border-radius: 7px; background: #f7f7f4; overflow: hidden; }
+.glyph_vector_preview svg { width: 116px; height: 116px; overflow: visible; }
+.glyph_vector_preview path { fill: #101216; fill-rule: nonzero; stroke: none; }
+.glyph_vector_preview > span { padding: 1rem; color: #676f79; font-size: .58rem; letter-spacing: .08em; }
+.glyph_raster_previews { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+.glyph_raster_previews figure { display: grid; place-items: center; gap: .28rem; min-width: 0; margin: 0; }
+.glyph_raster_previews img,
+.glyph_raster_previews figure > span { display: grid; place-items: center; width: 100%; aspect-ratio: 1; object-fit: contain; border-radius: 6px; background: #fff; color: #15171a; font-size: 1.4rem; }
+.glyph_raster_previews figcaption { color: #929ca8; font-size: .5rem; text-transform: uppercase; }
+.glyph_visual_stage_notice { margin: 0; color: #a9d6b1; font-size: .58rem; }
+.glyph_character_recognition { display: grid; gap: .45rem; padding: .55rem; border: 1px solid #48535f; border-radius: 7px; background: #181c21; }
+.glyph_character_recognition > header small { color: #8996a4; font-size: .48rem; }
+.glyph_character_recognition > header h5 { margin: .12rem 0 0; color: #f2f0e8; font-size: .63rem; }
+.glyph_morph_similarity_debug { padding: .45rem .5rem; border: 1px dashed #4d555e; border-radius: 6px; color: #9da6b0; font-size: .52rem; }
+.glyph_morph_similarity_debug summary { cursor: pointer; color: #b8c0c9; }
+.glyph_morph_similarity_debug dl { display: grid; grid-template-columns: 1fr auto; gap: .28rem .55rem; margin: .45rem 0 0; }
+.glyph_morph_similarity_debug dd { margin: 0; color: #e4e7ea; }
+.glyph_cv_training { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: .45rem; padding: .58rem; border: 1px solid #486150; border-radius: 7px; background: #181d1a; }
+.glyph_cv_training > div { align-self: center; }
+.glyph_cv_training > div small,
+.glyph_cv_training > div strong { display: block; }
+.glyph_cv_training > div small,
+.glyph_cv_training label span,
+.glyph_cv_training_message { color: #94a59a; font-size: .49rem; }
+.glyph_cv_training > div strong { margin-top: .12rem; color: #f3f1e9; font-size: .67rem; }
+.glyph_cv_training label { display: grid; gap: .2rem; }
+.glyph_cv_training input { width: 3.1rem; min-width: 0; padding: .36rem .28rem; border: 1px solid #65756a; border-radius: 5px; background: #0f1210; color: #fff; text-align: center; font: 700 .82rem/1 var(--font-family-system); }
+.glyph_cv_training button { grid-column: 1 / -1; padding: .48rem .6rem; border: 1px solid #5a8163; border-radius: 6px; background: #294b31; color: #f5fff6; font-size: .58rem; cursor: pointer; }
+.glyph_cv_training button:disabled { opacity: .45; cursor: default; }
+.glyph_cv_training_message { grid-column: 1 / -1; line-height: 1.4; }
+.glyph_cv_training_message--saved { color: #72dc88; }
+.glyph_cv_training_message--error { color: #ff8d8d; }
+.glyph_visual_prediction { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: .12rem .45rem; padding: .5rem .58rem; border-radius: 7px; background: #181b20; }
+.glyph_visual_prediction small { grid-column: 1; color: #9da6b1; font-size: .53rem; letter-spacing: .06em; text-transform: uppercase; }
+.glyph_visual_prediction strong { grid-column: 1; color: #fff; font-size: 1.18rem; }
+.glyph_visual_prediction span { grid-column: 2; grid-row: 1 / span 2; color: #b7c0ca; font-size: .6rem; text-align: right; }
+.glyph_visual_candidates h5 { margin: 0 0 .25rem; color: #9da6b1; font-size: .55rem; }
+.glyph_visual_candidates div { display: flex; justify-content: space-between; padding: .13rem 0; color: #e5e8ec; font-size: .61rem; }
+.glyph_visual_morphology { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .2rem .5rem; margin: 0; font-size: .58rem; }
+.glyph_visual_morphology dt { color: #9da6b1; }
+.glyph_visual_morphology dd { margin: 0; color: #edf0f3; text-align: right; }
+.glyph_visual_unavailable { margin: 0; color: #b0b7c0; font-size: .59rem; line-height: 1.4; }
+.glyph_measurement_validity { border-color: #59697a; background: #151a20; }
+.glyph_measurement_validity dd { max-width: 13rem; overflow-wrap: anywhere; }
+.glyph_admission_reasons { display: flex; flex-wrap: wrap; gap: .3rem; }
+.glyph_admission_reasons span { padding: .2rem .35rem; border: 1px solid #6c5943; border-radius: 999px; background: #29231d; color: #f0d2a8; font-size: .49rem; }
+.glyph_typographic_details { padding: .6rem; border: 1px solid #48535f; border-radius: 7px; background: #181c21; color: #f2f0e8; }
+.glyph_typographic_details summary { cursor: pointer; font-size: .58rem; letter-spacing: .06em; }
+.glyph_typographic_details[open] summary { margin-bottom: .55rem; }
+.glyph_char_specimen { display: grid; place-items: center; gap: .35rem; margin: 0 0 .75rem; }
+.glyph_char_specimen img, .glyph_char_specimen > span { width: 116px; height: 116px; display: grid; place-items: center; object-fit: contain; background: white; color: #111; border-radius: 8px; image-rendering: auto; font-size: 2rem; }
+#app_route_view #glyph_char_aside .glyph_char_specimen > span { color: #111; }
+.glyph_char_specimen figcaption { font-size: .58rem; }
+.glyph_char_observations { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
+.glyph_char_observations article { display: grid; gap: .18rem; padding: .6rem; background: #22262c; border-radius: 7px; }
+.glyph_char_observations small { font-size: .54rem; }
+.glyph_char_observations strong { font-size: 1.35rem; }
+.glyph_char_observations span { font-size: .61rem; color: #aeb5bf; }
+.glyph_char_comparison { margin: .65rem 0; padding: .45rem; text-align: center; border: 1px solid #59616d; border-radius: 6px; font-size: .7rem; font-weight: 800; letter-spacing: .09em; }
+.glyph_char_comparison--match { color: #79d98d; border-color: #39784a; }
+.glyph_char_comparison--disagreement { color: #ff8585; border-color: #a64040; background: rgba(166,64,64,.12); }
+.glyph_char_comparison--ambiguous { color: #ffd166; }
+.glyph_char_candidates { margin-bottom: .7rem; }
+.glyph_char_candidates h4 { margin: 0 0 .3rem; font-size: .62rem; color: #aeb5bf; }
+.glyph_char_candidates div { display: flex; justify-content: space-between; padding: .2rem 0; font-size: .67rem; }
+.glyph_char_debug { margin-top: .65rem; font-size: .64rem; }
+.glyph_char_debug summary { cursor: pointer; color: #aeb5bf; }
+.glyph_char_debug dl { margin-top: .55rem; }
+.glyph_char_debug img { max-width: 100%; margin-top: .6rem; background: white; }
+.glyph_char_empty { color: #9fa7b2; font-size: .7rem; }
+
+/* Full-pane Layer 1 detection console. The ordinary embedded mode remains a
+   vertical inspector; only the PDF-reader full-pane mode gets the platform
+   layout class from its parent. */
+#pdfw_panes--layer1-only #glyph_char_aside,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(22rem, .85fr);
+  grid-template-rows: auto auto auto auto auto minmax(0, 1fr);
+  align-content: start;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background: #111419;
+}
+
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_header,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_scope,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_report_trigger,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_start_button,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_report_dialog,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_cancel,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_summary {
+  grid-column: 1 / -1;
+}
+
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_header {
+  position: relative;
+  background: #171b21;
+}
+
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_inspector,
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_list_section {
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_inspector {
+  grid-column: 1;
+}
+
+#pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_list_section {
+  grid-column: 2;
+  border-left: 1px solid rgba(255,255,255,.1);
+}
+
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_detection_layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(22rem, .85fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-column: 1 / -1;
+  min-height: 0;
+  overflow: hidden;
+}
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_detection_layout > .glyph_char_summary {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_detection_layout > .glyph_char_inspector {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid rgba(255,255,255,.1);
+}
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_detection_layout > .glyph_char_list_section {
+  grid-column: 1;
+  grid-row: 2;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Compact detection-console density: controls stay legible without wasting
+   the viewport on empty button padding. */
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_header,
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_summary,
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_inspector,
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_list_section { padding: .55rem .7rem; }
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_scope,
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_cancel { padding: .42rem .7rem; }
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_scope button,
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_report_trigger,
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_start_button,
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_filters button { padding: .32rem .48rem; }
+#pdfw_panes.pdfw_panes--layer1-only .glyph_metric_cards { gap: .42rem; }
+#pdfw_panes.pdfw_panes--layer1-only .glyph_metric_card { flex-basis: clamp(14rem, 19vw, 17rem); padding: .55rem; }
+#pdfw_panes.pdfw_panes--layer1-only .glyph_char_filters { gap: .18rem; margin-bottom: .35rem; }
+
+@media (max-width: 900px) {
+  #pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside {
+    display: block;
+    overflow-y: auto;
+  }
+
+  #pdfw_panes.pdfw_panes--layer1-only .glyph_char_detection_layout {
+    display: block;
+    overflow: visible;
+  }
+
+  #pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_inspector,
+  #pdfw_panes.pdfw_panes--layer1-only #glyph_char_aside > .glyph_char_list_section {
+    overflow: visible;
+    border-left: 0;
+  }
+}
+
+.glyph_char_filters { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: .55rem; }
+.glyph_char_filters button { padding: .25rem .42rem; border: 1px solid #3b414a; border-radius: 999px; background: #20242a; color: #b8bec7; font-size: .56rem; cursor: pointer; }
+.glyph_char_filters button.is-active { background: #496777; color: white; border-color: #7293a3; }
+.glyph_char_results { overflow-y: auto; border: 1px solid #343a43; border-radius: 7px; }
+.glyph_char_results_spacer { position: relative; }
+.glyph_char_result { position: absolute; left: 0; right: 0; display: grid; grid-template-columns: 1.3rem 1fr auto; align-items: center; gap: .4rem; width: 100%; padding: 0 .55rem; border: 0; border-bottom: 1px solid #30363e; background: #1d2025; color: #f3f1e9; text-align: left; cursor: pointer; }
+.glyph_char_result:hover, .glyph_char_result.is-selected { background: #2a3037; }
+.glyph_char_result--disagreement { box-shadow: inset 3px 0 #d95c5c; }
+.glyph_char_result_state { text-align: center; }
+.glyph_char_result_pair { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; }
+.glyph_char_result_pair i { color: #7e8792; font-style: normal; }
+.glyph_char_result_meta { font-size: .57rem; color: #929ba6; }
+.glyph_char_selection_layer { position: absolute; inset: 0; z-index: 1100; pointer-events: none; }
+.glyph_char_selection_box { position: absolute; border: 2px solid #51cf66; background: rgba(81,207,102,.15); box-shadow: 0 0 0 2px rgba(10,15,12,.55), 0 0 14px rgba(81,207,102,.45); box-sizing: border-box; }
+
+@media (max-width: 850px) {
+  #glyph_char_aside { flex-basis: clamp(300px, 48vw, 390px); width: clamp(300px, 48vw, 390px); min-width: 280px; }
+}

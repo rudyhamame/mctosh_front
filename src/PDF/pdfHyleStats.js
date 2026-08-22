@@ -1,7 +1,7 @@
 // pdfHyleStats.js
 //
-// Pure helpers behind the PDF page canvas's "AMCTOSHS Hyle" floating
-// button. Per this app's own AMCTOSHS vocabulary (see AboutPage.jsx:
+// Pure helpers behind the PDF page canvas's "RabbitHole Hyle" floating
+// button. Per this app's own RabbitHole vocabulary (see AboutPage.jsx:
 // "Before extraction a word is a Hyle — undifferentiated matter"), a page
 // has layers of imposed structure sitting on top of its raw substrate:
 //

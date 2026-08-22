@@ -107,9 +107,9 @@ export default function HomeVocabsCard({ onOpen }) {
   return (
     <article className="app_dashboard_card app_vocabs_card">
       <div className="app_card_heading">
-        <div><span className="app_card_kicker">05 / AMCTOSHS VOCABS</span><h2>Vocabulary</h2></div>
+        <div><span className="app_card_kicker">05 / RabbitHole MORPHEMES</span><h2>Morphemes</h2></div>
         <div className="app_card_icon_actions">
-          <button className="app_icon_action" type="button" onClick={onOpen} aria-label="Open AMCTOSHS Vocabs" title="Open AMCTOSHS Vocabs"><i className="fi fi-rr-arrow-up-right" /></button>
+          <button className="app_icon_action" type="button" onClick={onOpen} aria-label="Open RabbitHole Morphemes" title="Open RabbitHole Morphemes"><i className="fi fi-rr-arrow-up-right" /></button>
         </div>
       </div>
       <p className="app_card_description">Your saved medical terms, translations, and dictionary definitions.</p>

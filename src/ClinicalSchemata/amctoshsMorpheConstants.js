@@ -4,7 +4,7 @@
 // (kept as plain constants here, same convention as the old
 // PDF/entityBuilderConstants.js — enforcement of these lists is client-side
 // display/filtering only; the backend's own Zod schemas are the real
-// enforcement). AMCTOSHS Reasoning imports DOMAINS from here too rather
+// enforcement). RabbitHole Reasoning imports DOMAINS from here too rather
 // than redefining it.
 
 export const DOMAINS = [

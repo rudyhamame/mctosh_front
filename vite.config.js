@@ -96,6 +96,7 @@ export default defineConfig({
   },
   build: {
     outDir: "build",
+    modulePreload: false,
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {

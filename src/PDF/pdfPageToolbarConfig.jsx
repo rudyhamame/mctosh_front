@@ -113,6 +113,7 @@ export const ANNOT_TOOLS = [
     hasSize: false,
   },
   { key: "eraser", icon: "bx bx-eraser", label: "Eraser", hasSize: true },
+  { key: "antiAgingEraser", icon: "bx bx-brush", label: "Anti-aging eraser", hasSize: true },
   {
     key: "smartVideo",
     iconSvg: (
@@ -131,11 +132,8 @@ export const DRAWING_TOOL_ORDER = [
   "pen",
   "smartPen",
   "highlight",
-  "underline",
-  "strikethrough",
   "shapes",
   "text",
-  "bbox",
   "eraser",
 ];
 export const MODE_TOOL_ORDER = ["smartVideo"];
@@ -347,11 +345,65 @@ const KNOB_PAD_PX = 12;
 const KNOB_TRACK_W = 64;
 const KNOB_LABEL_W = 44;
 const KNOB_TOTAL_W = KNOB_TRACK_W + KNOB_LABEL_W;
-export const OPACITY_MIN_PCT = 10;
-export const OPACITY_MAX_PCT = 90;
+const LEADING_VALUE_W_PX = 26;
+const COMPACT_KNOB_RADIUS_PX = 7;
+export const OPACITY_MIN_PCT = 0;
+export const OPACITY_MAX_PCT = 100;
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
 
-export const SizeKnob = ({ min, max, step, value, onChange, color, dashed, variant = "dot" }) => {
+const NumericController = ({ value, onChange, min, max, step = 1, label, formatValue = (next) => next }) => {
+  const precision = String(step).includes(".") ? String(step).split(".")[1].length : 0;
+  const repeatTimerRef = useRef(null);
+  const repeatedRef = useRef(false);
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const nudge = (direction) => {
+    const next = clamp(valueRef.current + direction * step, min, max);
+    onChange(Number(next.toFixed(precision)));
+  };
+  const stopRepeat = () => {
+    if (repeatTimerRef.current) {
+      clearTimeout(repeatTimerRef.current.timeout);
+      clearInterval(repeatTimerRef.current.interval);
+      repeatTimerRef.current = null;
+    }
+  };
+  const startRepeat = (direction) => {
+    stopRepeat();
+    repeatedRef.current = false;
+    const timeout = setTimeout(() => {
+      repeatedRef.current = true;
+      const interval = setInterval(() => nudge(direction), 75);
+      repeatTimerRef.current = { timeout, interval };
+    }, 450);
+    repeatTimerRef.current = { timeout, interval: null };
+  };
+  const handleClick = (direction) => {
+    if (repeatedRef.current) {
+      repeatedRef.current = false;
+      return;
+    }
+    nudge(direction);
+  };
+
+  return (
+    <div
+      className="annot_numeric_controller"
+      aria-label={label}
+      style={{ "--numeric-progress": `${((value - min) / Math.max(1, max - min)) * 100}%` }}
+    >
+      <span className="annot_numeric_controller_liquid" aria-hidden="true" />
+      <button type="button" className="annot_numeric_controller_btn" onClick={() => handleClick(-1)} onPointerDown={() => startRepeat(-1)} onPointerUp={stopRepeat} onPointerCancel={stopRepeat} onPointerLeave={stopRepeat} onContextMenu={(event) => event.preventDefault()} disabled={value <= min} aria-label={`Decrease ${label}`}>−</button>
+      <output className="annot_numeric_controller_value">
+        <span className="annot_numeric_controller_label">{label}</span>
+        <span className="annot_numeric_controller_number">{formatValue(value)}</span>
+      </output>
+      <button type="button" className="annot_numeric_controller_btn" onClick={() => handleClick(1)} onPointerDown={() => startRepeat(1)} onPointerUp={stopRepeat} onPointerCancel={stopRepeat} onPointerLeave={stopRepeat} onContextMenu={(event) => event.preventDefault()} disabled={value >= max} aria-label={`Increase ${label}`}>+</button>
+    </div>
+  );
+};
+
+export const SizeKnob = ({ min, max, step, value, onChange, color, colorless = false, dashed, variant = "dot", leadingValue = false }) => {
   const trackRef = useRef(null);
   const draggingRef = useRef(false);
 
@@ -363,14 +415,17 @@ export const SizeKnob = ({ min, max, step, value, onChange, color, dashed, varia
 
   const updateFromClientX = useCallback((clientX) => {
     const rect = trackRef.current.getBoundingClientRect();
-    const usable = KNOB_TRACK_W - KNOB_PAD_PX * 2;
-    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
+    const rangeStart = leadingValue ? LEADING_VALUE_W_PX + COMPACT_KNOB_RADIUS_PX : KNOB_PAD_PX;
+    const usable = leadingValue
+      ? rect.width - LEADING_VALUE_W_PX - COMPACT_KNOB_RADIUS_PX * 2
+      : KNOB_TRACK_W - KNOB_PAD_PX * 2;
+    let frac = (clientX - rect.left - rangeStart) / usable;
     frac = Math.min(1, Math.max(0, frac));
     let val = min + frac * (max - min);
     val = Math.round(val / step) * step;
     val = Math.min(max, Math.max(min, val));
     onChange(val);
-  }, [min, max, step, onChange]);
+  }, [leadingValue, min, max, step, onChange]);
 
   const onPointerDown = (e) => {
     draggingRef.current = true;
@@ -393,13 +448,25 @@ export const SizeKnob = ({ min, max, step, value, onChange, color, dashed, varia
   const centerX = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
 
   return (
+    <NumericController
+      value={value}
+      onChange={onChange}
+      min={min}
+      max={max}
+      step={step}
+      label="Size"
+      formatValue={(next) => `${Number.isInteger(next) ? next : next.toFixed(1)}pt`}
+    />
+  );
+
+  return (
     <div className="annot_size_knob">
       <div className="annot_size_stepper" aria-label="Adjust tool size">
         <button type="button" className="annot_size_stepper_btn" onClick={() => nudgeSize(1)} disabled={value >= max} title="Increase size">+</button>
         <button type="button" className="annot_size_stepper_btn" onClick={() => nudgeSize(-1)} disabled={value <= min} title="Decrease size">-</button>
       </div>
       <div
-        className="annot_size_knob_track"
+        className={`annot_size_knob_track${leadingValue ? " annot_size_knob_track--leading-value" : ""}`}
         ref={trackRef}
         style={{ width: KNOB_TOTAL_W }}
         onPointerDown={onPointerDown}
@@ -407,18 +474,25 @@ export const SizeKnob = ({ min, max, step, value, onChange, color, dashed, varia
         onPointerUp={onPointerUp}
         title="Size"
       >
-        <div className="annot_size_knob_fill" style={{ width: centerX }} />
-        {variant === "highlight" ? (
+        {leadingValue && <div className="annot_size_knob_measure">
+          <div className="annot_size_knob_fill" style={{ width: `calc(7px + ${frac * 100}%)` }} />
+          <div
+            className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}${colorless ? " annot_size_knob_dot--colorless" : ""}`}
+            style={{ width: knobSize, height: knobSize, left: `${frac * 100}%`, background: dashed || colorless ? "transparent" : color }}
+          />
+        </div>}
+        {!leadingValue && <div className="annot_size_knob_fill" style={{ width: centerX }} />}
+        {!leadingValue && variant === "highlight" ? (
           <div
             className="annot_size_highlight_preview"
             style={{ width: highlightPreviewWidth, height: highlightPreviewHeight, left: centerX, color, background: color }}
           />
-        ) : (
+        ) : !leadingValue ? (
           <div
-            className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}`}
-            style={{ width: knobSize, height: knobSize, left: centerX, background: dashed ? "transparent" : color }}
+            className={`annot_size_knob_dot${dashed ? " annot_size_knob_dot--eraser" : ""}${colorless ? " annot_size_knob_dot--colorless" : ""}`}
+            style={{ width: knobSize, height: knobSize, left: centerX, background: dashed || colorless ? "transparent" : color }}
           />
-        )}
+        ) : null}
         <span className="annot_size_label">{Number.isInteger(value) ? value : value.toFixed(1)}pt</span>
       </div>
     </div>
@@ -456,6 +530,18 @@ export const OpacityKnob = ({ value, onChange, color }) => {
   const centerX = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
 
   return (
+    <NumericController
+      value={value}
+      onChange={onChange}
+      min={OPACITY_MIN_PCT}
+      max={OPACITY_MAX_PCT}
+      step={1}
+      label="Opacity"
+      formatValue={(next) => `${next}%`}
+    />
+  );
+
+  return (
     <div
       className="annot_size_knob_track"
       ref={trackRef}
@@ -471,20 +557,23 @@ export const OpacityKnob = ({ value, onChange, color }) => {
   );
 };
 
-export const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%" }) => {
+export const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, label = "%", title = "", leadingValue = false }) => {
   const trackRef = useRef(null);
   const draggingRef = useRef(false);
 
   const updateFromClientX = useCallback((clientX) => {
     const rect = trackRef.current.getBoundingClientRect();
-    const usable = KNOB_TRACK_W - KNOB_PAD_PX * 2;
-    let frac = (clientX - rect.left - KNOB_PAD_PX) / usable;
+    const rangeStart = leadingValue ? LEADING_VALUE_W_PX + COMPACT_KNOB_RADIUS_PX : KNOB_PAD_PX;
+    const usable = leadingValue
+      ? rect.width - LEADING_VALUE_W_PX - COMPACT_KNOB_RADIUS_PX * 2
+      : KNOB_TRACK_W - KNOB_PAD_PX * 2;
+    let frac = (clientX - rect.left - rangeStart) / usable;
     frac = Math.min(1, Math.max(0, frac));
     let val = min + frac * (max - min);
     val = Math.round(val / step) * step;
     val = Math.min(max, Math.max(min, val));
     onChange(val);
-  }, [max, min, onChange, step]);
+  }, [leadingValue, max, min, onChange, step]);
 
   const onPointerDown = (e) => {
     draggingRef.current = true;
@@ -504,9 +593,21 @@ export const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, lab
   const centerX = KNOB_PAD_PX + frac * (KNOB_TRACK_W - KNOB_PAD_PX * 2);
 
   return (
+    <NumericController
+      value={value}
+      onChange={onChange}
+      min={min}
+      max={max}
+      step={step}
+      label={title || (label === "%" ? "Percentage" : label)}
+      formatValue={(next) => `${next}${label}`}
+    />
+  );
+
+  return (
     <div className="annot_size_knob">
       <div
-        className="annot_size_knob_track"
+        className={`annot_size_knob_track${leadingValue ? " annot_size_knob_track--leading-value" : ""}`}
         ref={trackRef}
         style={{ width: KNOB_TOTAL_W }}
         onPointerDown={onPointerDown}
@@ -514,8 +615,17 @@ export const PercentKnob = ({ value, onChange, min = 0, max = 100, step = 5, lab
         onPointerUp={onPointerUp}
         title={`${value}${label}`}
       >
-        <div className="annot_size_knob_fill" style={{ width: centerX }} />
-        <div className="annot_size_knob_dot annot_size_knob_dot--percent" style={{ width: 14, height: 14, left: centerX }} />
+        {leadingValue ? (
+          <div className="annot_size_knob_measure">
+            <div className="annot_size_knob_fill" style={{ width: `calc(7px + ${frac * 100}%)` }} />
+            <div className="annot_size_knob_dot annot_size_knob_dot--percent" style={{ width: 14, height: 14, left: `${frac * 100}%` }} />
+          </div>
+        ) : (
+          <>
+            <div className="annot_size_knob_fill" style={{ width: centerX }} />
+            <div className="annot_size_knob_dot annot_size_knob_dot--percent" style={{ width: 14, height: 14, left: centerX }} />
+          </>
+        )}
         <span className="annot_size_label">{value}{label}</span>
       </div>
     </div>
@@ -532,7 +642,7 @@ export const LabeledPercentKnob = ({ title, subtitle, ...props }) => (
         </div>
       ) : null}
     </div>
-    <PercentKnob {...props} />
+    <PercentKnob {...props} title={title} />
   </div>
 );
 

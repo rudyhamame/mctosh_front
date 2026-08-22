@@ -44,7 +44,7 @@ export default function ClinicalVignetteGeneratorPage() {
         </button>
         <div id="cvg_header_titles">
           <div id="cvg_title">ACMTOSHS Tools</div>
-          <div id="cvg_subtitle">AMCTOSHS Clinical Vignette Generator</div>
+          <div id="cvg_subtitle">RabbitHole Clinical Vignette Generator</div>
         </div>
       </div>
 

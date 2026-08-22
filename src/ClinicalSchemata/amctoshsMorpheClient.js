@@ -1,8 +1,8 @@
 // amctoshsMorpheClient.js
 //
-// Thin fetch wrapper for the AMCTOSHS Morphe backend
+// Thin fetch wrapper for the RabbitHole Morphe backend
 // (back/routes/AmctoshsMorpheAPI.js) — browse/CRUD only. The extraction
-// action ("Extract AMCTOSHS Relations") lives on the AMCTOSHS
+// action ("Extract RabbitHole Relations") lives on the RabbitHole
 // Segmentation page instead — see
 // ../Segmentations/amctoshsRelationsExtractionClient.js. Same
 // authHeaders/jsonHeaders/parseJsonResponse convention as that file.
@@ -26,7 +26,7 @@ const parseJsonResponse = async (res) => {
   return data;
 };
 
-/** Everything this user has SAVED in AMCTOSHS Morphe — {schemas, instances, traceSchemas, traceInstances, relations}. */
+/** Everything this user has SAVED in RabbitHole Morphe — {schemas, instances, traceSchemas, traceInstances, relations}. */
 export const listMorphe = async () => {
   const res = await fetch(apiUrl("/api/amctoshs-morphe/"), { headers: authHeaders() });
   return parseJsonResponse(res);

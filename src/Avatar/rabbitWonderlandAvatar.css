@@ -1,0 +1,73 @@
+.rabbit_wonderland_avatar {
+  display: grid;
+  justify-items: center;
+  gap: .45rem;
+  width: min(16rem, 72vw);
+  padding: .7rem;
+  color: var(--color-text);
+}
+
+.rabbit_wonderland_avatar_logo {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: clamp(6rem, 18vw, 10rem);
+  height: clamp(6rem, 18vw, 10rem);
+  overflow: visible;
+  border: 1px solid color-mix(in srgb, var(--color-highlight) 38%, var(--color-border));
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-surface) 82%, transparent);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .18), inset 0 1px rgba(255, 255, 255, .45);
+}
+
+.rabbit_wonderland_avatar_status {
+  position: absolute;
+  top: -1.85rem;
+  left: 50%;
+  z-index: 2;
+  padding: .28rem .55rem;
+  border: 1px solid color-mix(in srgb, var(--color-highlight) 42%, var(--color-border));
+  border-radius: 48% 52% 54% 46% / 58% 46% 54% 42%;
+  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  color: var(--color-text-muted);
+  font: 500 .52rem/1 "SF Mono", SFMono-Regular, ui-monospace, monospace;
+  letter-spacing: .05em;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  box-shadow: 0 5px 12px rgba(0, 0, 0, .14);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.rabbit_wonderland_avatar_status::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -.3rem;
+  width: .52rem;
+  height: .52rem;
+  border-right: 1px solid color-mix(in srgb, var(--color-highlight) 42%, var(--color-border));
+  border-bottom: 1px solid color-mix(in srgb, var(--color-highlight) 42%, var(--color-border));
+  background: inherit;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.rabbit_wonderland_avatar_status--listening { color: #2e9b68; }
+.rabbit_wonderland_avatar_status--thinking { color: var(--color-highlight); }
+.rabbit_wonderland_avatar_status--speaking { color: #9b5fbe; }
+
+.rabbit_wonderland_avatar_logo_image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.rabbit_wonderland_avatar_caption {
+  max-width: 100%;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: .65rem;
+  line-height: 1.4;
+  text-align: center;
+}

@@ -274,7 +274,7 @@ const EntityBuilderPanel = ({
           setMorpheTraceSchemas(Array.isArray(data.traceSchemas) ? data.traceSchemas : []);
         }
       } catch (error) {
-        if (!cancelled) setMorpheError(error.message || "Failed to load AMCTOSHS Morphe.");
+        if (!cancelled) setMorpheError(error.message || "Failed to load RabbitHole Representation.");
       } finally {
         if (!cancelled) setMorpheLoading(false);
       }
@@ -477,7 +477,7 @@ const EntityBuilderPanel = ({
   );
   const armContainerBBox = (container) => onArmBBoxInsideContainer?.(container.id, pageNum);
   const renderBBoxId = (bbox) => (
-    <span className="entity_builder_bbox_id" title="Global AMCTOSHS Hyle BBox ID">
+    <span className="entity_builder_bbox_id" title="Global RabbitHole Hyle BBox ID">
       {bbox.hyleId || bbox.id}
     </span>
   );
@@ -881,15 +881,15 @@ const EntityBuilderPanel = ({
     <div id="entity_builder_body" className="entity_builder_morphe_body">
       <div className="entity_builder_morphe_summary">
         <span className="entity_builder_morphe_title">
-          AMCTOSHS Morphe
+          RabbitHole Representation
           <button
             type="button"
             className={`entity_builder_morphe_info_button${activeMorpheView === "information" ? " entity_builder_morphe_info_button--active" : ""}`}
             onClick={() => setActiveMorpheView((view) => (view === "information" ? "entities" : "information"))}
-            aria-label="Open AMCTOSHS Morphe information"
+            aria-label="Open RabbitHole Representation information"
             aria-expanded={activeMorpheView === "information"}
             aria-controls="mrp_information"
-            title="About AMCTOSHS Morphe Entities"
+            title="About RabbitHole Representation Entities"
           >
             <i className="bx bx-info-circle" aria-hidden="true" />
           </button>
@@ -986,7 +986,7 @@ const EntityBuilderPanel = ({
       <div id="entity_builder_header">
         <span id="entity_builder_header_title">
           {isPageFullySegmented ? <IlluminationIcon /> : <SegmentsBuilderIcon />}
-          AMCTOSHS Illumination
+          RabbitHole Illumination
         </span>
         <button type="button" id="entity_builder_close" onClick={onClose} title="Close">✕</button>
       </div>

@@ -44,7 +44,7 @@
 .terminology_identity p { margin: 0; color: var(--color-text-muted); font-size: .66rem; }
 
 .terminology_body { width: min(1440px, 100%); margin: 0 auto; padding: 1rem; display: grid; gap: .8rem; }
-.terminology_summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .65rem; }
+.terminology_summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .65rem; }
 .terminology_summary article, .terminology_panel {
   border: 1px solid var(--color-border);
   background: var(--color-surface);
@@ -124,14 +124,181 @@
 .terminology_search > i { margin-left: .55rem; color: var(--color-text-muted); font-size: .7rem; }
 .terminology_search input { min-width: 0; flex: 1; border: 0; outline: 0; background: transparent; color: var(--color-text); padding: .45rem .5rem; font: inherit; font-size: .68rem; }
 .terminology_search button { border-width: 0 0 0 1px; border-radius: 0; }
+.terminology_language_filters { display: flex; align-items: center; gap: .65rem; padding: .45rem .8rem; border-top: 1px solid var(--color-border); color: var(--color-text-muted); font-size: .62rem; }
+.terminology_language_filters > span { font-weight: 700; }
+.terminology_language_filters label { display: inline-flex; align-items: center; gap: .28rem; color: var(--color-text); cursor: pointer; }
+.terminology_language_filters input { margin: 0; accent-color: var(--color-highlight); }
+.terminology_reference_tabs {
+  display: flex;
+  gap: .25rem;
+  padding: .55rem .8rem 0;
+  border-top: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 35%, var(--color-surface));
+}
+.terminology_reference_tabs button {
+  padding: .42rem .7rem;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 5px 5px 0 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: .62rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+.terminology_reference_tabs button:hover { color: var(--color-text); background: color-mix(in srgb, var(--color-highlight) 5%, transparent); }
+.terminology_reference_tabs button.is-active {
+  border-color: var(--color-border);
+  border-bottom-color: var(--color-highlight);
+  color: var(--color-text);
+  background: var(--color-surface);
+}
 .terminology_reference_table { min-width: 0; table-layout: auto; }
-.terminology_reference_table--simple { min-width: 760px; }
+.terminology_reference_table_wrap {
+  padding: .65rem .8rem .8rem;
+  background: color-mix(in srgb, var(--color-bg) 35%, var(--color-surface));
+}
+.terminology_reference_table--simple {
+  min-width: 720px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  border-spacing: 0;
+  overflow: hidden;
+  background: var(--color-surface);
+}
+.terminology_reference_table--simple th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: .62rem .7rem;
+  border-bottom: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-bg) 74%, var(--color-surface));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--color-border) 65%, transparent);
+}
+.terminology_reference_table--simple thead tr:first-child th { background: color-mix(in srgb, var(--color-bg) 82%, var(--color-surface)); }
+.terminology_reference_table--simple thead tr:nth-child(2) th {
+  top: 1.85rem;
+  padding-top: .42rem;
+  padding-bottom: .48rem;
+  font-size: .5rem;
+  letter-spacing: .06em;
+  background: color-mix(in srgb, var(--color-bg) 74%, var(--color-surface));
+}
+.terminology_reference_table--simple thead tr:first-child th[colspan] { text-align: center; color: var(--color-text); }
 .terminology_reference_table--simple th:nth-child(1) { width: 9rem; }
 .terminology_reference_table--simple th:nth-child(2) { width: 18%; }
-.terminology_reference_table--simple th:nth-child(3) { width: 44%; }
-.terminology_reference_table--simple th:nth-child(4) { width: 20%; }
-.terminology_unified_strings summary { cursor: pointer; color: var(--color-text); white-space: nowrap; }
+.terminology_reference_table--simple th:nth-child(3) { width: 6rem; }
+.terminology_reference_table--simple th:nth-child(4) { width: 10rem; }
+.terminology_reference_table--simple th:nth-child(5) { width: 7rem; }
+.terminology_reference_table--simple th:nth-child(6) { width: 28%; }
+.terminology_reference_table--simple th:nth-child(7) { width: 7rem; }
+.terminology_reference_table--simple th:nth-child(8) { width: 8rem; }
+.terminology_reference_table--simple th:nth-child(9) { width: 25%; }
+.terminology_reference_table--simple th:nth-child(10) { width: 7rem; }
+.terminology_reference_table--simple td {
+  padding: .72rem .7rem;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+  border-right: 0;
+  line-height: 1.4;
+}
+.terminology_reference_table--simple tbody tr { transition: background-color .16s ease; }
+.terminology_reference_table--simple tbody tr:hover { background: color-mix(in srgb, var(--color-highlight) 5%, var(--color-surface)); }
+.terminology_reference_table--simple tbody tr:first-child td { border-top: 0; }
+.terminology_reference_cell--id code {
+  display: inline-block;
+  padding: .16rem .3rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-bg) 68%, var(--color-surface));
+  font-size: .58rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.terminology_concept_value { display: grid; gap: .28rem; min-width: 8rem; }
+.terminology_concept_value strong { font-size: .7rem; line-height: 1.3; }
+.terminology_local_badge {
+  width: fit-content;
+  padding: .1rem .3rem;
+  border-radius: 999px;
+  color: #287b4e;
+  background: color-mix(in srgb, #2f9e63 12%, var(--color-surface));
+  font-size: .5rem;
+  font-weight: 750;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.terminology_value_badge {
+  display: inline-block;
+  min-width: 1.45rem;
+  padding: .15rem .28rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-bg) 62%, var(--color-surface));
+  font-size: .58rem;
+  text-align: center;
+}
+.terminology_reference_cell--sty,
+.terminology_reference_cell--abbreviations,
+.terminology_reference_cell--definition-aui,
+.terminology_reference_cell--definition-source,
+.terminology_reference_cell--string-sui,
+.terminology_reference_cell--string-tty { white-space: nowrap; }
+.terminology_reference_cell--definition-value { min-width: 17rem; max-width: 34rem; color: var(--color-text-muted); }
+.terminology_abbreviation_values { display: grid; gap: .3rem; min-width: 7rem; }
+.terminology_abbreviation_chips { display: flex; flex-wrap: wrap; gap: .25rem; }
+.terminology_abbreviation_chips span {
+  display: inline-block;
+  max-width: 8rem;
+  padding: .14rem .3rem;
+  border: 1px solid color-mix(in srgb, var(--color-highlight) 28%, var(--color-border));
+  border-radius: 999px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-highlight) 8%, var(--color-surface));
+  font-size: .57rem;
+  overflow-wrap: anywhere;
+}
+.terminology_abbreviation_values details summary { cursor: pointer; color: var(--color-text-muted); font-size: .55rem; }
+.terminology_abbreviation_values details ul { margin: .25rem 0 0; padding-left: 1rem; color: var(--color-text-muted); font-size: .58rem; }
+.terminology_definition_values {
+  display: grid;
+  gap: .3rem;
+  max-height: 10rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  line-height: 1.45;
+}
+.terminology_definition_values li { overflow-wrap: anywhere; }
+.terminology_string_values {
+  display: grid;
+  gap: .24rem;
+  min-width: 0;
+  max-height: 10rem;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  color: var(--color-text-muted);
+  font-size: .6rem;
+  line-height: 1.35;
+}
+.terminology_string_values li { overflow-wrap: anywhere; }
+.terminology_reference_cell--string-value .terminology_string_values { color: var(--color-text); font-weight: 550; }
+.terminology_reference_cell--string-sui .terminology_string_values,
+.terminology_reference_cell--string-tty .terminology_string_values { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .55rem; }
+.terminology_unified_strings summary {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  cursor: pointer;
+  color: var(--color-text);
+  white-space: nowrap;
+}
 .terminology_unified_strings summary::marker { color: var(--color-text-muted); }
+.terminology_unified_strings summary strong { color: var(--color-highlight); }
 .terminology_unified_strings ul {
   max-height: 13rem;
   margin: .55rem 0 0;
@@ -143,6 +310,17 @@
 }
 .terminology_unified_strings li + li { margin-top: .2rem; }
 .terminology_empty { text-align: center; color: var(--color-text-muted); padding: 1.3rem !important; }
+.terminology_visually_hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .terminology_notice { padding: .6rem .8rem; border-radius: 6px; font-size: .68rem; }
 .terminology_notice--error { color: #a3261d; background: color-mix(in srgb, #a3261d 8%, var(--color-surface)); border: 1px solid color-mix(in srgb, #a3261d 28%, var(--color-border)); }
 .terminology_abbreviation_count { white-space: nowrap; }

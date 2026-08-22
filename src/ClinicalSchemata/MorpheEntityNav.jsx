@@ -4,23 +4,23 @@ import { DOMAIN_LABELS, MORPHE_OBJECT_MODES } from "./amctoshsMorpheConstants";
 export const MORPHE_MODE_GROUPS = [
   {
     key: "objects",
-    label: "AMCTOSHS Objects",
+    label: "RabbitHole Objects",
     children: MORPHE_OBJECT_MODES.map(({ domain, label }) => [`object:${domain}`, label]),
   },
   {
     key: "3d",
-    label: "AMCTOSHS in 3D",
+    label: "RabbitHole in 3D",
     children: [
-      ["traceSchemas3d", "3D TRACE (sub-instance)", "One 3D trace of an AMCTOSHS object with a value at a specific time."],
+      ["traceSchemas3d", "3D TRACE (sub-instance)", "One 3D trace of an RabbitHole object with a value at a specific time."],
       ["instances", "INSTANCES", "All 3D traces with their values at a specific time."],
     ],
   },
   {
     key: "4d",
-    label: "AMCTOSHS in 4D",
+    label: "RabbitHole in 4D",
     children: [
       ["textRelations", "RELATIONS", "The order of the change in value for each 3D trace of an object."],
-      ["traceSchemas4d", "4D TRACE (sub-schema)", "A thread of relational values of a specific 3D Trace of an AMCTOSHS object at many points of time."],
+      ["traceSchemas4d", "4D TRACE (sub-schema)", "A thread of relational values of a specific 3D Trace of an RabbitHole object at many points of time."],
       ["schemas", "SCHEMATA", "All 4D traces with their values at all points of time."],
     ],
   },
@@ -71,7 +71,7 @@ export default function MorpheEntityNav({
       <div id="mrp_entity_list">
         {objectDomain && (
           objectSchemas.length === 0 ? (
-            <p className="mrp_empty_hint">No saved AMCTOSHS {DOMAIN_LABELS[objectDomain] || objectDomain} objects yet.</p>
+            <p className="mrp_empty_hint">No saved RabbitHole {DOMAIN_LABELS[objectDomain] || objectDomain} objects yet.</p>
           ) : objectSchemas.map((s) => {
             const { instanceCount, traceSchemaCount } = index.schemaCounts(s);
             return (
@@ -94,7 +94,7 @@ export default function MorpheEntityNav({
 
         {activeEntityType === "schemas" && (
           schemas.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS Schemata are saved yet.</p>
+            <p className="mrp_empty_hint">No RabbitHole Schemata are saved yet.</p>
           ) : schemas.map((s) => {
             const { instanceCount, traceSchemaCount } = index.schemaCounts(s);
             return (
@@ -112,7 +112,7 @@ export default function MorpheEntityNav({
 
         {activeEntityType === "instances" && (
           traceInstances3d.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS Instances are saved yet.</p>
+            <p className="mrp_empty_hint">No RabbitHole Instances are saved yet.</p>
           ) : traceInstances3d.map((instance) => (
             <button
               key={instance._id}
@@ -132,7 +132,7 @@ export default function MorpheEntityNav({
 
         {activeEntityType === "traceSchemas4d" && (
           traceSchemas4d.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS 4D Traces are saved yet.</p>
+            <p className="mrp_empty_hint">No RabbitHole 4D Traces are saved yet.</p>
           ) : traceSchemas4d.map((ts) => {
             const { traceInstanceCount } = index.traceSchemaCounts(ts);
             return (
@@ -160,7 +160,7 @@ export default function MorpheEntityNav({
 
         {activeEntityType === "traceSchemas3d" && (
           traceSchemas3d.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS 3D Traces are saved yet.</p>
+            <p className="mrp_empty_hint">No RabbitHole 3D Traces are saved yet.</p>
           ) : traceSchemas3d.map((trace) => (
             <button
               key={trace._id}
@@ -180,7 +180,7 @@ export default function MorpheEntityNav({
         )}
         {activeEntityType === "textRelations" && (
           textRelations.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS Relations saved yet — extract some from AMCTOSHS Segmentation first.</p>
+            <p className="mrp_empty_hint">No RabbitHole Relations saved yet — extract some from RabbitHole Segmentation first.</p>
           ) : textRelations.map((r) => (
             <button
               key={r._id}
@@ -203,7 +203,7 @@ export default function MorpheEntityNav({
 
 export function MorpheEntityTabs({ activeEntityType, onSelectEntityType, counts }) {
   return (
-    <div id="mrp_entity_tabs" role="tablist" aria-label="AMCTOSHS Morphe Mode">
+    <div id="mrp_entity_tabs" role="tablist" aria-label="RabbitHole Morphe Mode">
       {MORPHE_MODE_GROUPS.map((group) => (
         <section key={group.key} className="mrp_mode_group" aria-label={group.label}>
           <div className="mrp_mode_group_title">{group.label}</div>

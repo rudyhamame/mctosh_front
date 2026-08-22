@@ -129,6 +129,7 @@ const GlbViewer = ({ url }) => {
       window.removeEventListener("resize", handleResize);
       controls.dispose();
       renderer.dispose();
+      renderer.forceContextLoss?.();
       scene.traverse((obj) => {
         obj.geometry?.dispose?.();
         const mats = Array.isArray(obj.material) ? obj.material : [obj.material];

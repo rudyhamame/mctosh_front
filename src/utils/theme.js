@@ -2,7 +2,7 @@ export const THEME_STORAGE_KEY = "mctosh_theme";
 export const DEFAULT_THEME = "light";
 
 export const normalizeThemeId = (themeId) => (
-  ["original", "light", "dark"].includes(themeId) ? themeId : DEFAULT_THEME
+  ["original", "light"].includes(themeId) ? themeId : DEFAULT_THEME
 );
 
 export const readStoredTheme = () => {
@@ -16,7 +16,6 @@ export const applyTheme = (themeId, { persist = true } = {}) => {
 
   document.documentElement.classList.remove("theme-light", "theme-dark");
   if (nextTheme === "light") document.documentElement.classList.add("theme-light");
-  if (nextTheme === "dark") document.documentElement.classList.add("theme-dark");
 
   if (persist && typeof localStorage !== "undefined") {
     localStorage.setItem(THEME_STORAGE_KEY, nextTheme);

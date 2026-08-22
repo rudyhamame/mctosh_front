@@ -63,3 +63,40 @@ export const extractPlacedImageRects = (operatorList, viewport, ops) => {
   }
   return rects;
 };
+
+/** Extract axis-aligned ruling segments from PDF.js path operations. */
+export const extractVectorRulingLines = (operatorList, viewport, ops) => {
+  if (!operatorList?.fnArray?.length || !viewport?.transform || !ops) return [];
+  const stack = []; let current = [1, 0, 0, 1, 0, 0]; let pending = [];
+  const lines = [];
+  const paintOps = new Set([ops.stroke, ops.closeStroke, ops.fillStroke, ops.eoFillStroke, ops.closeFillStroke, ops.closeEOFillStroke].filter(Number.isFinite));
+  const emit = () => { lines.push(...pending); pending = []; };
+  for (let index = 0; index < operatorList.fnArray.length; index += 1) {
+    const fn = operatorList.fnArray[index]; const args = operatorList.argsArray[index];
+    if (fn === ops.save) stack.push([...current]);
+    else if (fn === ops.restore) current = stack.pop() || current;
+    else if (fn === ops.transform && args?.length >= 6) current = multiplyMatrices(current, args);
+    else if (fn === ops.paintFormXObjectBegin) { stack.push([...current]); if (args?.[0]?.length >= 6) current = multiplyMatrices(current, args[0]); }
+    else if (fn === ops.paintFormXObjectEnd) current = stack.pop() || current;
+    else if (fn === ops.constructPath) {
+      const pathOps = args?.[0] || []; const coords = args?.[1] || []; let cursor = 0; let point = null;
+      const matrix = multiplyMatrices(viewport.transform, current);
+      const add = (a, b) => {
+        const start = transformPoint(matrix, a.x, a.y); const end = transformPoint(matrix, b.x, b.y);
+        const dx = Math.abs(end.x - start.x); const dy = Math.abs(end.y - start.y);
+        if (Math.max(dx, dy) >= 3 && Math.min(dx, dy) <= Math.max(0.8, Math.max(dx, dy) * 0.015)) pending.push({ x1: start.x, y1: start.y, x2: end.x, y2: end.y, source: "pdfjs-vector-path" });
+      };
+      pathOps.forEach((pathOp) => {
+        if (pathOp === ops.moveTo) { point = { x: Number(coords[cursor]), y: Number(coords[cursor + 1]) }; cursor += 2; }
+        else if (pathOp === ops.lineTo) { const next = { x: Number(coords[cursor]), y: Number(coords[cursor + 1]) }; cursor += 2; if (point) add(point, next); point = next; }
+        else if (pathOp === ops.rectangle) {
+          const x = Number(coords[cursor]); const y = Number(coords[cursor + 1]); const width = Number(coords[cursor + 2]); const height = Number(coords[cursor + 3]); cursor += 4;
+          const corners = [{ x, y }, { x: x + width, y }, { x: x + width, y: y + height }, { x, y: y + height }];
+          corners.forEach((corner, cornerIndex) => add(corner, corners[(cornerIndex + 1) % corners.length])); point = corners[0];
+        } else if ([ops.curveTo, ops.curveTo2, ops.curveTo3].includes(pathOp)) cursor += pathOp === ops.curveTo ? 6 : 4;
+      });
+    } else if (paintOps.has(fn)) emit();
+    else if ([ops.endPath, ops.fill, ops.eoFill].includes(fn)) pending = [];
+  }
+  return lines.sort((left, right) => left.y1 - right.y1 || left.x1 - right.x1 || left.y2 - right.y2 || left.x2 - right.x2);
+};

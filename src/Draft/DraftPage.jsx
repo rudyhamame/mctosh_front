@@ -1416,7 +1416,7 @@ const DraftEditor = ({ id }) => {
       const form = new FormData();
       form.append("pdf", blob, `${title || "Untitled Document"}.pdf`);
       form.append("to", emailTo.trim());
-      form.append("subject", `AMCTOSHS Draft: ${title}`);
+      form.append("subject", `RabbitHole Draft: ${title}`);
       const token = readStoredSession()?.token || "";
       const res = await fetch(apiUrl(`/api/draft/${id}/email`), {
         method: "POST",

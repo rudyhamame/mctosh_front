@@ -218,10 +218,10 @@ const ClinicalVignetteBuilderPanel = ({
       <div id="cvb_body">
         <div className="cvb_notice">
           <i className="bx bx-info-circle" />
-          Generates a clinical vignette by instantiating AMCTOSHS domains — Humans/Societies speak first, the rest stay silent underneath.
+          Generates a clinical vignette by instantiating RabbitHole domains — Humans/Societies speak first, the rest stay silent underneath.
         </div>
 
-        <label className="cvb_label" htmlFor="cvb_goal_domain">AMCTOSHS Domain of Goal</label>
+        <label className="cvb_label" htmlFor="cvb_goal_domain">RabbitHole Domain of Goal</label>
         <select id="cvb_goal_domain" value={goalDomain} onChange={(event) => setGoalDomain(event.target.value)}>
           {GOAL_DOMAINS.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>

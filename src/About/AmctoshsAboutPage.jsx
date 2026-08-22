@@ -3,18 +3,18 @@ import { useNavigate } from "react-router-dom";
 import { useLongPressSelect } from "../utils/longPressSelect";
 import "./amctoshsAboutPage.css";
 
-// AmctoshsAboutPage — a dedicated conceptual page explaining the AMCTOSHS
+// AmctoshsAboutPage — a dedicated conceptual page explaining the RabbitHole
 // model itself: ontic patient, traces, modes of access (patient-as-speakable
-// / patient-as-unspeakable), the AMCTOSHS Entity Schema, 3D instantiation,
+// / patient-as-unspeakable), the RabbitHole Entity Schema, 3D instantiation,
 // Identity, the 4D representational patient, domains, reasoning, the
 // ASK/EXAMINE doctor loop, and the recursive epistemic loop. This is
 // distinct from the existing general About page (About/AboutPage.jsx,
 // still at /about) — that page explains the university-patient/real-patient
-// pedagogical framing; this one is the formal AMCTOSHS ontology/epistemology
-// itself, linked from the Home page's "The AMCTOSHS Model" button.
+// pedagogical framing; this one is the formal RabbitHole ontology/epistemology
+// itself, linked from the Home page's "The RabbitHole Model" button.
 //
 // Every diagram, definition, distinction, and example below is transcribed
-// from the AMCTOSHS model spec verbatim — only the visual presentation
+// from the RabbitHole model spec verbatim — only the visual presentation
 // (boxes/arrows instead of literal monospace ASCII, cards, tables) is new.
 
 // ── Small reusable diagram primitives ───────────────────────────────────
@@ -106,7 +106,7 @@ const Section = ({ id, title, children }) => {
     <section id={id} className="amc_section">
       <div className="amc_section_eyebrow">
         <span className="amc_section_eyebrow_num">{num}</span>
-        <span>AMCTOSHS Model</span>
+        <span>RabbitHole Model</span>
       </div>
       <h2 className="amc_section_heading">{title}</h2>
       {children}
@@ -124,10 +124,10 @@ const SECTIONS = [
   { id: "amc-unspeakable",  label: "Patient-as-Unspeakable" },
   { id: "amc-not-subobj",   label: "Not Subjective/Objective" },
   { id: "amc-medium",       label: "Trace Medium vs Mode of Access" },
-  { id: "amc-schema",       label: "AMCTOSHS Entity Schema" },
-  { id: "amc-3d",           label: "3D AMCTOSHS Instantiation" },
+  { id: "amc-schema",       label: "RabbitHole Entity Schema" },
+  { id: "amc-3d",           label: "3D RabbitHole Instantiation" },
   { id: "amc-identity",     label: "Identity" },
-  { id: "amc-4d",           label: "4D AMCTOSHS" },
+  { id: "amc-4d",           label: "4D RabbitHole" },
   { id: "amc-domains",      label: "Domains" },
   { id: "amc-before",       label: "Representation Before Reasoning" },
   { id: "amc-reasoning",    label: "The Reasoning Layer" },
@@ -190,7 +190,7 @@ const AmctoshsAboutPage = () => {
     <div id="amc_page">
       <div id="amc_header">
         <button id="amc_back_btn" onClick={() => navigate(-1)}>←</button>
-        <span id="amc_header_title">The AMCTOSHS Model</span>
+        <span id="amc_header_title">The RabbitHole Model</span>
         <span id="amc_header_sub">ontic patient · traces · modes of access · 3D/4D representation · reasoning</span>
         <button id="amc_copy_btn" onClick={handleCopy} title="Copy all text">
           {copied ? "Copied ✓" : "Copy"}
@@ -226,18 +226,18 @@ const AmctoshsAboutPage = () => {
               <div id="amc_hero">
                 <div id="amc_hero_eyebrow">A Model, Not a Product Category</div>
                 <h1 id="amc_hero_title">
-                  AMCTOSHS is not the ontic patient.<br />
+                  RabbitHole is not the ontic patient.<br />
                   It is the representational patient through which<br />
                   the ontic patient becomes intelligible.
                 </h1>
                 <p className="amc_lede">
-                  AMCTOSHS is <strong>not simply a medical application, EHR, clinical database,
+                  RabbitHole is <strong>not simply a medical application, EHR, clinical database,
                   or diagnostic AI.</strong> It is a model of a <strong>representational patient</strong>{" "}
                   constructed from traces of an inaccessible <strong>ontic patient</strong>.
                 </p>
                 <p className="amc_lede">
                   Those concepts may overlap technically with parts of its implementation, but
-                  none of them alone define AMCTOSHS. Do not reinterpret AMCTOSHS into a
+                  none of them alone define RabbitHole. Do not reinterpret RabbitHole into a
                   conventional medical informatics model. It is not merely:
                 </p>
                 <ul className="amc_not_list">
@@ -249,7 +249,7 @@ const AmctoshsAboutPage = () => {
                   <li>a clinical decision support system</li>
                 </ul>
 
-                <Diagram title="The AMCTOSHS Architecture">
+                <Diagram title="The RabbitHole Architecture">
                   <Node>ONTIC PATIENT</Node>
                   <ArrowDown label="produces traces" />
                   <Node>MODES OF ACCESS</Node>
@@ -260,15 +260,15 @@ const AmctoshsAboutPage = () => {
                   <ArrowDown />
                   <Node>TRACES BECOME REPRESENTABLE</Node>
                   <ArrowDown />
-                  <Node>INSTANTIATION OF AMCTOSHS ENTITY SCHEMA</Node>
+                  <Node>INSTANTIATION OF RabbitHole ENTITY SCHEMA</Node>
                   <ArrowDown />
                   <Node variant="accent" wide>
-                    AMCTOSHS(t)
+                    RabbitHole(t)
                     <span className="amc_node_sub">= one 3D representational slice of the ontic patient&rsquo;s Identity</span>
                   </Node>
                   <ArrowDown label="multiple temporally ordered instantiations" />
                   <Node variant="accent" wide>
-                    AMCTOSHS(t₁ → tₙ)
+                    RabbitHole(t₁ → tₙ)
                     <span className="amc_node_sub">= 4D representational patient</span>
                   </Node>
                   <ArrowDown />
@@ -295,17 +295,17 @@ const AmctoshsAboutPage = () => {
               <Diagram><Node variant="ghost">Ontic patient ≠ known patient</Node></Diagram>
               <p className="amc_section_body">
                 The ontic patient remains epistemically inaccessible in full. This distinction
-                is <strong>fundamental to AMCTOSHS</strong>.
+                is <strong>fundamental to RabbitHole</strong>.
               </p>
               <Callout>
-                AMCTOSHS must never be presented as though it <em>is</em> the ontic patient.
-                AMCTOSHS is a representation through which we attempt to understand the ontic patient.
+                RabbitHole must never be presented as though it <em>is</em> the ontic patient.
+                RabbitHole is a representation through which we attempt to understand the ontic patient.
               </Callout>
 
               <DefinitionBlock label="Core Epistemological Principle">
                 We cannot reach the ontic patient directly. We can only access traces of the
                 ontic patient. Through modes of access, these traces become the basis for
-                structured representations that instantiate AMCTOSHS. AMCTOSHS is therefore
+                structured representations that instantiate RabbitHole. RabbitHole is therefore
                 the <strong>representational patient</strong> through which we attempt to
                 understand the inaccessible ontic patient.
               </DefinitionBlock>
@@ -363,8 +363,8 @@ const AmctoshsAboutPage = () => {
                 <Node small>Speech / narrative</Node>
                 <ArrowDown label="encountered through a mode of access" />
                 <Node small>Linguistic trace</Node>
-                <ArrowDown label="represented in AMCTOSHS" />
-                <Node variant="accent">AMCTOSHS</Node>
+                <ArrowDown label="represented in RabbitHole" />
+                <Node variant="accent">RabbitHole</Node>
               </Diagram>
 
               <p className="amc_section_body">The patient-as-speakable can provide access to things such as:</p>
@@ -390,7 +390,7 @@ const AmctoshsAboutPage = () => {
   }
 }`}</Code>
               </div>
-              <p className="amc_section_body">AMCTOSHS may then construct a representation such as the one above from the trace on the left.</p>
+              <p className="amc_section_body">RabbitHole may then construct a representation such as the one above from the trace on the left.</p>
 
               <p className="amc_section_body">The distinction must remain explicit:</p>
               <Neq a="utterance" b="representation" c="ontic reality" />
@@ -480,7 +480,7 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>trace available through patient-as-speakable</Node>
                 <ArrowDown />
-                <Node variant="accent">representation in AMCTOSHS</Node>
+                <Node variant="accent">representation in RabbitHole</Node>
               </Diagram>
 
               <p className="amc_section_body">This provides a deeper foundation for the <strong>chief complaint</strong>:</p>
@@ -526,7 +526,7 @@ walking → chest pain`}</Code>
                 <ArrowDown label="encountered through" />
                 <Node small>Mode of access / instrument / examination</Node>
                 <ArrowDown />
-                <Node variant="accent">Representation in AMCTOSHS</Node>
+                <Node variant="accent">Representation in RabbitHole</Node>
               </Diagram>
 
               <div className="amc_code_pair">
@@ -595,7 +595,7 @@ walking → chest pain`}</Code>
                ══════════════════════════════════════════════════════════ */}
             <Section id="amc-medium" title="Trace Medium vs Mode of Access">
               <p className="amc_section_body">
-                AMCTOSHS must distinguish at least two dimensions:
+                RabbitHole must distinguish at least two dimensions:
               </p>
               <div className="amc_code_pair">
                 <div>
@@ -616,24 +616,24 @@ walking → chest pain`}</Code>
             </Section>
 
             {/* ══════════════════════════════════════════════════════════
-                7 — AMCTOSHS Entity Schema
+                7 — RabbitHole Entity Schema
                ══════════════════════════════════════════════════════════ */}
-            <Section id="amc-schema" title="AMCTOSHS Entity Schema">
+            <Section id="amc-schema" title="RabbitHole Entity Schema">
               <p className="amc_section_body">
-                The <strong>AMCTOSHS Entity Schema</strong> is the formal representational schema
+                The <strong>RabbitHole Entity Schema</strong> is the formal representational schema
                 capable of being instantiated from traces.
               </p>
               <p className="amc_section_body">It defines:</p>
               <Callout><strong>how a patient can be represented</strong></Callout>
               <p className="amc_section_body">
-                The AMCTOSHS Entity Schema is not itself a particular patient.
+                The RabbitHole Entity Schema is not itself a particular patient.
               </p>
               <Diagram>
-                <Node wide>AMCTOSHS ENTITY SCHEMA<span className="amc_node_sub">= schema of a representational patient</span></Node>
+                <Node wide>RabbitHole ENTITY SCHEMA<span className="amc_node_sub">= schema of a representational patient</span></Node>
               </Diagram>
               <p className="amc_section_body">A particular instantiation is something conceptually like:</p>
               <Diagram>
-                <Node variant="accent" wide>AMCTOSHS of a particular patient at t₁<span className="amc_node_sub">= concrete instantiation of that schema</span></Node>
+                <Node variant="accent" wide>RabbitHole of a particular patient at t₁<span className="amc_node_sub">= concrete instantiation of that schema</span></Node>
               </Diagram>
               <p className="amc_section_body">
                 The schema provides the formal structure into which representations derived from
@@ -642,13 +642,13 @@ walking → chest pain`}</Code>
             </Section>
 
             {/* ══════════════════════════════════════════════════════════
-                8 — 3D AMCTOSHS Instantiation
+                8 — 3D RabbitHole Instantiation
                ══════════════════════════════════════════════════════════ */}
             <Section id="amc-3d" title="Each Instantiation Is a 3D Slice of the Ontic Patient's Identity">
               <p className="amc_section_body">
                 This is <strong>one of the most important principles of the entire model</strong>.
               </p>
-              <p className="amc_section_body">Each instantiation, AMCTOSHS(t), is a:</p>
+              <p className="amc_section_body">Each instantiation, RabbitHole(t), is a:</p>
               <Callout><strong>3D representational slice of the ontic patient&rsquo;s Identity.</strong></Callout>
               <p className="amc_section_body">It is not the ontic patient itself.</p>
               <p className="amc_section_body">It is not merely &ldquo;data collected at a time.&rdquo;</p>
@@ -660,22 +660,22 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>Modes of access</Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS Entity Schema</Node>
+                <Node small>RabbitHole Entity Schema</Node>
                 <ArrowDown label="instantiate" />
-                <Node variant="accent">AMCTOSHS(t₁)</Node>
+                <Node variant="accent">RabbitHole(t₁)</Node>
                 <ArrowDown />
                 <Node variant="ghost" wide>3D slice of the ontic patient&rsquo;s represented Identity</Node>
               </Diagram>
 
               <p className="amc_section_body">The distinction must remain:</p>
-              <Neq a="Ontic patient" b="AMCTOSHS slice" />
+              <Neq a="Ontic patient" b="RabbitHole slice" />
               <p className="amc_section_body">Rather:</p>
               <Diagram>
                 <Node small>Ontic patient&rsquo;s traces</Node>
                 <ArrowDown label="mode of access" />
                 <Node small>representation of Identity-at-t</Node>
                 <ArrowDown />
-                <Node variant="accent">AMCTOSHS(t)</Node>
+                <Node variant="accent">RabbitHole(t)</Node>
               </Diagram>
             </Section>
 
@@ -684,7 +684,7 @@ walking → chest pain`}</Code>
                ══════════════════════════════════════════════════════════ */}
             <Section id="amc-identity" title="Identity">
               <p className="amc_section_body">
-                Each AMCTOSHS instantiation is specifically a slice of the{" "}
+                Each RabbitHole instantiation is specifically a slice of the{" "}
                 <strong>Identity of the ontic patient</strong>. The concept of Identity is essential.
               </p>
               <p className="amc_section_body">
@@ -695,12 +695,12 @@ walking → chest pain`}</Code>
               <Diagram>
                 <Node variant="accent">Identity</Node>
                 <Branch>
-                  <BranchCol label="t₁ slice"><Node small>AMCTOSHS₁</Node></BranchCol>
-                  <BranchCol label="t₂ slice"><Node small>AMCTOSHS₂</Node></BranchCol>
-                  <BranchCol label="t₃ slice"><Node small>AMCTOSHS₃</Node></BranchCol>
+                  <BranchCol label="t₁ slice"><Node small>RabbitHole₁</Node></BranchCol>
+                  <BranchCol label="t₂ slice"><Node small>RabbitHole₂</Node></BranchCol>
+                  <BranchCol label="t₃ slice"><Node small>RabbitHole₃</Node></BranchCol>
                 </Branch>
                 <ArrowDown />
-                <Node variant="accent" wide>4D AMCTOSHS</Node>
+                <Node variant="accent" wide>4D RabbitHole</Node>
               </Diagram>
 
               <p className="amc_section_body">
@@ -710,37 +710,37 @@ walking → chest pain`}</Code>
             </Section>
 
             {/* ══════════════════════════════════════════════════════════
-                10 — 4D AMCTOSHS (+ the dedicated 3D vs 4D recap)
+                10 — 4D RabbitHole (+ the dedicated 3D vs 4D recap)
                ══════════════════════════════════════════════════════════ */}
-            <Section id="amc-4d" title="The 4D AMCTOSHS">
+            <Section id="amc-4d" title="The 4D RabbitHole">
               <DefinitionBlock label="Core Dimensional Principle">
-                Each instantiation of the AMCTOSHS Entity Schema is a{" "}
+                Each instantiation of the RabbitHole Entity Schema is a{" "}
                 <strong>3D representational slice</strong> of the ontic patient&rsquo;s Identity.
-                The ordered integration of identity-preserving AMCTOSHS instantiations across
-                time constitutes the <strong>4D AMCTOSHS</strong> representation of that patient.
+                The ordered integration of identity-preserving RabbitHole instantiations across
+                time constitutes the <strong>4D RabbitHole</strong> representation of that patient.
               </DefinitionBlock>
 
               <p className="amc_section_body">
-                The full AMCTOSHS representation emerges when multiple 3D instantiations are
+                The full RabbitHole representation emerges when multiple 3D instantiations are
                 related across time:
               </p>
               <Diagram>
-                <Node small>AMCTOSHS(t₁)</Node>
+                <Node small>RabbitHole(t₁)</Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS(t₂)</Node>
+                <Node small>RabbitHole(t₂)</Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS(t₃)</Node>
+                <Node small>RabbitHole(t₃)</Node>
                 <ArrowDown />
                 <Node small>…</Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS(tₙ)</Node>
+                <Node small>RabbitHole(tₙ)</Node>
               </Diagram>
-              <p className="amc_section_body">The result is AMCTOSHS(t₁ → tₙ), which is the:</p>
+              <p className="amc_section_body">The result is RabbitHole(t₁ → tₙ), which is the:</p>
               <Callout><strong>4D representational patient</strong></Callout>
               <p className="amc_section_body">This is not merely a stack of snapshots.</p>
               <p className="amc_section_body">
                 The identity-preserving temporal relationships between these slices produce the
-                4D representation. The 4D AMCTOSHS contains concepts such as:
+                4D representation. The 4D RabbitHole contains concepts such as:
               </p>
               <div className="amc_equation_row">
                 {["state", "persistence", "change", "events", "temporal order", "emergence", "disappearance", "relations among states"].map((t, i, arr) => (
@@ -750,10 +750,10 @@ walking → chest pain`}</Code>
                   </React.Fragment>
                 ))}
                 <span className="amc_eq">=</span>
-                <span className="amc_equation_result">4D AMCTOSHS</span>
+                <span className="amc_equation_result">4D RabbitHole</span>
               </div>
               <p className="amc_section_body">
-                AMCTOSHS therefore represents something closer to a{" "}
+                RabbitHole therefore represents something closer to a{" "}
                 <strong>worldline of patient Identity</strong> than a static medical record.
               </p>
 
@@ -768,18 +768,18 @@ walking → chest pain`}</Code>
               </table>
               <p className="amc_section_body">
                 The second row expresses temporal relations and changing states within the 4D
-                AMCTOSHS. The identity of the represented patient persists through those changes.
+                RabbitHole. The identity of the represented patient persists through those changes.
               </p>
 
               <div className="amc_subheading">3D Versus 4D</div>
               <p className="amc_section_body">
-                <strong>3D</strong> — each AMCTOSHS instantiation, AMCTOSHS(t), represents a{" "}
+                <strong>3D</strong> — each RabbitHole instantiation, RabbitHole(t), represents a{" "}
                 <strong>3D slice of the ontic patient&rsquo;s Identity</strong> — one temporally
                 bounded representational state.
               </p>
               <p className="amc_section_body">
                 <strong>4D</strong> — the temporal integration of identity-linked 3D slices creates
-                AMCTOSHS(t₁ → tₙ), the <strong>4D representational patient</strong>.
+                RabbitHole(t₁ → tₙ), the <strong>4D representational patient</strong>.
               </p>
 
               <div className="amc_timeline">
@@ -788,17 +788,17 @@ walking → chest pain`}</Code>
                     <div className="amc_timeline_step">
                       <div className="amc_timeline_t">{t}</div>
                       <div className="amc_timeline_dot" />
-                      <div className="amc_timeline_node">AMCTOSHS{["₁","₂","₃","₄"][i]}</div>
+                      <div className="amc_timeline_node">RabbitHole{["₁","₂","₃","₄"][i]}</div>
                     </div>
                     {i < 3 && <div className="amc_timeline_line" />}
                   </React.Fragment>
                 ))}
               </div>
               <div className="amc_timeline_brace">
-                <strong>4D AMCTOSHS</strong> — continuity of represented patient Identity
+                <strong>4D RabbitHole</strong> — continuity of represented patient Identity
               </div>
 
-              <Callout>The 4D AMCTOSHS is not merely many snapshots stored together.</Callout>
+              <Callout>The 4D RabbitHole is not merely many snapshots stored together.</Callout>
               <p className="amc_section_body">The slices are related by:</p>
               <ul className="amc_plain_list">
                 {["identity", "temporal order", "state transitions", "persistence", "change", "emergence", "disappearance", "events", "relations"].map((t) => <li key={t}>{t}</li>)}
@@ -808,8 +808,8 @@ walking → chest pain`}</Code>
             {/* ══════════════════════════════════════════════════════════
                 11 — Domains
                ══════════════════════════════════════════════════════════ */}
-            <Section id="amc-domains" title="Domains of AMCTOSHS">
-              <p className="amc_section_body">AMCTOSHS represents the patient across the following domains:</p>
+            <Section id="amc-domains" title="Domains of RabbitHole">
+              <p className="amc_section_body">RabbitHole represents the patient across the following domains:</p>
               <div className="amc_domain_row">
                 {["Atoms", "Molecules", "Cells", "Tissues", "Organs", "Organ Systems"].map((d, i, arr) => (
                   <React.Fragment key={d}>
@@ -847,7 +847,7 @@ walking → chest pain`}</Code>
                 domains.
               </Callout>
               <p className="amc_section_body">
-                The entire AMCTOSHS remains <strong>one representational patient</strong>.
+                The entire RabbitHole remains <strong>one representational patient</strong>.
               </p>
             </Section>
 
@@ -855,11 +855,11 @@ walking → chest pain`}</Code>
                 12 — Representation Before Reasoning
                ══════════════════════════════════════════════════════════ */}
             <Section id="amc-before" title="Representation Comes Before Reasoning">
-              <div className="amc_subheading" style={{ marginTop: 0 }}>AMCTOSHS Is Not a Conventional Medical Record</div>
+              <div className="amc_subheading" style={{ marginTop: 0 }}>RabbitHole Is Not a Conventional Medical Record</div>
               <Callout warn>
                 Do not present the architecture as: history / physical examination / labs /
                 imaging. These are useful clinical workflow categories, but they are not the
-                fundamental epistemological architecture of AMCTOSHS.
+                fundamental epistemological architecture of RabbitHole.
               </Callout>
               <p className="amc_section_body">The deeper architecture is:</p>
               <Diagram>
@@ -875,7 +875,7 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>REPRESENTATIONS</Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS INSTANTIATIONS</Node>
+                <Node small>RabbitHole INSTANTIATIONS</Node>
                 <ArrowDown />
                 <Node small>4D REPRESENTATIONAL PATIENT</Node>
                 <ArrowDown />
@@ -889,7 +889,7 @@ walking → chest pain`}</Code>
 
               <div className="amc_subheading">Representation Comes Before Reasoning</div>
               <p className="amc_section_body">
-                AMCTOSHS is explicitly <strong>not</strong> intended to follow the simplistic architecture:
+                RabbitHole is explicitly <strong>not</strong> intended to follow the simplistic architecture:
               </p>
               <Diagram>
                 <Node small>raw data</Node>
@@ -906,16 +906,16 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>structured representations</Node>
                 <ArrowDown />
-                <Node small>3D AMCTOSHS instantiations</Node>
+                <Node small>3D RabbitHole instantiations</Node>
                 <ArrowDown />
                 <Node small>4D representational patient</Node>
                 <ArrowDown />
-                <Node small>reasoning over AMCTOSHS</Node>
+                <Node small>reasoning over RabbitHole</Node>
                 <ArrowDown />
                 <Node variant="accent">understanding / inference / diagnosis / decision</Node>
               </Diagram>
               <Callout>
-                The <strong>object of reasoning is AMCTOSHS</strong>, not the ontic patient
+                The <strong>object of reasoning is RabbitHole</strong>, not the ontic patient
                 directly. Reasoning therefore occurs over representations. It never claims direct
                 epistemic possession of the ontic patient.
               </Callout>
@@ -955,7 +955,7 @@ walking → chest pain`}</Code>
               </Diagram>
               <p className="amc_section_body">These are different epistemic levels. Do not collapse them into:</p>
               <Callout warn>&ldquo;patient has acute pericarditis&rdquo;</Callout>
-              <p className="amc_section_body">as though AMCTOSHS had direct access to ontic truth. Instead, the representation should preserve the distinction between:</p>
+              <p className="amc_section_body">as though RabbitHole had direct access to ontic truth. Instead, the representation should preserve the distinction between:</p>
               <div className="amc_equation_row">
                 {["trace", "representation", "interpretation", "inference", "hypothesis", "conclusion"].map((t, i, arr) => (
                   <React.Fragment key={t}>
@@ -983,7 +983,7 @@ walking → chest pain`}</Code>
                   <BranchCol><Node small>PATIENT-AS-UNSPEAKABLE</Node><ArrowDown /><Node small>REPRESENTATIONS</Node></BranchCol>
                 </Branch>
                 <ArrowDown />
-                <Node variant="accent">AMCTOSHS</Node>
+                <Node variant="accent">RabbitHole</Node>
                 <ArrowDown />
                 <Node>REASONING</Node>
                 <ArrowDown />
@@ -1001,7 +1001,7 @@ walking → chest pain`}</Code>
                ══════════════════════════════════════════════════════════ */}
             <Section id="amc-ask-examine" title="ASK and EXAMINE Follow the Two Modes of Access">
               <p className="amc_section_body">
-                The older clinical <strong>DOCTOR LOOP</strong> gains a deeper formal basis in AMCTOSHS.
+                The older clinical <strong>DOCTOR LOOP</strong> gains a deeper formal basis in RabbitHole.
               </p>
               <p className="amc_section_body">
                 <strong>ASK</strong> primarily interrogates the patient through patient-as-speakable.
@@ -1041,7 +1041,7 @@ walking → chest pain`}</Code>
               <p className="amc_section_body">
                 Reasoning can identify an information gap. That information gap can determine the
                 next mode of access. Then new traces can be obtained. Those traces can produce new
-                representations. Those representations can instantiate or update AMCTOSHS. Then
+                representations. Those representations can instantiate or update RabbitHole. Then
                 reasoning occurs again.
               </p>
               <Diagram title="The Loop">
@@ -1057,7 +1057,7 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>new representations</Node>
                 <ArrowDown />
-                <Node small>new AMCTOSHS instantiation / update</Node>
+                <Node small>new RabbitHole instantiation / update</Node>
                 <ArrowDown />
                 <Node small>new reasoning</Node>
                 <ArrowDown />
@@ -1114,7 +1114,7 @@ walking → chest pain`}</Code>
                ══════════════════════════════════════════════════════════ */}
             <Section id="amc-distinctions" title="Conceptual Distinctions That Must Never Be Collapsed">
               <div className="amc_neq_grid">
-                <Neq a="Ontic patient" b="AMCTOSHS" />
+                <Neq a="Ontic patient" b="RabbitHole" />
                 <Neq a="Trace" b="Representation" />
                 <Neq a="Representation" b="Ontic reality" />
                 <Neq a="Observation/interpretation" b="Inference" />
@@ -1122,10 +1122,10 @@ walking → chest pain`}</Code>
                 <Neq a="Patient-as-speakable" b="Subjective" />
                 <Neq a="Patient-as-unspeakable" b="Objective" />
                 <Neq a="Trace medium" b="Mode of access" />
-                <Neq a="AMCTOSHS Entity Schema" b="AMCTOSHS instantiation" />
-                <Neq a="3D AMCTOSHS slice" b="4D AMCTOSHS" />
-                <Neq a="AMCTOSHS" b="Electronic Health Record" />
-                <Neq a="Reasoning over AMCTOSHS" b="Direct reasoning over the ontic patient" />
+                <Neq a="RabbitHole Entity Schema" b="RabbitHole instantiation" />
+                <Neq a="3D RabbitHole slice" b="4D RabbitHole" />
+                <Neq a="RabbitHole" b="Electronic Health Record" />
+                <Neq a="Reasoning over RabbitHole" b="Direct reasoning over the ontic patient" />
               </div>
               <Callout>These distinctions are critical to the ontology.</Callout>
             </Section>
@@ -1137,7 +1137,7 @@ walking → chest pain`}</Code>
               <p className="amc_section_body">
                 Every concept and relationship in the model above, in one continuous architecture:
               </p>
-              <Diagram title="Full AMCTOSHS Architecture">
+              <Diagram title="Full RabbitHole Architecture">
                 <Node>ONTIC PATIENT</Node>
                 <ArrowDown label="produces" />
                 <Node small>TRACES</Node>
@@ -1156,19 +1156,19 @@ walking → chest pain`}</Code>
                   </BranchCol>
                 </Branch>
                 <ArrowDown />
-                <Node small>AMCTOSHS ENTITY SCHEMA</Node>
+                <Node small>RabbitHole ENTITY SCHEMA</Node>
                 <ArrowDown label="instantiated" />
-                <Node variant="accent" wide>AMCTOSHS(t₁)<span className="amc_node_sub">3D REPRESENTATIONAL SLICE OF PATIENT IDENTITY</span></Node>
+                <Node variant="accent" wide>RabbitHole(t₁)<span className="amc_node_sub">3D REPRESENTATIONAL SLICE OF PATIENT IDENTITY</span></Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS(t₂)</Node>
+                <Node small>RabbitHole(t₂)</Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS(t₃)</Node>
+                <Node small>RabbitHole(t₃)</Node>
                 <ArrowDown />
                 <Node small>…</Node>
                 <ArrowDown />
-                <Node small>AMCTOSHS(tₙ)</Node>
+                <Node small>RabbitHole(tₙ)</Node>
                 <ArrowDown label="temporal integration + identity persistence" />
-                <Node variant="accent" wide>4D AMCTOSHS INSTANCE<span className="amc_node_sub">REPRESENTATIONAL PATIENT</span></Node>
+                <Node variant="accent" wide>4D RabbitHole INSTANCE<span className="amc_node_sub">REPRESENTATIONAL PATIENT</span></Node>
                 <ArrowDown />
                 <Node>REASONING</Node>
                 <Branch>
@@ -1193,15 +1193,15 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>NEW REPRESENTATIONS</Node>
                 <ArrowDown />
-                <Node small>NEW / UPDATED AMCTOSHS</Node>
+                <Node small>NEW / UPDATED RabbitHole</Node>
                 <div className="amc_loopback">↩ loops back into REASONING, above</div>
               </Diagram>
             </Section>
 
             {/* ══════════════════════════════════════════════════════════
-                19 — What AMCTOSHS is trying to achieve + Core Definition
+                19 — What RabbitHole is trying to achieve + Core Definition
                ══════════════════════════════════════════════════════════ */}
-            <Section id="amc-definition" title="What AMCTOSHS Is Trying to Achieve">
+            <Section id="amc-definition" title="What RabbitHole Is Trying to Achieve">
               <p className="amc_section_body">The goal is not to claim perfect reproduction of reality.</p>
               <Callout>
                 The goal is to construct an increasingly coherent representational patient from traces.
@@ -1213,7 +1213,7 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>representations</Node>
                 <ArrowDown />
-                <Node variant="accent">AMCTOSHS</Node>
+                <Node variant="accent">RabbitHole</Node>
                 <ArrowDown />
                 <Node small>reasoning</Node>
                 <ArrowDown />
@@ -1221,7 +1221,7 @@ walking → chest pain`}</Code>
                 <ArrowDown />
                 <Node small>better representations</Node>
                 <ArrowDown />
-                <Node small>richer AMCTOSHS</Node>
+                <Node small>richer RabbitHole</Node>
                 <ArrowDown />
                 <Node variant="ghost">better understanding</Node>
               </Diagram>
@@ -1231,10 +1231,10 @@ walking → chest pain`}</Code>
               </p>
 
               <div id="amc_closing_definition">
-                <div className="amc_subheading">Core Definition of AMCTOSHS</div>
+                <div className="amc_subheading">Core Definition of RabbitHole</div>
                 <DefinitionBlock label="The Core Current Definition">
-                  AMCTOSHS is a <strong>4D representational patient</strong> constructed by
-                  instantiating the AMCTOSHS Entity Schema into temporally related 3D slices of
+                  RabbitHole is a <strong>4D representational patient</strong> constructed by
+                  instantiating the RabbitHole Entity Schema into temporally related 3D slices of
                   the ontic patient&rsquo;s Identity, using traces of the inaccessible ontic
                   patient obtained through modes of access — patient-as-speakable and
                   patient-as-unspeakable. Reasoning operates on this representational patient to
@@ -1247,15 +1247,15 @@ walking → chest pain`}</Code>
                 <div className="amc_recap_row"><div className="amc_recap_key">Ontology</div><div className="amc_recap_val">There is an ontic patient.</div></div>
                 <div className="amc_recap_row"><div className="amc_recap_key">Epistemology</div><div className="amc_recap_val">The ontic patient cannot be directly reached. Only traces become accessible.</div></div>
                 <div className="amc_recap_row"><div className="amc_recap_key">Access</div><div className="amc_recap_val">Traces are encountered through: patient-as-speakable, patient-as-unspeakable.</div></div>
-                <div className="amc_recap_row"><div className="amc_recap_key">Representation</div><div className="amc_recap_val">Those traces are used to instantiate the AMCTOSHS Entity Schema.</div></div>
+                <div className="amc_recap_row"><div className="amc_recap_key">Representation</div><div className="amc_recap_val">Those traces are used to instantiate the RabbitHole Entity Schema.</div></div>
                 <div className="amc_recap_row"><div className="amc_recap_key">3D</div><div className="amc_recap_val">Each instantiation is a 3D representational slice of the ontic patient&rsquo;s Identity.</div></div>
-                <div className="amc_recap_row"><div className="amc_recap_key">4D</div><div className="amc_recap_val">Identity-linked, temporally ordered 3D instantiations constitute the 4D AMCTOSHS representational patient.</div></div>
-                <div className="amc_recap_row"><div className="amc_recap_key">Reasoning</div><div className="amc_recap_val">Reasoning operates on AMCTOSHS — not directly on the ontic patient — to progressively improve our understanding of the ontic patient.</div></div>
-                <div className="amc_recap_row"><div className="amc_recap_key">Recursion</div><div className="amc_recap_val">Reasoning identifies what needs to be accessed next, producing new traces, new representations, and an increasingly developed AMCTOSHS.</div></div>
+                <div className="amc_recap_row"><div className="amc_recap_key">4D</div><div className="amc_recap_val">Identity-linked, temporally ordered 3D instantiations constitute the 4D RabbitHole representational patient.</div></div>
+                <div className="amc_recap_row"><div className="amc_recap_key">Reasoning</div><div className="amc_recap_val">Reasoning operates on RabbitHole — not directly on the ontic patient — to progressively improve our understanding of the ontic patient.</div></div>
+                <div className="amc_recap_row"><div className="amc_recap_key">Recursion</div><div className="amc_recap_val">Reasoning identifies what needs to be accessed next, producing new traces, new representations, and an increasingly developed RabbitHole.</div></div>
               </div>
 
               <p id="amc_footer_tag">
-                AMCTOSHS is not the ontic patient. It is the representational patient through
+                RabbitHole is not the ontic patient. It is the representational patient through
                 which the ontic patient becomes intelligible.
               </p>
             </Section>

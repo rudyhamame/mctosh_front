@@ -3,79 +3,83 @@ import { isBBoxType } from "./pdfBBoxTypes.js";
 
 const isClosedBBoxPath = (ann) => ann?.closed !== false;
 
-// The highlight tool shares its color palette with every other annotation
-// tool (ANNOT_COLORS in PDFPage.jsx), which includes near-black and other
-// dark hues — fine for pen/text ink, but multiplied (mix-blend-mode) over
-// already-dark PDF text at anything above default opacity, a dark pick
-// darkens the text toward unreadable instead of "highlighting" it. Real
-// highlighter markers don't have this problem because a marker literally
-// can't be darker than translucent-pastel; clamp lightness the same way
-// so any color choice stays legible, keeping the picked hue.
-const hexToHsl = (hex) => {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  let h = 0;
-  let s = 0;
-  const l = (max + min) / 2;
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
-    else if (max === g) h = (b - r) / d + 2;
-    else h = (r - g) / d + 4;
-    h /= 6;
+const svgNumber = (value) => Number(value.toFixed(3));
+const closedSvgPath = (points) => {
+  if (!Array.isArray(points) || points.length < 3) return "";
+  let path = `M ${svgNumber(points[0][0])} ${svgNumber(points[0][1])}`;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    path += ` Q ${svgNumber(current[0])} ${svgNumber(current[1])} ${svgNumber((current[0] + next[0]) / 2)} ${svgNumber((current[1] + next[1]) / 2)}`;
   }
-  return { h, s, l };
+  return `${path} Z`;
 };
-const hue2rgb = (p, q, t) => {
-  let tt = t;
-  if (tt < 0) tt += 1;
-  if (tt > 1) tt -= 1;
-  if (tt < 1 / 6) return p + (q - p) * 6 * tt;
-  if (tt < 1 / 2) return q;
-  if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
-  return p;
-};
-const hslToRgb = (h, s, l) => {
-  if (s === 0) {
-    const v = Math.round(l * 255);
-    return { r: v, g: v, b: v };
+
+// Returns a genuine vector outline in annotation/document coordinates. The
+// same persisted point data can therefore scale with the PDF without being
+// enlarged as canvas pixels.
+export const getPenAnnotationSvgPath = (ann) => {
+  const points = Array.isArray(ann?.points) ? ann.points : [];
+  if (ann?.type !== "pen" || points.length < 2) return "";
+  const settings = ann.penSettings || {};
+  const penType = ann.penType || "ball";
+  const baseWidth = Math.max(0.05, Number(ann.lineWidth) || 2);
+  const flow = Math.min(1, Math.max(0, (settings.flow ?? 38) / 100));
+  const taper = Math.min(1, Math.max(0, (settings.taper ?? 72) / 100));
+
+  if (penType !== "fountain") {
+    const size = baseWidth * (0.72 + (1.18 - 0.72) * flow);
+    const outline = getStroke(points.map((point) => ({
+      x: point.x,
+      y: point.y,
+      pressure: Math.min(1, Math.max(0.02, point.pressure ?? 0.5)),
+    })), {
+      size,
+      thinning: 0.72,
+      smoothing: 0.32,
+      streamline: 0.22,
+      simulatePressure: false,
+      last: true,
+      start: { taper: size * (0.6 + taper * 6), cap: false },
+      end: { taper: size * (0.6 + taper * 6), cap: false },
+    });
+    return closedSvgPath(outline);
   }
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  return {
-    r: Math.round(hue2rgb(p, q, h + 1 / 3) * 255),
-    g: Math.round(hue2rgb(p, q, h) * 255),
-    b: Math.round(hue2rgb(p, q, h - 1 / 3) * 255),
-  };
-};
-const HIGHLIGHT_MIN_LIGHTNESS = 0.55;
-// Returns both a usable CSS color and its {r,g,b} — the safe (lightness-
-// clamped) version of a picked color, used both to paint the highlight
-// itself and (via relativeLuminance below) to decide whether masked text
-// drawn on top of it should be black or white.
-const highlightSafeColorRgb = (hex) => {
-  if (typeof hex !== "string" || !/^#[0-9a-f]{6}$/i.test(hex)) return { r: 255, g: 224, b: 102 };
-  const { h, s, l } = hexToHsl(hex);
-  if (l >= HIGHLIGHT_MIN_LIGHTNESS) {
-    return { r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16) };
+
+  const left = [];
+  const right = [];
+  const nibAngle = ((settings.nibAngle ?? 35) * Math.PI) / 180;
+  const nibSpread = Math.min(1, Math.max(0, (settings.nibSpread ?? 68) / 100));
+  const flowBoost = 1 + flow * 0.34;
+  const count = points.length;
+  for (let index = 0; index < count; index += 1) {
+    const point = points[index];
+    const previous = points[Math.max(0, index - 1)];
+    const next = points[Math.min(count - 1, index + 1)];
+    const source = index > 0 ? previous : point;
+    const dt = Math.max(1, Math.abs((point.t ?? 0) - (source.t ?? 0)));
+    const velocity = Math.hypot(point.x - source.x, point.y - source.y) / dt;
+    const pressure = Math.min(1, Math.max(0, point.pressure ?? 0.5));
+    const hasPressure = pressure > 0.01 && pressure < 0.99;
+    const edge = Math.sin((index / Math.max(1, count - 1)) * Math.PI);
+    const edgeTaper = (0.1 + (1 - taper) * 0.28) + (1 - (0.1 + (1 - taper) * 0.28)) * Math.pow(edge, 0.7 + taper * 0.9);
+    const strokeAngle = Math.atan2(point.y - source.y, point.x - source.x);
+    const broadness = Math.abs(Math.sin(strokeAngle - nibAngle));
+    const nibBoost = 0.78 + (1 + nibSpread * 0.72 - 0.78) * broadness;
+    const pressureFactor = hasPressure ? 0.72 + (1.9 - 0.72) * Math.pow(pressure, 0.8) : 1;
+    const velocityFactor = hasPressure ? Math.max(0.86, 1.08 - velocity * 0.55) : Math.max(0.5, 1.38 - velocity * 2.8);
+    const width = Math.max(0.05, baseWidth * pressureFactor * velocityFactor * edgeTaper * flowBoost * nibBoost);
+    let dx = next.x - previous.x;
+    let dy = next.y - previous.y;
+    const length = Math.hypot(dx, dy) || 1;
+    dx /= length;
+    dy /= length;
+    const half = width / 2;
+    left.push([point.x - dy * half, point.y + dx * half]);
+    right.push([point.x + dy * half, point.y - dx * half]);
   }
-  return hslToRgb(h, s, HIGHLIGHT_MIN_LIGHTNESS);
+  return closedSvgPath([...left, ...right.reverse()]);
 };
-const rgbToCss = ({ r, g, b }) => `rgb(${r}, ${g}, ${b})`;
-const highlightSafeColor = (hex) => rgbToCss(highlightSafeColorRgb(hex));
-// WCAG relative luminance → pick whichever of black/white ink reads better
-// against the (already-lightened, so usually bright) highlight color.
-const relativeLuminance = ({ r, g, b }) => {
-  const toLinear = (c) => {
-    const cs = c / 255;
-    return cs <= 0.03928 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
-};
-const contrastInkFor = (hex) => (relativeLuminance(highlightSafeColorRgb(hex)) > 0.42 ? "#000000" : "#ffffff");
 
 export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
   const s  = scale;
@@ -201,10 +205,11 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     if (!points || points.length < 2) return;
     const ribbon = buildStrokeRibbon(points, baseWidth, penType, settings);
     if (!ribbon) return;
-    const flowLevel = clamp((settings?.flow ?? 38) / 100, 0, 1);
     ctx.save();
     traceRibbonPath(ribbon.left, ribbon.right);
-    ctx.globalAlpha = (penType === "fountain" ? 0.82 : 0.88) + flowLevel * 0.15;
+    // Pen ink is always solid. Flow may shape the stroke width, but it must
+    // never fade the selected color or make the stroke translucent.
+    ctx.globalAlpha = 1;
     ctx.fill();
     ctx.restore();
   };
@@ -263,7 +268,7 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     if (!outline.length) return;
     ctx.save();
     traceStrokeOutline(outline);
-    ctx.globalAlpha = 0.82 + flowLevel * 0.17;
+    ctx.globalAlpha = 1;
     ctx.fill();
     ctx.restore();
   };
@@ -308,29 +313,85 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     if (!ann.points || ann.points.length < 2) return;
     const width = visibleWidth((ann.lineWidth || 16) * s, 3.25);
     const opacity = ann.opacity ?? 0.35;
-    const body = clamp((ann.highlightSettings?.body ?? 58) / 100, 0, 1);
-    const lowZoomBoost = clamp((1 - s) * 0.4, 0, 0.22);
     const previousLineCap = ctx.lineCap;
-    const previousComposite = ctx.globalCompositeOperation;
     const previousStrokeStyle = ctx.strokeStyle;
     ctx.lineCap = ann.mode === "line" && ann.taperEnds === false ? "butt" : "round";
     ctx.lineJoin = "round";
-    ctx.globalCompositeOperation = "multiply";
-    // This function only ever runs when there's no maskedText (see the
-    // "highlight" case in drawAnnotation below — it's skipped entirely
-    // when masked text exists, since drawMaskedHighlightText draws its
-    // own band + text instead). On reconstructed surfaces such as MD there
-    // is no PDF text mask, so clamp the selected color when Auto Contrast is on.
-    ctx.strokeStyle = ann.autoContrast ? highlightSafeColor(ann.color) : ann.color;
-
-    // Single main highlight body only.
-    if (drawHighlightPath(ann.points, ann.mode)) {
-      ctx.globalAlpha = Math.min(0.96, opacity * (0.68 + body * 0.22 + lowZoomBoost));
-      ctx.lineWidth = visibleWidth(width, 3.6);
+    const drawStableFlatStroke = () => {
+      if (ann.mode === "line" || typeof ann.highlightOrientation !== "number" || ann.points.length < 2) return false;
+      // Use a true 2D centerline stroke. Its width is constant in the page
+      // plane, so vertical drift changes only the path, never the apparent
+      // thickness or the perspective of the marker.
+      if (!drawHighlightPath(ann.points, ann.mode)) return false;
+      ctx.save();
+      ctx.lineWidth = width;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.globalCompositeOperation = "source-over";
+      ctx.globalAlpha = Math.min(1, Math.max(0, opacity));
+      ctx.strokeStyle = ann.color || "#ffff00";
       ctx.stroke();
+      ctx.restore();
+      return true;
+    };
+    // The covered glyphs are painted separately above this stroke.
+    // Render the highlight as one filled outline (not repeated strokes)
+    // to avoid local overdraw at sampled points. Use perfect-freehand to
+    // build a genuine polygon outline and fill it once with a single
+    // global alpha and a multiply blend so page ink remains readable.
+    try {
+      if (drawStableFlatStroke()) {
+        ctx.lineCap = previousLineCap;
+        ctx.strokeStyle = previousStrokeStyle;
+        return;
+      }
+      const strokePoints = ann.points.map((pt) => ({ x: p(pt.x), y: p(pt.y), pressure: clamp(pt.pressure ?? 0.5, 0.02, 1) }));
+      const outlineSize = visibleWidth(width, 3.6);
+      const outline = getStroke(strokePoints, {
+        size: outlineSize,
+        thinning: 0.1,
+        smoothing: 0.2,
+        streamline: 0.15,
+        simulatePressure: false,
+        last: true,
+        start: { taper: 0, cap: false },
+        end: { taper: 0, cap: false },
+      });
+      if (outline && outline.length) {
+        ctx.save();
+        // Use normal/source-over compositing and an RGBA fill so the
+        // annotation's alpha is applied uniformly to the final shape
+        // (avoids per-sample compounding). This produces a natural
+        // translucent highlighter effect where underlying text remains
+        // readable.
+        // Keep canvas-level multiply blend so markers interact with page ink.
+        // Use source-over when drawing the fill onto this canvas, but
+        // apply the stroke opacity via globalAlpha so overlapping samples
+        // don't compound inside the single filled geometry.
+        ctx.globalCompositeOperation = "source-over";
+        traceStrokeOutline(outline);
+        // Opacity is a direct user-facing percentage: 0% is invisible and
+        // 100% is fully opaque. The multiply blend keeps printed glyphs
+        // readable underneath even at the maximum.
+        const finalAlpha = Math.min(1, Math.max(0, opacity));
+        ctx.globalAlpha = finalAlpha;
+        ctx.fillStyle = ann.color || "#ffff00";
+        ctx.fill();
+        ctx.restore();
+      }
+    } catch (e) {
+      // Fallback to stroking path if perfect-freehand fails for any reason.
+      ctx.save();
+      ctx.globalCompositeOperation = "multiply";
+      ctx.strokeStyle = ann.color;
+      if (drawHighlightPath(ann.points, ann.mode)) {
+        ctx.globalAlpha = Math.min(1, Math.max(0, opacity));
+        ctx.lineWidth = visibleWidth(width, 3.6);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
 
-    ctx.globalCompositeOperation = previousComposite;
     ctx.lineCap = previousLineCap;
     ctx.strokeStyle = previousStrokeStyle;
   };
@@ -420,15 +481,10 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
 
   switch (ann.type) {
     case "highlight": {
-      // The masked/recolored text (drawMaskedHighlightText, drawn on the
-      // separate #pdf_mask_canvas above this one) already paints its own
-      // opaque band wherever it covers text — drawing the original
-      // translucent band here too just shows through at the edges where
-      // the two don't pixel-perfectly line up, reading as a mismatched
-      // "double highlight" halo. Skip it whenever there's masked text;
-      // annotations with none (e.g. highlighting blank space) still get
-      // the normal translucent band as their only visual.
-      if (!Array.isArray(ann.maskedText) || !ann.maskedText.length) drawExpressiveHighlight(ann);
+      // Draw the marker stroke on the blended annotation canvas. Masked
+      // glyphs are painted separately above it, so the stroke stays behind
+      // the text instead of washing it out.
+      drawExpressiveHighlight(ann);
       break;
     }
     case "underline":
@@ -641,69 +697,5 @@ export const drawAnnotation = (ctx, ann, scale = 1, appearanceScale = 1) => {
     ctx.restore();
   }
 
-  ctx.restore();
-};
-
-// Renders on a SEPARATE, non-multiply-blended canvas (#pdf_mask_canvas,
-// stacked above #pdf_annot_canvas — see PDFPage.jsx's own render effect).
-// #pdf_annot_canvas has mix-blend-mode:multiply applied via CSS to the
-// whole element, so it composites against the PDF page canvas beneath it
-// no matter what globalCompositeOperation is used for an individual draw
-// call inside it — an "opaque" fill drawn there still gets multiplied
-// against whatever's underneath, so a dark original glyph keeps showing
-// through instead of being replaced. Only a canvas with normal (source-
-// over) element-level blending can actually hide/replace content below
-// it, hence the separate layer.
-export const drawMaskedHighlightText = (ctx, ann, scale = 1) => {
-  if (!Array.isArray(ann.maskedText) || !ann.maskedText.length) return;
-  const s = scale;
-  const p = (v) => v * s;
-  const inkColor = contrastInkFor(ann.color);
-  const fillColor = highlightSafeColor(ann.color);
-
-  // Group into visual lines (same "within half a span's own height"
-  // tolerance PDFPage.jsx's findSpansOverlappingHighlight uses) and fill
-  // ONE merged rect per line, from the leftmost to the rightmost masked
-  // word — a separate opaque fillRect per word (previous version) left a
-  // gap at every word boundary, reading as disconnected blocks instead of
-  // the one continuous band the highlight ink itself already is.
-  const sorted = [...ann.maskedText].sort((a, b) => a.y - b.y || a.x - b.x);
-  const lines = [];
-  for (const t of sorted) {
-    const centerY = t.y + t.height / 2;
-    let line = lines.find((l) => Math.abs(l.centerY - centerY) < Math.max(t.height, l.height) * 0.5);
-    if (!line) {
-      line = { centerY, height: t.height, items: [] };
-      lines.push(line);
-    }
-    line.items.push(t);
-  }
-
-  ctx.save();
-  ctx.globalAlpha = 1;
-  ctx.globalCompositeOperation = "source-over";
-  ctx.textBaseline = "alphabetic";
-  ctx.textAlign = "left";
-  for (const line of lines) {
-    const left = Math.min(...line.items.map((t) => t.x));
-    const right = Math.max(...line.items.map((t) => t.x + t.width));
-    const top = Math.min(...line.items.map((t) => t.y));
-    const bottom = Math.max(...line.items.map((t) => t.y + t.height));
-    ctx.fillStyle = fillColor;
-    ctx.fillRect(p(left), p(top), p(right - left), p(bottom - top));
-    for (const t of line.items) {
-      // Span boxes are top-anchored at baseline - fontSize*0.8 with
-      // height === fontSize (see the text-layer build effect in
-      // PDFPage.jsx), so the baseline sits at top + 0.8*height.
-      // fontFamily is pdf.js's own generic classification of the PDF's
-      // real (often embedded/subset) font — serif/sans-serif/monospace,
-      // not the exact typeface, but a real match for the original's
-      // general look rather than an always-sans-serif guess.
-      const fontFamily = t.fontFamily || "sans-serif";
-      ctx.font = `${t.fontStyle || "normal"} ${t.fontWeight || "normal"} ${Math.max(8, t.fontSize * s)}px ${fontFamily.includes(" ") ? `"${fontFamily}"` : fontFamily}`;
-      ctx.fillStyle = inkColor;
-      ctx.fillText(t.text, p(t.x), p(t.y) + p(t.height) * 0.8);
-    }
-  }
   ctx.restore();
 };

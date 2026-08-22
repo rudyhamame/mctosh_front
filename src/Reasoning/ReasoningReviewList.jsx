@@ -104,7 +104,7 @@ export default function ReasoningReviewList({ extraction, busy, onDecide, onSave
   return (
     <div id="mrv_root">
       <div id="mrv_head">
-        <span className="mrp_panel_label">Review AMCTOSHS Reasoning Proposal</span>
+        <span className="mrp_panel_label">Review RabbitHole Reasoning Proposal</span>
         {extraction.validation?.warnings?.length > 0 && (
           <span className="mrv_warning_count" title={extraction.validation.warnings.join("\n")}>
             <i className="bx bx-error" /> {extraction.validation.warnings.length} warning{extraction.validation.warnings.length !== 1 ? "s" : ""}

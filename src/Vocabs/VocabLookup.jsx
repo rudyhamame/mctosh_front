@@ -148,7 +148,7 @@ const VocabLookup = ({ compact = false, onSaved }) => {
       {result && result.dictionaryResponseType !== "suggestions" && !candidates.length && <article className="vocabs_result" aria-live="polite">
         <div className="vocabs_result_heading">
           <div><span>Saved term</span><h3>{result.word}</h3>{result.translation && <small>{targetLanguage}: {result.translation}</small>}</div>
-          <div className="vocabs_result_meta"><small>{result.sourceLabel || "AMCTOSHS Vocabs"}</small><span className="vocabs_saved_badge"><i className="fi fi-rr-check" /> Saved</span></div>
+          <div className="vocabs_result_meta"><small>{result.sourceLabel || "RabbitHole Vocabs"}</small><span className="vocabs_saved_badge"><i className="fi fi-rr-check" /> Saved</span></div>
         </div>
         {result.phonetic && <div className="vocabs_phonetic">/{result.phonetic.replace(/^\/+|\/+$/g, "")}/</div>}
         <div className="vocabs_definitions">{(result.definitions || []).map((definition, index) => <div key={`${definition.definition}-${index}`}><b>{String(index + 1).padStart(2, "0")}</b><p>{definition.definition}</p></div>)}</div>

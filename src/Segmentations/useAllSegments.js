@@ -4,7 +4,7 @@ import { readStoredSession } from "../utils/sessionCleanup";
 import { buildHyleBBoxIdMap } from "../PDF/pdfBBoxTypes";
 
 // useAllSegments — the reservoir fetch + flatten logic originally inline
-// in SegmentationsPage.jsx, extracted so AMCTOSHS Morphe's own segment
+// in SegmentationsPage.jsx, extracted so RabbitHole Morphe's own segment
 // picker (ClinicalSchemata.jsx) can list/select the exact same segments
 // without duplicating this ~40-line fetch. Behavior-preserving extraction:
 // same endpoints, same shape, same container-name resolution.

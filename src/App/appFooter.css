@@ -40,16 +40,115 @@
   display: flex;
   align-items: center;
   padding: 0 1rem;
-  background: var(--color-surface);
-  border-top: 1px solid var(--color-border);
-  z-index: 950;
+  /* Keep the footer visually above panels, drawers, and page content that
+     meet its lower edge. */
+  z-index: 10000;
+  transform: translateZ(0);
 }
 
 #app_footer { --app-base-footer-height: 44px; }
 
-body.podcast_footer_theme #app_footer {
-  background: linear-gradient(180deg, rgba(92, 198, 147, 0.3), rgba(54, 152, 103, 0.18)), #ffffff;
-  border-top: 1px solid rgba(46, 125, 90, 0.26);
+
+#app_footer_services {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.42rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+#app_footer_services::-webkit-scrollbar { display: none; }
+
+.app_footer_service {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+  color: var(--color-text-muted);
+  font-size: 0.58rem;
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.app_footer_service i {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: #9aa0aa;
+}
+
+.app_footer_service--online i {
+  background: #3fbd75;
+  box-shadow: 0 0 0 2px color-mix(in srgb, #3fbd75 17%, transparent);
+  animation: app-footer-service-live 1.8s ease-in-out infinite;
+}
+
+.app_footer_service--offline { color: #a84a4a; }
+.app_footer_service--offline i { background: #cf5959; }
+
+.app_footer_service--ready i {
+  background: #51cf66;
+  box-shadow: 0 0 0 2px rgba(81, 207, 102, 0.14);
+  animation: none;
+}
+
+.app_footer_service--working {
+  color: var(--footer-ink, var(--color-text));
+}
+
+.app_footer_service--working i {
+  background: #51cf66;
+  box-shadow: 0 0 0 2px rgba(81, 207, 102, 0.14);
+  animation: app-footer-service-live 0.9s ease-in-out infinite;
+}
+
+.app_footer_service--broken {
+  color: #ffb0b0;
+}
+
+.app_footer_service--broken i {
+  background: #ff6b6b;
+  box-shadow: 0 0 0 2px rgba(255, 107, 107, 0.14);
+  animation: none;
+}
+
+.app_footer_service small {
+  font-size: 0.48rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.app_footer_service--busy {
+  color: var(--footer-ink, var(--color-text));
+  animation: app-footer-service-busy 0.72s steps(2, jump-none) infinite;
+}
+
+.app_footer_service--busy i {
+  background: #e2a62b;
+}
+
+.app_footer_ai_service {
+  max-width: min(34rem, 42vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes app-footer-service-live {
+  0%, 100% { opacity: 0.68; }
+  50% { opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, #3fbd75 11%, transparent); }
+}
+
+@keyframes app-footer-service-busy {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.28; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app_footer_service--busy { animation: none; }
 }
 
 #app_footer_end {
@@ -57,4 +156,136 @@ body.podcast_footer_theme #app_footer {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* Rabbit Hole editorial footer. The footer sits outside #app_home_view, so
+   it owns the same paper/ink tokens instead of relying on page inheritance. */
+#app_footer {
+  --footer-paper: rgba(7, 25, 34, 0.42);
+  --footer-paper-alt: rgba(37, 91, 106, 0.34);
+  --footer-ink: #e5f0ef;
+  --footer-muted: #a9c0c2;
+  --footer-rule: rgba(151, 211, 218, 0.24);
+  isolation: isolate;
+  color: var(--footer-ink);
+  font-family: inherit;
+}
+
+html.theme-disabled-dark #app_footer {
+  --footer-paper: rgba(7, 25, 34, 0.42);
+  --footer-paper-alt: rgba(37, 91, 106, 0.34);
+  --footer-ink: #e5f0ef;
+  --footer-muted: #a9c0c2;
+  --footer-rule: rgba(151, 211, 218, 0.24);
+}
+
+body.podcast_footer_theme #app_footer {
+  border-top-color: var(--footer-ink);
+  background: var(--footer-paper);
+}
+
+#app_footer::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  display: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.1'/%3E%3C/svg%3E");
+  mix-blend-mode: multiply;
+}
+
+
+#app_footer_services { gap: 0.35rem; }
+
+.app_footer_service {
+  position: relative;
+  min-height: 1.7rem;
+  padding: 0 0.7rem;
+  gap: 0.38rem;
+  overflow: hidden;
+  border: 1px solid var(--footer-rule);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--footer-paper-alt) 82%, transparent);
+  box-shadow: none;
+  color: var(--footer-muted);
+  font-size: 0.54rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease;
+}
+
+.app_footer_service::before {
+  content: none;
+}
+
+.app_footer_service:hover {
+  transform: none;
+  border-color: color-mix(in srgb, var(--footer-ink) 28%, var(--footer-rule));
+  background: color-mix(in srgb, var(--footer-paper-alt) 88%, transparent);
+  box-shadow: none;
+}
+
+.app_footer_service i {
+  width: 0.34rem;
+  height: 0.34rem;
+  border-radius: 50%;
+  box-shadow: none;
+}
+
+.app_footer_service--online i,
+.app_footer_service--online i:hover {
+  box-shadow: none;
+  animation: none;
+}
+
+#app_footer_end { gap: 0.35rem; }
+
+#app_footer_end button:not(.vk_toggle),
+#app_footer #split_view_btn,
+#app_footer #home_chat_fab,
+#app_footer #app_footer_end #pdf_ai_assistant_fab,
+#app_footer .vocabs_footer_button,
+#app_footer .translator_footer_button,
+#app_footer .podcast_footer_mini_action {
+  width: 30px;
+  height: 30px;
+  box-sizing: border-box;
+  border: 1px solid var(--footer-rule);
+  border-radius: 10px;
+  background: rgba(37, 91, 106, 0.24);
+  color: var(--footer-muted);
+  box-shadow: none;
+  font-family: "Courier New", Courier, monospace;
+  transform: none;
+}
+
+#app_footer_end button:not(.vk_toggle):hover:not(:disabled),
+#app_footer_end button:not(.vk_toggle):focus-visible,
+#app_footer #split_view_btn.split_view_btn--active,
+#app_footer #home_chat_fab.home_chat_fab--open,
+#app_footer #app_footer_end #pdf_ai_assistant_fab.pdf_ai_assistant_fab--active,
+#app_footer .vocabs_footer_button--active,
+#app_footer .translator_footer_button--active {
+  border-color: var(--footer-ink);
+  background: var(--footer-ink);
+  color: var(--footer-paper);
+  outline: none;
+  transform: none;
+}
+
+#app_footer_end button:not(.vk_toggle):focus-visible {
+  box-shadow: inset 0 0 0 2px var(--footer-paper), 0 0 0 1px var(--footer-ink);
+}
+
+.podcast_footer_mini_player,
+.podcast_footer_mini_title,
+.podcast_footer_mini_time { color: var(--footer-ink); font-family: "Courier New", Courier, monospace; }
+.podcast_footer_mini_icon { border-radius: 10px; background: var(--footer-paper-alt); color: var(--footer-ink); }
+
+@media (max-width: 640px) {
+  #app_footer { padding-inline: max(0.55rem, env(safe-area-inset-left)); }
+  .app_footer_service { padding-inline: 0.4rem; letter-spacing: 0.04em; }
+  #app_footer_end { gap: 0.22rem; }
 }

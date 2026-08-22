@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useCallback, useLayoutEffect, useState } from "react";
+import React, { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import {
   BrowserRouter as Router,
   Navigate,
@@ -11,12 +11,12 @@ import { AvatarProviderContextProvider } from "./Avatar/AvatarProviderContext";
 import { clearStoredSession, readStoredSession } from "./utils/sessionCleanup";
 import { clearStoredPatientSession, readStoredPatientSession } from "./utils/patientSessionCleanup";
 import { applyStoredTheme } from "./utils/theme";
-import VirtualKeyboard from "./Shared/VirtualKeyboard";
 import SourceBackgroundTaskIndicator from "./Sources/SourceBackgroundTaskIndicator";
-import AppFooter from "./App/AppFooter";
-import VocabsFooter from "./App/VocabsFooter";
-import { PodcastPlayerFooter, PodcastPlayerProvider } from "./Podcast/PodcastPlayerContext";
-import { PDFTextAssistantFooter, PDFTextAssistantProvider } from "./PDF/PDFTextAssistantContext";
+import { PodcastPlayerProvider } from "./Podcast/PodcastPlayerContext";
+import { PDFTextAssistantProvider } from "./PDF/PDFTextAssistantContext";
+import { GraphicsSettingsRuntime } from "./Settings/graphicsSettings";
+import GlobalSelectMenu from "./Shared/GlobalSelectMenu";
+import BlackHoleLoginTransition from "./Login/BlackHoleLoginTransition";
 
 const App = lazy(() => import("./App/App"));
 const Login = lazy(() => import("./Login/Login"));
@@ -30,6 +30,7 @@ const CardPage = lazy(() => import("./Card/CardPage"));
 const PhenomenaPage = lazy(() => import("./Phenomena/PhenomenaPage"));
 const AboutPage = lazy(() => import("./About/AboutPage"));
 const AmctoshsAboutPage = lazy(() => import("./About/AmctoshsAboutPage"));
+const MetaPatientNoumenaAboutPage = lazy(() => import("./About/MetaPatientNoumenaAboutPage"));
 const PortfolioPage = lazy(() => import("./Portfolio/PortfolioPage"));
 const HylomorphismPage = lazy(() => import("./Hylomorphism/HylomorphismPage"));
 const SourcesPage = lazy(() => import("./Sources/SourcesPage"));
@@ -40,7 +41,6 @@ const SettingsPage = lazy(() => import("./Settings/SettingsPage"));
 const VoiceProfilePage = lazy(() => import("./VoiceProfile/VoiceProfilePage"));
 const PatientInstantiationPage = lazy(() => import("./PatientInstantiation/PatientInstantiationPage"));
 const ClinicalSchemata = lazy(() => import("./ClinicalSchemata/ClinicalSchemata"));
-const MCCQEObjectivesPage = lazy(() => import("./MCC/MCCQEObjectivesPage"));
 const SocialMediaControlPage = lazy(() => import("./SocialMediaControl/SocialMediaControlPage"));
 const InstagramHomePreviewPage = lazy(() => import("./SocialMediaControl/InstagramHomePreviewPage"));
 const SocialMediaDesignerPage = lazy(() => import("./SocialMediaControl/SocialMediaDesignerPage"));
@@ -48,12 +48,13 @@ const HumanAtlasPage = lazy(() => import("./HumanAtlas/HumanAtlasPage"));
 const FreeformPage = lazy(() => import("./Freeform/FreeformPage"));
 const FreeformListPage = lazy(() => import("./Freeform/FreeformListPage"));
 const ClinicalVignetteGeneratorPage = lazy(() => import("./ClinicalVignetteGenerator/ClinicalVignetteGeneratorPage"));
-const MedicalExamsPage = lazy(() => import("./MedicalExams/MedicalExamsPage"));
-const SegmentationsPage = lazy(() => import("./Segmentations/SegmentationsPage"));
+const SegmentationsPage = lazy(() => import("./Segmentations/RabbitHoleSemanticHolderPage"));
+const RabbitHoleHyleEntities4DPage = lazy(() => import("./HyleEntities4D/RabbitHoleHyleEntities4DPage"));
 const ReasoningPage = lazy(() => import("./Reasoning/ReasoningPage"));
 const VocabsPage = lazy(() => import("./Vocabs/VocabsPage"));
 const TerminologyPage = lazy(() => import("./Terminology/TerminologyPage"));
-const PatientLoginPage = lazy(() => import("./PatientApp/PatientLoginPage"));
+const FAQPage = lazy(() => import("./FAQ/FAQPage"));
+const OntologyPage = lazy(() => import("./ontology/OntologyPage"));
 const PatientSignupPage = lazy(() => import("./PatientApp/PatientSignupPage"));
 const PatientCallPage = lazy(() => import("./PatientApp/PatientCallPage"));
 const PatientSettingsPage = lazy(() => import("./PatientApp/PatientSettingsPage"));
@@ -78,6 +79,8 @@ const PodcastRedirect = () => {
 
 const AppRouter = () => {
   const [authState, setAuthState] = useState(getStoredAuth);
+  const [postLoginTransition, setPostLoginTransition] = useState(false);
+  const [homePreviewMounted, setHomePreviewMounted] = useState(false);
 
   const isAuthenticated =
     authState?.isLoggedIn === true || authState?.isConnected === true;
@@ -86,12 +89,30 @@ const AppRouter = () => {
 
   const handleLogin = useCallback((nextAuthState) => {
     setAuthState(nextAuthState);
+    setPostLoginTransition(true);
   }, []);
 
   const handleLogout = useCallback(() => {
     clearStoredSession();
     setAuthState(null);
+    setPostLoginTransition(false);
   }, []);
+
+  const handleTransitionComplete = useCallback(() => {
+    setPostLoginTransition(false);
+  }, []);
+
+  useEffect(() => {
+    if (!postLoginTransition) {
+      setHomePreviewMounted(false);
+      return undefined;
+    }
+
+    // Keep Home unmounted through acceleration and the beginning of the
+    // slowdown. Mount it only once the deceleration is visually established.
+    const timer = window.setTimeout(() => setHomePreviewMounted(true), 12600);
+    return () => window.clearTimeout(timer);
+  }, [postLoginTransition]);
 
   // Parallel, independent auth for the patient-facing app — separate
   // storage key ("patient_state" vs "state") and separate JWT secret
@@ -103,11 +124,13 @@ const AppRouter = () => {
 
   const handlePatientLogin = useCallback((nextAuthState) => {
     setPatientAuthState(nextAuthState);
+    setPostLoginTransition(true);
   }, []);
 
   const handlePatientLogout = useCallback(() => {
     clearStoredPatientSession();
     setPatientAuthState(null);
+    setPostLoginTransition(false);
   }, []);
 
   useLayoutEffect(() => {
@@ -151,6 +174,7 @@ const AppRouter = () => {
       <PDFTextAssistantProvider>
       <SplitViewProvider>
       <PodcastPlayerProvider>
+      <GraphicsSettingsRuntime />
       <SplitViewFrame>
       <div id="App_viewportScale">
       <div id="app_route_view">
@@ -161,13 +185,30 @@ const AppRouter = () => {
 
         <Route path="/about"     element={withSuspense(<AboutPage />)} />
         <Route path="/about/amctoshs" element={withSuspense(<AmctoshsAboutPage />)} />
+        <Route path="/about/meta-patient-noumena" element={auth(withSuspense(<MetaPatientNoumenaAboutPage />))} />
         <Route path="/portfolio" element={withSuspense(<PortfolioPage />)} />
-        <Route path="/mcc/mccqe/objectives" element={withSuspense(<MCCQEObjectivesPage />)} />
 
         <Route path="/login" element={
-          canAccessAuthenticatedRoutes
+          canAccessAuthenticatedRoutes && !postLoginTransition
             ? <Navigate to="/home" replace />
-            : withSuspense(<Login onLogin={handleLogin} onForceLogout={handleLogout} />)
+            : (
+              <div className="postLoginTransitionStage">
+                <div className="postLoginTransitionStage__login">
+                  {withSuspense(
+                    <Login
+                      onLogin={handleLogin}
+                      onTransitionComplete={handleTransitionComplete}
+                      onForceLogout={handleLogout}
+                    />,
+                  )}
+                </div>
+                  {canAccessAuthenticatedRoutes && postLoginTransition && homePreviewMounted && (
+                    <div className="postLoginTransitionStage__home" aria-hidden="true">
+                      {withSuspense(<App onLogout={handleLogout} colorWaveEnabled={false} />)}
+                    </div>
+                  )}
+              </div>
+            )
         } />
 
         <Route path="/home"               element={auth(withSuspense(<App onLogout={handleLogout} />))} />
@@ -194,20 +235,24 @@ const AppRouter = () => {
         <Route path="/human-atlas"            element={auth(withSuspense(<HumanAtlasPage />))} />
         <Route path="/freeform"               element={auth(withSuspense(<FreeformListPage />))} />
         <Route path="/clinical-vignettes"     element={auth(withSuspense(<ClinicalVignetteGeneratorPage />))} />
-        <Route path="/medical-exams"          element={auth(withSuspense(<MedicalExamsPage />))} />
         <Route path="/segmentations"          element={auth(withSuspense(<SegmentationsPage />))} />
+        <Route path="/hyle-entities-4d"       element={auth(withSuspense(<RabbitHoleHyleEntities4DPage />))} />
         <Route path="/amctoshs-reasoning"     element={auth(withSuspense(<ReasoningPage />))} />
-        <Route path="/vocabs"                 element={auth(withSuspense(<VocabsPage />))} />
+        <Route path="/morphemes"              element={auth(withSuspense(<VocabsPage />))} />
+        <Route path="/vocabs"                 element={<Navigate to="/morphemes" replace />} />
         <Route path="/terminology"            element={auth(withSuspense(<TerminologyPage />))} />
+        <Route path="/faq"                    element={auth(withSuspense(<FAQPage />))} />
+        <Route path="/documentation"          element={auth(withSuspense(<OntologyPage />))} />
+        <Route path="/ontology"               element={<Navigate to="/documentation" replace />} />
         <Route path="/freeform/:id"           element={auth(withSuspense(<FreeformPage />))} />
 
         {/* Patient-facing app — separate account system, separate auth
             gate (authPatient/canAccessPatientRoutes), independent of the
             clinician auth above. */}
         <Route path="/patient/login" element={
-          canAccessPatientRoutes
+          canAccessPatientRoutes && !postLoginTransition
             ? <Navigate to="/patient/call" replace />
-            : withSuspense(<PatientLoginPage onLogin={handlePatientLogin} />)
+            : withSuspense(<Login onLogin={handlePatientLogin} onTransitionComplete={handleTransitionComplete} patientMode />)
         } />
         <Route path="/patient/signup" element={
           canAccessPatientRoutes
@@ -224,16 +269,8 @@ const AppRouter = () => {
           <Navigate to={canAccessAuthenticatedRoutes ? "/home" : "/login"} replace />
         } />
       </Routes>
+      <GlobalSelectMenu />
       </div>
-      {canAccessAuthenticatedRoutes && <div id="app_keyboard_slot" />}
-      {canAccessAuthenticatedRoutes && (
-        <AppFooter>
-          <PDFTextAssistantFooter />
-          <PodcastPlayerFooter />
-          <VocabsFooter />
-          <VirtualKeyboard inline autoOpenOnFocus panelPortalId="app_keyboard_slot" />
-        </AppFooter>
-      )}
       </div>
       </SplitViewFrame>
       </PodcastPlayerProvider>
@@ -241,6 +278,7 @@ const AppRouter = () => {
       {canAccessAuthenticatedRoutes && <SourceBackgroundTaskIndicator />}
 
       {canAccessAuthenticatedRoutes && withSuspense(<PredictionOverlay />)}
+      <BlackHoleLoginTransition active={postLoginTransition} onComplete={handleTransitionComplete} />
       </SplitViewProvider>
       </PDFTextAssistantProvider>
       </AvatarProviderContextProvider>

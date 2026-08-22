@@ -51,7 +51,7 @@ export default function Morphe3DTraceCreator({ traceSchemas, selectedObject, cre
 
       {formOpen && (
         <form id="mrp_add_3d_trace_form" onSubmit={submit}>
-          {!selectedObject && <p className="mrp_trace_create_hint">Select an AMCTOSHS object first.</p>}
+          {!selectedObject && <p className="mrp_trace_create_hint">Select an RabbitHole object first.</p>}
           <label className="mrp_field">
             <span>Biological sensor</span>
             <select className="mrp_input" value={biologicalSensor} onChange={(event) => setBiologicalSensor(event.target.value)}>

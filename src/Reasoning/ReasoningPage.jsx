@@ -12,13 +12,13 @@ import { buildReasoningIndex } from "./amctoshsReasoningGraph";
 import ReasoningReviewList from "./ReasoningReviewList";
 import ReasoningEditor from "./ReasoningEditor";
 
-// AMCTOSHS Reasoning — the interpretive layer downstream of "Extract
-// AMCTOSHS Relations". Owns its own workflow end to end: pick one or more
-// already-saved Trace Instances/Schemas (fetched from AMCTOSHS Morphe's
+// RabbitHole Reasoning — the interpretive layer downstream of "Extract
+// RabbitHole Relations". Owns its own workflow end to end: pick one or more
+// already-saved Trace Instances/Schemas (fetched from RabbitHole Morphe's
 // own browse data) → "Extract Reasoning" → review each proposed
 // Reasoning-dependent entity/Relation → save the accepted ones → browse/
 // edit everything saved so far. Never reads raw segment text — only
-// already-saved, already-reviewed AMCTOSHS Morphe output. Reasons over
+// already-saved, already-reviewed RabbitHole Morphe output. Reasons over
 // Trace INSTANCES specifically (concrete recorded occurrences), never
 // Trace Schemata (the type-level object).
 
@@ -72,7 +72,7 @@ export default function ReasoningPage() {
       setReasoningData(data);
       setReasoningError("");
     } catch (err) {
-      setReasoningError(err.message || "Could not load AMCTOSHS Reasoning data.");
+      setReasoningError(err.message || "Could not load RabbitHole Reasoning data.");
     } finally {
       setReasoningLoading(false);
     }
@@ -121,7 +121,7 @@ export default function ReasoningPage() {
       });
       setCurrentExtraction(doc);
     } catch (err) {
-      setExtractError(err.message || "AMCTOSHS Reasoning extraction failed.");
+      setExtractError(err.message || "RabbitHole Reasoning extraction failed.");
       if (err.extraction) setCurrentExtraction(err.extraction);
     } finally {
       setExtractBusy(false);
@@ -217,8 +217,8 @@ export default function ReasoningPage() {
           <i className="fi fi-rr-menu-burger" />
         </button>
         <div id="cs_header_titles">
-          <span id="cs_title">AMCTOSHS Reasoning</span>
-          <span id="cs_subtitle">AMCTOSHS Trace / Schema → AMCTOSHS Reasoning-dependent Entity</span>
+          <span id="cs_title">RabbitHole Reasoning</span>
+          <span id="cs_subtitle">RabbitHole Trace / Schema → RabbitHole Reasoning-dependent Entity</span>
         </div>
         <div id="cs_header_meta">
           <span className="cs_count_badge" style={{ color: "#ab47bc", background: "color-mix(in srgb, #ab47bc 12%, transparent)", borderColor: "color-mix(in srgb, #ab47bc 28%, transparent)" }}>
@@ -229,9 +229,9 @@ export default function ReasoningPage() {
 
       <div id="mrp_extraction_bar">
         {morpheLoading ? (
-          <span className="mrp_empty_hint">Loading AMCTOSHS Morphe data…</span>
+          <span className="mrp_empty_hint">Loading RabbitHole Morphe data…</span>
         ) : (!morpheData.schemas.length && !morpheData.traceInstances.length) ? (
-          <span className="mrp_empty_hint">No saved AMCTOSHS Morphe Trace Instances/Schemata yet — save some via "Extract AMCTOSHS Relations" first.</span>
+          <span className="mrp_empty_hint">No saved RabbitHole Morphe Trace Instances/Schemata yet — save some via "Extract RabbitHole Relations" first.</span>
         ) : (
           <details id="rsp_input_picker">
             <summary>{selectedTraceIds.size + selectedSchemaIds.size} input{selectedTraceIds.size + selectedSchemaIds.size !== 1 ? "s" : ""} selected</summary>
@@ -304,9 +304,9 @@ export default function ReasoningPage() {
 
         <div id="mrp_middle">
           {reasoningLoading ? (
-            <div id="cs_no_selection"><i className="bx bx-loader-circle mrp_icon_spin" /><p>Loading AMCTOSHS Reasoning…</p></div>
+            <div id="cs_no_selection"><i className="bx bx-loader-circle mrp_icon_spin" /><p>Loading RabbitHole Reasoning…</p></div>
           ) : visibleEntities.length === 0 ? (
-            <p className="mrp_empty_hint">No AMCTOSHS Reasoning-dependent entities saved yet.</p>
+            <p className="mrp_empty_hint">No RabbitHole Reasoning-dependent entities saved yet.</p>
           ) : (
             <div id="mrp_entity_list">
               {visibleEntities.map((e) => (

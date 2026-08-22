@@ -6,11 +6,13 @@
 export const AVATAR_PROVIDERS = {
   ANAM: "anam",
   LOCAL3D: "local3d",
+  RABBIT_WONDERLAND: "rabbit-wonderland",
 };
 
 export const AVATAR_PROVIDER_LIST = [
   { id: AVATAR_PROVIDERS.ANAM, label: "ANAM", sub: "Cloud realistic avatar" },
   { id: AVATAR_PROVIDERS.LOCAL3D, label: "Local 3D", sub: "Lower-cost browser avatar" },
+  { id: AVATAR_PROVIDERS.RABBIT_WONDERLAND, label: "Rabbit of Wonderland", sub: "Rabbit logo companion" },
 ];
 
 /**

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { suggestPredictions } from "../utils/predictionApi";
+import { suggestMedicalPredictions, suggestPredictions } from "../utils/predictionApi";
 import { suggestCorpusCorrections } from "../Shared/corpusSttResolver";
 import { getCaretCoordinates } from "./caretCoordinates";
 import "./predictionOverlay.css";
@@ -88,9 +88,15 @@ const currentWordPrefix = (value, caret) => {
   return match ? match[0] : "";
 };
 
-const publishSuggestions = (target, prefix = "", suggestions = []) => {
+const publishSuggestions = (target, prefix = "", suggestions = [], medicalSuggestions = []) => {
   window.dispatchEvent(new CustomEvent("amctoshs:prediction-suggestions", {
-    detail: { target, prefix, suggestions },
+    detail: {
+      target,
+      prefix,
+      suggestions,
+      generalSuggestions: suggestions,
+      medicalSuggestions,
+    },
   }));
 };
 
@@ -462,6 +468,7 @@ const PredictionOverlay = () => {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(async () => {
       const requestId = ++requestIdRef.current;
+      const medicalRequest = suggestMedicalPredictions(prefix, 12);
       const results = await suggestPredictions(prefix, 12);
       if (requestId !== requestIdRef.current || targetRef.current !== el || !el.isConnected) return;
 
@@ -475,16 +482,26 @@ const PredictionOverlay = () => {
         candidate.length > prefix.length &&
         candidate.toLocaleLowerCase().startsWith(prefix.toLocaleLowerCase()));
       if (!word) {
-        dismiss();
-        return;
+        completionRef.current = null;
+        el.classList.remove("prediction_inline_active");
+        setSuffixHighlight(null);
+      } else {
+        const start = currentCaret - prefix.length;
+        const suffix = word.slice(prefix.length);
+        completionRef.current = { el, start, caret: currentCaret, prefix, word, suggestions: results };
+        el.classList.add("prediction_inline_active");
+        requestAnimationFrame(() => positionSuffixHighlight(el, currentCaret, suffix));
       }
+      // Corpus is local and should render immediately. UMLS fills its own rail
+      // independently so a large terminology file never delays autocomplete.
+      publishSuggestions(el, prefix, results, []);
 
-      const start = currentCaret - prefix.length;
-      const suffix = word.slice(prefix.length);
-      completionRef.current = { el, start, caret: currentCaret, prefix, word, suggestions: results };
-      el.classList.add("prediction_inline_active");
-      requestAnimationFrame(() => positionSuffixHighlight(el, currentCaret, suffix));
-      publishSuggestions(el, prefix, results);
+      const medicalResults = await medicalRequest;
+      if (requestId !== requestIdRef.current || targetRef.current !== el || !el.isConnected) return;
+      const latestSelection = targetSelection(el);
+      const latestPrefix = currentWordPrefix(targetText(el), latestSelection.start);
+      if (latestSelection.end !== latestSelection.start || latestPrefix.toLocaleLowerCase() !== prefix.toLocaleLowerCase()) return;
+      publishSuggestions(el, prefix, results, medicalResults);
     }, 150);
   }, [dismiss, positionSuffixHighlight]);
 
@@ -697,6 +714,13 @@ const PredictionOverlay = () => {
       dismiss();
     };
 
+    const onVirtualKeyboardInput = (event) => {
+      const target = predictableTarget(event.detail?.target);
+      if (!target || event.detail?.inputType !== "deleteContentBackward") return;
+      targetRef.current = target;
+      runSuggest(target);
+    };
+
     const onSelectionChange = () => {
       const target = predictableTarget(document.activeElement);
       if (!target) return;
@@ -773,6 +797,7 @@ const PredictionOverlay = () => {
     window.addEventListener("virtual-keyboard:space", onVirtualKeyboardSpace);
     window.addEventListener("virtual-keyboard:prediction", onVirtualKeyboardPrediction);
     window.addEventListener("virtual-keyboard:before-input", onVirtualKeyboardBeforeInput);
+    window.addEventListener("virtual-keyboard:input", onVirtualKeyboardInput);
     window.addEventListener("amctoshs:editable-selection", onAppEditableSelection);
     window.addEventListener("scroll", repositionHighlight, true);
     window.addEventListener("resize", repositionHighlight);
@@ -787,6 +812,7 @@ const PredictionOverlay = () => {
       window.removeEventListener("virtual-keyboard:space", onVirtualKeyboardSpace);
       window.removeEventListener("virtual-keyboard:prediction", onVirtualKeyboardPrediction);
       window.removeEventListener("virtual-keyboard:before-input", onVirtualKeyboardBeforeInput);
+      window.removeEventListener("virtual-keyboard:input", onVirtualKeyboardInput);
       window.removeEventListener("amctoshs:editable-selection", onAppEditableSelection);
       window.removeEventListener("scroll", repositionHighlight, true);
       window.removeEventListener("resize", repositionHighlight);

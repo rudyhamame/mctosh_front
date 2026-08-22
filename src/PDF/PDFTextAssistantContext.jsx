@@ -8,13 +8,22 @@ const PDFTextAssistant = lazy(() => import("./PDFTextAssistant"));
 const PDFTextAssistantContext = createContext(null);
 
 export const PDFTextAssistantProvider = ({ children }) => {
-  const [documentContext, setDocumentContext] = useState(null);
+  const [documentRegistration, setDocumentRegistration] = useState(null);
   const [open, setOpen] = useState(false);
+  const documentContext = documentRegistration?.document || null;
 
   const registerDocument = useCallback((nextDocument) => {
-    if (!nextDocument?.loadDocumentPages) return;
-    setDocumentContext(nextDocument);
+    if (!nextDocument?.loadDocumentPages) return () => {};
+    const token = Symbol("pdf-assistant-document");
+    setDocumentRegistration({ token, document: nextDocument });
+    return () => {
+      setDocumentRegistration((current) => current?.token === token ? null : current);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!documentContext) setOpen(false);
+  }, [documentContext]);
 
   const value = useMemo(() => ({
     documentContext,
@@ -91,8 +100,8 @@ export const PDFTextAssistantFooter = () => {
         id="pdf_ai_assistant_fab"
         className={open ? "pdf_ai_assistant_fab--active" : undefined}
         onClick={() => setOpen((value) => !value)}
-        title={open ? "Close AMCTOSHS Assistant" : "Open AMCTOSHS Assistant"}
-        aria-label={open ? "Close AMCTOSHS Assistant" : "Open AMCTOSHS Assistant"}
+        title={open ? "Close RabbitHole Assistant" : "Open RabbitHole Assistant"}
+        aria-label={open ? "Close RabbitHole Assistant" : "Open RabbitHole Assistant"}
         aria-expanded={open}
       >
         <i className={`bx ${open ? "bx-x" : "bx-robot"}`} aria-hidden="true" />

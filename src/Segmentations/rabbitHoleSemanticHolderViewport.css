@@ -1,0 +1,29 @@
+/* Keep the routed page inside the space left by the app shell/footer. Long
+   saved lists and trees scroll within their own panels instead of pushing
+   the entire page below the viewport. */
+.rhs_page {
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 10px
+}
+
+.rhs_header { flex: 0 0 auto; }
+#app_route_view .rhs_header {
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.rhs_catalog,
+.rhs_workspace { flex: 1 1 auto; min-height: 0; width: 100%; }
+.rhs_layout { flex: 1 1 auto; height: auto; min-height: 0; width: 100%; }
+.rhs_blocks,
+.rhs_content { min-height: 0; }
+.rhs_content { width: 100%; }
+.rhs_tree { flex: 1 1 auto; min-height: 0; }

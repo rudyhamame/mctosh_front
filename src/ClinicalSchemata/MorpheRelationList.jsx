@@ -11,7 +11,7 @@ import React from "react";
 export default function MorpheRelationList({ entityId, relationsFor, resolveName }) {
   const { outgoing, incoming } = relationsFor(entityId);
   if (!outgoing.length && !incoming.length) {
-    return <p className="mrp_empty_hint">No AMCTOSHS Relations recorded for this item yet.</p>;
+    return <p className="mrp_empty_hint">No RabbitHole Relations recorded for this item yet.</p>;
   }
   return (
     <div className="mrp_relation_list">

@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import PDFPage from "./PDFPage";
 import PDFReaderWorkspaceTabStrip, { ReaderAnnotationActions } from "./PDFReaderWorkspaceTabStrip";
+import VirtualKeyboard from "../Shared/VirtualKeyboard";
+import ServiceStatusFooter from "../App/ServiceStatusFooter";
 import {
   DEFAULT_PAGE_NAV_STATE,
   DEFAULT_ZOOM_STATE,
@@ -32,10 +34,11 @@ const PaneBody = ({
   onAnnotationSaveStateChange,
   toolbarLeading,
   toolbarHost,
-  toolbarOptionsHost,
+  textToolbarOptionsHost,
   entityBuilderHost,
   markdownHost,
   markdownHostRef,
+  onLayer1OnlyChange,
 }) => (
   <div className={`pdfw_pane_body${isActive && markdownHost ? " pdfw_pane_body--md" : ""}`}>
     {tab ? (
@@ -56,9 +59,11 @@ const PaneBody = ({
         onAnnotationSaveStateChange={isActive ? onAnnotationSaveStateChange : undefined}
         toolbarLeading={isActive ? toolbarLeading : null}
         toolbarHost={isActive ? toolbarHost : null}
-        toolbarOptionsHost={isActive ? toolbarOptionsHost : null}
+        textToolbarOptionsHost={isActive ? textToolbarOptionsHost : null}
         entityBuilderHost={isActive ? entityBuilderHost : null}
         markdownHost={isActive ? markdownHost : null}
+        layer1Only={isActive}
+        onLayer1OnlyChange={isActive ? onLayer1OnlyChange : undefined}
         initialPage={tab.page}
         onPdfTypeChange={(type) => onTabTypeChange(tab.id, type)}
       />
@@ -73,6 +78,7 @@ const PaneBody = ({
 );
 
 const PDFReaderWorkspace = () => {
+  const rootRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
   const {
@@ -89,9 +95,11 @@ const PDFReaderWorkspace = () => {
     locationState: location.state,
   });
   const [toolbarHostEl, setToolbarHostEl] = useState(null);
-  const [toolbarOptionsHostEl, setToolbarOptionsHostEl] = useState(null);
+  const [textToolbarOptionsHostEl, setTextToolbarOptionsHostEl] = useState(null);
   const [entityBuilderHostEl, setEntityBuilderHostEl] = useState(null);
   const [markdownHostEl, setMarkdownHostEl] = useState(null);
+  const [layer1Only, setLayer1Only] = useState(false);
+  const onLayer1OnlyChange = useCallback((open) => setLayer1Only(Boolean(open)), []);
 
   // pdf-type (text-based/mixed/scanned) per tab, reported by each PDFPage
   // instance via onPdfTypeChange — shown as an icon after the tab's name.
@@ -139,15 +147,23 @@ const PDFReaderWorkspace = () => {
     toggleOcrBlankPage: () => activePageRef.current?.toggleOcrBlankPage(),
     toggleMarkdownAside: () => activePageRef.current?.toggleMarkdownAside(),
     setMarkdownMode: (mode) => activePageRef.current?.setMarkdownMode(mode),
+    toggleSentenceTree: () => activePageRef.current?.toggleSentenceTree(),
     setNotebookView: (mode) => activePageRef.current?.setNotebookView(mode),
     closeNotebook: () => activePageRef.current?.closeNotebook(),
     setSearchOpen: (value) => activePageRef.current?.setSearchOpen(value),
     setSearchQuery: (value) => activePageRef.current?.setSearchQuery(value),
+    runSearch: (query) => activePageRef.current?.runSearch(query),
     goToSearchMatch: (direction) => activePageRef.current?.goToSearchMatch(direction),
     closeSearch: () => activePageRef.current?.closeSearch(),
     insertBlankPageAfterCurrent: () => activePageRef.current?.insertBlankPageAfterCurrent(),
     toggleOutline: () => activePageRef.current?.toggleOutline(),
+    openDocumentNavigator: (view) => activePageRef.current?.openDocumentNavigator(view),
+    buildPageConcepts: () => activePageRef.current?.buildPageConcepts(),
+    toggleGlyphCharAside: () => activePageRef.current?.toggleGlyphCharAside(),
     toggleBookmark: () => activePageRef.current?.toggleBookmark(),
+    toggleSmartVideo: () => activePageRef.current?.toggleSmartVideo(),
+    toggleEntityBuilder: () => activePageRef.current?.toggleEntityBuilder(),
+    toggleAbbreviationPanel: () => activePageRef.current?.toggleAbbreviationPanel(),
   } : null;
   const zoomControls = activeId ? {
     ...zoomState,
@@ -169,32 +185,28 @@ const PDFReaderWorkspace = () => {
   }, [tabs, activeId, pageNavState.pageCount, pageNavState.pageNum]);
 
   return (
-    <div id="pdfw_root">
+    <div id="pdfw_root" ref={rootRef}>
       <div id="pdfw_entity_builder_host" ref={setEntityBuilderHostEl} />
       <div id="pdfw_main">
         <div id="pdfw_header">
-          <div id="pdfw_header_main">
-            <PDFReaderWorkspaceTabStrip
-              tabs={tabs}
-              setTabs={setTabs}
-              activeId={activeId}
-              setActiveId={setActiveId}
-              tabTypes={tabTypes}
-              splitModeOn={splitModeOn}
-              checkedIds={checkedIds}
-              onToggleCheck={onToggleCheck}
-              pageNav={pageNav}
-              onToggleSplit={toggleSplitMode}
-              annotationSaveStatus={annotationSaveStatus}
-              onBack={() => navigate("/home")}
-            />
-          </div>
+          <PDFReaderWorkspaceTabStrip
+            tabs={tabs}
+            setTabs={setTabs}
+            activeId={activeId}
+            setActiveId={setActiveId}
+            tabTypes={tabTypes}
+            splitModeOn={splitModeOn}
+            checkedIds={checkedIds}
+            onToggleCheck={onToggleCheck}
+            pageNav={pageNav}
+            onToggleSplit={toggleSplitMode}
+            annotationSaveStatus={annotationSaveStatus}
+            onBack={() => navigate("/home")}
+          />
         </div>
 
-        <div id="pdfw_toolbar_host" ref={setToolbarHostEl} aria-label="Annotation tools" />
-        <div id="pdfw_subtoolbar_host" ref={setToolbarOptionsHostEl} aria-label="Annotation tool options" />
-
-        <div id="pdfw_panes" className={panesToShow.length > 1 ? "pdfw_panes--split" : ""}>
+        <div id="pdfw_panes" className={`${panesToShow.length > 1 ? "pdfw_panes--split " : ""}${layer1Only ? "pdfw_panes--layer1-only" : ""}`}>
+          <div id="pdfw_toolbar_host" ref={setToolbarHostEl} aria-label="Annotation tools" />
           {panesToShow.map((tab, i) => (
             <div className="pdfw_pane" key={tab?.id ?? `empty_${i}`}>
               <PaneBody
@@ -204,18 +216,29 @@ const PDFReaderWorkspace = () => {
                 pdfPageRef={activePageRef}
                 onUndoRedoStateChange={setUndoRedoState}
                 onPageNavStateChange={setPageNavState}
-                onZoomStateChange={setZoomState}
+              onZoomStateChange={setZoomState}
               onAnnotationSaveStateChange={setAnnotationSaveStatus}
               toolbarLeading={<ReaderAnnotationActions undoRedo={undoRedo} pageNav={pageNav} />}
               toolbarHost={toolbarHostEl}
-              toolbarOptionsHost={toolbarOptionsHostEl}
+              textToolbarOptionsHost={textToolbarOptionsHostEl}
                 entityBuilderHost={entityBuilderHostEl}
                 markdownHost={markdownHostEl}
                 markdownHostRef={setMarkdownHostEl}
+                onLayer1OnlyChange={onLayer1OnlyChange}
               />
             </div>
           ))}
         </div>
+        <div id="pdfw_text_subtoolbar_host" ref={setTextToolbarOptionsHostEl} aria-label="Annotation tool options" />
+        <div id="pdfw_keyboard_slot" aria-label="PDF text input keyboard">
+          <VirtualKeyboard inline autoOpenOnFocus openOnCommand showToggle={false} panelPortalId="pdfw_keyboard_slot" predictionPortalId="pdfw_footer_predictions" panelClassName="pdfw_virtual_keyboard" />
+        </div>
+        {activeId && (
+          <footer id="pdfw_footer" aria-label="PDF Reader status and predictions">
+            <ServiceStatusFooter containerId="pdfw_footer_services" />
+            <div id="pdfw_footer_predictions" aria-label="Prediction suggestions" />
+          </footer>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 // amctoshsMorpheGraph.js
 //
-// Pure client-side indexing over AMCTOSHS Morphe's saved, typed data
+// Pure client-side indexing over RabbitHole Morphe's saved, typed data
 // ({schemas, instances, traceSchemas, traceInstances, relations} — the
 // shape GET /api/amctoshs-morphe returns). Mirrors PDF/amctoshsEntityGraph.js's
 // role for the OLD flat AmctoshsEntity model: no DOM/React, fully

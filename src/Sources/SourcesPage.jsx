@@ -16,29 +16,52 @@ const TYPE_LABELS = {
   textbook: "Textbook", reference: "Reference", review: "Review",
   xray: "X-Ray", ct: "CT Scan", mri: "MRI", ultrasound: "Ultrasound",
 };
-const TYPE_COLORS = {
-  pdf: "#4fc3f7", word: "#4fc3f7", youtube: "#e53935", podcast: "#ff8a65", image: "#81c784",
-  textbook: "#4fc3f7", reference: "#a5d6a7", review: "#ce93d8",
-  xray: "#b0bec5", ct: "#4dd0e1", mri: "#9575cd", ultrasound: "#4db6ac",
-};
 
 const authHeader = () => {
   const token = readStoredSession()?.token || "";
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
-const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
-const MAX_SPLIT_PDF_BYTES = 512 * 1024 * 1024;
-const CLOUDINARY_RAW_LIMIT_BYTES = 10 * 1024 * 1024;
+const MAX_UPLOAD_BYTES = 512 * 1024 * 1024; // 512 MB local source limit
+// Kept only for compatibility with legacy background-task state; local source
+// uploads no longer use a Cloudinary-size threshold.
+const CLOUDINARY_RAW_LIMIT_BYTES = MAX_UPLOAD_BYTES;
+const ACCESS_MODE_TABS = [
+  "All",
+  "Sight / Text",
+  "Sight / Image",
+  "Sight + Hearing / Video",
+  "Hearing / Recording",
+];
 
 const formatMb = (bytes) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+const displaySourceName = (name) => String(name || "").replace(/\.[a-z0-9]{1,8}$/i, "");
 const formatDuration = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 const isPdfFile = (file) =>
   file?.type === "application/pdf" || /\.pdf$/i.test(String(file?.name || ""));
-const withQueuedOcr = (source) => String(source?.format || "").toLowerCase() === "pdf"
-  ? { ...source, ocrStatus: ["completed", "processing", "uploading"].includes(source.ocrStatus) ? source.ocrStatus : "queued" }
-  : source;
-
+const sourceTypeFromFile = (file, fallback = "textbook") => {
+  const mime = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  if (mime.startsWith("image/") || /\.(dcm|dicom|png|jpe?g|gif|webp|tiff?)$/i.test(name)) return "image";
+  if (mime === "application/pdf" || /\.(pdf|doc|docx|txt|rtf)$/i.test(name)) return "textbook";
+  return fallback;
+};
+const modeOfAccessFromSource = (source) => {
+  const explicitMode = String(source?.modeOfAccess || source?.mode_of_access || "").trim();
+  if (explicitMode) return explicitMode;
+  const format = String(source?.format || "").toLowerCase();
+  if (["mp3", "wav", "m4a", "aac", "ogg", "flac", "podcast"].includes(format) || source?.type === "podcast") {
+    return "Hearing / Recording";
+  }
+  if (["mp4", "webm", "mov", "avi", "mkv", "youtube"].includes(format) || source?.type === "youtube") {
+    return "Sight + Hearing / Video";
+  }
+  if (["png", "jpg", "jpeg", "gif", "webp", "tif", "tiff", "dcm", "dicom"].includes(format)
+    || ["image", "xray", "ct", "mri", "ultrasound"].includes(String(source?.type || "").toLowerCase())) {
+    return "Sight / Image";
+  }
+  return "Sight / Text";
+};
 const readResponsePayload = async (res) => {
   const text = await res.text();
   if (!text) return {};
@@ -91,11 +114,34 @@ const SourcesPage = () => {
   const [splitCheckElapsed, setSplitCheckElapsed] = useState(0);
   const [deleteMode, setDeleteMode] = useState(false);
   const [selectedSourceIds, setSelectedSourceIds] = useState([]);
+  const [accessModeTab, setAccessModeTab] = useState("All");
+  const [swipedSourceId, setSwipedSourceId] = useState(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const swipeStartXRef = useRef(null);
   const backgroundTasks = useSourceBackgroundTasks();
   const compressionBusy = backgroundTasks.some((task) => task.kind === "split" && task.status === "running");
   const handledBackgroundTasks = useRef(new Set());
-  const autoQueuedOcrRef = useRef(new Set());
+  const availableAccessModeTabs = [
+    ...ACCESS_MODE_TABS,
+    ...sources.map((source) => modeOfAccessFromSource(source)),
+  ].filter((mode, index, modes) => modes.indexOf(mode) === index);
+  const visibleSources = accessModeTab === "All"
+    ? sources
+    : sources.filter((source) => modeOfAccessFromSource(source) === accessModeTab);
+
+  const handleSourceTouchStart = (event) => {
+    swipeStartXRef.current = event.touches[0]?.clientX ?? null;
+  };
+
+  const handleSourceTouchEnd = (sourceId, event) => {
+    const startX = swipeStartXRef.current;
+    swipeStartXRef.current = null;
+    if (startX == null) return;
+    const endX = event.changedTouches[0]?.clientX ?? startX;
+    const distance = endX - startX;
+    if (distance < -40) setSwipedSourceId(sourceId);
+    else if (distance > 40 && swipedSourceId === sourceId) setSwipedSourceId(null);
+  };
 
   /* ── Load sources ── */
   useEffect(() => {
@@ -129,39 +175,6 @@ const SourcesPage = () => {
     return () => window.clearInterval(timer);
   }, [sources]);
 
-  // Older PDFs may predate automatic OCR and still be marked not_started.
-  // Queue each of those once when the Sources page discovers it; subsequent
-  // polling renders the persisted job status normally.
-  useEffect(() => {
-    const targets = sources.filter((source) => (
-      String(source.format || "").toLowerCase() === "pdf"
-      && (!source.ocrStatus || source.ocrStatus === "not_started")
-      && !autoQueuedOcrRef.current.has(source._id)
-    ));
-    if (!targets.length) return;
-
-    targets.forEach((source) => autoQueuedOcrRef.current.add(source._id));
-    setSources((current) => current.map((source) => (
-      targets.some((target) => target._id === source._id)
-        ? { ...source, ocrStatus: "queued", ocrProgress: 0 }
-        : source
-    )));
-
-    void Promise.all(targets.map(async (source) => {
-      try {
-        const response = await fetch(apiUrl(`/api/sources/${source._id}/ocr/reprocess`), {
-          method: "POST",
-          headers: authHeader(),
-        });
-        if (!response.ok) throw new Error("OCR could not be queued.");
-      } catch {
-        setSources((current) => current.map((item) => (
-          item._id === source._id ? { ...item, ocrStatus: "failed", ocrProgress: 0 } : item
-        )));
-      }
-    }));
-  }, [sources]);
-
   /* ── Close dropdown on outside click ── */
   useEffect(() => {
     if (!dropOpen) return;
@@ -189,31 +202,13 @@ const SourcesPage = () => {
         if (source) {
           setSources((current) => current.some((item) => item._id === source._id)
             ? current
-            : [withQueuedOcr(source), ...current]);
+            : [source, ...current]);
         }
         setInfo(task.result?.duplicate
           ? `"${task.name}" is already in your sources.`
           : task.kind === "split"
             ? `Uploaded "${task.name}" as one source, stored behind the scenes as ${task.result?.partCount || "multiple"} parts.`
             : `Uploaded "${task.name}".`);
-        dismissSourceTask(task.id);
-        continue;
-      }
-
-      if (task.status === "needs_split") {
-        const data = task.result || {};
-        setCompressionPrompt({
-          file: task.file,
-          type: task.type,
-          reason: readableError(data.error, `"${task.name}" must be split before upload.`),
-          currentSizeBytes: data.currentSizeBytes ?? task.file.size,
-          maxSizeBytes: data.maxSizeBytes ?? CLOUDINARY_RAW_LIMIT_BYTES,
-          splitSuggestion: data.splitSuggestion || null,
-          splitUnavailableReason: data.splitUnavailableReason
-            ? readableError(data.splitUnavailableReason, "The PDF could not be inspected for splitting.")
-            : null,
-          loadingSplit: false,
-        });
         dismissSourceTask(task.id);
         continue;
       }
@@ -430,79 +425,11 @@ const SourcesPage = () => {
     }
   }, [fetchSplitPreview, updateSplitCheckProgress]);
 
+  // Clear any pre-migration split prompt left in browser storage. Local source
+  // uploads no longer ask the user to split PDFs.
   useEffect(() => {
-    let cancelled = false;
-    void loadPendingSplit().then((pending) => {
-      if (cancelled || !pending) return;
-      if (pending.uploadJobId && pending.splitSuggestion) {
-        setCompressionPrompt({ ...pending, loadingSplit: false, checkerStage: "complete", checkerProgress: 100 });
-        return;
-      }
-      if (pending.uploadJobId) {
-        setCompressionPrompt({
-          ...pending,
-          loadingSplit: true,
-          checkerStage: "inspecting",
-          checkerStageLabel: "Restoring PDF inspection",
-          checkerProgress: Number(pending.checkerProgress) || 5,
-          checkerStartedAt: Date.now(),
-        });
-        void pollSplitPreviewJob(pending.uploadJobId, (progress) => {
-          updateSplitCheckProgress(undefined, progress);
-        }).then((data) => {
-          if (cancelled) return;
-          const refreshed = { ...pending, ...data, loadingSplit: false, checkerStage: "complete", checkerProgress: 100 };
-          setCompressionPrompt(refreshed);
-          void savePendingSplit(refreshed);
-        }).catch((inspectionError) => {
-          if (!cancelled) setCompressionPrompt((current) => ({
-            ...current,
-            loadingSplit: false,
-            splitSuggestion: null,
-            splitUnavailableReason: inspectionError.message,
-          }));
-        });
-        return;
-      }
-      if (!pending.file) {
-        void clearPendingSplit();
-        setError("The browser could not restore the selected PDF. Select it again to resume uploading.");
-        return;
-      }
-      // A previous server failure is diagnostic state, not a permanent result.
-      // Always re-inspect the persisted PDF so backend parser/repair fixes can
-      // replace stale errors such as pdf-lib's malformed PDFDict exception.
-      setCompressionPrompt({
-        ...pending,
-        splitUnavailableReason: null,
-        loadingSplit: true,
-        checkerStage: "uploading",
-        checkerProgress: 0,
-        checkerLoaded: 0,
-        checkerTotal: pending.file.size,
-        checkerStartedAt: Date.now(),
-      });
-      void fetchSplitPreview(pending.file, pending.type, (progress) => updateSplitCheckProgress(pending.file, progress)).then((data) => {
-        if (cancelled) return;
-        const refreshed = {
-          ...pending,
-          ...data,
-          splitUnavailableReason: data.splitUnavailableReason || null,
-          loadingSplit: false,
-          checkerStage: "complete",
-          checkerProgress: 100,
-          uploadJobId: data.uploadJobId || null,
-        };
-        setCompressionPrompt((current) => current?.file === pending.file ? refreshed : current);
-        void savePendingSplit(refreshed);
-      }).catch((error) => {
-        if (!cancelled) setCompressionPrompt((current) => current?.file === pending.file
-          ? { ...current, splitSuggestion: null, splitUnavailableReason: error.message, loadingSplit: false }
-          : current);
-      });
-    });
-    return () => { cancelled = true; };
-  }, [fetchSplitPreview, pollSplitPreviewJob, updateSplitCheckProgress]);
+    void clearPendingSplit();
+  }, []);
 
   const uploadFile = useCallback((file, type) => {
     setError(null);
@@ -658,21 +585,10 @@ const SourcesPage = () => {
     if (!files.length) return;
     e.target.value = "";
     for (const file of files) {
-      const resolvedType = type === "doc" ? pendingDocType.current : type;
-      if (isPdfFile(file) && file.size > MAX_SPLIT_PDF_BYTES) {
-        setError(`"${file.name}" is too large (${formatMb(file.size)}). The local splitter currently supports PDFs up to ${formatMb(MAX_SPLIT_PDF_BYTES)}.`);
-        continue;
-      }
+      const selectedType = type === "doc" ? pendingDocType.current : type;
+      const resolvedType = sourceTypeFromFile(file, selectedType);
       if (file.size > MAX_UPLOAD_BYTES) {
-        if (isPdfFile(file)) {
-          void offerPdfSplit(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the upload limit and must be split.`);
-        } else {
-          setError(`"${file.name}" is too large (${formatMb(file.size)}). Maximum is 100 MB.`);
-        }
-        continue;
-      }
-      if (isPdfFile(file) && file.size > CLOUDINARY_RAW_LIMIT_BYTES) {
-        void offerPdfSplit(file, resolvedType, `"${file.name}" is ${formatMb(file.size)}, above the ${formatMb(CLOUDINARY_RAW_LIMIT_BYTES)} PDF upload limit and must be split.`);
+        setError(`"${file.name}" is too large (${formatMb(file.size)}). Maximum is 512 MB.`);
         continue;
       }
       uploadFile(file, resolvedType);
@@ -684,107 +600,14 @@ const SourcesPage = () => {
 
       {/* ── Header ── */}
       <div id="sources_header">
-        <button id="sources_back_btn" onClick={() => navigate("/home")}>←</button>
-        <span id="sources_header_title">Hyle Source Organisation</span>
-        <div className="sources_bulk_actions" aria-label="Source selection actions">
-          {deleteMode && (
-            <button
-              type="button"
-              className="sources_bulk_cancel_btn"
-              onClick={() => { setDeleteMode(false); setSelectedSourceIds([]); }}
-              disabled={deleteBusy}
-            >Cancel</button>
-          )}
-          <button
-            type="button"
-            id="sources_delete_btn"
-            className={deleteMode ? "sources_delete_btn--active" : ""}
-            onClick={() => {
-              if (!deleteMode) {
-                setDeleteMode(true);
-                return;
-              }
-              void deleteSelectedSources();
-            }}
-            disabled={deleteBusy || (deleteMode && selectedSourceIds.length === 0)}
-            title={deleteMode ? "Delete selected sources" : "Choose sources to delete"}
-          >
-            {deleteBusy ? "Deleting…" : deleteMode ? `Delete selected${selectedSourceIds.length ? ` (${selectedSourceIds.length})` : ""}` : "Delete"}
-          </button>
-        </div>
-        {(uploadCount + backgroundUploadCount) > 0 && (
-          <span id="sources_uploading_label">Working in background {(uploadCount + backgroundUploadCount) > 1 ? `(${uploadCount + backgroundUploadCount})` : ""}…</span>
-        )}
-
-        <div id="sources_add_wrap">
-          <button
-            id="sources_add_btn"
-            ref={addBtnRef}
-            onClick={() => { setDropOpen((o) => !o); setLinkInputMode(""); }}
-          >
-            + Add Source
-          </button>
-
-          {dropOpen && (
-            <div id="sources_dropdown" ref={dropdownRef}>
-              <button className="sources_drop_item" style={{ "--src-color": "#4fc3f7" }}
-                onClick={() => { pendingDocType.current = "textbook"; setDropOpen(false); fileDocRef.current?.click(); }}>
-                <i className="fi fi-rr-book-alt sources_drop_icon" />
-                <span className="sources_drop_label">Textbook</span>
-                <span className="sources_drop_tag">PDF</span>
-              </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#a5d6a7" }}
-                onClick={() => { pendingDocType.current = "reference"; setDropOpen(false); fileDocRef.current?.click(); }}>
-                <i className="fi fi-rr-book-bookmark sources_drop_icon" />
-                <span className="sources_drop_label">Reference Book</span>
-                <span className="sources_drop_tag">PDF</span>
-              </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#ce93d8" }}
-                onClick={() => { pendingDocType.current = "review"; setDropOpen(false); fileDocRef.current?.click(); }}>
-                <i className="fi fi-rr-document sources_drop_icon" />
-                <span className="sources_drop_label">Review</span>
-                <span className="sources_drop_tag">PDF</span>
-              </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#e53935" }}
-                onClick={() => { setDropOpen(false); setLinkInputMode("youtube"); }}>
-                <i className="fi fi-rr-play-alt sources_drop_icon" />
-                <span className="sources_drop_label">YouTube Link</span>
-                <span className="sources_drop_tag">Transcription</span>
-              </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#ff8a65" }}
-                onClick={() => { setDropOpen(false); setLinkInputMode("podcast"); }}>
-                <i className="fi fi-rr-headphones sources_drop_icon" />
-                <span className="sources_drop_label">Podcast Episode Link</span>
-                <span className="sources_drop_tag">Web Audio</span>
-              </button>
-              <div className="sources_drop_divider">Radiological Imaging</div>
-              <button className="sources_drop_item" style={{ "--src-color": "#b0bec5" }}
-                onClick={() => { pendingImgType.current = "xray"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-x-ray sources_drop_icon" />
-                <span className="sources_drop_label">Radiograph (X-Ray)</span>
-                <span className="sources_drop_tag">Imaging</span>
-              </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#4dd0e1" }}
-                onClick={() => { pendingImgType.current = "ct"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-target sources_drop_icon" />
-                <span className="sources_drop_label">CT Scan</span>
-                <span className="sources_drop_tag">Imaging</span>
-              </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#9575cd" }}
-                onClick={() => { pendingImgType.current = "mri"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-brain sources_drop_icon" />
-                <span className="sources_drop_label">MRI</span>
-                <span className="sources_drop_tag">Imaging</span>
-              </button>
-              <button className="sources_drop_item" style={{ "--src-color": "#4db6ac" }}
-                onClick={() => { pendingImgType.current = "ultrasound"; setDropOpen(false); fileImgRef.current?.click(); }}>
-                <i className="fi fi-rr-wave-sine sources_drop_icon" />
-                <span className="sources_drop_label">Ultrasound</span>
-                <span className="sources_drop_tag">Imaging</span>
-              </button>
-            </div>
-          )}
-        </div>
+        <button id="sources_back_btn" onClick={() => navigate("/home")} aria-label="Home" title="Home">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 13h1v7c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-7h1c.4 0 .77-.24.92-.62.15-.37.07-.8-.22-1.09l-8.99-9a.996.996 0 0 0-1.41 0l-9.01 9c-.29.29-.37.72-.22 1.09s.52.62.92.62Zm9-8.59 6 6V20H6v-9.59z" />
+          </svg>
+        </button>
+        <button id="sources_morphe_btn" onClick={() => navigate("/about/meta-patient-noumena")} aria-label="About Meta-Patient Noumena" title="About Meta-Patient Noumena">
+          <i className="fi fi-rr-info" aria-hidden="true" />
+        </button>
       </div>
 
       {/* Hidden file inputs */}
@@ -809,7 +632,7 @@ const SourcesPage = () => {
       {/* ── Feedback ── */}
       {error && <div id="sources_error">{error}</div>}
       {info  && <div id="sources_info">{info}</div>}
-      {compressionPrompt && (
+      {false && compressionPrompt && (
         <div id="sources_compress_prompt">
           <div className="sources_compress_prompt__copy">
             <strong>Split PDF for upload?</strong>
@@ -895,6 +718,25 @@ const SourcesPage = () => {
 
       {/* ── Table ── */}
       <div id="sources_body">
+        <div className="sources_table_stage">
+        <div className="sources_access_tabs" role="tablist" aria-label="Sort sources by mode of access">
+          <span className="sources_access_tabs__label">Sort by mode of access</span>
+          <div className="sources_access_tabs__list">
+            {availableAccessModeTabs.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="tab"
+                aria-selected={accessModeTab === mode}
+                className={`sources_access_tab${accessModeTab === mode ? " sources_access_tab--active" : ""}`}
+                onClick={() => setAccessModeTab(mode)}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="sources_table_scroll">
         <table id="sources_table">
           <thead>
             <tr>
@@ -908,7 +750,7 @@ const SourcesPage = () => {
                   />
                 </th>
               )}
-              <th className="sources_type_col">Type</th>
+              <th className="sources_type_col">Mode of Access</th>
               <th className="sources_format_col">Format</th>
               <th className="sources_name_col">Name</th>
             </tr>
@@ -916,10 +758,13 @@ const SourcesPage = () => {
           <tbody>
             {loading ? (
               <tr><td colSpan={deleteMode ? 4 : 3} className="sources_td_status">Loading…</td></tr>
-            ) : sources.length === 0 ? (
-              <tr><td colSpan={deleteMode ? 4 : 3} className="sources_td_status">No sources yet — click + Add Source to get started.</td></tr>
-            ) : sources.map((s) => (
-              <tr key={s._id}>
+            ) : visibleSources.map((s) => (
+              <tr
+                key={s._id}
+                className={`sources_row${swipedSourceId === s._id ? " sources_row--swiped" : ""}`}
+                onTouchStart={handleSourceTouchStart}
+                onTouchEnd={(event) => handleSourceTouchEnd(s._id, event)}
+              >
                 {deleteMode && (
                   <td className="sources_select_col">
                     <input
@@ -931,14 +776,14 @@ const SourcesPage = () => {
                   </td>
                 )}
                 <td>
-                  <span className="sources_type_badge" style={{ "--src-color": TYPE_COLORS[s.type] || "#aaa" }}>
-                    {TYPE_LABELS[s.type] || s.type}
+                  <span className="sources_type_badge">
+                    {modeOfAccessFromSource(s)}
                   </span>
                 </td>
                 <td className="sources_td_format">{s.format || "—"}</td>
                 <td className="sources_td_name">
                   {renamingId === s._id ? (
-                    <span className="sources_rename_group">
+                    <span className="sources_rename_group sources_row_content">
                       <input
                         type="text"
                         className="sources_rename_input"
@@ -967,14 +812,15 @@ const SourcesPage = () => {
                       >✕</button>
                     </span>
                   ) : (
-                    <span className="sources_rename_group">
+                    <span className="sources_rename_group sources_row_content">
                       {isSourceOpenable(s) ? (
                         <button type="button" className="sources_name_text sources_name_text--link" onClick={() => openSource(s)} title={`Open ${s.name}`}>
-                          {s.name}
+                          {displaySourceName(s.name)}
                         </button>
                       ) : (
-                        <span className="sources_name_text" title={s.name}>{s.name}</span>
+                        <span className="sources_name_text" title={s.name}>{displaySourceName(s.name)}</span>
                       )}
+                      {swipedSourceId === s._id && <span className="sources_row_actions">
                       <button
                         type="button"
                         className="sources_rename_btn"
@@ -986,27 +832,44 @@ const SourcesPage = () => {
                           <path d="M7 13v3c0 .55.45 1 1 1h3c.27 0 .52-.11.71-.29l9-9a.996.996 0 0 0 0-1.41l-3-3a.996.996 0 0 0-1.41 0l-9.01 8.99A1 1 0 0 0 7 13m10-7.59L18.59 7 17.5 8.09 15.91 6.5zm-8 8 5.5-5.5 1.59 1.59-5.5 5.5H9z" />
                         </svg>
                       </button>
-                    </span>
-                  )}
-                  {String(s.format || "").toLowerCase() === "pdf" && (
-                    <span className={`sources_ocr_status sources_ocr_status--${s.ocrStatus || "not_started"}`}>
-                      <span className="sources_ocr_status_label">
-                        <i className="fi fi-rr-scanner-image" aria-hidden="true" />
-                        OCR {String(s.ocrStatus || "not_started").replace(/_/g, " ")}
-                      </span>
-                      {["queued", "uploading", "processing", "completed", "partial"].includes(s.ocrStatus) && (
-                        <span className="sources_ocr_progress" role="progressbar" aria-label={`OCR progress ${Math.round((Number(s.ocrProgress) || 0) * 100)}%`} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round((Number(s.ocrProgress) || 0) * 100)}>
-                          <span className={`sources_ocr_progress_fill${s.ocrStatus === "processing" && !(Number(s.ocrProgress) > 0) ? " sources_ocr_progress_fill--indeterminate" : ""}`} style={{ width: `${Math.max(0, Math.min(100, (Number(s.ocrProgress) || 0) * 100))}%` }} />
-                        </span>
-                      )}
-                      {["queued", "uploading", "processing", "completed", "partial"].includes(s.ocrStatus) && <span className="sources_ocr_progress_value">{Math.round((Number(s.ocrProgress) || 0) * 100)}%</span>}
+                      <button
+                        type="button"
+                        className="sources_del_btn"
+                        onClick={() => {
+                          if (window.confirm(`Delete “${s.name}”?`)) deleteSource(s._id);
+                        }}
+                        title={`Delete ${s.name}`}
+                        aria-label={`Delete ${s.name}`}
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                          <path d="M9 3h6l1 2h4v2H4V5h4zm-2 6h2v9H7zm4 0h2v9h-2zm4 0h2v9h-2z" />
+                          <path d="M6 21h12l1-14H5z" opacity=".35" />
+                        </svg>
+                      </button>
+                      </span>}
                     </span>
                   )}
                 </td>
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr className="sources_add_row">
+              <td colSpan={deleteMode ? 4 : 3}>
+                <button
+                  type="button"
+                  className="sources_add_row_btn"
+                  onClick={() => fileDocRef.current?.click()}
+                  aria-label="Add source"
+                  title="Add source"
+                >+
+                </button>
+              </td>
+            </tr>
+          </tfoot>
         </table>
+        </div>
+        </div>
       </div>
 
     </div>

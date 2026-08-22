@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
@@ -12,6 +12,147 @@ const authHeaders = () => {
 const formatItems = (value) => (
   Number.isFinite(Number(value)) ? Number(value).toLocaleString() : "—"
 );
+
+const LOCAL_TERMINOLOGY_WORDS = [
+  {
+    cui: "LOCAL-TTY",
+    preferredName: "TTY",
+    tty: "TTY",
+    sty: "—",
+    definition: "Term Type: the type of term or source name represented in a terminology source.",
+    definitionSource: "RabbitHole local terminology",
+    unifiedStrings: ["TTY", "Term Type"],
+  },
+  {
+    cui: "LOCAL-STY",
+    preferredName: "STY",
+    tty: "—",
+    sty: "STY",
+    definition: "Semantic Type: the semantic category assigned to a terminology concept.",
+    definitionSource: "RabbitHole local terminology",
+    unifiedStrings: ["STY", "Semantic Type"],
+  },
+];
+
+const REFERENCE_COLUMNS = [
+  { key: "cui", label: "ID (CUI)", className: "terminology_reference_cell--id" },
+  { key: "concept", label: "Value", className: "terminology_reference_cell--concept" },
+  { key: "sty", label: "Semantic Type (STY)", className: "terminology_reference_cell--sty" },
+  { key: "abbreviations", label: "Abbreviations", className: "terminology_reference_cell--abbreviations" },
+  { key: "definitionAui", label: "AUI", className: "terminology_reference_cell--definition-aui" },
+  { key: "definitionValue", label: "Value", className: "terminology_reference_cell--definition-value" },
+  { key: "definitionSource", label: "Source (SAB)", className: "terminology_reference_cell--definition-source" },
+  { key: "stringSui", label: "ID (SUI)", className: "terminology_reference_cell--string-sui" },
+  { key: "stringValue", label: "Value", className: "terminology_reference_cell--string-value" },
+  { key: "stringTty", label: "Term Type (TTY)", className: "terminology_reference_cell--string-tty" },
+];
+
+const REFERENCE_TABS = [
+  { key: "concepts", label: "Concepts", keys: ["abbreviations"] },
+  { key: "definitions", label: "Definitions", keys: ["definitionAui", "definitionValue", "definitionSource"] },
+  { key: "strings", label: "Strings", keys: ["stringSui", "stringValue", "stringTty"] },
+];
+
+const CONCEPT_IDENTITY_KEYS = ["cui", "concept", "sty"];
+const referenceColumnsFor = (tabKey) => REFERENCE_COLUMNS.filter((column) => (
+  CONCEPT_IDENTITY_KEYS.includes(column.key)
+  || REFERENCE_TABS.find((tab) => tab.key === tabKey)?.keys.includes(column.key)
+));
+
+const referenceHeaderLayoutFor = (tabKey) => [
+  { type: "group", label: "Concept", keys: tabKey === "concepts" ? [...CONCEPT_IDENTITY_KEYS, "abbreviations"] : CONCEPT_IDENTITY_KEYS },
+  ...(tabKey === "concepts"
+    ? []
+    : [{ type: "group", label: REFERENCE_TABS.find((tab) => tab.key === tabKey)?.label || "", keys: REFERENCE_TABS.find((tab) => tab.key === tabKey)?.keys || [] }]),
+];
+
+const stringItemsFor = (concept) => (
+  Array.isArray(concept.stringItems) && concept.stringItems.length
+    ? concept.stringItems
+    : (concept.unifiedStrings || []).map((value) => ({ sui: "", value, tty: "" }))
+);
+
+const renderStringList = (concept, property) => {
+  const items = stringItemsFor(concept);
+  if (!items.length) return "—";
+  return (
+    <ul className="terminology_string_values">
+      {items.map((item, index) => <li key={`${item.sui || "string"}-${item.value}-${index}`}>{item[property] || "—"}</li>)}
+    </ul>
+  );
+};
+
+const definitionItemsFor = (concept) => (
+  Array.isArray(concept.definitionItems) && concept.definitionItems.length
+    ? concept.definitionItems
+    : (concept.definition ? [{ aui: "", value: concept.definition, source: concept.definitionSource || "" }] : [])
+);
+
+const renderDefinitionCell = (item, column) => {
+  const values = { definitionAui: item.aui, definitionValue: item.value, definitionSource: item.source };
+  return values[column.key] || "—";
+};
+
+const renderDefinitionList = (concept, property) => {
+  const items = definitionItemsFor(concept);
+  if (!items.length) return "—";
+  return (
+    <ul className="terminology_definition_values">
+      {items.map((item, index) => <li key={`${item.aui || "definition"}-${index}`}>{item[property] || "—"}</li>)}
+    </ul>
+  );
+};
+
+const renderAbbreviations = (concept) => {
+  const items = Array.isArray(concept.abbreviations) ? concept.abbreviations : [];
+  if (!items.length) return "—";
+  const visibleItems = items.slice(0, 3);
+  return (
+    <div className="terminology_abbreviation_values">
+      <div className="terminology_abbreviation_chips">
+        {visibleItems.map((item, index) => <span key={`${item.str}-${item.aui || index}`} title={`${item.tty || ""}${item.sab ? ` · ${item.sab}` : ""}`}>{item.str}</span>)}
+      </div>
+      {items.length > visibleItems.length && (
+        <details>
+          <summary>+{items.length - visibleItems.length} more</summary>
+          <ul>{items.slice(3).map((item, index) => <li key={`${item.str}-${item.aui || index}`}>{item.str}</li>)}</ul>
+        </details>
+      )}
+    </div>
+  );
+};
+
+const renderReferenceCell = (concept, column) => {
+  switch (column.key) {
+    case "cui":
+      return <code>{concept.cui || "—"}</code>;
+    case "concept":
+      return (
+        <div className="terminology_concept_value">
+          <strong>{concept.preferredName || "—"}</strong>
+          {String(concept.cui || "").startsWith("LOCAL-") && <span className="terminology_local_badge">Local</span>}
+        </div>
+      );
+    case "abbreviations":
+      return renderAbbreviations(concept);
+    case "sty":
+      return <code className="terminology_value_badge">{concept.sty || "—"}</code>;
+    case "definitionAui":
+      return renderDefinitionList(concept, "aui");
+    case "definitionValue":
+      return renderDefinitionList(concept, "value");
+    case "definitionSource":
+      return renderDefinitionList(concept, "source");
+    case "stringSui":
+      return renderStringList(concept, "sui");
+    case "stringValue":
+      return renderStringList(concept, "value");
+    case "stringTty":
+      return renderStringList(concept, "tty");
+    default:
+      return "—";
+  }
+};
 
 const UMLS_ABBREVIATION_GROUPS = [
   {
@@ -100,7 +241,10 @@ const TerminologyPage = () => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
+  const [searchLanguages, setSearchLanguages] = useState(["ENG", "ARA"]);
   const [abbreviationQuery, setAbbreviationQuery] = useState("");
+  const [referenceTab, setReferenceTab] = useState("concepts");
+  const searchAbortRef = useRef(null);
 
   const sourceAbbreviations = useMemo(() => {
     const filter = abbreviationQuery.trim().toLowerCase();
@@ -135,18 +279,63 @@ const TerminologyPage = () => {
 
   const search = async (event) => {
     event.preventDefault();
-    if (query.trim().length < 2) return;
+    if (query.trim().length < 2 || !searchLanguages.length) return;
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+    const searchQuery = query.trim();
     setSearching(true);
     setError("");
+    setResults([]);
     try {
-      const response = await fetch(apiUrl(`/api/terminology/search?q=${encodeURIComponent(query.trim())}`), { headers: authHeaders() });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Terminology search failed.");
-      setResults(data.results || []);
+      const languages = searchLanguages.join(",");
+      const response = await fetch(apiUrl(`/api/terminology/search?q=${encodeURIComponent(searchQuery)}&languages=${encodeURIComponent(languages)}&stream=1`), {
+        headers: authHeaders(),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || "Terminology search failed.");
+      }
+      if (!response.body) throw new Error("Terminology search stream is unavailable.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const streamedResults = new Map();
+      const appendResult = (item) => {
+        if (!item?.cui || streamedResults.has(item.cui)) streamedResults.set(item?.cui || `result-${streamedResults.size}`, item);
+        else streamedResults.set(item.cui, item);
+        setResults([...streamedResults.values()]);
+      };
+      const processEvents = (chunk) => {
+        chunk.split("\n\n").filter(Boolean).forEach((rawEvent) => {
+          const eventName = rawEvent.match(/^event:\s*(.+)$/m)?.[1] || "message";
+          const dataLine = rawEvent.match(/^data:\s*(.+)$/m)?.[1];
+          if (!dataLine) return;
+          const payload = JSON.parse(dataLine);
+          if (eventName === "result") appendResult(payload);
+          if (eventName === "complete") {
+            streamedResults.clear();
+            (payload.results || []).forEach((item) => streamedResults.set(item.cui, item));
+            setResults([...streamedResults.values()]);
+          }
+          if (eventName === "error") throw new Error(payload.error || "Terminology search failed.");
+        });
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+        events.forEach(processEvents);
+        if (done) break;
+      }
+      if (buffer.trim()) processEvents(buffer);
     } catch (requestError) {
+      if (requestError.name === "AbortError") return;
       setError(requestError.message);
     } finally {
-      setSearching(false);
+      if (searchAbortRef.current === controller) setSearching(false);
     }
   };
 
@@ -157,8 +346,8 @@ const TerminologyPage = () => {
           <i className="fi fi-rr-arrow-left" aria-hidden="true" />
         </button>
         <div className="terminology_identity">
-          <span>AMCTOSHS Reference Services</span>
-          <h1>AMCTOSHS Terminology</h1>
+          <span>RabbitHole Reference Services</span>
+          <h1>RabbitHole Terminology</h1>
           <p>Local normalized UMLS concepts, terms, definitions, semantic types, relations, and source vocabularies.</p>
         </div>
         <button type="button" className="terminology_refresh" onClick={loadStatus} disabled={loading}>
@@ -180,6 +369,11 @@ const TerminologyPage = () => {
             <span>Local reference items</span>
             <strong>{formatItems(status?.totalItems)}</strong>
             <small>Records across detected sections</small>
+          </article>
+          <article>
+            <span>Unique concepts</span>
+            <strong>{formatItems(status?.conceptCount)}</strong>
+            <small>Distinct CUIs in MRCONSO.RRF</small>
           </article>
           <article>
             <span>Detected release</span>
@@ -239,26 +433,85 @@ const TerminologyPage = () => {
             <form onSubmit={search} className="terminology_search">
               <i className="fi fi-rr-search" aria-hidden="true" />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search a concept or synonym" />
-              <button type="submit" disabled={searching || query.trim().length < 2}>{searching ? "Searching…" : "Search"}</button>
+              <button type="submit" disabled={searching || query.trim().length < 2 || !searchLanguages.length}>{searching ? "Searching…" : "Search"}</button>
             </form>
           </div>
-          <div className="terminology_table_wrap">
-            <table className="terminology_table terminology_reference_table terminology_reference_table--simple">
-              <thead><tr><th>Concept ID</th><th>Concept</th><th>Definition</th><th>Unified strings</th></tr></thead>
+          <div className="terminology_language_filters" aria-label="Search languages">
+            <span>Languages</span>
+            {[['ENG', 'English'], ['ARA', 'Arabic']].map(([code, label]) => (
+              <label key={code}>
+                <input
+                  type="checkbox"
+                  checked={searchLanguages.includes(code)}
+                  onChange={() => setSearchLanguages((current) => current.includes(code)
+                    ? current.filter((language) => language !== code)
+                    : [...current, code])}
+                />
+                {label}
+              </label>
+            ))}
+          </div>
+          <div className="terminology_reference_tabs" role="tablist" aria-label="Terminology result categories">
+            {REFERENCE_TABS.map((tab) => (
+              <button
+                key={tab.key}
+                type="button"
+                role="tab"
+                aria-selected={referenceTab === tab.key}
+                className={referenceTab === tab.key ? "is-active" : ""}
+                onClick={() => setReferenceTab(tab.key)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="terminology_table_wrap terminology_reference_table_wrap">
+            <table className="terminology_table terminology_reference_table terminology_reference_table--simple" key={referenceTab}>
+              <caption className="terminology_visually_hidden">Local terminology search results</caption>
+              <thead>
+                <tr>
+                  {referenceHeaderLayoutFor(referenceTab).map((item) => item.type === "group"
+                    ? <th key={item.label} colSpan={item.keys.length} scope="colgroup">{item.label}</th>
+                    : <th key={item.key} rowSpan="2" scope="col">{REFERENCE_COLUMNS.find((column) => column.key === item.key)?.label}</th>)}
+                </tr>
+                <tr>
+                  {referenceHeaderLayoutFor(referenceTab).filter((item) => item.type === "group").flatMap((group) => group.keys).map((key) => {
+                    const column = REFERENCE_COLUMNS.find((item) => item.key === key);
+                    return <th key={key} scope="col">{column.label}</th>;
+                  })}
+                </tr>
+              </thead>
               <tbody>
-                {results.length ? results.map((concept) => (
-                  <tr key={concept.cui}>
-                    <td><code>{concept.cui || "—"}</code></td>
-                    <td><strong>{concept.preferredName || "—"}</strong></td>
-                    <td className="terminology_definition">{concept.definition || "No definition available."}</td>
-                    <td>
-                      <details className="terminology_unified_strings">
-                        <summary><strong>{formatItems(concept.unifiedStringCount)}</strong> strings</summary>
-                        <ul>{(concept.unifiedStrings || []).map((string) => <li key={string}>{string}</li>)}</ul>
-                      </details>
-                    </td>
-                  </tr>
-                )) : <tr><td colSpan="4" className="terminology_empty">Search for a term to see which strings UMLS unifies under each concept.</td></tr>}
+                {results.length ? results.flatMap((concept) => {
+                  const columns = referenceColumnsFor(referenceTab);
+                  if (referenceTab !== "definitions") {
+                    return [(
+                      <tr key={concept.cui} className={String(concept.cui || "").startsWith("LOCAL-") ? "terminology_reference_row--local" : undefined}>
+                        {columns.map((column) => (
+                          <td key={column.key} className={`terminology_reference_cell ${column.className}`} data-label={column.label}>
+                            {renderReferenceCell(concept, column)}
+                          </td>
+                        ))}
+                      </tr>
+                    )];
+                  }
+                  const definitions = definitionItemsFor(concept);
+                  const rows = definitions.length ? definitions : [{ aui: "", value: "", source: "" }];
+                  return rows.map((definition, index) => (
+                    <tr key={`${concept.cui}-definition-${definition.aui || index}`} className={String(concept.cui || "").startsWith("LOCAL-") ? "terminology_reference_row--local" : undefined}>
+                      {index === 0 && columns.filter((column) => CONCEPT_IDENTITY_KEYS.includes(column.key)).map((column) => (
+                        <td key={column.key} rowSpan={rows.length} className={`terminology_reference_cell ${column.className}`} data-label={column.label}>
+                          {renderReferenceCell(concept, column)}
+                        </td>
+                      ))}
+                      {columns.filter((column) => !CONCEPT_IDENTITY_KEYS.includes(column.key)).map((column) => (
+                        <td key={column.key} className={`terminology_reference_cell ${column.className}`} data-label={column.label}>
+                          {renderDefinitionCell(definition, column)}
+                        </td>
+                      ))}
+                    </tr>
+                  ));
+                }) : <tr><td colSpan={referenceColumnsFor(referenceTab).length} className="terminology_empty">Search for a term to see which strings UMLS unifies under each concept.</td></tr>}
               </tbody>
             </table>
           </div>

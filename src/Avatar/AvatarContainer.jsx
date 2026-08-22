@@ -3,6 +3,7 @@ import { useAvatarProvider } from "./AvatarProviderContext";
 import { AVATAR_PROVIDERS } from "./avatarConstants";
 import AnamAvatarView from "./AnamAvatarView";
 import Local3DAvatarView from "./local3d/Local3DAvatarView";
+import RabbitWonderlandAvatarView from "./RabbitWonderlandAvatarView";
 
 // Renders exactly one provider view at a time — switching providers is a
 // plain React unmount+mount, which is already the correct cleanup for both
@@ -12,7 +13,7 @@ import Local3DAvatarView from "./local3d/Local3DAvatarView";
 // is currently mounted, so HomeChat.jsx's own call sites
 // (streamChunk/endMessage/isLive — unchanged) never need to know which
 // provider is actually active.
-const AvatarContainer = forwardRef(({ allowViewportControls = true, onSpeechCaptionChange = null }, ref) => {
+const AvatarContainer = forwardRef(({ allowViewportControls = true, onSpeechCaptionChange = null, activity = "idle", typingText = "" }, ref) => {
   const { provider } = useAvatarProvider();
   const innerRef = useRef(null);
 
@@ -35,6 +36,9 @@ const AvatarContainer = forwardRef(({ allowViewportControls = true, onSpeechCapt
 
   if (provider === AVATAR_PROVIDERS.LOCAL3D) {
     return <Local3DAvatarView ref={innerRef} allowViewportControls={allowViewportControls} onSpeechCaptionChange={onSpeechCaptionChange} />;
+  }
+  if (provider === AVATAR_PROVIDERS.RABBIT_WONDERLAND) {
+    return <RabbitWonderlandAvatarView ref={innerRef} activity={activity} typingText={typingText} onSpeechCaptionChange={onSpeechCaptionChange} />;
   }
   return <AnamAvatarView ref={innerRef} onSpeechCaptionChange={onSpeechCaptionChange} />;
 });

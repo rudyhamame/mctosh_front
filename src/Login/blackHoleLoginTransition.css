@@ -1,0 +1,69 @@
+.blackHoleLoginTransition {
+  position: fixed;
+  z-index: 2147483000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  width: 100vw;
+  height: 100svh;
+  overflow: hidden;
+  pointer-events: none;
+  background: transparent;
+  isolation: isolate;
+}
+
+.blackHoleLoginTransition__logo {
+  display: block;
+  width: clamp(9rem, 28vmin, 22rem);
+  height: clamp(9rem, 28vmin, 22rem);
+  object-fit: contain;
+  opacity: 0;
+  transform: scale(0) rotate(0deg);
+  transform-origin: 50% 50%;
+  user-select: none;
+  -webkit-user-drag: none;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 1.1rem 2.4rem rgba(0, 0, 0, 0.24));
+  animation: rabbitHoleLogoPassage 15s both;
+}
+
+#login_page.is-black-hole-collapsing {
+  pointer-events: none;
+  user-select: none;
+}
+
+@keyframes rabbitHoleLogoPassage {
+  0% {
+    opacity: 0;
+    transform: scale(0) rotate(0deg);
+    animation-timing-function: cubic-bezier(.16, .84, .3, 1);
+  }
+  10% { opacity: 1; }
+  43% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+    animation-timing-function: cubic-bezier(.64, 0, .78, .28);
+  }
+  52% {
+    opacity: 1;
+    transform: scale(1.02) rotate(0deg);
+    animation-timing-function: cubic-bezier(.42, 0, .58, 1);
+  }
+  88% { opacity: 1; }
+  100% {
+    opacity: 0;
+    transform: scale(0) rotate(1080deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blackHoleLoginTransition__logo {
+    animation: rabbitHoleLogoPassage 15s both;
+  }
+}
+
+@keyframes rabbitHoleLogoPassageReduced {
+  0% { opacity: 0; transform: scale(0.84); }
+  42% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.84); }
+}

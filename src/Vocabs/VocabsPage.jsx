@@ -542,7 +542,7 @@ const VocabsPage = () => {
         <div className="vocabs_header_row">
           <button type="button" className="vocabs_back" onClick={() => navigate("/home")} aria-label="Go to Home" title="Home"><i className="fi fi-rr-home" aria-hidden="true" /></button>
           <div className="vocabs_header_identity">
-            <h1><i className="fi fi-rr-book-alt" aria-hidden="true" /> AMCTOSHS Vocabs</h1>
+            <h1><i className="fi fi-rr-book-alt" aria-hidden="true" /> RabbitHole Morphemes</h1>
             <p>Look up the meaning and usage of terms while building and studying the patient object.</p>
           </div>
           <div className="vocabs_lookup_toolbar">
@@ -575,7 +575,7 @@ const VocabsPage = () => {
         </div>
       </header>
 
-      <section className="vocabs_page_card" aria-label="AMCTOSHS vocabulary lookup">
+      <section className="vocabs_page_card" aria-label="RabbitHole vocabulary lookup">
         {alternativeQueue.length > 0 && (
           <section className="vocabs_alternative_queue" aria-labelledby="vocabs-alternative-heading">
             <div className="vocabs_alternative_queue_heading">

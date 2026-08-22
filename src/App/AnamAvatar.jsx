@@ -22,16 +22,16 @@ const PING_INTERVAL_MS = 5000;
 // auto-engaged voice call, which starts listening as soon as the panel
 // opens — no separate "start call" click needed). Exported so HomeChat.jsx
 // can reuse the exact same wording for its own idle/pre-call caption text.
-export const AVATAR_GREETING = "Hi, I'm AMCTOSHS AI. I'm listening — go ahead and ask me anything.";
+export const AVATAR_GREETING = "Hi, I'm RabbitHole AI. I'm listening — go ahead and ask me anything.";
 
 // TTS engines (both Anam's and the browser's own, see HomeChat.jsx's
-// speak()) don't know "AMCTOSHS" is an acronym-turned-word and guess at it
+// speak()) don't know "RabbitHole" is an acronym-turned-word and guess at it
 // letter-by-letter or otherwise oddly — respelled phonetically so it comes
 // out "AMEK-TOSH-S" instead. Applied only to text actually SENT to a speech
 // engine; anything displayed on screen keeps the real spelling. Exported so
 // both speech paths (the avatar's own talk stream here, and the browser-TTS
 // fallback in HomeChat.jsx) apply the identical substitution.
-export const speakableText = (text) => String(text || "").replace(/AMCTOSHS/gi, "Amek Tosh Ess");
+export const speakableText = (text) => String(text || "").replace(/RabbitHole/gi, "Amek Tosh Ess");
 
 // The face/voice layer for Dev AI (see HomeChat.jsx) — MCTOSH's own AI stays
 // the brain. The reply text still comes entirely from
@@ -63,7 +63,7 @@ const AnamAvatar = forwardRef(({ onSpeechCaptionChange = null }, ref) => {
     // One chunk of an in-progress assistant reply — lazily opens a talk
     // stream on the first chunk of each turn (see endMessage, which clears
     // talkStreamRef so the next turn's first chunk opens a fresh one).
-    // speakableText is applied per-chunk, so the rare case of "AMCTOSHS"
+    // speakableText is applied per-chunk, so the rare case of "RabbitHole"
     // itself getting split across two SSE deltas won't get respelled — an
     // accepted gap, not worth buffering across chunk boundaries for.
     streamChunk(text) {

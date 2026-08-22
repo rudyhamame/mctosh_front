@@ -4,6 +4,8 @@
   height: calc((var(--vh, 1vh) * 100) - var(--app-footer-height, 44px)); /* reserve space for the fixed app footer instead of running underneath it */
   background: var(--color-bg);
   color: var(--color-text);
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, monospace;
+  font-weight: 300;
 }
 
 #ai_chat_messages {
@@ -19,6 +21,8 @@
   max-width: 72ch;
   line-height: 1.6;
   font-size: 0.95rem;
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, monospace;
+  font-weight: 300;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -50,6 +54,8 @@
   padding: 0.75rem 1rem;
   border-top: 1px solid var(--color-border);
   background: var(--color-bg);
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, monospace;
+  font-weight: 500;
 }
 
 #ai_chat_input {
@@ -62,7 +68,8 @@
   font-size: 0.95rem;
   resize: none;
   outline: none;
-  font-family: inherit;
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, monospace;
+  font-weight: 300;
 }
 
 #ai_chat_input:focus {
@@ -77,6 +84,7 @@
   color: #fff;
   font-size: 0.95rem;
   font-weight: 600;
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, monospace;
   cursor: pointer;
 }
 
@@ -92,5 +100,7 @@
   background: transparent;
   color: var(--color-text-muted);
   font-size: 0.85rem;
+  font-family: "SF Mono", SFMono-Regular, ui-monospace, monospace;
+  font-weight: 500;
   cursor: pointer;
 }

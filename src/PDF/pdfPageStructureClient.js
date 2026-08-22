@@ -14,6 +14,7 @@
 
 import { apiUrl } from "../config/api";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { trackPyMuPDFActivity } from "./pymupdfActivity";
 
 const authHeaders = () => {
   const session = readStoredSession();
@@ -23,12 +24,20 @@ const jsonHeaders = () => ({ "Content-Type": "application/json", ...authHeaders(
 
 const parseJsonResponse = async (res) => {
   const data = await res.json().catch(() => ({}));
-  if (data.error) throw new Error(data.error.message || data.error || `Request failed (${res.status}).`);
+  if (data.error) {
+    const message = data.error.message || data.error || `Request failed (${res.status}).`;
+    const details = Array.isArray(data.error.details)
+      ? data.error.details
+      : Array.isArray(data.details) ? data.details : [];
+    throw new Error(details.length ? `${message} ${details.join("; ")}` : message);
+  }
   if (!res.ok) throw new Error(`Request failed (${res.status}).`);
   return data;
 };
 
 const isObjectId = (value) => /^[a-f\d]{24}$/i.test(String(value || "").trim());
+const documentResolutionCache = new Map();
+const MAX_DOCUMENT_RESOLUTION_CACHE_ENTRIES = 32;
 
 /**
  * Get-or-create a stable documentId for (user, filename) — no AI/extraction,
@@ -42,13 +51,26 @@ const isObjectId = (value) => /^[a-f\d]{24}$/i.test(String(value || "").trim());
  * with a clear message in that case.
  */
 export const resolveDocumentId = async ({ filename, pageCount, type, sourceId }) => {
-  const res = await fetch(apiUrl("/api/pdf-page-structure/resolve-document"), {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify({ filename, pageCount, type, sourceId }),
-  });
-  const data = await parseJsonResponse(res);
-  return data.documentId;
+  const payload = { filename, pageCount, type };
+  if (String(sourceId || "").trim()) payload.sourceId = String(sourceId).trim();
+  const session = readStoredSession();
+  const sessionKey = session?.my_id || session?.token || "anonymous";
+  const identityKey = payload.sourceId
+    ? `${sessionKey}:source:${payload.sourceId}:${pageCount}`
+    : `${sessionKey}:local:${String(filename).trim()}:${pageCount}`;
+  if (!documentResolutionCache.has(identityKey)) {
+    const request = fetch(apiUrl("/api/pdf-page-structure/resolve-document"), {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify(payload),
+    }).then(parseJsonResponse).then((data) => data.documentId);
+    documentResolutionCache.set(identityKey, request);
+    while (documentResolutionCache.size > MAX_DOCUMENT_RESOLUTION_CACHE_ENTRIES) {
+      documentResolutionCache.delete(documentResolutionCache.keys().next().value);
+    }
+    request.catch(() => documentResolutionCache.delete(identityKey));
+  }
+  return documentResolutionCache.get(identityKey);
 };
 
 /** Read-only — loads existing draft/saved structure (+ each slot's own schemaVersion/legacy flag). NEVER triggers extraction/AI. Safe to call on page navigation / Narrative Mode open. */
@@ -72,18 +94,22 @@ export const savePdfNavigation = async (documentId, navigation) => {
 };
 
 /** Read-only extraction evidence for one page: native geometry + Docling layout, with no draft/save side effects. */
-export const getPageExtractionEvidence = async (documentId, pageNumber, { nativeOnly = false } = {}) => {
+export const getPageExtractionEvidence = async (documentId, pageNumber, { nativeOnly = false, forensics = false } = {}) => {
   if (!isObjectId(documentId)) {
     throw new Error("PDF extraction is unavailable until the document identity is resolved.");
   }
   // raw-glyphs-v2 distinguishes the character-aware native payload from
   // older cached span-only responses that cannot repair synthetic spaces.
-  const query = nativeOnly ? "?nativeOnly=1&format=raw-glyphs-v2" : "?format=raw-glyphs-v2";
-  const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/extraction${query}`), {
-    headers: authHeaders(),
-    cache: "no-store",
+  const query = new URLSearchParams({ format: "raw-glyphs-v2" });
+  if (nativeOnly) query.set("nativeOnly", "1");
+  if (forensics) query.set("forensics", "1");
+  return trackPyMuPDFActivity(async () => {
+    const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/extraction?${query}`), {
+      headers: authHeaders(),
+      cache: "no-store",
+    });
+    return parseJsonResponse(res);
   });
-  return parseJsonResponse(res);
 };
 
 /**
@@ -98,12 +124,14 @@ export const getPageExtractionEvidence = async (documentId, pageNumber, { native
  * resolvable Source (see resolveDocumentId's own comment).
  */
 export const segmentPage = async (documentId, pageNumber, { requestId, provider, model }) => {
-  const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/segment`), {
-    method: "POST",
-    headers: jsonHeaders(),
-    body: JSON.stringify({ requestId, provider, model }),
+  return trackPyMuPDFActivity(async () => {
+    const res = await fetch(apiUrl(`/api/pdf-page-structure/${documentId}/${pageNumber}/segment`), {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ requestId, provider, model }),
+    });
+    return parseJsonResponse(res);
   });
-  return parseJsonResponse(res);
 };
 
 /** Promotes the current draft to saved. */

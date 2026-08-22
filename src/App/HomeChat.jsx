@@ -9,6 +9,17 @@ import { AVATAR_GREETING, speakableText } from "./AnamAvatar";
 import { readDevAiSettings } from "./devAiSettings";
 import AvatarContainer from "../Avatar/AvatarContainer";
 import { startConfiguredStt } from "../Shared/configuredStt";
+import { readSttSettings, STT_PROVIDER_OPTIONS } from "../Avatar/local3d/sttProviderSettings";
+import { createLocalAvatarSpeechService } from "../Avatar/local3d/services/localAvatarSpeechService";
+import { createBrowserTTSProvider } from "../Avatar/local3d/services/ttsProviders/BrowserTTSProvider";
+import { createOpenVoiceCloneProvider } from "../Avatar/local3d/services/ttsProviders/OpenVoiceCloneProvider";
+import { createKokoroTTSProvider } from "../Avatar/local3d/services/ttsProviders/KokoroTTSProvider";
+import { createSupertonicTTSProvider } from "../Avatar/local3d/services/ttsProviders/SupertonicTTSProvider";
+import { readVoiceSettings, readTtsProviderId, TTS_PROVIDERS } from "../Avatar/local3d/ttsProviderSettings";
+import { useAvatarProvider } from "../Avatar/AvatarProviderContext";
+import { AVATAR_PROVIDERS } from "../Avatar/avatarConstants";
+import VirtualKeyboard from "../Shared/VirtualKeyboard";
+import { RABBIT_LOGO_BLINK_FRAMES } from "../Shared/RabbitLogoBlink";
 
 const appendToLast = (msgs, delta) => {
   const next = [...msgs];
@@ -29,10 +40,51 @@ const replaceLast = (msgs, text) => {
 // independently. `currentPage` (the route the user is actually looking at
 // right now, see useLocation() in HomeChat below) is sent with every turn
 // so the AI's own reply can be aware of it.
-const useContextChat = (userId, provider, model, avatarRef, currentPage) => {
+const useContextChat = (userId, provider, model, avatarRef, currentPage, onReplySpeech = null, voiceCallRef = null) => {
   const [messages, setMessages] = useState([]);
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef(null);
+  const rawReplyRef = useRef("");
+  const displayedReplyRef = useRef("");
+  const streamFinishedRef = useRef(false);
+  const speechStartedRef = useRef(false);
+  const pendingSpeechRef = useRef(null);
+  const typingIntervalRef = useRef(90);
+
+  // Reveal the assistant reply one character at a time. The network stream
+  // may arrive in large chunks, so rendering it directly bypasses the
+  // intended typing latency and makes the avatar/text feel disconnected.
+  useEffect(() => {
+    let timer = 0;
+    const tick = () => {
+      if (!speechStartedRef.current) {
+        timer = window.setTimeout(tick, 60);
+        return;
+      }
+      if (displayedReplyRef.current.length < rawReplyRef.current.length) {
+        const voiceCall = Boolean(voiceCallRef?.current);
+        const nextText = voiceCall
+          ? rawReplyRef.current
+          : rawReplyRef.current[displayedReplyRef.current.length];
+        if (voiceCall) displayedReplyRef.current = rawReplyRef.current;
+        else displayedReplyRef.current += nextText;
+        setMessages((previous) => replaceLast(previous, displayedReplyRef.current));
+        avatarRef?.current?.streamChunk(nextText);
+      } else if (streamFinishedRef.current) {
+        const pendingSpeech = pendingSpeechRef.current;
+        pendingSpeechRef.current = null;
+        streamFinishedRef.current = false;
+        setStreaming(false);
+        avatarRef?.current?.endMessage();
+        pendingSpeech?.();
+      }
+
+      timer = window.setTimeout(tick, speechStartedRef.current ? typingIntervalRef.current : 60);
+    };
+    timer = window.setTimeout(tick, 60);
+
+    return () => window.clearTimeout(timer);
+  }, [avatarRef, voiceCallRef]);
 
   const send = async (userText) => {
     const text = String(userText || "").trim();
@@ -40,10 +92,22 @@ const useContextChat = (userId, provider, model, avatarRef, currentPage) => {
 
     const nextMessages = [...messages, { role: "user", content: text }];
     setMessages([...nextMessages, { role: "assistant", content: "" }]);
+    rawReplyRef.current = "";
+    displayedReplyRef.current = "";
+    streamFinishedRef.current = false;
+    speechStartedRef.current = false;
+    typingIntervalRef.current = 90;
     setStreaming(true);
 
     const controller = new AbortController();
+    controller.assistantStoppedByUser = false;
     abortRef.current = controller;
+    let stallTimer = 0;
+    const armStallTimer = () => {
+      window.clearTimeout(stallTimer);
+      stallTimer = window.setTimeout(() => controller.abort(), 35000);
+    };
+    armStallTimer();
 
     try {
       const res = await fetch(apiUrl("/api/ai/context-chat"), {
@@ -54,6 +118,10 @@ const useContextChat = (userId, provider, model, avatarRef, currentPage) => {
         }),
         signal: controller.signal,
       });
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data?.error?.message || `Assistant request failed (${res.status}).`);
+      }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -62,6 +130,7 @@ const useContextChat = (userId, provider, model, avatarRef, currentPage) => {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        armStallTimer();
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop();
@@ -77,27 +146,55 @@ const useContextChat = (userId, provider, model, avatarRef, currentPage) => {
               next[next.length - 1] = { ...next[next.length - 1], model: `${info.provider} · ${info.model}` };
               return next;
             });
-            else if (error) setMessages(p => replaceLast(p, `Error: ${error}`));
+            else if (error) rawReplyRef.current = `Error: ${error}`;
             else if (delta) {
-              setMessages(p => appendToLast(p, delta));
-              avatarRef?.current?.streamChunk(delta);
+              rawReplyRef.current += delta;
+              // The answer has started; the avatar must leave Thinking even
+              // while the rest of the streamed reply is still arriving.
+              speechStartedRef.current = true;
             }
           } catch {}
         }
       }
     } catch (err) {
-      if (err.name !== "AbortError") {
-        setMessages(p => replaceLast(p, "Could not reach AI."));
+      if (controller.assistantStoppedByUser) {
+        setMessages((previous) => {
+          const last = previous[previous.length - 1];
+          return last?.role === "assistant" && !last.content ? previous.slice(0, -1) : previous;
+        });
+      } else {
+        rawReplyRef.current = err.name === "AbortError"
+          ? "The assistant stopped because the AI response stalled. Please try again."
+          : (err.message || "Could not reach AI.");
       }
     } finally {
-      setStreaming(false);
+      window.clearTimeout(stallTimer);
       abortRef.current = null;
-      avatarRef?.current?.endMessage();
+      streamFinishedRef.current = true;
+      speechStartedRef.current = true;
+      if (rawReplyRef.current && onReplySpeech && !controller.assistantStoppedByUser) {
+        pendingSpeechRef.current = () => onReplySpeech(rawReplyRef.current, (durationMs) => {
+          typingIntervalRef.current = Math.max(20, Number(durationMs) / Math.max(1, rawReplyRef.current.length));
+        });
+      }
     }
   };
 
-  const stop  = () => abortRef.current?.abort();
-  const reset = () => { abortRef.current?.abort(); setMessages([]); setStreaming(false); };
+  const stop  = () => {
+    if (abortRef.current) abortRef.current.assistantStoppedByUser = true;
+    abortRef.current?.abort();
+  };
+  const reset = () => {
+    if (abortRef.current) abortRef.current.assistantStoppedByUser = true;
+    abortRef.current?.abort();
+    setMessages([]);
+    rawReplyRef.current = "";
+    displayedReplyRef.current = "";
+    streamFinishedRef.current = false;
+    speechStartedRef.current = false;
+    pendingSpeechRef.current = null;
+    setStreaming(false);
+  };
 
   return { messages, streaming, send, stop, reset };
 };
@@ -117,12 +214,6 @@ const stripMd = (text) => text
   .replace(/\s+/g, " ")
   .trim();
 
-const rollingSubtitle = (text) => {
-  const clean = stripMd(text);
-  if (!clean) return "";
-  return clean;
-};
-
 // Must be called synchronously inside a user gesture to unlock Safari's audio gate
 const unlockSpeech = () => {
   if (!window.speechSynthesis) return;
@@ -131,45 +222,75 @@ const unlockSpeech = () => {
   window.speechSynthesis.cancel();
 };
 
-const speak = (text, onDone) => {
+let configuredSpeechService = null;
+let configuredSpeechProviderId = null;
+let browserFallbackSpeechService = null;
+
+const createConfiguredTtsProvider = (providerId) => {
+  if (providerId === TTS_PROVIDERS.OPENVOICE) return createOpenVoiceCloneProvider();
+  if (providerId === TTS_PROVIDERS.KOKORO) return createKokoroTTSProvider();
+  if (providerId === TTS_PROVIDERS.SUPERTONIC) return createSupertonicTTSProvider();
+  return createBrowserTTSProvider();
+};
+
+const ensureConfiguredSpeechService = () => {
+  const providerId = readTtsProviderId();
+  if (!configuredSpeechService || configuredSpeechProviderId !== providerId) {
+    configuredSpeechService?.stop?.();
+    configuredSpeechProviderId = providerId;
+    configuredSpeechService = createLocalAvatarSpeechService(createConfiguredTtsProvider(providerId));
+  }
+  return configuredSpeechService;
+};
+
+const ensureBrowserFallbackSpeechService = () => {
+  if (!browserFallbackSpeechService) {
+    browserFallbackSpeechService = createLocalAvatarSpeechService(createBrowserTTSProvider());
+  }
+  return browserFallbackSpeechService;
+};
+
+const unlockConfiguredAudio = () => {
+  ensureConfiguredSpeechService().unlockAudio?.();
+};
+
+const speak = (text, onDone, onDuration) => {
   const clean = speakableText(stripMd(text));
   if (!clean) { onDone?.(); return; }
-  if (!window.speechSynthesis) { onDone?.(); return; }
-
-  window.speechSynthesis.cancel();
-
-  setTimeout(() => {
-    const utt = new SpeechSynthesisUtterance(clean);
-    utt.lang = "en-US";
-    utt.rate = 1.05;
-
-    const voices = window.speechSynthesis.getVoices();
-    const enVoice = voices.find(v => v.lang === "en-US" && v.localService)
-      || voices.find(v => v.lang.startsWith("en-") && v.localService)
-      || voices.find(v => v.lang.startsWith("en"))
-      || voices[0];
-    if (enVoice) utt.voice = enVoice;
-
-    const keepAlive = setInterval(() => {
-      if (!window.speechSynthesis.speaking) { clearInterval(keepAlive); return; }
-      window.speechSynthesis.pause();
-      window.speechSynthesis.resume();
-    }, 10000);
-
-    const finish = () => { clearInterval(keepAlive); onDone?.(); };
-    utt.onend   = finish;
-    utt.onerror = finish;
-
-    window.speechSynthesis.speak(utt);
-  }, 150);
+  const speechService = ensureConfiguredSpeechService();
+  const settings = readVoiceSettings();
+  const speechOptions = {
+    language: settings.language || "en-US",
+    voice: settings.voiceURI,
+    voiceProfileId: settings.voiceProfileId,
+    kokoroVoice: settings.kokoroVoice,
+    supertonicVoice: settings.supertonicVoice,
+    onDuration,
+  };
+  speechService.speak(clean, speechOptions).then(() => onDone?.()).catch((error) => {
+    console.error("[HomeChat] configured TTS playback failed:", error);
+    if (readTtsProviderId() === TTS_PROVIDERS.BROWSER) {
+      onDone?.();
+      return;
+    }
+    // Wonderland must remain audible even when an optional local TTS
+    // service is offline or returns an unreadable audio response.
+    ensureBrowserFallbackSpeechService().speak(clean, speechOptions)
+      .then(() => onDone?.())
+      .catch((fallbackError) => {
+        console.error("[HomeChat] browser TTS fallback failed:", fallbackError);
+        onDone?.();
+      });
+  });
 };
 
 // ── Voice Call ────────────────────────────────────────────────────────────────
 
-const CALL_LABELS = {
-  listening: "Listening…",
-  thinking:  "Thinking…",
-  speaking:  "Speaking…",
+const TTS_PROVIDER_LABELS = {
+  [TTS_PROVIDERS.BROWSER]: "Browser speech synthesis",
+  [TTS_PROVIDERS.OPENVOICE]: "OpenVoice",
+  [TTS_PROVIDERS.KOKORO]: "Kokoro",
+  [TTS_PROVIDERS.SUPERTONIC]: "Supertonic",
 };
 
 // No "avatar finished speaking" event exists on the Anam client to hook
@@ -194,7 +315,7 @@ const isInterruptingTranscript = (text) => {
 // single live caption line under the avatar (see HomeChat.jsx). Ending the
 // call is just unmounting this (the shared call-toggle button does that),
 // which the mount effect's own cleanup below already handles.
-const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
+const VoiceCall = ({ send, streaming, messages, avatarRef, onStateChange, onSpeechActivity }) => {
   const [callState, setCallState]     = useState("listening");
   const [transcript, setTranscript]   = useState("");
   const activeRef  = useRef(true);
@@ -207,6 +328,7 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
 
   useEffect(() => { sendRef.current = send; });
   useEffect(() => { callStateRef.current = callState; }, [callState]);
+  useEffect(() => { onStateChange?.(callState); }, [callState, onStateChange]);
 
   const clearSpeakingTimer = () => {
     if (speakingTimerRef.current) {
@@ -230,6 +352,7 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
 
   const startListening = async () => {
     if (!activeRef.current) return;
+    onSpeechActivity?.(false);
     stopInterruptRecognizer();
     clearSpeakingTimer();
     interruptedRef.current = false;
@@ -243,12 +366,20 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
       const rec = await startConfiguredStt({
         continuous: false,
         language: "en-US",
+        // Whisper is the authority for whether the recording contains
+        // speech; local RMS detection must not discard a quiet utterance.
+        requireDetectedSpeech: false,
+        onSpeechActivityChange: (active) => {
+          if (activeRef.current) onSpeechActivity?.(active);
+        },
         onText: (text, { final }) => {
           setTranscript(text);
-          if (final) finalText = text;
+          onSpeechActivity?.(Boolean(String(text || "").trim()));
+          if (String(text || "").trim()) finalText = text;
         },
         onEnd: () => {
           recRef.current = null;
+          onSpeechActivity?.(false);
           if (!activeRef.current) return;
           if (finalText.trim()) {
             setCallState("thinking");
@@ -257,6 +388,7 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
           } else setTimeout(startListening, 400);
         },
         onError: () => {
+          onSpeechActivity?.(false);
           if (activeRef.current) setTimeout(startListening, 1000);
         },
       });
@@ -281,8 +413,12 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
       const rec = await startConfiguredStt({
         continuous: false,
         language: "en-US",
+        onSpeechActivityChange: (active) => {
+          if (activeRef.current) onSpeechActivity?.(active);
+        },
         onText: (nextText, { final }) => {
           if (!isInterruptingTranscript(nextText)) return;
+          onSpeechActivity?.(true);
           setTranscript(nextText);
           if (!interruptedRef.current) {
             interruptedRef.current = true;
@@ -293,6 +429,7 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
         },
         onEnd: () => {
           interruptRecRef.current = null;
+          onSpeechActivity?.(false);
           if (!activeRef.current) return;
           if (finalText.trim()) {
             setCallState("thinking");
@@ -302,6 +439,7 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
         },
         onError: () => {
           interruptRecRef.current = null;
+          onSpeechActivity?.(false);
           if (activeRef.current && interruptedRef.current) setTimeout(startListening, 400);
         },
       });
@@ -362,11 +500,12 @@ const VoiceCall = ({ send, streaming, messages, avatarRef }) => {
 
 // ── Main panel ────────────────────────────────────────────────────────────────
 
-const HomeChat = () => {
+const HomeChat = ({ embedded = false, initiallyOpen = false, onClose = null }) => {
   // Provider is chosen in Settings now (same mctosh_ai_provider localStorage
   // key useAIProvider reads on mount) — Dev AI no longer has its own
   // selector, just uses whatever's currently set.
   const { provider } = useAIProvider();
+  const { provider: avatarProvider } = useAvatarProvider();
   const userId = readStoredSession()?.my_id;
   // Rendered once, app-wide (see AppRouter.js), outside of <Routes> — but
   // useLocation() still tracks navigation from anywhere inside the Router,
@@ -393,65 +532,189 @@ const HomeChat = () => {
   }, []);
 
   const selectedModel = providerOptions.find(p => p.id === provider)?.model || "";
+  const selectedProviderLabel = providerOptions.find(p => p.id === provider)?.label || provider || "AI provider";
+  const sttSettings = readSttSettings();
+  const sttProviderLabel = STT_PROVIDER_OPTIONS.find((option) => option.id === sttSettings.provider)?.label || sttSettings.provider;
+  const ttsProviderId = readTtsProviderId();
+  const ttsProviderLabel = TTS_PROVIDER_LABELS[ttsProviderId] || ttsProviderId;
   const avatarRef = useRef(null);
-  const { messages, streaming, send, stop } = useContextChat(userId, provider, selectedModel, avatarRef, currentPage);
-  const [isOpen, setIsOpen]        = useState(false);
+  const messagesEndRef = useRef(null);
+  const inCallRef = useRef(false);
+  const [replySpeaking, setReplySpeaking] = useState(false);
+  const startReplySpeech = useCallback((text, onDuration) => {
+    if (inCallRef.current) return;
+    setReplySpeaking(true);
+    speak(text, () => setReplySpeaking(false), onDuration);
+  }, []);
+  const { messages, streaming, send, stop } = useContextChat(userId, provider, selectedModel, avatarRef, currentPage, startReplySpeech, inCallRef);
+  const [isOpen, setIsOpen]        = useState(initiallyOpen);
+  const [isMinimized, setIsMinimized] = useState(false);
   const [inCall, setInCall]       = useState(false);
-  const [avatarCaption, setAvatarCaption] = useState("");
+  const [voiceState, setVoiceState] = useState("listening");
+  const [humanSpeaking, setHumanSpeaking] = useState(false);
+  const [input, setInput]         = useState("");
 
-  const handleAvatarCaptionChange = useCallback((text) => {
-    setAvatarCaption(rollingSubtitle(text));
+  const handleVoiceStateChange = useCallback((state) => {
+    setVoiceState(state);
   }, []);
 
-  // Ready to listen the instant the panel opens — no separate "start call"
-  // click needed, the avatar greets you and starts the mic itself (see
-  // AnamAvatar's own auto-greeting and VoiceCall's mount-time
-  // startListening). Turns back off on close so reopening always starts
-  // this same fresh, rather than silently resuming whatever inCall was
-  // left at from the last time the panel was open.
   useEffect(() => {
-    if (!SR) return;
-    setInCall(isOpen);
+    if (!isOpen) setInCall(false);
   }, [isOpen]);
 
   useEffect(() => {
-    if (streaming) setAvatarCaption("");
-  }, [streaming]);
+    inCallRef.current = inCall;
+  }, [inCall]);
 
-  // TTS for typed (non-call) turns — skipped whenever the avatar is live,
-  // since useContextChat's own avatarRef.streamChunk/endMessage calls
-  // already speak every reply unconditionally (call or no call, open or
-  // not); this is purely the fallback for when there's no live avatar to
-  // have covered it, so the two never talk over each other.
   useEffect(() => {
-    if (streaming || inCall || avatarRef.current?.isLive?.()) return;
-    const last = messages[messages.length - 1];
-    if (last?.role !== "assistant" || !last.content) return;
-    speak(last.content);
-  }, [streaming]); // eslint-disable-line
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, streaming]);
 
-  const mainCaption = avatarCaption || "";
+  const rabbitProviderActive = avatarProvider === AVATAR_PROVIDERS.RABBIT_WONDERLAND;
+  const assistantReplyText = messages[messages.length - 1]?.role === "assistant" ? messages[messages.length - 1]?.content || "" : "";
+  const assistantReplyStarted = streaming && messages[messages.length - 1]?.role === "assistant" && Boolean(messages[messages.length - 1]?.content);
+  const rabbitAvatarActivity = inCall
+    ? (voiceState === "listening"
+      ? "listening"
+      : (voiceState === "speaking" || (voiceState === "thinking" && Boolean(assistantReplyText))
+        ? "speaking"
+        : "thinking"))
+    : (!inCall && replySpeaking && !streaming
+      ? "speaking"
+      : (!inCall && input.trim() && !streaming
+        ? "waiting"
+        : (!inCall && streaming
+          ? (assistantReplyStarted ? "typing" : "thinking")
+          : (voiceState === "speaking" ? "speaking" : (voiceState === "thinking" ? "thinking" : "idle")))));
+
+  const submitText = (event) => {
+    event.preventDefault();
+    const text = input.trim();
+    if (!text || streaming) return;
+    unlockSpeech();
+    unlockConfiguredAudio();
+    send(text);
+    setInput("");
+  };
+
+  const toggleVoiceCall = () => {
+    if (inCall) {
+      setInCall(false);
+      setReplySpeaking(false);
+      setHumanSpeaking(false);
+      avatarRef.current?.stop?.();
+      configuredSpeechService?.stop?.();
+      window.speechSynthesis.cancel();
+      return;
+    }
+    unlockSpeech();
+    unlockConfiguredAudio();
+    avatarRef.current?.unlockAudio?.();
+    setInCall(true);
+  };
 
   return (
-    <div id="home_chat_root">
-      {mainCaption ? <p id="home_live_caption">{mainCaption}</p> : null}
+    <div id="home_chat_root" className={embedded ? "home_chat_root--embedded" : undefined}>
+      {isOpen && !isMinimized && (
+        <section id="home_chat_panel" className={rabbitProviderActive ? "has-rabbit-provider" : undefined} aria-label="Rabbit of Wonderland AI">
+          {rabbitProviderActive && (
+            <div className="home_chat_provider_avatar" aria-label="Rabbit of Wonderland provider">
+              <AvatarContainer ref={avatarRef} allowViewportControls={false} activity={rabbitAvatarActivity} typingText={assistantReplyText} />
+            </div>
+          )}
+          <header id="home_chat_header">
+            <div>
+              <span className="home_chat_kicker">Rabbit of Wonderland</span>
+              <h2>AI companion</h2>
+              <p>Ask, explore, and follow a thought down the rabbit hole.</p>
+              <div className="home_chat_model_io">
+                <span className="home_chat_model" title={`${selectedProviderLabel} · ${selectedModel || "configured model"}`}>
+                  {selectedProviderLabel} · {selectedModel || "configured model"}
+                </span>
+                <span className="home_chat_io" title={`Speech to text: ${sttProviderLabel}; text to speech: ${ttsProviderLabel}`}>
+                  <span><b>STT</b> {sttProviderLabel}</span>
+                  <span><b>TTS</b> {ttsProviderLabel}</span>
+                </span>
+              </div>
+            </div>
+            <button type="button" className={`home_chat_voice${inCall ? " is-active" : ""}`} onClick={toggleVoiceCall} aria-pressed={inCall}>
+              <i className={`fi ${inCall ? "fi-ss-phone-call" : "fi-ss-microphone"}`} />
+              {inCall ? "End voice call" : "Voice call"}
+            </button>
+            {onClose && (
+              <button type="button" className="home_chat_minimize" onClick={() => setIsMinimized(true)} aria-label="Minimize Wonderland AI" title="Minimize chat">
+                <i className="fi fi-rr-minus-small" />
+              </button>
+            )}
+            {onClose && (
+              <button type="button" className="home_chat_close" onClick={onClose} aria-label="Close Rabbit of Wonderland AI" title="Close chat">
+                <i className="fi fi-rr-cross-small" />
+              </button>
+            )}
+          </header>
+
+          <div className={`home_chat_conversation${rabbitProviderActive ? " has-provider-avatar" : ""}`}>
+            <div id="home_chat_messages" aria-live="polite">
+              {messages.length === 0 && (
+                <p className="home_chat_empty">What would you like to uncover?</p>
+              )}
+              {messages.map((message, index) => (
+                <article key={`${message.role}-${index}`} className={`home_chat_message home_chat_message--${message.role}`}>
+                  <span className="home_chat_message_role">{message.role === "user" ? "You" : "Wonderland AI"}</span>
+                  <p>{message.content || (streaming && index === messages.length - 1 ? "Thinking…" : "")}</p>
+                  {message.model && <small>{message.model}</small>}
+                </article>
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
+          </div>
+
+          <form id="home_chat_composer" onSubmit={submitText}>
+            <div className="home_chat_input_row">
+              <textarea
+                value={input}
+                rows={2}
+                placeholder="Write to Wonderland AI…"
+                aria-label="Message Wonderland AI"
+                disabled={streaming}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    submitText(event);
+                  }
+                }}
+              />
+              {streaming ? (
+                <button type="button" className="home_chat_send" style={{ backgroundColor: "#000", backgroundImage: "none", color: "#fff", WebkitAppearance: "none" }} onClick={stop}>Stop</button>
+              ) : (
+                <button type="submit" className="home_chat_send" style={{ backgroundColor: "#000", backgroundImage: "none", color: "#fff", WebkitAppearance: "none" }} disabled={!input.trim()}>Send</button>
+              )}
+            </div>
+            <div id="home_chat_keyboard_slot" aria-label="AI message keyboard" />
+            <VirtualKeyboard inline autoOpenOnFocus showToggle={false} panelPortalId="home_chat_keyboard_slot" panelClassName="home_chat_virtual_keyboard" />
+          </form>
+        </section>
+      )}
 
       {/* Floats at the bottom-center of the whole app — no boxed chat
           container anymore, just the avatar and a live caption of
           whatever's currently being said (either side). No
           border/background of its own (see homeChat.css/anamAvatar.css). */}
-      {isOpen && (
+      {isOpen && !isMinimized && inCall && (
         <div id="home_avatar_float">
           {inCall ? (
-            <VoiceCall send={send} streaming={streaming} messages={messages} avatarRef={avatarRef} />
+            <VoiceCall send={send} streaming={streaming} messages={messages} avatarRef={avatarRef} onStateChange={handleVoiceStateChange} onSpeechActivity={setHumanSpeaking} />
           ) : null}
 
-          <AvatarContainer ref={avatarRef} allowViewportControls onSpeechCaptionChange={handleAvatarCaptionChange} />
+          {!rabbitProviderActive && (
+            <AvatarContainer ref={avatarRef} allowViewportControls />
+          )}
         </div>
       )}
 
       {/* FAB */}
-      <button
+      {!embedded && <button
         id="home_chat_fab"
         onClick={() => {
           // Opening auto-engages the call (see the isOpen->inCall effect
@@ -461,23 +724,37 @@ const HomeChat = () => {
           // from an effect instead, Safari silently refuses it since it's
           // no longer inside a real user gesture by then.
           if (!isOpen) {
+            setIsMinimized(false);
             unlockSpeech();
+            unlockConfiguredAudio();
             flushSync(() => setIsOpen(true));
             avatarRef.current?.unlockAudio?.();
             return;
           }
+          if (isMinimized) {
+            setIsMinimized(false);
+            return;
+          }
           setIsOpen(false);
         }}
-        title={isOpen ? "Close AMCTOSHS Assistant" : "Open AMCTOSHS Assistant"}
-        aria-label={isOpen ? "Close AMCTOSHS Assistant" : "Open AMCTOSHS Assistant"}
+        title={isOpen ? "Close RabbitHole Assistant" : "Open RabbitHole Assistant"}
+        aria-label={isOpen ? "Close RabbitHole Assistant" : "Open RabbitHole Assistant"}
         aria-expanded={isOpen}
-        className={isOpen ? "home_chat_fab--open" : ""}
+        className={`${isOpen ? "home_chat_fab--open" : ""}${isMinimized && rabbitProviderActive ? " home_chat_fab--minimized" : ""}`}
       >
-        <i className={`fi ${isOpen ? "fi-ss-cross-small" : "fi-ss-message-bot"}`} />
+        {isMinimized && rabbitProviderActive ? (
+          <img
+            className="home_chat_fab_logo"
+            src={RABBIT_LOGO_BLINK_FRAMES[RABBIT_LOGO_BLINK_FRAMES.length - 1]}
+            alt="Open Wonderland AI"
+          />
+        ) : (
+          <i className={`fi ${isOpen ? "fi-ss-cross-small" : "fi-ss-message-bot"}`} />
+        )}
         {!isOpen && messages.length > 0 && (
           <span id="home_chat_badge">{messages.filter(m => m.role === "assistant").length}</span>
         )}
-      </button>
+      </button>}
 
     </div>
   );

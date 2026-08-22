@@ -1,10 +1,10 @@
 // amctoshsRelationsExtractionClient.js
 //
-// Thin fetch wrapper for "Extract AMCTOSHS Relations"
+// Thin fetch wrapper for "Extract RabbitHole Relations"
 // (back/routes/AMCTOSHSRelationsExtractionAPI.js) — same authHeaders/
 // jsonHeaders/parseJsonResponse convention as
 // ../ClinicalSchemata/amctoshsMorpheClient.js. Extraction is explicitly
-// user-triggered (the "Extract AMCTOSHS Relations" button click), never
+// user-triggered (the "Extract RabbitHole Relations" button click), never
 // fired from a mount/navigation effect; extraction never silently
 // persists into the typed collections, only saveRelationsExtraction does.
 
@@ -27,7 +27,7 @@ const parseJsonResponse = async (res) => {
   return data;
 };
 
-/** Runs the AI extraction over one or more selected AMCTOSHS Segments. Never auto-saves. */
+/** Runs the AI extraction over one or more selected RabbitHole Segments. Never auto-saves. */
 export const createRelationsExtraction = async ({ segments, provider, model }) => {
   const res = await fetch(apiUrl("/api/amctoshs-relations-extraction/extractions"), {
     method: "POST",
