@@ -1186,7 +1186,7 @@ const getPdfTextAscentRatio = (style) => {
 // effort rather than a single aggressive pinch — at 1.5 a big finger-spread
 // could still fling the page to 1000%+ in one gesture, which read as
 // physically unrealistic (a real lens doesn't behave like that).
-const ZOOM_RESISTANCE = 4;
+const ZOOM_RESISTANCE = 0;
 const dynamicZoomGain = (baseGain, currentZoom) => baseGain / (1 + ZOOM_RESISTANCE * Math.abs(Math.log(currentZoom)));
 // Held +/- zoom buttons: tick rate, and how fast/how far the per-tick step
 // accelerates the longer the button stays down (see startZoomHold).
@@ -2462,6 +2462,7 @@ const PDFPage = forwardRef(({
   onLayer1OnlyChange = null,
 }, ref) => {
   const navigate = useNavigate();
+  const layer1StorageKey = `pdf_layer1_open_v1:${embeddedSourceId || embeddedPdfName || "local"}`;
   const [pdfDoc, setPdfDoc]         = useState(null);
   const [filename, setFilename]     = useState("");
   const [pageNum, setPageNum]       = useState(1);
@@ -3220,7 +3221,20 @@ const PDFPage = forwardRef(({
   const [markdownAsideOpen, setMarkdownAsideOpen] = useState(false);
   // Layer 1 is opt-in from the Functions menu. Mounting it does not affect
   // the durable analysis job state.
-  const [glyphCharAsideOpen, setGlyphCharAsideOpen] = useState(false);
+  const [glyphCharAsideOpen, setGlyphCharAsideOpen] = useState(() => {
+    try {
+      return typeof window !== "undefined" && window.sessionStorage?.getItem(layer1StorageKey) === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.sessionStorage?.setItem(layer1StorageKey, String(glyphCharAsideOpen));
+    } catch {
+      // Layer 1 persistence is best-effort when storage is unavailable.
+    }
+  }, [glyphCharAsideOpen, layer1StorageKey]);
   const [sentenceTreeOpen, setSentenceTreeOpen] = useState(false);
   const [wholeDocumentReconstruction, setWholeDocumentReconstruction] = useState(null);
   const [backendReconstructionState, setBackendReconstructionState] = useState({ status: "idle", mode: null, run: null, root: null, error: "" });
@@ -9866,19 +9880,17 @@ const PDFPage = forwardRef(({
       ? page.getViewport({ scale: displayScale * renderScaleFactor })
       : displayViewport;
     const outputScale = Math.max(1, getSafeCanvasOutputScale(renderViewport.width, renderViewport.height, deviceScale));
-    c.width  = Math.floor(renderViewport.width * outputScale);
-    c.height = Math.floor(renderViewport.height * outputScale);
-    // Keep layout in CSS pixels while rendering the raster at device-pixel
-    // density, so the page reads sharper and less washed out on modern displays.
-    c.style.width  = `${displayViewport.width}px`;
-    c.style.height = `${displayViewport.height}px`;
-    renderedCssSizeRef.current[n - 1] = {
-      width: displayViewport.width,
-      height: displayViewport.height,
-    };
-    const ctx = c.getContext("2d");
-    ctx.setTransform(outputScale, 0, 0, outputScale, 0, 0);
-    const task = page.render({ canvasContext: ctx, viewport: renderViewport });
+    // Render away from the visible page. Resizing the live canvas clears it
+    // immediately and forces layout to settle before PDF.js has produced the
+    // replacement; that is the source of the heavy post-gesture snap. Keep
+    // the composited old page visible and atomically install the finished
+    // raster below.
+    const stagingCanvas = document.createElement("canvas");
+    stagingCanvas.width = Math.floor(renderViewport.width * outputScale);
+    stagingCanvas.height = Math.floor(renderViewport.height * outputScale);
+    const stagingContext = stagingCanvas.getContext("2d");
+    stagingContext.setTransform(outputScale, 0, 0, outputScale, 0, 0);
+    const task = page.render({ canvasContext: stagingContext, viewport: renderViewport });
     renderTasksRef.current[n - 1] = task;
     try {
       await task.promise;
@@ -9887,6 +9899,19 @@ const PDFPage = forwardRef(({
       return;
     }
     if (pageRenderGenerationRef.current[n - 1] !== renderGeneration) return;
+    const finalCanvas = pageCanvasRefs.current[n - 1];
+    if (!finalCanvas) return;
+    finalCanvas.width = stagingCanvas.width;
+    finalCanvas.height = stagingCanvas.height;
+    finalCanvas.style.width = `${displayViewport.width}px`;
+    finalCanvas.style.height = `${displayViewport.height}px`;
+    const finalContext = finalCanvas.getContext("2d");
+    finalContext.setTransform(1, 0, 0, 1, 0, 0);
+    finalContext.drawImage(stagingCanvas, 0, 0);
+    renderedCssSizeRef.current[n - 1] = {
+      width: displayViewport.width,
+      height: displayViewport.height,
+    };
     renderedScaleRef.current[n - 1] = displayScale;
     if (n === pageNumRef.current) {
       setPageViewport((previous) => (
@@ -9898,7 +9923,7 @@ const PDFPage = forwardRef(({
           ? previous
           : displayViewport
       ));
-      currentBackingScaleRef.current = c.width / Math.max(1, displayViewport.width);
+      currentBackingScaleRef.current = finalCanvas.width / Math.max(1, displayViewport.width);
     }
   }, [pdfDoc]);
 
@@ -10044,6 +10069,13 @@ const PDFPage = forwardRef(({
     const newScale = fitScaleRef.current * zoom;
     pageCanvasRefs.current.forEach((canvas, i) => {
       if (!canvas) return;
+      const pageNode = pageContainerRefs.current[i];
+      const wrapNode = canvasWrapRef.current;
+      // During a live gesture the complete page scene is already being
+      // transformed by the compositor. Resizing its visible canvas here
+      // would apply the zoom twice and force a layout shift before the
+      // staged sharp raster is ready.
+      if (i === pageNumRef.current - 1 && (pageNode?.style.transform || wrapNode?.style.transform)) return;
       const prevScale = renderedScaleRef.current[i];
       if (!prevScale || prevScale === newScale) return;
       const ratio = newScale / prevScale;
@@ -10127,8 +10159,10 @@ const PDFPage = forwardRef(({
     if (state.frame) cancelAnimationFrame(state.frame);
   }, []);
 
-  // Apply zoom-to-point scroll correction after canvas re-renders at new zoom.
-  // Also strips any CSS pinch-transform that was held until this point.
+  // Finalize the zoom after the canvas re-renders. The Index blank page lets
+  // the browser preserve the current scroll viewport naturally; match that
+  // behavior here instead of writing a new centered scroll position after
+  // the user's fingers have already left the surface.
   //
   // renderPage() is async (it awaits pdfDoc.getPage before it ever touches
   // pageViewport), so the [zoom] state commits — and this effect's first
@@ -10143,33 +10177,19 @@ const PDFPage = forwardRef(({
   // the DOM has really caught up yet — if not, leave the correction pending
   // instead of consuming it early; the effect fires again once pageViewport
   // itself updates, by which point the size is correct.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const pending = scrollAfterZoomRef.current;
     if (!pending || !previewRef.current) return;
     if (pinchGestureActiveRef.current) return;
     if (renderedScaleRef.current[pageNumRef.current - 1] !== fitScaleRef.current * zoom) return;
     scrollAfterZoomRef.current = null;
-    const el   = previewRef.current;
-    requestAnimationFrame(() => {
-      if (pinchGestureActiveRef.current) return;
-      // Remove the CSS transform and set the real scroll in the same frame
-      // so the canvas never flashes back to the pre-zoom position.
-      clearLiveZoomTransform();
-      if (pending.kind === "canvas-anchor") {
-        const canvas = canvasWrapRef.current;
-        if (canvas) {
-          const targetLeft = canvas.offsetLeft + canvas.offsetWidth * pending.ratioX - pending.viewportX;
-          const targetTop = canvas.offsetTop + canvas.offsetHeight * pending.ratioY - pending.viewportY;
-          const maxLeft = Math.max(0, el.scrollWidth - el.clientWidth);
-          const maxTop = Math.max(0, el.scrollHeight - el.clientHeight);
-          el.scrollLeft = clamp(targetLeft, 0, maxLeft);
-          el.scrollTop = clamp(targetTop, 0, maxTop);
-          return;
-        }
-      }
-      el.scrollLeft = Math.max(0, pending.left);
-      el.scrollTop  = Math.max(0, pending.top);
-    });
+    if (pinchGestureActiveRef.current) return;
+    if (pending.kind === "pan-delta") {
+      const el = previewRef.current;
+      el.scrollLeft = clamp(pending.left, 0, Math.max(0, el.scrollWidth - el.clientWidth));
+      el.scrollTop = clamp(pending.top, 0, Math.max(0, el.scrollHeight - el.clientHeight));
+    }
+    clearLiveZoomTransform();
   }, [zoom, pageViewport, clearLiveZoomTransform]);
 
   // A zoom gesture uses a temporary wrapper transform until the committed
@@ -11459,6 +11479,14 @@ const PDFPage = forwardRef(({
       if (m.page !== pageNumRef.current) setPageNum(m.page);
       return next;
     });
+  }, [searchMatches]);
+
+  const selectSearchMatch = useCallback((index) => {
+    const nextIndex = Number(index);
+    if (!Number.isInteger(nextIndex) || nextIndex < 0 || nextIndex >= searchMatches.length) return;
+    const match = searchMatches[nextIndex];
+    if (match.page !== pageNumRef.current) setPageNum(match.page);
+    setSearchActiveIndex(nextIndex);
   }, [searchMatches]);
 
   // Draws highlight rects for every match on the CURRENT page (the active
@@ -13796,11 +13824,12 @@ const PDFPage = forwardRef(({
     searchOpen,
     searchQuery,
     searchMatchCount: searchMatches.length,
+    searchMatches,
     searchActiveIndex,
     searchScanning,
     searchActiveMatchType: searchActiveMatch?.matchType ?? null,
     searchActiveMatchedText: searchActiveMatch?.originalMatchedText ?? null,
-  }), [pageNum, pageCount, readingMode, bookletRightPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, markdownAsideMode, markdownModeMenuOpen, sentenceTreeOpen, notebookMode, pageConceptBusy, pageConceptError, glyphCharAsideOpen, outlineOpen, documentNavigatorView, documentNavigatorOpen, pdfCustomOutlines.length, bookmarks, annotTool, entityBuilderOpen, abbreviationPanelOpen, isCurrentPageFullySegmented, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
+  }), [pageNum, pageCount, readingMode, bookletRightPage, entityBuilderOcrBlankPageOpen, markdownAsideOpen, markdownAsideMode, markdownModeMenuOpen, sentenceTreeOpen, notebookMode, pageConceptBusy, pageConceptError, glyphCharAsideOpen, outlineOpen, documentNavigatorView, documentNavigatorOpen, pdfCustomOutlines.length, bookmarks, annotTool, entityBuilderOpen, abbreviationPanelOpen, isCurrentPageFullySegmented, insertingBlankPage, hasSourceId, searchOpen, searchQuery, searchMatches, searchMatches.length, searchActiveIndex, searchScanning, searchActiveMatch]);
 
   useEffect(() => {
     onPageNavStateChange?.(pageNavState);
@@ -14091,6 +14120,7 @@ const PDFPage = forwardRef(({
     setSearchOpen,
     setSearchQuery,
     goToSearchMatch,
+    selectSearchMatch,
     runSearch: (query = searchQuery) => setSearchRunQuery(String(query || "").trim()),
     closeSearch: () => { setSearchOpen(false); setSearchQuery(""); setSearchRunQuery(""); },
     toggleOutline: () => setOutlineOpen((open) => !open),
@@ -14234,7 +14264,6 @@ const PDFPage = forwardRef(({
     let visualX = 0;
     let visualY = 0;
     let pinchRenderInvalidated = false;
-    let pinchAnchor = null;
     let twoFingerGestureMode = "pending"; // pending | pinch
     let palmRejected = false;
     let threeFingerPan = null;
@@ -14254,20 +14283,16 @@ const PDFPage = forwardRef(({
       const target = pinchTransformTarget || getLiveZoomTarget();
       if (!target) return;
       pinchTransformTarget = target;
-      // Touch samples arrive unevenly on Safari. Follow the latest target
-      // over a few frames so zooming feels continuous instead of stepped.
-      const follow = 0.34;
-      visualScale += (targetScale - visualScale) * follow;
-      visualX += (targetX - visualX) * follow;
-      visualY += (targetY - visualY) * follow;
-      if (Math.abs(targetScale - visualScale) < 0.0005) visualScale = targetScale;
-      if (Math.abs(targetX - visualX) < 0.08) visualX = targetX;
-      if (Math.abs(targetY - visualY) < 0.08) visualY = targetY;
+      // Track the gesture directly. The Index blank page has no weighted
+      // follow or resistance, so the PDF surface must not lag behind the
+      // current finger position or pinch scale either.
+      visualScale = targetScale;
+      visualX = targetX;
+      visualY = targetY;
       target.style.transformOrigin = "0 0";
       target.style.transform = `translate3d(${visualX}px, ${visualY}px, 0) scale(${visualScale})`;
       target.style.willChange = "transform";
       pinchTransformApplied = true;
-      if (visualScale !== targetScale || visualX !== targetX || visualY !== targetY) startPinchAnimation();
     };
 
     const startPinchAnimation = () => {
@@ -14450,42 +14475,38 @@ const PDFPage = forwardRef(({
         resetPinchPreview();
         return;
       }
-      const centerX = startMidX;
-      const centerY = startMidY;
       const zoomChanged = lastPinchZoom !== startZoom;
 
-      // Two-finger translation is intentionally not a pan gesture. If the
-      // finger distance did not change enough to activate zoom, discard the
-      // preview without changing scroll position or rerendering the PDF.
+      // A translation-only gesture commits as a normal pan without asking
+      // PDF.js for another raster.
       if (!zoomChanged) {
+        el.scrollLeft = clamp(startSL - (currentMidX - startMidX), 0, Math.max(0, el.scrollWidth - el.clientWidth));
+        el.scrollTop = clamp(startST - (currentMidY - startMidY), 0, Math.max(0, el.scrollHeight - el.clientHeight));
         resetPinchPreview();
         return;
       }
 
-      // Preserve the content point under the INITIAL midpoint. The midpoint
-      // itself does not translate the page; only finger separation zooms.
-      scrollAfterZoomRef.current = pinchAnchor
-        ? { ...pinchAnchor, viewportX: centerX, viewportY: centerY }
-        : {
-            left: (startSL + startMidX) * (lastPinchZoom / startZoom) - centerX,
-            top: (startST + startMidY) * (lastPinchZoom / startZoom) - centerY,
-          };
+      // Preserve the content point under the live midpoint so a pinch can
+      // translate and scale the page together, like the Index blank page.
+      scrollAfterZoomRef.current = {
+        kind: "pan-delta",
+        left: startSL - (currentMidX - startMidX),
+        top: startST - (currentMidY - startMidY),
+      };
 
-      // Transfer the preview scale to the real canvas before removing the
-      // wrapper transform. Keeping both active caused the committed zoom to
-      // be applied twice; the next pinch then appeared to reverse when it
-      // cleared that stale wrapper transform.
-      const pageIndex = pageNumRef.current - 1;
-      const canvas = pageCanvasRefs.current[pageIndex];
-      const renderedScale = renderedScaleRef.current[pageIndex];
-      const renderedSize = renderedCssSizeRef.current[pageIndex];
-      const committedScale = fitScaleRef.current * lastPinchZoom;
-      if (canvas && renderedScale && renderedSize) {
-        const committedRatio = committedScale / renderedScale;
-        canvas.style.width = `${renderedSize.width * committedRatio}px`;
-        canvas.style.height = `${renderedSize.height * committedRatio}px`;
+      // Keep the complete transformed scene visible while PDF.js renders a
+      // sharp replacement offscreen. The layout-phase commit clears this
+      // transform only after the finished raster has been installed.
+      if (pinchRaf) cancelAnimationFrame(pinchRaf);
+      pinchRaf = 0;
+      const heldTarget = pinchTransformTarget || getLiveZoomTarget();
+      if (heldTarget) {
+        heldTarget.style.transformOrigin = "0 0";
+        heldTarget.style.transform = `translate3d(${targetX}px, ${targetY}px, 0) scale(${targetScale})`;
+        heldTarget.style.willChange = "transform";
+        pinchTransformTarget = heldTarget;
+        pinchTransformApplied = true;
       }
-      resetPinchPreview();
       zoomRef.current = lastPinchZoom;
       setZoom(lastPinchZoom);
     };
@@ -14865,10 +14886,6 @@ const PDFPage = forwardRef(({
         startSL = el.scrollLeft;
         startST = el.scrollTop;
         twoFingerGestureMode = "pending";
-        pinchAnchor = captureZoomAnchor(
-          elRect.left + startMidX,
-          elRect.top + startMidY,
-        );
         panVelocityTracker.reset();
         panVelocityTracker.push(startMidX, startMidY, performance.now());
         pinchRenderInvalidated = false;
@@ -14938,35 +14955,19 @@ const PDFPage = forwardRef(({
         livePanRef.current.active = false;
         hasMoved = false;
       } else if (e.touches.length === 1) {
-        // No longer a pan trigger (panning is three-finger only, see
-        // above) — this single-finger tracking only exists so onTouchEnd's
-        // tap-vs-drag bookkeeping (hasMoved) and double-tap-to-select still
-        // work, and so a real drawing stroke (handled by the annotation
-        // canvas's own listeners, not this one) isn't fought over — this
-        // handler deliberately never calls preventDefault()/touches
-        // scroll state for the 1-finger case anymore.
+        // Match the Index blank page: one finger directly pans in both axes
+        // whenever no annotation tool owns the contact.
         touchInteractionActive = true;
         panX = e.touches[0].clientX;
         panY = e.touches[0].clientY;
-        // Page swiping is measured against the rendered PDF page itself,
-        // not the app, preview viewport, or raster canvas. The container is
-        // the stable page boundary shared by the canvas and all overlays.
-        const currentPageElement = pageContainerRefs.current[pageNumRef.current - 1];
-        const pageRect = currentPageElement?.getBoundingClientRect?.() || null;
-        const startsOnPage = Boolean(pageRect
-          && panX >= pageRect.left && panX <= pageRect.right
-          && panY >= pageRect.top && panY <= pageRect.bottom);
-        // A quick horizontal swipe may begin at any point on the paper.
-        edgeSwipeCandidate = startsOnPage
-          ? {
-              startedAt: performance.now(),
-              startX: panX,
-              startY: panY,
-              lastX: panX,
-              lastY: panY,
-              rect: pageRect,
-            }
-          : null;
+        panSL = el.scrollLeft;
+        panST = el.scrollTop;
+        edgeSwipeCandidate = null;
+        livePanRef.current.currentL = panSL;
+        livePanRef.current.currentT = panST;
+        livePanRef.current.targetL = panSL;
+        livePanRef.current.targetT = panST;
+        livePanRef.current.active = false;
         hasMoved = false;
       }
     };
@@ -15009,8 +15010,8 @@ const PDFPage = forwardRef(({
         const midpointTravel = Math.hypot(currentMidX - startMidX, currentMidY - startMidY);
         const pinchRatioTravel = Math.abs(Math.log(Math.max(0.01, nextDist / startDist)));
 
-        // Activate only after deliberate separation. Midpoint translation is
-        // ignored so two fingers cannot pan the page.
+        // Activate zoom only after deliberate separation. Midpoint movement
+        // remains part of the live transform so pinch and pan can combine.
         if (twoFingerGestureMode === "pending") {
           if (!zoomingDisabled && pinchRatioTravel >= PINCH_ACTIVATION_RATIO) {
             twoFingerGestureMode = "pinch";
@@ -15053,8 +15054,8 @@ const PDFPage = forwardRef(({
           const gestureRatio = newZoom / startZoom;
           const anchorX = startSL + startMidX - targetOffset.left;
           const anchorY = startST + startMidY - targetOffset.top;
-          const centerX = startSL + startMidX - targetOffset.left;
-          const centerY = startST + startMidY - targetOffset.top;
+          const centerX = startSL + currentMidX - targetOffset.left;
+          const centerY = startST + currentMidY - targetOffset.top;
           targetScale = gestureRatio;
           targetX = centerX - anchorX * gestureRatio;
           targetY = centerY - anchorY * gestureRatio;
@@ -15113,31 +15114,22 @@ const PDFPage = forwardRef(({
         hasMoved = true;
         return;
       }
-      // No longer a pan trigger — see the matching branch in onTouchStart.
-      // Only tracks hasMoved so onTouchEnd can still tell a tap from a drag
-      // for double-tap-to-select; never calls preventDefault() or touches
-      // scroll state, so it can't interfere with a real drawing stroke
-      // (handled by the annotation canvas's own listeners) or block native
-      // behavior.
       if (Date.now() < pinchCooldownUntil) return;
       const dx = e.touches[0].clientX - panX;
       const dy = e.touches[0].clientY - panY;
       const moved = Math.sqrt(dx * dx + dy * dy);
-      if (edgeSwipeCandidate) {
-        edgeSwipeCandidate.lastX = e.touches[0].clientX;
-        edgeSwipeCandidate.lastY = e.touches[0].clientY;
-        const verticalTravel = Math.abs(edgeSwipeCandidate.lastY - edgeSwipeCandidate.startY);
-        const horizontalTravel = Math.abs(edgeSwipeCandidate.lastX - edgeSwipeCandidate.startX);
-        if (
-          verticalTravel > edgeSwipeCandidate.rect.height * PAGE_SWIPE_MAX_VERTICAL_RATIO
-          || (horizontalTravel > MOVE_THRESHOLD && verticalTravel > horizontalTravel * 0.5)
-        ) {
-          edgeSwipeCandidate = null;
-        } else if (horizontalTravel > MOVE_THRESHOLD && horizontalTravel > verticalTravel && e.cancelable) {
-          e.preventDefault();
-        }
-      }
-      if (!hasMoved && moved >= MOVE_THRESHOLD) hasMoved = true;
+      if (!hasMoved && moved < MOVE_THRESHOLD) return;
+      if (e.cancelable) e.preventDefault();
+      hasMoved = true;
+      livePanRef.current.active = true;
+      const nextLeft = clamp(panSL - dx, 0, Math.max(0, el.scrollWidth - el.clientWidth));
+      const nextTop = clamp(panST - dy, 0, Math.max(0, el.scrollHeight - el.clientHeight));
+      el.scrollLeft = nextLeft;
+      el.scrollTop = nextTop;
+      livePanRef.current.currentL = nextLeft;
+      livePanRef.current.currentT = nextTop;
+      livePanRef.current.targetL = nextLeft;
+      livePanRef.current.targetT = nextTop;
     };
 
     const onTouchEnd = (e) => {
@@ -15278,10 +15270,13 @@ const PDFPage = forwardRef(({
         const wasPanning = livePanRef.current.active;
         livePanRef.current.active = false;
         if (wasPanning) {
+          stopLivePan(livePanRef);
           syncLivePan(el, livePanRef);
           if (hasMoved) {
-            const { vx, vy } = panVelocityTracker.velocity();
-            if (Math.hypot(vx, vy) > MOMENTUM_FLICK_MIN) runMomentumScroll(el, vx, vy, momentumFrameRef);
+            // Stop exactly at the release position. The implicit text page
+            // uses direct compositor scrolling without post-release drift;
+            // keep the PDF reader's pan behavior consistent with it.
+            stopMomentumScroll(momentumFrameRef);
           }
         } else if (!hasMoved && textSelectableRef.current && e.changedTouches.length === 1) {
           // Double-tap detection — the mouse path gets a real dblclick event,
@@ -15345,7 +15340,7 @@ const PDFPage = forwardRef(({
       el.removeEventListener("selectstart", onSelectStart);
       el.removeEventListener("dblclick",    onDblClick);
     };
-  }, [pdfDoc, captureZoomAnchor, clearLiveZoomTransform, getLiveZoomTarget, getLiveZoomTargetOffset, zoomingDisabled]);
+  }, [pdfDoc, clearLiveZoomTransform, getLiveZoomTarget, getLiveZoomTargetOffset, zoomingDisabled]);
 
   // ── Mouse drag to pan ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -15408,9 +15403,11 @@ const PDFPage = forwardRef(({
       el.style.cursor     = "";
       el.style.userSelect = "";
       livePanRef.current.active = false;
+      stopLivePan(livePanRef);
       syncLivePan(el, livePanRef);
-      const { vx, vy } = dragVelocityTracker.velocity();
-      if (Math.hypot(vx, vy) > MOMENTUM_FLICK_MIN) runMomentumScroll(el, vx, vy, momentumFrameRef);
+      // Stop exactly where the pointer is released; do not continue the pan
+      // after the user's hand/mouse has left the page.
+      stopMomentumScroll(momentumFrameRef);
     };
 
     el.addEventListener("mousedown", onMouseDown);
@@ -19420,6 +19417,10 @@ const PDFPage = forwardRef(({
         <GlyphCharAside
           analysis={glyphCharAnalysis}
           currentPage={pageNum}
+          pageCount={pageCount}
+          pageViewport={pageViewport}
+          pdfDoc={pdfDoc}
+          onNavigatePage={navigatePage}
           onClose={() => setGlyphCharAsideOpen(false)}
           onStartAnalysis={({ scope = "document", pageNumber = null, force = false } = {}) => setGlyphCharAnalysisRequest({
             scope,
@@ -22457,6 +22458,10 @@ const PDFPage = forwardRef(({
           <GlyphCharAside
             analysis={glyphCharAnalysis}
             currentPage={pageNum}
+            pageCount={pageCount}
+            pageViewport={pageViewport}
+            pdfDoc={pdfDoc}
+            onNavigatePage={navigatePage}
             onClose={() => setGlyphCharAsideOpen(false)}
             onStartAnalysis={({ scope = "document", pageNumber = null, force = false } = {}) => setGlyphCharAnalysisRequest({
               scope,

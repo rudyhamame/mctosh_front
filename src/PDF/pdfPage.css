@@ -1649,7 +1649,7 @@
 .pdf_outline_page_group--unsectioned { border-style: solid; background: color-mix(in srgb, var(--color-surface) 76%, transparent); }
 .pdf_outline_page_group--unsectioned > .pdf_outline_page_group_header { width: 100%; }
 .pdf_outline_page_group_header > i.is-open { transform: rotate(90deg); }
-.pdf_mini_page { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-width: 0; gap: .35rem; padding: .3rem; border: 1px solid transparent; border-radius: 9px; background: color-mix(in srgb, var(--color-bg) 35%, transparent); }
+.pdf_mini_page { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-width: 0; gap: .35rem; padding: .3rem; border: 1px solid transparent; border-radius: 9px; background: transparent; }
 .pdf_mini_page--active { border-color: color-mix(in srgb, var(--color-highlight) 62%, var(--color-border)); background: color-mix(in srgb, var(--color-highlight) 8%, transparent); }
 .pdf_mini_page--range-end { border-color: color-mix(in srgb, #c58a28 72%, var(--color-border)); background: color-mix(in srgb, #c58a28 10%, transparent); }
 .pdf_mini_page--range-end .pdf_mini_page_preview { outline: 2px solid color-mix(in srgb, #c58a28 52%, transparent); }
@@ -1769,7 +1769,7 @@
 .pdf_outline_empty { margin: .3rem 0; color: var(--color-text-muted); font-size: .68rem; line-height: 1.45; }
 .pdf_custom_outline_items { display: grid; gap: .12rem; margin-top: .35rem; }
 .pdf_custom_outline_item { display: flex; align-items: center; gap: .2rem; }
-.pdf_custom_outline_item > button:first-child { flex: 1; min-width: 0; display: flex; align-items: center; gap: .25rem; padding: .43rem .35rem; border: 1px solid transparent; border-radius: 7px; background: color-mix(in srgb, var(--color-surface) 72%, transparent); color: var(--color-text-muted); text-align: left; cursor: pointer; font-size: .7rem; transition: color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease; }
+.pdf_custom_outline_item > button:first-child { flex: 1; min-width: 0; display: flex; align-items: center; gap: .25rem; padding: .43rem .35rem; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--color-text-muted); text-align: left; cursor: pointer; font-size: .7rem; transition: color .15s ease, background .15s ease, border-color .15s ease, transform .15s ease; }
 .pdf_custom_outline_item > button:first-child:hover { border-color: color-mix(in srgb, #c58a28 26%, var(--color-border)); background: color-mix(in srgb, #c58a28 7%, var(--color-surface)); color: var(--color-text); transform: translateX(2px); }
 .pdf_custom_outline_item > button:first-child i { color: #c58a28; }
 .pdf_custom_outline_item > button:first-child span { min-width: 0; overflow-wrap: anywhere; }
@@ -5317,6 +5317,7 @@
     linear-gradient(180deg, #111111, #0b0b0b);
   touch-action: none;
   overscroll-behavior: none;
+  overflow-anchor: none;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -5527,9 +5528,20 @@ html.theme-light #pdf_preview_scroll {
      covers the zoomed-wide case, where width==container width and this
      margin resolves to 0 anyway. */
   margin: 0 auto;
+  overflow-anchor: none;
   /* Permanent 3D contexts make Safari retain giant composited textures while
      panning. Page-turn animation classes opt into compositing only briefly. */
   perspective: none;
+}
+
+/* Once zoom leaves the fitted 100% state, the page position belongs to the
+   user's pan gesture. Do not let flex alignment or auto margins recenter the
+   newly sized canvas after PDF.js commits a sharper raster. */
+#pdf_preview:not(.pdf_preview--zoom-fit) #pdf_canvas_wrap {
+  align-items: flex-start;
+  justify-content: flex-start;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 .pdf_page_container {

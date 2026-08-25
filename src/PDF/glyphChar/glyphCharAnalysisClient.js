@@ -32,6 +32,16 @@ export const getGlyphCharAnalysisResults = (jobId, afterPage = 0, { pageNumber =
   if (Number.isInteger(Number(pageNumber)) && Number(pageNumber) > 0) query.set("pageNumber", String(Number(pageNumber)));
   return request(`/api/glyph-char-analysis/jobs/${jobId}/results?${query}`);
 };
+export const getGlyphDefinitions = (jobId, { pageNumber = null } = {}) => {
+  const query = new URLSearchParams();
+  if (Number.isInteger(Number(pageNumber)) && Number(pageNumber) > 0) query.set("pageNumber", String(Number(pageNumber)));
+  return request(`/api/glyph-char-analysis/jobs/${jobId}/definitions${query.size ? `?${query}` : ""}`);
+};
+export const getGlyphDefinitionInstances = (jobId, { definitionId, pageNumber = null } = {}) => {
+  const query = new URLSearchParams({ definitionId: String(definitionId || "") });
+  if (Number.isInteger(Number(pageNumber)) && Number(pageNumber) > 0) query.set("pageNumber", String(Number(pageNumber)));
+  return request(`/api/glyph-char-analysis/jobs/${jobId}/definition-instances?${query}`);
+};
 export const getGlyphCharVisualStages = (jobId, { pageNumber, glyphId }) => {
   const query = new URLSearchParams({ pageNumber: String(pageNumber), glyphId: String(glyphId) });
   return request(`/api/glyph-char-analysis/jobs/${jobId}/visual-stage?${query}`);

@@ -131,6 +131,19 @@ const PDFReaderWorkspace = () => {
   // Same pattern as undoRedo above, for the prev/page-number/next row.
   const [pageNavState, setPageNavState] = useState(DEFAULT_PAGE_NAV_STATE);
   useEffect(() => { setPageNavState(DEFAULT_PAGE_NAV_STATE); }, [activeId]);
+  const onPageNavStateChange = useCallback((nextState) => {
+    setPageNavState(nextState);
+    if (!activeId || nextState.pageCount <= 0 || nextState.pageNum <= 0) return;
+    setTabs((prev) => prev.map((tab) => tab.id === activeId ? { ...tab, page: nextState.pageNum } : tab));
+    const activeTab = tabs.find((tab) => tab.id === activeId);
+    if (activeTab) {
+      storeReaderTab({
+        sourceId: activeTab.sourceId,
+        pdfName: activeTab.name,
+        page: nextState.pageNum,
+      });
+    }
+  }, [activeId, setTabs, tabs]);
   const [zoomState, setZoomState] = useState(DEFAULT_ZOOM_STATE);
   useEffect(() => {
     setZoomState(DEFAULT_ZOOM_STATE);
@@ -187,7 +200,16 @@ const PDFReaderWorkspace = () => {
   return (
     <div id="pdfw_root" ref={rootRef}>
       <div id="pdfw_entity_builder_host" ref={setEntityBuilderHostEl} />
-      <div id="pdfw_main">
+      <div id="pdfw_main" className={[
+        pageNav?.glyphCharAsideOpen,
+        pageNav?.entityBuilderOpen,
+        pageNav?.abbreviationPanelOpen,
+        pageNav?.sentenceTreeOpen,
+        pageNav?.smartVideoActive,
+        pageNav?.markdownOpen,
+        pageNav?.notebookOpen,
+        pageNav?.outlineOpen,
+      ].some(Boolean) ? "pdfw_main--function-open" : undefined}>
         <div id="pdfw_header">
           <PDFReaderWorkspaceTabStrip
             tabs={tabs}

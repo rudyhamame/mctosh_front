@@ -4,7 +4,8 @@ import { extractNativeGlyphInstances, extractPdfJsFallbackGlyphInstances } from 
 import { createGlyphPredictionCache } from "./glyphPredictionCache.js";
 import { createGlyphVisualRenderer } from "./glyphVisualRenderer.js";
 import { createVisualGlyphRecognizer } from "./visualGlyphRecognizer.js";
-import { cancelGlyphCharAnalysis, deleteGlyphCharAnalysisResults, getGlyphCharAnalysisResults, getGlyphCharVisualStages, getSavedGlyphCharAnalysis, startGlyphCharAnalysis, trainGlyphCharSample } from "./glyphCharAnalysisClient.js";
+import { cancelGlyphCharAnalysis, deleteGlyphCharAnalysisResults, getGlyphCharAnalysisResults, getGlyphCharVisualStages, getGlyphDefinitionInstances, getGlyphDefinitions, getSavedGlyphCharAnalysis, startGlyphCharAnalysis, trainGlyphCharSample } from "./glyphCharAnalysisClient.js";
+import { cancelPdfCharExtraction, getPdfCharDefinitions, getPdfCharExtractionJob, getPdfCharInstances, pausePdfCharExtraction, reextractPdfChars, resumePdfCharExtraction, startPdfCharExtraction } from "./pdfCharExtractionClient.js";
 
 const pauseForBrowser = () => new Promise((resolve) => {
   if (typeof requestIdleCallback === "function") requestIdleCallback(resolve, { timeout: 80 });
@@ -61,6 +62,13 @@ const hydrateServerGlyph = (glyph, documentId, vectorDefinitions = new Map()) =>
 
 export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, forceReanalysis = false, requestNonce = 0, pdfDoc, pdfjsUtil, documentId, pageCount, initialPage, loadNativeEvidence }) => {
   const [glyphs, setGlyphs] = useState([]);
+  const [charGlyphs, setCharGlyphs] = useState([]);
+  const [charExtraction, setCharExtraction] = useState(null);
+  const [charExtractionNonce, setCharExtractionNonce] = useState(0);
+  const [charDataRetrieving, setCharDataRetrieving] = useState(false);
+  const [savedAnalysisRetrieving, setSavedAnalysisRetrieving] = useState(false);
+  const [analysisMetadata, setAnalysisMetadata] = useState(null);
+  const [retrievalTasks, setRetrievalTasks] = useState({ characters: "not-needed", analysis: "not-needed" });
   const [selectedId, setSelectedId] = useState(null);
   const selectedIdRef = useRef(null);
   const [status, setStatus] = useState("idle");
@@ -76,10 +84,83 @@ export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, fo
 
   useEffect(() => {
     if (!pdfDoc || !pageCount) {
+      setCharGlyphs([]);
+      setCharExtraction(null);
+      setCharDataRetrieving(false);
+      setRetrievalTasks((current) => ({ ...current, characters: "not-needed" }));
+      return undefined;
+    }
+    const run = { cancelled: false };
+    const persistedDocument = /^[a-f\d]{24}$/i.test(String(documentId || ""));
+    const extracted = [];
+    setCharGlyphs([]);
+    setCharDataRetrieving(persistedDocument);
+    setRetrievalTasks((current) => ({ ...current, characters: persistedDocument ? "retrieving" : "not-needed" }));
+    setCharExtraction({ status: "queued", pageCount, processedPages: 0, charCount: 0, classCounts: {}, pages: [] });
+    const extractChars = async () => {
+      if (persistedDocument) {
+        let response = await startPdfCharExtraction(documentId);
+        if (!run.cancelled) {
+          setCharDataRetrieving(false);
+          setRetrievalTasks((current) => ({ ...current, characters: "complete" }));
+        }
+        let snapshot = response.extraction;
+        while (!run.cancelled && snapshot) {
+          setCharExtraction(snapshot);
+          const charactersFinished = ["paused", "completed", "failed", "cancelled"].includes(snapshot.status);
+          const definitionsFinishedByCount = Number(snapshot.pageCount || 0) > 0
+            && Number(snapshot.implicitDefinitionsProcessedPages || 0) >= Number(snapshot.pageCount || 0);
+          const definitionsFinished = ["completed", "failed"].includes(snapshot.implicitDefinitionsStatus)
+            || definitionsFinishedByCount
+            || Number(snapshot.charCount || 0) === 0;
+          if (charactersFinished && (snapshot.status !== "completed" || definitionsFinished)) return;
+          // CHARS is lightweight counter telemetry. Refresh it frequently so
+          // every newly persisted character/class total reaches the card
+          // without waiting for the slower glyph-analysis polling cadence.
+          await waitForPoll(() => run.cancelled, 250);
+          if (run.cancelled) return;
+          response = await getPdfCharExtractionJob(snapshot.id);
+          snapshot = response.extraction;
+        }
+        return;
+      }
+      setCharDataRetrieving(false);
+      setRetrievalTasks((current) => ({ ...current, characters: "not-needed" }));
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+        if (run.cancelled) return;
+        let extraction = null;
+        try { extraction = await loadNativeEvidence?.(pageNumber); } catch { extraction = null; }
+        let pageGlyphs = extractNativeGlyphInstances({ extraction, documentId, pageNumber });
+        if (!pageGlyphs.length) pageGlyphs = await extractPdfJsFallbackGlyphInstances({ pdfDoc, pdfjsUtil, documentId, pageNumber });
+        extracted.push(...pageGlyphs);
+        if (!run.cancelled) {
+          setCharGlyphs([...extracted]);
+          setCharExtraction({ status: "processing", pageCount, processedPages: pageNumber, progress: pageNumber / pageCount });
+        }
+        await pauseForBrowser();
+      }
+      if (!run.cancelled) setCharExtraction((current) => ({ ...current, status: "completed", progress: 1 }));
+    };
+    extractChars().catch((charError) => {
+      if (!run.cancelled) {
+        setCharDataRetrieving(false);
+        setRetrievalTasks((current) => ({ ...current, characters: "complete" }));
+        setCharGlyphs([...extracted]);
+        setCharExtraction((current) => ({ ...current, status: "failed", error: charError.message || "CHARS extraction failed." }));
+      }
+    });
+    return () => { run.cancelled = true; };
+  }, [charExtractionNonce, documentId, loadNativeEvidence, pageCount, pdfDoc, pdfjsUtil]);
+
+  useEffect(() => {
+    if (!pdfDoc || !pageCount) {
       setGlyphs([]);
       selectedIdRef.current = null;
       setSelectedId(null);
       setStatus("idle");
+      setAnalysisMetadata(null);
+      setSavedAnalysisRetrieving(false);
+      setRetrievalTasks((current) => ({ ...current, analysis: "not-needed" }));
       setError("");
       setToUnicodeDetected(false);
       setProgress({ pagesCompleted: 0, pagesTotal: pageCount || 0, instancesEvaluated: 0, definitionsAnalyzed: 0 });
@@ -94,12 +175,16 @@ export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, fo
     const predictionCache = createGlyphPredictionCache();
     let all = [];
     glyphsRef.current = all;
+    setAnalysisMetadata(null);
     let evaluated = 0;
     selectedIdRef.current = null;
     setGlyphs([]); setSelectedId(null); setError(""); setToUnicodeDetected(false); setStatus(enabled ? "analyzing" : "idle");
     setProgress({ pagesCompleted: 0, pagesTotal: pageCount, instancesEvaluated: 0, definitionsAnalyzed: 0, requestedPage: Number(requestedPage) || null, activePage: null, pageProgressPage: Number(requestedPage) || null, pageComplete: false });
     let activeAnalysisPage = null;
     let requestedPageComplete = false;
+    const persistedDocument = Boolean(documentId && documentId !== "local" && /^[a-f\d]{24}$/i.test(String(documentId)));
+    setSavedAnalysisRetrieving(!enabled && persistedDocument);
+    setRetrievalTasks((current) => ({ ...current, analysis: !enabled && persistedDocument ? "retrieving" : "not-needed" }));
 
     const publish = (pagesCompleted) => {
       if (run.cancelled) return;
@@ -221,6 +306,7 @@ export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, fo
         }
         const response = await getGlyphCharAnalysisResults(job.id, loadedThroughPage);
         job = response.job || job;
+        job = response.job || job;
         if (job.toUnicodeDetected) setToUnicodeDetected(true);
         (response.chunks || []).forEach((chunk) => {
           (chunk.vectorDefinitions || []).forEach((definition) => {
@@ -299,21 +385,16 @@ export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, fo
       if (!job?.id || run.cancelled) return;
       setToUnicodeDetected(Boolean(job.toUnicodeDetected));
       jobIdRef.current = job.id;
-      const response = await getGlyphCharAnalysisResults(job.id, 0, { pageNumber: savedResultsPage });
-      if (run.cancelled) return;
-      const vectorDefinitions = new Map((response.chunks || []).flatMap((chunk) => chunk.vectorDefinitions || []).filter((definition) => definition?.definitionRef).map((definition) => [definition.definitionRef, definition]));
-      all = (response.chunks || []).flatMap((chunk) => (chunk.glyphs || []).map((glyph) => hydrateServerGlyph(glyph, documentId, vectorDefinitions)));
-      glyphsRef.current = all;
-      setGlyphs([...all]);
+      setAnalysisMetadata(job);
       setProgress({
         pagesCompleted: Number(job.processedPages || 0),
         pagesTotal: Number(job.pageCount || pageCount),
-        instancesEvaluated: Number(job.glyphInstances || all.length),
+        instancesEvaluated: Number(job.glyphInstances || 0),
         definitionsAnalyzed: Number(job.uniqueDefinitions || 0),
         requestedPage: Number(job.requestedPage) || null,
         activePage: Number(job.activePage) || null,
         pageProgressPage: Number(savedResultsPage) || null,
-        pageComplete: (response.chunks || []).some((chunk) => Number(chunk.pageNumber) === Number(savedResultsPage)),
+        pageComplete: false,
       });
       cacheDiagnosticsRef.current = {
         definitions: Number(job.uniqueDefinitions || 0),
@@ -342,14 +423,7 @@ export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, fo
 
     const analyze = async () => {
       if (!enabled) {
-        const savedJob = await loadSavedResults();
-        // Reconnect to an active persisted job after a reload or when the
-        // panel is opened after the worker has already started. This also
-        // restores polling, rather than leaving the panel stuck on a stale
-        // saved snapshot.
-        if (!run.cancelled && (savedJob?.status === "queued" || savedJob?.status === "processing")) {
-          await analyzeInBackground();
-        }
+        await loadSavedResults();
         return;
       }
       if (documentId && documentId !== "local") {
@@ -368,6 +442,11 @@ export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, fo
 
     analyze().catch((analysisError) => {
       if (!run.cancelled) { setStatus("failed"); setError(analysisError.message || "Glyph analysis failed."); }
+    }).finally(() => {
+      if (!run.cancelled) {
+        setSavedAnalysisRetrieving(false);
+        setRetrievalTasks((current) => ({ ...current, analysis: !enabled && persistedDocument ? "complete" : "not-needed" }));
+      }
     });
     return () => { run.cancelled = true; if (cancelRunRef.current) cancelRunRef.current = null; renderer.clear(); if (rendererRef.current === renderer) rendererRef.current = null; predictionCache.clear(); };
   // initialPage is deliberately excluded: page navigation must not discard a
@@ -473,8 +552,62 @@ export const useGlyphCharAnalysis = ({ enabled = false, requestedPage = null, fo
     setGlyphs([...glyphsRef.current]);
     return result;
   }, []);
+  const reextractChars = useCallback(async () => {
+    if (!/^[a-f\d]{24}$/i.test(String(documentId || ""))) {
+      throw new Error("CHARS re-extraction requires a saved PDF document.");
+    }
+    setCharExtraction((current) => ({ ...current, status: "resetting", error: "" }));
+    const response = await reextractPdfChars(documentId);
+    setCharExtraction(response.extraction || null);
+    setCharExtractionNonce((current) => current + 1);
+    return response.extraction;
+  }, [documentId]);
+  const pauseChars = useCallback(async () => {
+    if (!charExtraction?.id) throw new Error("No Implicit Character extraction is available to pause.");
+    const response = await pausePdfCharExtraction(charExtraction.id);
+    setCharExtraction(response.extraction || null);
+    return response.extraction;
+  }, [charExtraction?.id]);
+  const resumeChars = useCallback(async () => {
+    if (!charExtraction?.id) throw new Error("No paused Implicit Character extraction is available.");
+    const response = await resumePdfCharExtraction(charExtraction.id);
+    setCharExtraction(response.extraction || null);
+    setCharExtractionNonce((current) => current + 1);
+    return response.extraction;
+  }, [charExtraction?.id]);
+  const cancelChars = useCallback(async () => {
+    if (!charExtraction?.id) throw new Error("No Implicit Character extraction is available to stop.");
+    const response = await cancelPdfCharExtraction(charExtraction.id);
+    setCharExtraction(response.extraction || null);
+    return response.extraction;
+  }, [charExtraction?.id]);
+  const loadGlyphDefinitions = useCallback(({ pageNumber = null } = {}) => {
+    if (!jobIdRef.current) throw new Error("No saved glyph analysis is available.");
+    return getGlyphDefinitions(jobIdRef.current, { pageNumber });
+  }, []);
+  const loadGlyphDefinitionInstances = useCallback(({ definitionId, pageNumber = null } = {}) => {
+    if (!jobIdRef.current) throw new Error("No saved glyph analysis is available.");
+    return getGlyphDefinitionInstances(jobIdRef.current, { definitionId, pageNumber });
+  }, []);
+  const loadImplicitGlyphDefinitions = useCallback(({ pageNumber = null, limit = null } = {}) => {
+    if (!charExtraction?.id) throw new Error("No saved implicit Glyph Definitions are available.");
+    return getPdfCharDefinitions(charExtraction.id, { pageNumber, limit });
+  }, [charExtraction?.id]);
+  const loadImplicitGlyphInstances = useCallback(({ pageNumber = null, offset = 0, limit = 20 } = {}) => {
+    if (!charExtraction?.id) throw new Error("No saved implicit Glyph instances are available.");
+    return getPdfCharInstances(charExtraction.id, { pageNumber, offset, limit });
+  }, [charExtraction?.id]);
+  const activeRetrievalTasks = Object.values(retrievalTasks).filter((task) => task !== "not-needed");
+  const retrievalProgress = activeRetrievalTasks.length
+    ? Math.round((activeRetrievalTasks.filter((task) => task === "complete").length / activeRetrievalTasks.length) * 100)
+    : 100;
   return {
-    glyphs, selectedGlyph, selectGlyph, trainSelectedGlyph, cancelAnalysis, deleteAllResults,
+    glyphs, charGlyphs, charExtraction, reextractChars, pauseChars, resumeChars, cancelChars, selectedGlyph, selectGlyph, trainSelectedGlyph, cancelAnalysis, deleteAllResults,
+    analysisMetadata,
+    retrievalStatus: charDataRetrieving || savedAnalysisRetrieving ? "retrieving" : "ready",
+    retrievalProgress,
+    loadGlyphDefinitions, loadGlyphDefinitionInstances,
+    loadImplicitGlyphDefinitions, loadImplicitGlyphInstances,
     jobId: jobIdRef.current,
     canGenerateReport: Boolean(jobIdRef.current),
     // The backend reports queued work separately from processing. Keep the

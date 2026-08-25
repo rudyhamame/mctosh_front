@@ -222,7 +222,11 @@ const ReaderSearchBar = ({ pageNav }) => {
   }
 
   return (
-    <div className="pdfw_search_group pdfw_search_group--open">
+    <div
+      className="pdfw_search_group pdfw_search_group--open"
+      role="search"
+      aria-label="Wordform Search"
+    >
       <input
         ref={searchInputRef}
         className="pdfw_search_input"
@@ -239,6 +243,24 @@ const ReaderSearchBar = ({ pageNav }) => {
         aria-label="Wordform Search"
         autoFocus
       />
+      {pageNav.searchMatches?.length > 0 && (
+        <div className="pdfw_search_results_dropdown" role="listbox" aria-label="Search results">
+          {pageNav.searchMatches.map((match, index) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={index === pageNav.searchActiveIndex}
+              className={`pdfw_search_result${index === pageNav.searchActiveIndex ? " is-active" : ""}`}
+              key={`${match.page}-${index}-${match.originalMatchedText || "match"}`}
+              onClick={() => pageNav.selectSearchMatch?.(index)}
+            >
+              <span className="pdfw_search_result_page">Page {match.page}</span>
+              <span className="pdfw_search_result_text">{match.originalMatchedText || pageNav.searchQuery}</span>
+              <span className="pdfw_search_result_type">{match.matchType || "match"}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <span className="pdfw_search_count">
         {pageNav.searchScanning ? (
           <span className="pdfw_search_loader" aria-label="Search in progress" role="status" />
@@ -431,6 +453,9 @@ const ReaderPageNavigation = ({ pageNav }) => {
       { id: "pdf-forensics", icon: "bx bx-shield-quarter", label: "PDF Forensics", active: pageNav.markdownOpen && pageNav.markdownMode === "forensics", disabled: pageNav.disabled, role: "menuitemcheckbox", onSelect: selectFunction(() => pageNav.setMarkdownMode?.("forensics")) },
     ],
   }];
+  const selectedFunctionLabel = functionSections
+    .flatMap((section) => section.items)
+    .find((item) => item.active)?.label || "FUNCTIONS";
 
   return (
     <div
@@ -449,9 +474,9 @@ const ReaderPageNavigation = ({ pageNav }) => {
             setFunctionsMenuOpen((open) => !open);
             setModeMenuOpen(false);
           }}
-          title="Functions on PDF"
+          title={selectedFunctionLabel === "FUNCTIONS" ? "Functions on PDF" : selectedFunctionLabel}
         >
-          FUNCTIONS <i className="bx bx-chevron-down" aria-hidden="true" />
+          <span>{selectedFunctionLabel}</span> <i className="bx bx-chevron-down" aria-hidden="true" />
         </button>
         {functionsMenuOpen && (
           <div className="pdfw_mode_menu pdfw_functions_menu" role="menu" aria-label="Functions on PDF">
