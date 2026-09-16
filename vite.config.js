@@ -2,9 +2,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import basicSsl from "@vitejs/plugin-basic-ssl";
 
-const devHost = "192.168.68.104";
+const devHost = "127.0.0.1";
 const devPort = 5173;
-const backendProxyTarget = "https://localhost:4000";
+const backendProxyTarget = "https://127.0.0.1:4000";
 
 const isExpectedSocketProxyClose = (error) => {
   const errorCode = String(error?.code || "").trim();
