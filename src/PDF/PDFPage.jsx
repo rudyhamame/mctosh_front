@@ -188,7 +188,7 @@ import {
 } from "./pdfPageToolbarConfig.jsx";
 import { lookupDictionaryWord } from "../utils/dictionarySettings";
 import { queueVocabularyForUmls } from "../Vocabs/umlsQueue";
-import { extractDocumentAbbreviations } from "../linguistics/abbreviations/extractAbbreviations.js";
+import { extractDocumentAbbreviations } from "../Linguistics/abbreviations/extractAbbreviations.js";
 import { createLexicalEvidenceProvider } from "./lexicalEvidenceProvider.js";
 import { deleteDocumentReconstruction, getDocumentReconstructionChildren, getDocumentReconstructionPhysicalLines, getDocumentReconstructionRoot, getDocumentReconstructionStatus, getLatestDocumentReconstruction, persistDocumentReconstruction, persistForensicEvidence, persistManualResolution } from "./documentReconstructionClient.js";
 import { prepareMeaningBlockPage } from "./meaningBlockAnalysis.js";
