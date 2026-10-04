@@ -89,7 +89,6 @@ const VirtualKeyboard = ({
   panelPortalId = "",
   predictionPortalId = "",
   openOnCommand = false,
-  onLoginAutofill = null,
 }) => {
   const [open, setOpen] = useState(false);
   const [shiftMode, setShiftMode] = useState("off");
@@ -958,21 +957,7 @@ const VirtualKeyboard = ({
         >
           <span className="vk_action_symbol" aria-hidden="true">⌫</span>
         </button>
-        {onLoginAutofill && (
-          <button
-            type="button"
-            className="vk_login_autofill_key"
-            aria-label="Fill login credentials and sign in"
-            title="Fill saved login credentials and sign in"
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={(event) => {
-              event.preventDefault();
-              onLoginAutofill();
-            }}
-          >
-            <span className="vk_action_symbol" aria-hidden="true">↪</span>
-          </button>
-        )}
+
       </div>
     </div>
   ) : null;

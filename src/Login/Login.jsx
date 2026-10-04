@@ -90,17 +90,6 @@ export default function Login({ onLogin, onTransitionComplete, patientMode = fal
     }
   };
 
-  const fillLoginAndSubmit = () => {
-    if (patientMode || mode !== "login" || loading || transitionActive) return;
-    setUsername("rudyhamame");
-    setPassword("roro1995");
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
-        document.getElementById("login_form")?.requestSubmit();
-      });
-    });
-  };
-
   const handleTransitionComplete = useCallback(() => {
     pendingAuthRef.current = null;
     onTransitionComplete?.();
@@ -267,7 +256,6 @@ export default function Login({ onLogin, onTransitionComplete, patientMode = fal
             autoOpenOnFocus
             showToggle={false}
             panelClassName="vk_panel--login"
-            onLoginAutofill={!patientMode && mode === "login" ? fillLoginAndSubmit : null}
           />
           </>
         )}

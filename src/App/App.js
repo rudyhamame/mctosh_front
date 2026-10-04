@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { readStoredSession } from "../utils/sessionCleanup";
+import { apiUrl } from "../config/api";
 import { InfoPopupButton } from "../PDF/InfoPopupButton";
 import { listMorphe, listMorpheSources } from "../ClinicalSchemata/amctoshsMorpheClient";
 import { deleteStudySession, listStudySessions, startStudySession, stopStudySession } from "../utils/studySessions";
@@ -287,20 +288,6 @@ export const LEVEL_LABELS = LEVELS.map((level) => level.label);
 const ONTIC_TOOL_PATHS = ["/patient-instantiation", "/sources"];
 const NOETIC_TOOL_PATHS = ["/segmentations", "/hyle-entities-4d", "/clinical-schemata"];
 
-const readProfilePhoto = (session) => (
-  session?.photoUrl
-  || session?.profilePhoto
-  || session?.profilePicture
-  || session?.avatarUrl
-  || session?.imageUrl
-  || session?.user?.photoUrl
-  || session?.user?.profilePhoto
-  || session?.user?.profilePicture
-  || session?.user?.avatarUrl
-  || session?.user?.imageUrl
-  || ""
-);
-
 const readDisplayName = (session) => (
   session?.name
   || session?.displayName
@@ -325,18 +312,6 @@ const getInitials = (label) => {
   return words.slice(0, 2).map((word) => word[0]?.toUpperCase() || "").join("") || "P";
 };
 
-const HOME_FRIENDS = [
-  { id: "maya", name: "Maya Chen", status: "Online", color: "#5eead4", messages: ["Ready to explore the next layer?"] },
-  { id: "samir", name: "Samir Patel", status: "Away", color: "#a78bfa", messages: ["I saved a note for you."] },
-  { id: "elena", name: "Elena Brooks", status: "Offline", color: "#f0a6ca", messages: [] },
-];
-
-const FRIEND_ORBIT_POSITIONS = {
-  maya: { left: "41%", top: "23%" },
-  samir: { left: "60%", top: "50%" },
-  elena: { left: "42%", top: "77%" },
-};
-
 const formatStudyTimer = (totalSeconds) => {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -353,16 +328,9 @@ const App = ({ onLogout, colorWaveEnabled = true }) => {
   const navigate = useNavigate();
   const profileMenuRef = useRef(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [friendsOpen, setFriendsOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [assistantOpening, setAssistantOpening] = useState(false);
   const assistantLogoRef = useRef(null);
-  const friendsViewportRef = useRef(null);
-  const [selectedFriendId, setSelectedFriendId] = useState("");
-  const [friendMessage, setFriendMessage] = useState("");
-  const [friendMessages, setFriendMessages] = useState(() => (
-    Object.fromEntries(HOME_FRIENDS.map((friend) => [friend.id, [...friend.messages]]))
-  ));
   const [sourceData, setSourceData] = useState(null);
   const [schemataData, setSchemataData] = useState(null);
   const [studySessions, setStudySessions] = useState([]);
@@ -370,66 +338,37 @@ const App = ({ onLogout, colorWaveEnabled = true }) => {
   const [studyElapsedSeconds, setStudyElapsedSeconds] = useState(0);
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const session = readStoredSession();
-  const profilePhoto = readProfilePhoto(session);
-  const displayName = readDisplayName(session);
+  const [accountProfile, setAccountProfile] = useState(null);
+  const [photoFailed, setPhotoFailed] = useState(false);
+  const profilePhoto = accountProfile?.profilePhoto || "";
+  const displayName = readDisplayName(accountProfile || session);
   const firstName = String(displayName).trim().split(/\s+/)[0] || "Profile";
   const username = readHandle(session);
   const profileInitials = getInitials(displayName);
-  const selectedFriend = HOME_FRIENDS.find((friend) => friend.id === selectedFriendId) || null;
+  const accountToken = session?.token || "";
 
   useEffect(() => {
-    if (!friendsOpen) return undefined;
-    const frame = window.requestAnimationFrame(() => {
-      const viewport = friendsViewportRef.current;
-      const homeViewport = document.getElementById("app_home_view");
-      if (!viewport || !homeViewport) return;
-      const scrollContainer = homeViewport.scrollHeight > homeViewport.clientHeight + 1
-        ? homeViewport
-        : document.scrollingElement;
-      if (!scrollContainer) return;
-      if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-        const containerRect = scrollContainer.getBoundingClientRect();
-        const viewportRect = viewport.getBoundingClientRect();
-        scrollContainer.scrollTop = Math.max(0, scrollContainer.scrollTop + viewportRect.top - containerRect.top);
-        return;
-      }
+    const controller = new AbortController();
+    setAccountProfile(null);
+    if (!accountToken) return () => controller.abort();
+    fetch(apiUrl("/api/user/me"), {
+      headers: { Authorization: `Bearer ${accountToken}` },
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Unable to load account profile.");
+        return response.json();
+      })
+      .then((profile) => {
+        if (!controller.signal.aborted) setAccountProfile(profile);
+      })
+      .catch((error) => {
+        if (error.name !== "AbortError") console.error("Failed to load account profile", error);
+      });
+    return () => controller.abort();
+  }, [accountToken]);
 
-      const start = scrollContainer.scrollTop;
-      const containerRect = scrollContainer.getBoundingClientRect();
-      const viewportRect = viewport.getBoundingClientRect();
-      const rawTarget = start + viewportRect.top - containerRect.top;
-      const maxScroll = Math.max(0, scrollContainer.scrollHeight - scrollContainer.clientHeight);
-      const target = Math.min(maxScroll, Math.max(0, rawTarget));
-      const distance = target - start;
-      const duration = Math.min(2400, Math.max(1400, Math.abs(distance) * 1.15));
-      const startedAt = performance.now();
-      const easeInOut = (value) => value < 0.5
-        ? 4 * value * value * value
-        : 1 - Math.pow(-2 * value + 2, 3) / 2;
-      let animationFrame;
-      const animate = (now) => {
-        const progress = Math.min(1, (now - startedAt) / duration);
-        scrollContainer.scrollTop = start + distance * easeInOut(progress);
-        if (progress < 1) animationFrame = window.requestAnimationFrame(animate);
-      };
-      animationFrame = window.requestAnimationFrame(animate);
-      viewport.dataset.scrollAnimation = "active";
-      viewport.addEventListener("wheel", () => window.cancelAnimationFrame(animationFrame), { once: true, passive: true });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [friendsOpen]);
-
-  const sendFriendMessage = (event) => {
-    event.preventDefault();
-    if (!selectedFriend) return;
-    const message = friendMessage.trim();
-    if (!message) return;
-    setFriendMessages((current) => ({
-      ...current,
-      [selectedFriend.id]: [...(current[selectedFriend.id] || []), message],
-    }));
-    setFriendMessage("");
-  };
+  useEffect(() => { setPhotoFailed(false); }, [profilePhoto]);
 
   const currentDateLabel = new Intl.DateTimeFormat(undefined, {
     day: "2-digit",
@@ -584,11 +523,14 @@ const App = ({ onLogout, colorWaveEnabled = true }) => {
                     aria-expanded={profileMenuOpen}
                     title={displayName}
                   >
-                    <img
+                    {profilePhoto && !photoFailed ? <img
                       className="app_dashboard_header_profile"
-                      src={profilePhoto || `${import.meta.env.BASE_URL}photo.jpg`}
+                      src={profilePhoto}
                       alt={`${displayName} profile`}
-                    />
+                      onError={() => setPhotoFailed(true)}
+                    /> : <span className="app_dashboard_header_initials" aria-label={`${displayName} profile`}>
+                      {profileInitials}
+                    </span>}
                   </button>
 
                   {profileMenuOpen && (
@@ -680,80 +622,7 @@ const App = ({ onLogout, colorWaveEnabled = true }) => {
       )}
       <div id="app_home_middle">
       </div>
-      <aside id="app_friends_aside" aria-label="Friends and chat">
-          <button
-            type="button"
-            className="app_friends_toggle"
-            aria-expanded={friendsOpen}
-            aria-controls="app_friends_list"
-            onClick={() => {
-              setFriendsOpen((open) => {
-                const nextOpen = !open;
-                if (nextOpen) setSelectedFriendId("");
-                return nextOpen;
-              });
-            }}
-          >
-            FRIENDS
-          </button>
-          {friendsOpen && <section ref={friendsViewportRef} id="app_friends_viewport" aria-label="Friends workspace">
-            <div className="app_friends_viewport_header">
-              <div>
-                <span className="app_friends_kicker">RabbitHole network</span>
-                <h2>Friends</h2>
-              </div>
-              <button type="button" className="app_friends_viewport_close" onClick={() => setFriendsOpen(false)} aria-label="Close friends workspace">×</button>
-            </div>
-            <div className="app_friends_viewport_body">
-              <nav id="app_friends_list" className="app_friends_list" aria-label="Friend list">
-                {HOME_FRIENDS.map((friend) => (
-                  <button
-                    type="button"
-                    key={friend.id}
-                    className={`app_friend_item ${friend.id === selectedFriendId ? "is-active" : ""}`}
-                    onClick={() => setSelectedFriendId(friend.id)}
-                  >
-                    <span className="app_friend_avatar" style={{ "--friend-color": friend.color }}>{getInitials(friend.name)}</span>
-                    <span className="app_friend_copy"><strong>{friend.name}</strong><small>{friend.status}</small></span>
-                    <span className={`app_friend_presence app_friend_presence--${friend.status.toLowerCase()}`} />
-                  </button>
-                ))}
-              </nav>
-              {selectedFriend ? <section className="app_friend_chat app_friends_viewport_chat" aria-label={`Chat with ${selectedFriend.name}`}>
-                <div className="app_friend_chat_header">
-                  <strong>{selectedFriend.name}</strong>
-                  <small>{selectedFriend.status}</small>
-                </div>
-                <div className="app_friend_messages" aria-live="polite">
-                  {(friendMessages[selectedFriend.id] || []).map((message, index) => (
-                    <div className={`app_friend_message ${index % 2 ? "is-self" : ""}`} key={`${selectedFriend.id}-viewport-${index}-${message}`}>{message}</div>
-                  ))}
-                  {!friendMessages[selectedFriend.id]?.length && <p className="app_friend_chat_empty">Start a conversation.</p>}
-                </div>
-                <form className="app_friend_chat_form" onSubmit={sendFriendMessage}>
-                  <input value={friendMessage} onChange={(event) => setFriendMessage(event.target.value)} placeholder="Write a message…" aria-label="Message" />
-                  <button type="submit" aria-label="Send message">↑</button>
-                </form>
-              </section> : <p className="app_friends_viewport_empty">Select a friend to open a conversation.</p>}
-            </div>
-          </section>}
-          {selectedFriend ? <section className="app_friend_chat" aria-label={`Chat with ${selectedFriend.name}`}>
-            <div className="app_friend_chat_header">
-              <strong>{selectedFriend.name}</strong>
-              <small>{selectedFriend.status}</small>
-            </div>
-            <div className="app_friend_messages" aria-live="polite">
-              {(friendMessages[selectedFriend.id] || []).map((message, index) => (
-                <div className={`app_friend_message ${index % 2 ? "is-self" : ""}`} key={`${selectedFriend.id}-${index}-${message}`}>{message}</div>
-              ))}
-              {!friendMessages[selectedFriend.id]?.length && <p className="app_friend_chat_empty">Start a conversation.</p>}
-            </div>
-            <form className="app_friend_chat_form" onSubmit={sendFriendMessage}>
-              <input value={friendMessage} onChange={(event) => setFriendMessage(event.target.value)} placeholder="Write a message…" aria-label="Message" />
-              <button type="submit" aria-label="Send message">↑</button>
-            </form>
-          </section> : null}
-      </aside>
+
     </div>
   );
 };

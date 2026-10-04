@@ -163,11 +163,7 @@ const SECTIONS = [
   { id: "theme",      label: "Theme",           icon: "fi fi-rr-palette" },
 ];
 
-// Dev-only camera tuning tool (moved off the Home page, see
-// CameraPresetTab.jsx) — restricted to a single username, not a general
-// permission/role, since it's a one-person workflow (tune a shot, copy it
-// as code, paste it into ThreadPyramidLogo.jsx, commit).
-const CAMERA_TAB_USERNAME = "rudyhamame";
+// Camera tuning is a development tool, independent of account identity.
 const CAMERA_SECTION = { id: "camera", label: "3D Camera", icon: "fi fi-rr-camera" };
 
 // Kept in sync with the same list PDFPage.jsx reads from localStorage
@@ -332,7 +328,7 @@ const SettingsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [section,   setSection]   = useState(() => new URLSearchParams(location.search).get("section") || "personal");
-  const canSeeCameraTab = readStoredSession()?.username === CAMERA_TAB_USERNAME;
+  const canSeeCameraTab = import.meta.env.DEV;
   const visibleSections = canSeeCameraTab ? [...SECTIONS, CAMERA_SECTION] : SECTIONS;
   const [theme,     setTheme]     = useState(() => readStoredTheme());
   const [pdfTranslateLang, setPdfTranslateLang] = useState(() => localStorage.getItem("mctosh_pdf_translate_lang") || "English");
