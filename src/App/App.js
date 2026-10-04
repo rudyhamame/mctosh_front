@@ -251,13 +251,6 @@ const LEVELS = [
         description: "The patients-in-themselves: actual, concrete patient instances as they exist independently of any observation, description, image, measurement, or model.",
         color: "#26a69a",
       },
-      {
-        path: "/social-media-control",
-        icon: "fi-rr-megaphone",
-        label: "RabbitHole Social Media Control",
-        description: "Plan campaigns, shape captions, review post drafts, and prepare Instagram publishing workflows",
-        color: "#ff8a65",
-      },
     ],
   },
   {

@@ -41,9 +41,6 @@ const SettingsPage = lazy(() => import("./Settings/SettingsPage"));
 const VoiceProfilePage = lazy(() => import("./VoiceProfile/VoiceProfilePage"));
 const PatientInstantiationPage = lazy(() => import("./PatientInstantiation/PatientInstantiationPage"));
 const ClinicalSchemata = lazy(() => import("./ClinicalSchemata/ClinicalSchemata"));
-const SocialMediaControlPage = lazy(() => import("./SocialMediaControl/SocialMediaControlPage"));
-const InstagramHomePreviewPage = lazy(() => import("./SocialMediaControl/InstagramHomePreviewPage"));
-const SocialMediaDesignerPage = lazy(() => import("./SocialMediaControl/SocialMediaDesignerPage"));
 const HumanAtlasPage = lazy(() => import("./HumanAtlas/HumanAtlasPage"));
 const FreeformPage = lazy(() => import("./Freeform/FreeformPage"));
 const FreeformListPage = lazy(() => import("./Freeform/FreeformListPage"));
@@ -229,9 +226,6 @@ const AppRouter = () => {
         <Route path="/draft/:id"          element={auth(withSuspense(<DraftPage />))} />
         <Route path="/patient-instantiation" element={auth(withSuspense(<PatientInstantiationPage />))} />
         <Route path="/clinical-schemata"      element={auth(withSuspense(<ClinicalSchemata />))} />
-        <Route path="/social-media-control"   element={auth(withSuspense(<SocialMediaControlPage />))} />
-        <Route path="/instagram-home-preview" element={auth(withSuspense(<InstagramHomePreviewPage />))} />
-        <Route path="/social-media-designer"  element={auth(withSuspense(<SocialMediaDesignerPage />))} />
         <Route path="/human-atlas"            element={auth(withSuspense(<HumanAtlasPage />))} />
         <Route path="/freeform"               element={auth(withSuspense(<FreeformListPage />))} />
         <Route path="/clinical-vignettes"     element={auth(withSuspense(<ClinicalVignetteGeneratorPage />))} />
